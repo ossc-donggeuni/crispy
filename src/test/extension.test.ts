@@ -112,6 +112,30 @@ suite('Crispy Extension', function () {
 		assert.ok(!isWebviewToExtensionMessage({
 			type: 'unknownMessage',
 		}));
+		assert.ok(isWebviewToExtensionMessage({
+			type: 'fileAnalysisRequested',
+			payload: {
+				requestId: 'request-1',
+				fileNodeId: 'file:src/extension.ts',
+				relativePath: 'src/extension.ts',
+			},
+		}));
+		assert.ok(!isWebviewToExtensionMessage({
+			type: 'fileAnalysisRequested',
+			payload: {
+				requestId: 'request-1',
+				fileNodeId: 'directory:src',
+				relativePath: 'src',
+			},
+		}));
+		assert.ok(!isWebviewToExtensionMessage({
+			type: 'fileAnalysisRequested',
+			payload: {
+				requestId: 'request-1',
+				fileNodeId: 'file:src/extension.ts',
+				relativePath: '',
+			},
+		}));
 
 		const workspaceLoadedMessage = {
 			type: 'workspaceLoaded',
@@ -147,6 +171,40 @@ suite('Crispy Extension', function () {
 			type: 'workspaceError',
 			payload: {
 				message: 42,
+			},
+		}));
+
+		const fileAnalysisResultMessage = {
+			type: 'fileAnalysisResult',
+			payload: {
+				requestId: 'request-1',
+				fileNodeId: 'file:src/extension.ts',
+				status: 'ready',
+				symbolNodes: [
+					{
+						id: 'function:src/extension.ts:activate:10',
+						type: 'symbol',
+						name: 'activate',
+						relativePath: 'src/extension.ts',
+						parentId: 'file:src/extension.ts',
+						childrenIds: [],
+					},
+				],
+				symbolMetadata: [
+					{
+						nodeId: 'function:src/extension.ts:activate:10',
+						kind: 'function',
+						startLine: 10,
+					},
+				],
+			},
+		};
+		assert.ok(isExtensionToWebviewMessage(fileAnalysisResultMessage));
+		assert.ok(!isExtensionToWebviewMessage({
+			...fileAnalysisResultMessage,
+			payload: {
+				...fileAnalysisResultMessage.payload,
+				status: 'loading',
 			},
 		}));
 	});

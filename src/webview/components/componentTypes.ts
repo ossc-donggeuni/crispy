@@ -1,4 +1,8 @@
 import type { NodePlanInfo, ProjectNode } from '../../model/projectNode';
+import type {
+	FileAnalysisState,
+	SymbolMetadata,
+} from '../../model/fileAnalysis';
 
 export type GraphComponentContext = {
 	nodesById: ReadonlyMap<string, ProjectNode>;
@@ -6,9 +10,12 @@ export type GraphComponentContext = {
 	expandedDirectoryIds: ReadonlySet<string>;
 	expandedFileIds: ReadonlySet<string>;
 	planInfoByNodeId: ReadonlyMap<string, NodePlanInfo>;
+	fileAnalysisStates: ReadonlyMap<string, FileAnalysisState>;
+	symbolMetadataByNodeId: ReadonlyMap<string, SymbolMetadata>;
 	onSelect: (nodeId: string) => void;
 	onToggleDirectory: (nodeId: string) => void;
 	onToggleFile: (nodeId: string) => void;
+	onRetryFileAnalysis: (nodeId: string) => void;
 	onBoxPointerDown: (event: PointerEvent) => void;
 };
 

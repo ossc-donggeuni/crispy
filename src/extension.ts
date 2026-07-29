@@ -3,8 +3,10 @@ import * as vscode from 'vscode';
 import {
 	isWebviewToExtensionMessage,
 	type ExtensionToWebviewMessage,
+	type FileAnalysisRequestedMessage,
 	type WebviewToExtensionMessage,
 } from './model/webviewMessage';
+import { analyzeDocumentSymbols } from './workspace/documentSymbolAnalyzer';
 import { scanWorkspaceFolder } from './workspace/projectScanner';
 
 const openGraphCommand = 'crispy.openGraph';
@@ -37,6 +39,7 @@ class CrispyGraphPanel {
 	private readonly panel: vscode.WebviewPanel;
 	private readonly outputChannel: vscode.OutputChannel;
 	private readonly disposables: vscode.Disposable[] = [];
+	private readonly fileAnalysisRequestIds = new Map<string, string>();
 	private disposed = false;
 	private scanRequestId = 0;
 
@@ -109,6 +112,7 @@ class CrispyGraphPanel {
 
 		this.disposed = true;
 		this.scanRequestId += 1;
+		this.fileAnalysisRequestIds.clear();
 		CrispyGraphPanel.currentPanel = undefined;
 
 		while (this.disposables.length > 0) {
@@ -130,11 +134,15 @@ class CrispyGraphPanel {
 				break;
 			case 'selectionChanged':
 				break;
+			case 'fileAnalysisRequested':
+				await this.analyzeFile(message);
+				break;
 		}
 	}
 
 	private async loadWorkspace(): Promise<void> {
 		const requestId = ++this.scanRequestId;
+		this.fileAnalysisRequestIds.clear();
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 
 		if (workspaceFolders.length === 0) {
@@ -190,6 +198,62 @@ class CrispyGraphPanel {
 					message,
 				},
 			});
+		}
+	}
+
+	private async analyzeFile(
+		message: FileAnalysisRequestedMessage,
+	): Promise<void> {
+		const {
+			requestId,
+			fileNodeId,
+			relativePath,
+		} = message.payload;
+		this.fileAnalysisRequestIds.set(fileNodeId, requestId);
+
+		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+		const result = workspaceFolders.length === 1
+			? await analyzeDocumentSymbols(
+				workspaceFolders[0],
+				fileNodeId,
+				relativePath,
+			)
+			: {
+				status: 'failed' as const,
+				symbolNodes: [],
+				symbolMetadata: [],
+				errorMessage: 'File analysis requires a single-folder Workspace.',
+			};
+
+		if (
+			this.disposed
+			|| this.fileAnalysisRequestIds.get(fileNodeId) !== requestId
+		) {
+			return;
+		}
+
+		if (result.status === 'failed') {
+			this.outputChannel.appendLine(
+				`[Crispy] File analysis failed: ${relativePath}`,
+			);
+		}
+
+		await this.postMessage({
+			type: 'fileAnalysisResult',
+			payload: {
+				requestId,
+				fileNodeId,
+				status: result.status,
+				symbolNodes: result.symbolNodes,
+				symbolMetadata: result.symbolMetadata,
+				...(result.errorMessage
+					? { errorMessage: result.errorMessage }
+					: {}),
+			},
+		});
+
+		if (this.fileAnalysisRequestIds.get(fileNodeId) === requestId) {
+			this.fileAnalysisRequestIds.delete(fileNodeId);
 		}
 	}
 

@@ -1,6 +1,7 @@
 import {
 	createSelectionChangedMessage,
 	isExtensionToWebviewMessage,
+	type FileAnalysisRequestedMessage,
 	type OpenWorkspaceFolderMessage,
 	type WebviewReadyMessage,
 	type WebviewToExtensionMessage,
@@ -72,7 +73,24 @@ try {
 						onSelectionChange: (selection) => {
 							vscode.postMessage(createSelectionChangedMessage(selection));
 						},
+						onFileAnalysisRequest: (fileNode, requestId) => {
+							if (!fileNode.relativePath) {
+								return;
+							}
+
+							vscode.postMessage({
+								type: 'fileAnalysisRequested',
+								payload: {
+									requestId,
+									fileNodeId: fileNode.id,
+									relativePath: fileNode.relativePath,
+								},
+							} satisfies FileAnalysisRequestedMessage);
+						},
 					});
+					break;
+				case 'fileAnalysisResult':
+					graphView?.setFileAnalysisResult(event.data.payload);
 					break;
 			}
 		} catch (error) {

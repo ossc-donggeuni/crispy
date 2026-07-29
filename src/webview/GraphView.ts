@@ -5,6 +5,10 @@ import type {
 	ProjectNode,
 	SharedSelection,
 } from '../model/projectNode';
+import type {
+	FileAnalysisResult,
+	SymbolMetadata,
+} from '../model/fileAnalysis';
 import { createDirectoryBox } from './components/DirectoryBox';
 import { createFileDetailBox } from './components/FileDetailBox';
 import {
@@ -16,11 +20,16 @@ import {
 	createElement,
 	type GraphComponentContext,
 } from './components/componentTypes';
+import { FileAnalysisStateStore } from './fileAnalysisState';
 
 export type GraphViewOptions = {
 	nodes: readonly ProjectNode[];
 	planInfo?: readonly NodePlanInfo[];
 	onSelectionChange?: (selection: SharedSelection) => void;
+	onFileAnalysisRequest?: (
+		fileNode: ProjectNode,
+		requestId: string,
+	) => void;
 };
 
 type DragState = {
@@ -46,9 +55,15 @@ const maximumZoom = 1.8;
 
 export class GraphView {
 	private readonly root: HTMLElement;
-	private readonly nodesById: ReadonlyMap<string, ProjectNode>;
+	private readonly nodesById: Map<string, ProjectNode>;
 	private readonly planInfoByNodeId: ReadonlyMap<string, NodePlanInfo>;
+	private readonly symbolMetadataByNodeId = new Map<string, SymbolMetadata>();
+	private readonly fileAnalysisStates = new FileAnalysisStateStore();
 	private readonly onSelectionChange?: (selection: SharedSelection) => void;
+	private readonly onFileAnalysisRequest?: (
+		fileNode: ProjectNode,
+		requestId: string,
+	) => void;
 	private readonly projectNode?: ProjectNode;
 	private readonly expandedDirectoryIds = new Set<string>();
 	private readonly expandedFileIds = new Set<string>();
@@ -71,12 +86,22 @@ export class GraphView {
 
 	public constructor(root: HTMLElement, options: GraphViewOptions) {
 		this.root = root;
-		this.nodesById = new Map(options.nodes.map((node) => [node.id, node]));
+		this.nodesById = new Map(
+			options.nodes.map((node) => [
+				node.id,
+				{
+					...node,
+					childrenIds: [...node.childrenIds],
+				},
+			]),
+		);
 		this.planInfoByNodeId = new Map(
 			(options.planInfo ?? []).map((info) => [info.nodeId, info]),
 		);
 		this.onSelectionChange = options.onSelectionChange;
-		this.projectNode = options.nodes.find((node) => node.type === 'project');
+		this.onFileAnalysisRequest = options.onFileAnalysisRequest;
+		this.projectNode = [...this.nodesById.values()]
+			.find((node) => node.type === 'project');
 		this.positions.set(this.projectNode?.id ?? 'project', { x: 70, y: 180 });
 
 		this.renderShell();
@@ -91,6 +116,68 @@ export class GraphView {
 		window.removeEventListener('pointermove', this.handlePointerMove);
 		window.removeEventListener('pointerup', this.handlePointerUp);
 		this.root.replaceChildren();
+	}
+
+	public setFileAnalysisResult(result: FileAnalysisResult): boolean {
+		const fileNode = this.nodesById.get(result.fileNodeId);
+		if (
+			fileNode?.type !== 'file'
+			|| !this.fileAnalysisStates.applyResult(result)
+		) {
+			return false;
+		}
+
+		const previousSymbolIds = new Set(
+			fileNode.childrenIds.filter(
+				(childId) => this.nodesById.get(childId)?.type === 'symbol',
+			),
+		);
+		for (const symbolId of previousSymbolIds) {
+			this.nodesById.delete(symbolId);
+			this.symbolMetadataByNodeId.delete(symbolId);
+		}
+
+		const nextSymbolIds: string[] = [];
+		const nextSymbolIdSet = new Set<string>();
+		for (const symbolNode of result.symbolNodes) {
+			if (
+				symbolNode.type !== 'symbol'
+				|| symbolNode.parentId !== fileNode.id
+				|| nextSymbolIdSet.has(symbolNode.id)
+			) {
+				continue;
+			}
+
+			nextSymbolIdSet.add(symbolNode.id);
+			nextSymbolIds.push(symbolNode.id);
+			this.nodesById.set(symbolNode.id, {
+				...symbolNode,
+				childrenIds: [...symbolNode.childrenIds],
+			});
+		}
+
+		for (const metadata of result.symbolMetadata) {
+			if (nextSymbolIdSet.has(metadata.nodeId)) {
+				this.symbolMetadataByNodeId.set(metadata.nodeId, metadata);
+			}
+		}
+
+		this.nodesById.set(fileNode.id, {
+			...fileNode,
+			childrenIds: nextSymbolIds,
+		});
+
+		const selectedNodeId = this.selection.selectedNodeId;
+		if (
+			selectedNodeId
+			&& previousSymbolIds.has(selectedNodeId)
+			&& !nextSymbolIdSet.has(selectedNodeId)
+		) {
+			this.setSelection(fileNode.id);
+		}
+
+		this.renderGraph();
+		return true;
 	}
 
 	private renderShell(): void {
@@ -203,9 +290,12 @@ export class GraphView {
 			expandedDirectoryIds: this.expandedDirectoryIds,
 			expandedFileIds: this.expandedFileIds,
 			planInfoByNodeId: this.planInfoByNodeId,
+			fileAnalysisStates: this.fileAnalysisStates.all,
+			symbolMetadataByNodeId: this.symbolMetadataByNodeId,
 			onSelect: (nodeId) => this.selectNode(nodeId),
 			onToggleDirectory: (nodeId) => this.toggleDirectory(nodeId),
 			onToggleFile: (nodeId) => this.toggleFile(nodeId),
+			onRetryFileAnalysis: (nodeId) => this.retryFileAnalysis(nodeId),
 			onBoxPointerDown: this.handleBoxPointerDown,
 		};
 	}
@@ -292,12 +382,44 @@ export class GraphView {
 		} else {
 			this.expandedFileIds.add(nodeId);
 			const node = this.nodesById.get(nodeId);
-			if (node) {
+			if (node?.type === 'file') {
 				this.ensurePosition(node);
+				this.requestFileAnalysis(node, false);
 			}
 		}
 		this.setSelection(nodeId);
 		this.renderGraph();
+	}
+
+	private retryFileAnalysis(nodeId: string): void {
+		const fileNode = this.nodesById.get(nodeId);
+		if (fileNode?.type !== 'file') {
+			return;
+		}
+
+		this.requestFileAnalysis(fileNode, true);
+		this.renderGraph();
+	}
+
+	private requestFileAnalysis(
+		fileNode: ProjectNode,
+		isRetry: boolean,
+	): void {
+		if (!this.onFileAnalysisRequest) {
+			return;
+		}
+
+		if (!fileNode.relativePath) {
+			this.fileAnalysisStates.markUnsupported(fileNode.id);
+			return;
+		}
+
+		const requestId = isRetry
+			? this.fileAnalysisStates.retry(fileNode.id)
+			: this.fileAnalysisStates.beginOnOpen(fileNode.id);
+		if (requestId) {
+			this.onFileAnalysisRequest(fileNode, requestId);
+		}
 	}
 
 	private selectNode(nodeId: string): void {
@@ -530,11 +652,21 @@ export class GraphView {
 		if (this.dragState) {
 			this.dragState.element.classList.remove('is-dragging');
 			this.suppressNextClick = this.dragState.moved;
+			if (this.suppressNextClick) {
+				window.setTimeout(() => {
+					this.suppressNextClick = false;
+				}, 0);
+			}
 			this.dragState = undefined;
 		}
 
 		if (this.panState && event.pointerId === this.panState.pointerId) {
 			this.suppressNextCanvasClick = this.panState.moved;
+			if (this.suppressNextCanvasClick) {
+				window.setTimeout(() => {
+					this.suppressNextCanvasClick = false;
+				}, 0);
+			}
 			this.panState = undefined;
 			this.canvas.classList.remove('is-panning');
 			if (this.canvas.hasPointerCapture(event.pointerId)) {

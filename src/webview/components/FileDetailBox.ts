@@ -38,15 +38,45 @@ export function createFileDetailBox(
 	const symbols = file.childrenIds
 		.map((childId) => context.nodesById.get(childId))
 		.filter((node): node is ProjectNode => node?.type === 'symbol');
+	const analysisState = context.fileAnalysisStates.get(file.id);
 
-	if (symbols.length === 0) {
-		body.append(
-			createElement('p', 'box-empty', 'No function blocks available.'),
-		);
-	} else {
-		for (const symbol of symbols) {
-			body.append(createSymbolBlock(symbol, context));
-		}
+	switch (analysisState?.status) {
+		case 'loading':
+			body.append(
+				createElement(
+					'p',
+					'box-empty analysis-loading',
+					'Analyzing file structure...',
+				),
+			);
+			break;
+		case 'unsupported':
+			body.append(
+				createElement(
+					'p',
+					'box-empty',
+					'Internal analysis is not supported for this file.',
+				),
+			);
+			break;
+		case 'failed':
+			body.title = analysisState.errorMessage ?? '';
+			body.append(
+				createElement('p', 'box-empty', 'File analysis failed.'),
+				createRetryButton(file, context),
+			);
+			break;
+		case 'ready':
+			appendReadySymbols(body, symbols, context);
+			break;
+		default:
+			if (symbols.length > 0) {
+				appendSymbolBlocks(body, symbols, context);
+			} else {
+				body.append(
+					createElement('p', 'box-empty', 'No function blocks available.'),
+				);
+			}
 	}
 
 	box.append(header, body);
@@ -57,4 +87,48 @@ export function createFileDetailBox(
 		}
 	});
 	return box;
+}
+
+function appendReadySymbols(
+	body: HTMLElement,
+	symbols: readonly ProjectNode[],
+	context: GraphComponentContext,
+): void {
+	if (symbols.length === 0) {
+		body.append(
+			createElement(
+				'p',
+				'box-empty',
+				'No supported top-level symbols found.',
+			),
+		);
+		return;
+	}
+
+	appendSymbolBlocks(body, symbols, context);
+}
+
+function appendSymbolBlocks(
+	body: HTMLElement,
+	symbols: readonly ProjectNode[],
+	context: GraphComponentContext,
+): void {
+	for (const symbol of symbols) {
+		body.append(createSymbolBlock(symbol, context));
+	}
+}
+
+function createRetryButton(
+	file: ProjectNode,
+	context: GraphComponentContext,
+): HTMLButtonElement {
+	const retryButton = createElement('button', 'analysis-retry', 'Retry');
+	retryButton.type = 'button';
+	retryButton.title = `Retry analysis for ${file.name}`;
+	retryButton.addEventListener('click', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		context.onRetryFileAnalysis(file.id);
+	});
+	return retryButton;
 }
