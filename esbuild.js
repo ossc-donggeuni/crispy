@@ -6,25 +6,27 @@ const watch = process.argv.includes('--watch');
 /**
  * @type {import('esbuild').Plugin}
  */
-const esbuildProblemMatcherPlugin = {
+const createProblemMatcherPlugin = (target) => ({
 	name: 'esbuild-problem-matcher',
 
 	setup(build) {
 		build.onStart(() => {
-			console.log('[watch] build started');
+			console.log(`[${target}] build started`);
 		});
 		build.onEnd((result) => {
 			result.errors.forEach(({ text, location }) => {
 				console.error(`✘ [ERROR] ${text}`);
-				console.error(`    ${location.file}:${location.line}:${location.column}:`);
+				if (location) {
+					console.error(`    ${location.file}:${location.line}:${location.column}:`);
+				}
 			});
-			console.log('[watch] build finished');
+			console.log(`[${target}] build finished`);
 		});
 	},
-};
+});
 
 async function main() {
-	const ctx = await esbuild.context({
+	const extensionContext = await esbuild.context({
 		entryPoints: [
 			'src/extension.ts'
 		],
@@ -38,15 +40,41 @@ async function main() {
 		external: ['vscode'],
 		logLevel: 'silent',
 		plugins: [
-			/* add to the end of plugins array */
-			esbuildProblemMatcherPlugin,
+			createProblemMatcherPlugin('extension'),
 		],
 	});
+
+	const webviewContext = await esbuild.context({
+		entryPoints: [
+			'src/webview/main.ts'
+		],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		outfile: 'dist/webview/main.js',
+		logLevel: 'silent',
+		plugins: [
+			createProblemMatcherPlugin('webview'),
+		],
+	});
+
 	if (watch) {
-		await ctx.watch();
+		await Promise.all([
+			extensionContext.watch(),
+			webviewContext.watch(),
+		]);
 	} else {
-		await ctx.rebuild();
-		await ctx.dispose();
+		await Promise.all([
+			extensionContext.rebuild(),
+			webviewContext.rebuild(),
+		]);
+		await Promise.all([
+			extensionContext.dispose(),
+			webviewContext.dispose(),
+		]);
 	}
 }
 
