@@ -23,6 +23,60 @@ button {
 	font: inherit;
 }
 
+.workspace-state {
+	display: flex;
+	width: 100%;
+	height: 100%;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 9px;
+	padding: 24px;
+	color: var(--vscode-descriptionForeground);
+	background: var(--vscode-editor-background);
+	text-align: center;
+}
+
+.workspace-state.is-error {
+	color: var(--vscode-errorForeground);
+}
+
+.workspace-state-message {
+	color: var(--vscode-editor-foreground);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.workspace-state.is-error .workspace-state-message {
+	color: var(--vscode-errorForeground);
+}
+
+.workspace-state-detail {
+	max-width: 560px;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.workspace-state-action {
+	min-height: 30px;
+	margin-top: 4px;
+	padding: 4px 12px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 4px;
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+	cursor: pointer;
+}
+
+.workspace-state-action:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.workspace-state-action:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
+}
+
 .graph-shell {
 	display: grid;
 	grid-template-rows: 52px minmax(0, 1fr) 34px;

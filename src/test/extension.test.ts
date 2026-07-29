@@ -1,7 +1,11 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { handleWebviewMessage } from '../extension';
-import { createSelectionChangedMessage } from '../model/webviewMessage';
+import {
+	createSelectionChangedMessage,
+	isExtensionToWebviewMessage,
+	isWebviewToExtensionMessage,
+} from '../model/webviewMessage';
 
 const commandId = 'crispy.openGraph';
 const webviewType = 'crispyGraph';
@@ -84,6 +88,67 @@ suite('Crispy Extension', function () {
 			'[Crispy] Selected node: file:components/ProfileIntro.tsx',
 			'[Crispy] Selection cleared',
 		]);
+	});
+
+	test('validates both directions of the Webview message contract', () => {
+		assert.ok(isWebviewToExtensionMessage({
+			type: 'webviewReady',
+		}));
+		assert.ok(isWebviewToExtensionMessage({
+			type: 'openWorkspaceFolder',
+		}));
+		assert.ok(isWebviewToExtensionMessage({
+			type: 'selectionChanged',
+			payload: {
+				selectedNodeId: 'file:src/extension.ts',
+			},
+		}));
+		assert.ok(!isWebviewToExtensionMessage({
+			type: 'selectionChanged',
+			payload: {
+				selectedNodeId: 42,
+			},
+		}));
+		assert.ok(!isWebviewToExtensionMessage({
+			type: 'unknownMessage',
+		}));
+
+		const workspaceLoadedMessage = {
+			type: 'workspaceLoaded',
+			payload: {
+				workspaceName: 'test-workspace',
+				nodes: [
+					{
+						id: 'project:test-workspace',
+						type: 'project',
+						name: 'test-workspace',
+						relativePath: '',
+						childrenIds: [],
+					},
+				],
+			},
+		};
+		assert.ok(isExtensionToWebviewMessage(workspaceLoadedMessage));
+		assert.ok(!isExtensionToWebviewMessage({
+			...workspaceLoadedMessage,
+			payload: {
+				...workspaceLoadedMessage.payload,
+				nodes: [
+					{
+						id: 'project:test-workspace',
+						type: 'project',
+						name: 'test-workspace',
+						childrenIds: 'not-an-array',
+					},
+				],
+			},
+		}));
+		assert.ok(!isExtensionToWebviewMessage({
+			type: 'workspaceError',
+			payload: {
+				message: 42,
+			},
+		}));
 	});
 
 	test('reuses, closes, and reopens the Crispy Webview panel', async () => {

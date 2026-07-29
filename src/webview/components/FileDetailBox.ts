@@ -41,7 +41,7 @@ export function createFileDetailBox(
 
 	if (symbols.length === 0) {
 		body.append(
-			createElement('p', 'box-empty', 'No function blocks in the mock data.'),
+			createElement('p', 'box-empty', 'No function blocks available.'),
 		);
 	} else {
 		for (const symbol of symbols) {
