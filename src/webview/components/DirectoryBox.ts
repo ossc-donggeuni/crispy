@@ -6,6 +6,16 @@ import {
 } from './componentTypes';
 import { createStructureBubble } from './StructureBubble';
 
+/** function createDirectoryBox( directory, context )
+ *
+ * - 디렉터리 이름, 상대 경로, 직접 항목 수와 Collapse 버튼을 표시한다.
+ * - 직접 포함된 Directory와 File을 Structure Bubble Grid로 배치한다.
+ * - Box 드래그, 접기, 디렉터리 선택 이벤트를 GraphView에 연결한다.
+ *
+ * @param directory 표시할 Directory 노드
+ * @param context 	그래프 컴포넌트 공통 컨텍스트
+ * @returns 			렌더링된 Directory Box 요소
+ */
 export function createDirectoryBox(
 	directory: ProjectNode,
 	context: GraphComponentContext,
@@ -48,6 +58,7 @@ export function createDirectoryBox(
 
 	const body = createElement('div', 'box-body');
 	if (directory.childrenIds.length === 0) {
+		// 직접 자식이 없는 실제 빈 디렉터리는 별도 안내 문구를 표시한다.
 		body.append(createElement('p', 'box-empty', 'This directory is empty.'));
 	} else {
 		const grid = createElement('div', 'bubble-grid');
@@ -62,6 +73,7 @@ export function createDirectoryBox(
 
 	box.append(header, body);
 	box.addEventListener('click', (event) => {
+		// Collapse와 Bubble 버튼이 아닌 Box 빈 영역에서 디렉터리를 선택한다.
 		const target = event.target as HTMLElement;
 		if (!target.closest('button')) {
 			context.onSelect(directory.id);

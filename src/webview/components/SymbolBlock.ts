@@ -6,6 +6,13 @@ import {
 	type GraphComponentContext,
 } from './componentTypes';
 
+/** function getStartLine( symbol )
+ *
+ * - 메타데이터가 없는 기존 Mock Symbol ID의 마지막 구간에서 줄 번호를 읽는다.
+ *
+ * @param symbol 줄 번호를 확인할 Symbol 노드
+ * @returns 		표시할 줄 번호 또는 알 수 없음을 나타내는 문자
+ */
 function getStartLine(symbol: ProjectNode): string {
 	const line = symbol.id.slice(symbol.id.lastIndexOf(':') + 1);
 	return /^\d+$/.test(line) ? line : '—';
@@ -33,6 +40,16 @@ const symbolKindIcons: Record<SymbolDisplayKind, string> = {
 	module: 'M',
 };
 
+/** function createSymbolBlock( symbol, context )
+ *
+ * - Symbol 이름과 실제 종류 및 선언 줄 번호를 선택 가능한 Block으로 표시한다.
+ * - 메타데이터가 없으면 기존 Mock ID와 Function 표시 규칙을 사용한다.
+ * - 선택 이벤트를 기존 노드 선택 경로에 전달한다.
+ *
+ * @param symbol 표시할 Symbol 노드
+ * @param context 그래프 컴포넌트 공통 컨텍스트
+ * @returns 		렌더링된 Symbol Block 요소
+ */
 export function createSymbolBlock(
 	symbol: ProjectNode,
 	context: GraphComponentContext,
@@ -61,6 +78,7 @@ export function createSymbolBlock(
 	content.append(name, meta);
 	block.append(icon, content);
 	block.addEventListener('click', (event) => {
+		// File Detail Box 선택으로 전파하지 않고 Symbol 자체를 선택한다.
 		event.stopPropagation();
 		context.onSelect(symbol.id);
 	});

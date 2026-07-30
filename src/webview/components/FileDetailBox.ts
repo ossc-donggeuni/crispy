@@ -6,6 +6,16 @@ import {
 } from './componentTypes';
 import { createSymbolBlock } from './SymbolBlock';
 
+/** function createFileDetailBox( file, context )
+ *
+ * - 파일 이름, 상대 경로, 닫기 버튼과 Symbol 목록을 표시한다.
+ * - 파일 분석 상태에 따라 Loading, Ready, Unsupported, Failed UI를 선택한다.
+ * - Box 드래그, 파일 선택, 분석 Retry 이벤트를 GraphView에 연결한다.
+ *
+ * @param file 	표시할 File 노드
+ * @param context 그래프 컴포넌트 공통 컨텍스트
+ * @returns 		렌더링된 File Detail Box 요소
+ */
 export function createFileDetailBox(
 	file: ProjectNode,
 	context: GraphComponentContext,
@@ -40,6 +50,7 @@ export function createFileDetailBox(
 		.filter((node): node is ProjectNode => node?.type === 'symbol');
 	const analysisState = context.fileAnalysisStates.get(file.id);
 
+	// 파일별 최신 분석 상태에 맞는 본문을 표시한다.
 	switch (analysisState?.status) {
 		case 'loading':
 			body.append(
@@ -60,6 +71,7 @@ export function createFileDetailBox(
 			);
 			break;
 		case 'failed':
+			// 긴 원본 오류는 기본 본문 대신 Hover title로만 제공한다.
 			body.title = analysisState.errorMessage ?? '';
 			body.append(
 				createElement('p', 'box-empty', 'File analysis failed.'),
@@ -70,6 +82,7 @@ export function createFileDetailBox(
 			appendReadySymbols(body, symbols, context);
 			break;
 		default:
+			// Mock 데이터처럼 분석 상태 없이 전달된 Symbol도 기존 화면과 호환한다.
 			if (symbols.length > 0) {
 				appendSymbolBlocks(body, symbols, context);
 			} else {
@@ -81,6 +94,7 @@ export function createFileDetailBox(
 
 	box.append(header, body);
 	box.addEventListener('click', (event) => {
+		// Close와 Retry 버튼이 아닌 Box 빈 영역에서 파일을 선택한다.
 		const target = event.target as HTMLElement;
 		if (!target.closest('button')) {
 			context.onSelect(file.id);
@@ -89,6 +103,15 @@ export function createFileDetailBox(
 	return box;
 }
 
+/** function appendReadySymbols( body, symbols, context )
+ *
+ * - 분석이 완료된 파일의 Symbol 목록 또는 정상 빈 결과 문구를 추가한다.
+ *
+ * @param body 	Symbol 목록을 추가할 File Detail 본문
+ * @param symbols 선언 순서대로 정렬된 Symbol 노드 목록
+ * @param context 그래프 컴포넌트 공통 컨텍스트
+ * @returns 		반환값 없음
+ */
 function appendReadySymbols(
 	body: HTMLElement,
 	symbols: readonly ProjectNode[],
@@ -108,6 +131,15 @@ function appendReadySymbols(
 	appendSymbolBlocks(body, symbols, context);
 }
 
+/** function appendSymbolBlocks( body, symbols, context )
+ *
+ * - 전달된 Symbol 노드를 현재 순서대로 Symbol Block으로 변환해 추가한다.
+ *
+ * @param body 	Symbol Block을 추가할 File Detail 본문
+ * @param symbols 표시할 Symbol 노드 목록
+ * @param context 그래프 컴포넌트 공통 컨텍스트
+ * @returns 		반환값 없음
+ */
 function appendSymbolBlocks(
 	body: HTMLElement,
 	symbols: readonly ProjectNode[],
@@ -118,6 +150,15 @@ function appendSymbolBlocks(
 	}
 }
 
+/** function createRetryButton( file, context )
+ *
+ * - failed 파일 분석을 다시 요청하는 Retry 버튼을 만든다.
+ * - Click이 파일 선택이나 Box 드래그로 전파되지 않게 한다.
+ *
+ * @param file 	다시 분석할 File 노드
+ * @param context 그래프 컴포넌트 공통 컨텍스트
+ * @returns 		렌더링된 Retry 버튼
+ */
 function createRetryButton(
 	file: ProjectNode,
 	context: GraphComponentContext,

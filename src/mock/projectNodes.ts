@@ -1,5 +1,10 @@
 import type { ProjectNode } from '../model/projectNode';
 
+/** constant mockProjectNodes
+ *
+ * - GraphView 개발과 데모 참고용 프로젝트 구조를 ProjectNode 목록으로 만든 데이터
+ * - 실제 Extension 실행 경로에서는 Workspace Scanner 결과를 사용한다.
+ */
 export const mockProjectNodes: readonly ProjectNode[] = [
 	{
 		id: 'project:01-next-profile',

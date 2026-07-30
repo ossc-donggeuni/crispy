@@ -1,3 +1,11 @@
+/**
+ * style Crispy Graph Webview
+ *
+ * - VS Code Theme Color 변수를 사용해 Graph Canvas와 상태 화면을 구성한다.
+ * - Project, Directory, File Detail, Bubble, Symbol의 계층과 선택 상태를 구분한다.
+ * - Box 이동, Canvas Pan, Zoom, Loading 및 Retry 상태의 시각 피드백을 제공한다.
+ */
+
 :root {
 	color-scheme: light dark;
 	font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
