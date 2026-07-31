@@ -2,6 +2,8 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 
+import { disposeCodexRuns } from './agent/runCodex';
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -22,5 +24,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(disposable);
 }
 
-// This method is called when your extension is deactivated
-export function deactivate() {}
+// Extension Host가 종료될 때 Codex가 별도 process로 남지 않도록 모든 활성 실행을 기다려 정리합니다.
+export async function deactivate(): Promise<void> {
+	await disposeCodexRuns();
+}
