@@ -9,13 +9,15 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:crispy.openGraph"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "crispy.helloWorld",
-        "title": "Hello World"
+        "command": "crispy.openGraph",
+        "title": "Crispy: Open Graph View"
       }
     ]
   },
