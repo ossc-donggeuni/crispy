@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { isRecord } from '../model/webviewMessage';
 import type { AgentEvent, AgentToolName, ChangePlan } from './agentTypes';
 import { validateChangePlan, type ChangePlanValidationResult } from './changePlanValidator';
 
@@ -285,8 +286,4 @@ function extractWorkspaceTarget(
 		return relativeTarget.split(path.sep).join('/');
 	}
 	return undefined;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

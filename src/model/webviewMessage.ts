@@ -428,6 +428,6 @@ function isProjectNodeType(value: unknown): value is ProjectNode['type'] {
  * @param value 검사할 원본 값
  * @returns 	문자열 키 객체 여부
  */
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
