@@ -10,7 +10,9 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:crispy.openGraph"
+    "onCommand:crispy.openGraph",
+    "onCommand:crispy.openChat",
+    "onCommand:crispy.openGraphAndChat"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -18,6 +20,14 @@
       {
         "command": "crispy.openGraph",
         "title": "Crispy: Open Graph View"
+      },
+      {
+        "command": "crispy.openChat",
+        "title": "Crispy: Open Chat View"
+      },
+      {
+        "command": "crispy.openGraphAndChat",
+        "title": "Crispy: Open Graph and Chat Views"
       }
     ]
   },

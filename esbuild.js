@@ -71,10 +71,10 @@ const createProblemMatcherPlugin = (target) => ({
 
 /** function main()
  *
- * - Extension Host용 CommonJS와 Webview용 Browser IIFE 빌드 컨텍스트를 만든다.
- * - Watch 모드에서는 두 번들을 감시하고 일반 모드에서는 빌드 후 리소스를 정리한다.
+ * - Extension Host, Graph Webview, Chat Webview용 빌드 컨텍스트를 만든다.
+ * - Watch 모드에서는 세 번들을 감시하고 일반 모드에서는 빌드 후 리소스를 정리한다.
  *
- * @returns 두 esbuild 대상의 실행이 완료되면 끝나는 Promise
+ * @returns 세 esbuild 대상의 실행이 완료되면 끝나는 Promise
  */
 async function main() {
 	const extensionContext = await esbuild.context({
@@ -91,7 +91,6 @@ async function main() {
 		external: ['vscode'],
 		logLevel: 'silent',
 		plugins: [
-			esbuildProblemMatcherPlugin,
 			agentAssetsPlugin,
 			createProblemMatcherPlugin('extension'),
 		],
@@ -114,19 +113,39 @@ async function main() {
 		],
 	});
 
+	const chatContext = await esbuild.context({
+		entryPoints: [
+			'src/chat/chatMain.ts'
+		],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		outfile: 'dist/chat/chat.js',
+		logLevel: 'silent',
+		plugins: [
+			createProblemMatcherPlugin('chat'),
+		],
+	});
+
 	if (watch) {
 		await Promise.all([
 			extensionContext.watch(),
 			webviewContext.watch(),
+			chatContext.watch(),
 		]);
 	} else {
 		await Promise.all([
 			extensionContext.rebuild(),
 			webviewContext.rebuild(),
+			chatContext.rebuild(),
 		]);
 		await Promise.all([
 			extensionContext.dispose(),
 			webviewContext.dispose(),
+			chatContext.dispose(),
 		]);
 	}
 }
