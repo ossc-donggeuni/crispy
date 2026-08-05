@@ -6,6 +6,9 @@ import { ChatRuntimeSettingsControl } from './chatRuntimeSettings';
 /** 대화 말풍선을 좌우에 배치하기 위해 사용하는 메시지 작성자 구분이다. */
 export type ChatRole = 'user' | 'agent';
 
+/** Agent 메시지가 아직 생성 중인지 완료되었는지 나타내는 렌더링 상태다. */
+export type ChatMessageStatus = 'streaming' | 'completed';
+
 /** 승인 요청 callback에 전달되는 사용자의 최종 결정이다. */
 export type ChatApprovalDecision = 'approved' | 'rejected';
 
@@ -29,7 +32,14 @@ export interface ChatMessage {
 	text: string;
 	/** 메시지 메타데이터에 표시할 생성 ISO 시각이다. */
 	createdAt: string;
+	/** 생략하면 이전 데이터와 호환되도록 완료된 메시지로 처리한다. */
+	status?: ChatMessageStatus;
 }
+
+/** 스트리밍 delta 또는 완료 이벤트가 기존 메시지에서 변경할 수 있는 필드다. */
+export type ChatMessagePatch = Partial<
+	Pick<ChatMessage, 'text' | 'createdAt' | 'status'>
+>;
 
 /** Agent·모델·모델 옵션에서 공통으로 사용하는 선택 항목이다. */
 export interface ChatSelectOption {
@@ -116,6 +126,8 @@ type ChatCopy = {
 	reject: string;
 	approvedAnnouncement: string;
 	rejectedAnnouncement: string;
+	showMore: string;
+	showLess: string;
 };
 
 /** 향후 언어별 copy 객체로 교체할 수 있도록 화면 문구를 한곳에서 관리한다. */
@@ -140,7 +152,12 @@ export const koreanChatCopy: Readonly<ChatCopy> = Object.freeze({
 	reject: '거부',
 	approvedAnnouncement: '승인했습니다.',
 	rejectedAnnouncement: '거부했습니다.',
+	showMore: '더 보기',
+	showLess: '접기',
 });
+
+/** 완료된 메시지에서 기본으로 노출할 실제 렌더링 줄 수다. */
+const collapsedMessageLineCount = 8;
 
 /**
  * 독립 Chat WebviewPanel 안에서 동작하는 Chat UI다.
@@ -168,12 +185,17 @@ export class ChatView {
 	private disposed = false;
 	private localMessageSequence = 0;
 	private announcementFrame: number | undefined;
+	private messageMeasurementFrame: number | undefined;
+	private lastMessageListWidth = -1;
+	private readonly expandedMessageIds = new Set<string>();
+	private messageResizeObserver: ResizeObserver | undefined;
 
 	private historyControl!: ChatHistoryControl;
 	private runtimeSettings!: ChatRuntimeSettingsControl;
 	private messageList!: HTMLElement;
 	private approvalHost!: HTMLElement;
 	private decisionAnnouncer!: HTMLElement;
+	private footer!: HTMLElement;
 	private composerForm!: HTMLFormElement;
 	private messageInput!: HTMLTextAreaElement;
 	private submitButton!: HTMLButtonElement;
@@ -242,6 +264,39 @@ export class ChatView {
 	}
 
 	/**
+	 * 스트리밍 본문과 완료 상태처럼 기존 메시지의 가변 필드만 갱신한다.
+	 *
+	 * @param messageId 갱신할 메시지의 안정적인 식별자.
+	 * @param patch 새 본문·시각·상태 중 변경할 값.
+	 */
+	public updateMessage(messageId: string, patch: ChatMessagePatch): void {
+		if (this.disposed) {
+			return;
+		}
+
+		const message = this.messages.find((candidate) => candidate.id === messageId);
+		if (!message) {
+			return;
+		}
+
+		if (patch.text !== undefined) {
+			message.text = patch.text;
+		}
+		if (patch.createdAt !== undefined) {
+			message.createdAt = patch.createdAt;
+		}
+		if (patch.status !== undefined) {
+			message.status = patch.status;
+		}
+
+		const wasNearBottom = this.isMessageListNearBottom();
+		this.renderMessages();
+		if (wasNearBottom) {
+			this.messageList.scrollTop = this.messageList.scrollHeight;
+		}
+	}
+
+	/**
 	 * 전송 버튼과 입력 도구를 idle 또는 실행 중 상태로 전환한다.
 	 *
 	 * @param running `true`이면 설정·입력을 잠그고 중지 아이콘을 표시한다.
@@ -282,6 +337,12 @@ export class ChatView {
 			cancelAnimationFrame(this.announcementFrame);
 			this.announcementFrame = undefined;
 		}
+		if (this.messageMeasurementFrame !== undefined) {
+			cancelAnimationFrame(this.messageMeasurementFrame);
+			this.messageMeasurementFrame = undefined;
+		}
+		this.messageResizeObserver?.disconnect();
+		this.messageResizeObserver = undefined;
 		this.root.replaceChildren();
 	}
 
@@ -323,12 +384,24 @@ export class ChatView {
 		this.messageList.setAttribute('aria-live', 'polite');
 		this.messageList.setAttribute('aria-relevant', 'additions');
 		this.messageList.setAttribute('aria-label', '대화 메시지');
+		if (typeof ResizeObserver !== 'undefined') {
+			this.messageResizeObserver = new ResizeObserver((entries) => {
+				const width = entries[0]?.contentRect.width
+					?? this.messageList.clientWidth;
+				if (Math.abs(width - this.lastMessageListWidth) < 0.5) {
+					return;
+				}
+				this.lastMessageListWidth = width;
+				this.scheduleMessageOverflowMeasurement();
+			});
+			this.messageResizeObserver.observe(this.messageList);
+		}
 		this.approvalHost = createElement('aside', 'chat-approval-dock-host');
 		this.approvalHost.hidden = true;
 		this.approvalHost.setAttribute('aria-live', 'polite');
 		this.approvalHost.setAttribute('aria-atomic', 'true');
 
-		const footer = createElement('footer', 'chat-footer');
+		this.footer = createElement('footer', 'chat-footer');
 		this.composerForm = createElement('form', 'chat-composer');
 		this.composerForm.addEventListener('submit', (event) => {
 			event.preventDefault();
@@ -383,7 +456,10 @@ export class ChatView {
 		this.runStatus = createElement('span', 'chat-visually-hidden');
 		this.runStatus.setAttribute('aria-live', 'polite');
 		this.composerForm.append(composerSurface, this.runStatus);
-		footer.append(this.composerForm);
+		this.footer.append(this.composerForm);
+
+		const actionSlot = createElement('div', 'chat-action-slot');
+		actionSlot.append(this.approvalHost, this.footer);
 
 		this.decisionAnnouncer = createElement(
 			'div',
@@ -396,8 +472,7 @@ export class ChatView {
 		shell.append(
 			toolbar,
 			this.messageList,
-			this.approvalHost,
-			footer,
+			actionSlot,
 		);
 		this.root.append(shell, this.decisionAnnouncer);
 	}
@@ -414,7 +489,7 @@ export class ChatView {
 			);
 			this.messageList.append(empty);
 		} else {
-			for (const message of this.messages) {
+			for (const [index, message] of this.messages.entries()) {
 				const article = createElement(
 					'article',
 					`chat-message is-${message.role}`,
@@ -431,19 +506,46 @@ export class ChatView {
 					formatClockTime(message.createdAt),
 				);
 				time.dateTime = message.createdAt;
+				const content = createElement('div', 'chat-message-content');
+				content.dataset.messageId = message.id;
 				const body = createElement('p', 'chat-message-body', message.text);
+				body.id = `chat-message-body-${index}`;
+				const overflowControls = createElement(
+					'div',
+					'chat-message-overflow-controls',
+				);
+				overflowControls.hidden = true;
+				const ellipsis = createElement('span', 'chat-message-ellipsis', '…');
+				ellipsis.setAttribute('aria-hidden', 'true');
+				const toggleButton = createElement(
+					'button',
+					'chat-message-toggle',
+					this.copy.showMore,
+				);
+				toggleButton.type = 'button';
+				toggleButton.setAttribute('aria-controls', body.id);
+				toggleButton.setAttribute('aria-expanded', 'false');
+				toggleButton.addEventListener('click', () => {
+					this.toggleMessageExpansion(message.id, article);
+				});
+				overflowControls.append(ellipsis, toggleButton);
+				content.append(body, overflowControls);
 				metadata.append(sender, time);
-				article.append(metadata, body);
+				article.append(metadata, content);
 				this.messageList.append(article);
 			}
 		}
+
+		this.scheduleMessageOverflowMeasurement();
 	}
 
 	/** 현재 승인 요청을 조건부 Dock으로 렌더링하고 요청이 없으면 공간을 회수한다. */
 	private renderApproval(): void {
 		this.approvalHost.replaceChildren();
 		this.approvalHost.hidden = this.approvalRequest === undefined;
+		this.footer.hidden = this.approvalRequest !== undefined;
 		if (!this.approvalRequest) {
+			this.updateComposerState();
 			return;
 		}
 
@@ -496,6 +598,7 @@ export class ChatView {
 	private startNewChat(): void {
 		this.selectedSessionId = undefined;
 		this.messages = [];
+		this.expandedMessageIds.clear();
 		this.approvalRequest = undefined;
 		this.isRunning = false;
 		this.messageInput.value = '';
@@ -508,6 +611,101 @@ export class ChatView {
 		this.updateComposerState();
 		this.messageInput.focus();
 		this.invokeSafely(this.callbacks.onNewChat, '새 대화 callback');
+	}
+
+	/** 메시지의 펼침 상태를 바꾸고 접힐 때 현재 카드가 화면에 남도록 보정한다. */
+	private toggleMessageExpansion(messageId: string, article: HTMLElement): void {
+		const wasExpanded = this.expandedMessageIds.has(messageId);
+		if (wasExpanded) {
+			this.expandedMessageIds.delete(messageId);
+		} else {
+			this.expandedMessageIds.add(messageId);
+		}
+
+		this.measureMessageOverflow();
+		if (wasExpanded) {
+			requestAnimationFrame(() => {
+				if (!this.disposed) {
+					article.scrollIntoView({ block: 'nearest' });
+				}
+			});
+		}
+	}
+
+	/** 다음 paint 직전에 모든 완료 메시지의 실제 8줄 초과 여부를 한 번 측정한다. */
+	private scheduleMessageOverflowMeasurement(): void {
+		if (this.disposed || this.messageMeasurementFrame !== undefined) {
+			return;
+		}
+
+		this.messageMeasurementFrame = requestAnimationFrame(() => {
+			this.messageMeasurementFrame = undefined;
+			this.measureMessageOverflow();
+		});
+	}
+
+	/** 원문 높이와 계산된 line-height를 비교해 각 메시지의 접기 UI를 동기화한다. */
+	private measureMessageOverflow(): void {
+		if (this.disposed) {
+			return;
+		}
+
+		const messagesById = new Map(this.messages.map((message) => [message.id, message]));
+		const contents = this.messageList.querySelectorAll<HTMLElement>(
+			'.chat-message-content[data-message-id]',
+		);
+		for (const content of contents) {
+			const messageId = content.dataset.messageId;
+			const message = messageId ? messagesById.get(messageId) : undefined;
+			const body = content.querySelector<HTMLElement>('.chat-message-body');
+			const controls = content.querySelector<HTMLElement>(
+				'.chat-message-overflow-controls',
+			);
+			const button = controls?.querySelector<HTMLButtonElement>(
+				'.chat-message-toggle',
+			);
+			if (!messageId || !message || !body || !controls || !button) {
+				continue;
+			}
+
+			body.classList.remove('is-collapsed');
+			content.classList.remove('is-collapsible', 'is-collapsed', 'is-expanded');
+			const isStreaming = message.role === 'agent'
+				&& message.status === 'streaming';
+			const bodyStyles = getComputedStyle(body);
+			const lineHeight = parsePixelValue(bodyStyles.lineHeight, 18);
+			const verticalPadding = parsePixelValue(bodyStyles.paddingTop, 0)
+				+ parsePixelValue(bodyStyles.paddingBottom, 0);
+			const renderedTextHeight = Math.max(0, body.scrollHeight - verticalPadding);
+			const collapsedHeight = lineHeight * collapsedMessageLineCount;
+			const isOverflowing = !isStreaming
+				&& renderedTextHeight > Math.ceil(collapsedHeight) + 1;
+			if (!isOverflowing) {
+				controls.hidden = true;
+				button.setAttribute('aria-expanded', 'false');
+				continue;
+			}
+
+			const isExpanded = this.expandedMessageIds.has(messageId);
+			controls.hidden = false;
+			content.classList.add('is-collapsible');
+			content.classList.toggle('is-collapsed', !isExpanded);
+			content.classList.toggle('is-expanded', isExpanded);
+			body.classList.toggle('is-collapsed', !isExpanded);
+			button.textContent = isExpanded ? this.copy.showLess : this.copy.showMore;
+			button.setAttribute('aria-expanded', String(isExpanded));
+			button.setAttribute(
+				'aria-label',
+				isExpanded ? '메시지 접기' : '메시지 더 보기',
+			);
+		}
+	}
+
+	/** 대화 영역 하단과 현재 scroll 위치가 충분히 가까운지 확인한다. */
+	private isMessageListNearBottom(): boolean {
+		return this.messageList.scrollHeight
+			- this.messageList.scrollTop
+			- this.messageList.clientHeight < 32;
 	}
 
 	/** 유효한 입력을 사용자 메시지로 추가하고 선택된 실행 환경과 함께 전달한다. */
@@ -692,12 +890,25 @@ export function createDemoChatOptions(now = new Date()): ChatViewOptions {
 				role: 'user',
 				text: '현재 프로젝트 구조를 확인하고 다음 구현 계획을 정리해 줘.',
 				createdAt: isoBefore(12 * minute),
+				status: 'completed',
 			},
 			{
 				id: 'message-agent-demo',
 				role: 'agent',
-				text: '프로젝트 구조를 확인했습니다. 변경 대상과 검증 순서를 포함한 계획을 준비했습니다.',
+				text: [
+					'프로젝트 구조를 확인했습니다.',
+					'변경 대상과 검증 순서를 포함한 계획을 준비했습니다.',
+					'',
+					'1. 기존 Chat 렌더링 구조를 유지합니다.',
+					'2. 승인 요청은 하단 Action Slot에 표시합니다.',
+					'3. Composer 입력 초안은 승인 대기 중에도 보존합니다.',
+					'4. 완료된 긴 메시지는 실제 렌더링 높이를 측정합니다.',
+					'5. 8줄을 초과하면 더 보기 버튼을 표시합니다.',
+					'6. Panel 폭이 바뀌면 접기 여부를 다시 계산합니다.',
+					'7. 좁은 화면과 낮은 화면을 함께 검증합니다.',
+				].join(' '),
 				createdAt: isoBefore(8 * minute),
+				status: 'completed',
 			},
 		],
 		agents: [{ value: 'codex', label: 'Codex' }],

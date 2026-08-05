@@ -61,10 +61,10 @@ button {
 	display: none !important;
 }
 
-/* 상단 도구·대화·승인 Dock·Composer를 세로로 배치하는 전체 화면 Grid다. */
+/* 상단 도구·대화·하단 Action Slot을 세로로 배치하는 전체 화면 Grid다. */
 .chat-shell {
 	display: grid;
-	grid-template-rows: 42px minmax(0, 1fr) auto auto;
+	grid-template-rows: 42px minmax(0, 1fr) auto;
 	width: 100%;
 	height: 100%;
 	min-width: 0;
@@ -182,28 +182,80 @@ button {
 	font-variant-numeric: tabular-nums;
 }
 
-/* 사용자·Agent 메시지 본문 말풍선의 공통 형태다. */
+/* 본문과 조건부 더 보기 도구를 하나의 말풍선으로 묶는 surface다. */
+.chat-message-content {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	overflow: hidden;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+/* 사용자·Agent 메시지 원문을 줄바꿈된 실제 높이로 측정하는 본문이다. */
 .chat-message-body {
 	max-width: 100%;
 	margin: 0;
 	padding: 9px 10px;
 	overflow-wrap: anywhere;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 8px;
 	line-height: 1.5;
 	white-space: pre-wrap;
 	word-break: break-word;
 }
 
+/* 완료된 긴 메시지는 원문을 유지한 채 실제 8줄 높이까지만 노출한다. */
+.chat-message-body.is-collapsed {
+	max-height: calc(12em + 18px);
+	overflow: hidden;
+}
+
+/* 접힌 긴 메시지의 생략 기호와 더 보기·접기 버튼을 말풍선 아래에 배치한다. */
+.chat-message-overflow-controls {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 0 10px 8px;
+}
+
+/* 접힌 본문 뒤에 더 내용이 있음을 시각적으로 알리는 생략 기호다. */
+.chat-message-ellipsis {
+	min-width: 0;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1;
+}
+
+/* 메시지 전문 노출 여부를 전환하는 텍스트 버튼이다. */
+.chat-message-toggle {
+	min-height: 26px;
+	margin-left: auto;
+	padding: 2px 4px;
+	border: 0;
+	border-radius: 4px;
+	color: inherit;
+	font: inherit;
+	font-size: 11px;
+	font-weight: 600;
+	background: transparent;
+	cursor: pointer;
+}
+
+/* 메시지 토글의 hover 상태를 현재 VS Code 테마 색상으로 표시한다. */
+.chat-message-toggle:hover {
+	background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
 /* Agent 메시지 말풍선의 왼쪽 배치용 색상과 모서리다. */
-.chat-message.is-agent .chat-message-body {
+.chat-message.is-agent .chat-message-content {
 	color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground));
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	border-top-left-radius: 3px;
 }
 
 /* 사용자 메시지 말풍선의 오른쪽 배치용 강조 색상과 모서리다. */
-.chat-message.is-user .chat-message-body {
+.chat-message.is-user .chat-message-content {
 	border-color: var(--vscode-focusBorder, var(--vscode-panel-border));
 	color: var(--vscode-list-activeSelectionForeground, var(--vscode-button-foreground));
 	background: var(--vscode-list-activeSelectionBackground, var(--vscode-button-background));
@@ -220,10 +272,19 @@ button {
 	text-align: center;
 }
 
-/* 승인 요청이 존재할 때만 대화와 Composer 사이에 나타나는 Dock host다. */
+/* 승인 UI와 Composer 중 한 가지만 표시하는 하단 Action Slot이다. */
+.chat-action-slot {
+	display: block;
+	grid-row: 3;
+	width: 100%;
+	min-width: 0;
+	min-height: 0;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+/* 승인 요청이 존재할 때 Action Slot 안에서 Composer를 대체하는 Dock host다. */
 .chat-approval-dock-host {
 	display: flex;
-	grid-row: 3;
 	width: 100%;
 	min-width: 0;
 	max-height: min(190px, 40cqh);
@@ -322,9 +383,8 @@ button {
 	background: var(--vscode-button-hoverBackground);
 }
 
-/* 전체 Grid 마지막 행에서 Composer를 감싸는 하단 영역이다. */
+/* 승인 요청이 없을 때 Action Slot 안에서 Composer를 감싸는 하단 영역이다. */
 .chat-footer {
-	grid-row: 4;
 	min-width: 0;
 	min-height: 0;
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
@@ -724,6 +784,7 @@ button {
 .chat-settings-row:focus-visible,
 .chat-settings-option:focus-visible,
 .chat-settings-back-button:focus-visible,
+.chat-message-toggle:focus-visible,
 .chat-message-input:focus-visible,
 .chat-submit-button:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
@@ -906,7 +967,8 @@ button {
 @media (forced-colors: active) {
 	.chat-toolbar-button,
 	.chat-session-button,
-	.chat-message-body,
+	.chat-message-content,
+	.chat-message-toggle,
 	.chat-approval-dock,
 	.chat-composer-surface,
 	.chat-runtime-summary-button,
