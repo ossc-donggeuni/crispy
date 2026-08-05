@@ -7,10 +7,13 @@ import {
 	isWebviewToExtensionMessage,
 } from '../model/webviewMessage';
 
-const commandId = 'crispy.openGraph';
-const webviewType = 'crispyGraph';
+const graphCommandId = 'crispy.openGraph';
+const chatCommandId = 'crispy.openChat';
+const openGraphAndChatCommandId = 'crispy.openGraphAndChat';
+const graphWebviewType = 'crispyGraph';
+const chatWebviewType = 'crispyChat';
 
-function getCrispyTabs(): vscode.Tab[] {
+function getWebviewTabs(webviewType: string): vscode.Tab[] {
 	return vscode.window.tabGroups.all
 		.flatMap((group) => group.tabs)
 		.filter(
@@ -23,17 +26,20 @@ function getCrispyTabs(): vscode.Tab[] {
 		);
 }
 
-async function waitForCrispyTabCount(expectedCount: number): Promise<vscode.Tab[]> {
+async function waitForWebviewTabCount(
+	webviewType: string,
+	expectedCount: number,
+): Promise<vscode.Tab[]> {
 	const timeoutAt = Date.now() + 2_000;
 	do {
-		const tabs = getCrispyTabs();
+		const tabs = getWebviewTabs(webviewType);
 		if (tabs.length === expectedCount) {
 			return tabs;
 		}
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	} while (Date.now() < timeoutAt);
 
-	return getCrispyTabs();
+	return getWebviewTabs(webviewType);
 }
 
 suite('Crispy Extension', function () {
@@ -47,9 +53,11 @@ suite('Crispy Extension', function () {
 		await extension.activate();
 	});
 
-	test('registers the graph command', async () => {
+	test('registers the Graph and Chat commands', async () => {
 		const commands = await vscode.commands.getCommands(true);
-		assert.ok(commands.includes(commandId));
+		assert.ok(commands.includes(graphCommandId));
+		assert.ok(commands.includes(chatCommandId));
+		assert.ok(commands.includes(openGraphAndChatCommandId));
 	});
 
 	test('uses the selection message contract and writes Output Channel logs', () => {
@@ -210,10 +218,10 @@ suite('Crispy Extension', function () {
 	});
 
 	test('reuses, closes, and reopens the Crispy Webview panel', async () => {
-		await vscode.commands.executeCommand(commandId);
-		await vscode.commands.executeCommand(commandId);
+		await vscode.commands.executeCommand(graphCommandId);
+		await vscode.commands.executeCommand(graphCommandId);
 
-		const initialTabs = await waitForCrispyTabCount(1);
+		const initialTabs = await waitForWebviewTabCount(graphWebviewType, 1);
 		assert.strictEqual(
 			initialTabs.length,
 			1,
@@ -231,11 +239,42 @@ suite('Crispy Extension', function () {
 		assert.strictEqual(initialTabs[0].label, 'Crispy');
 
 		await vscode.window.tabGroups.close(initialTabs[0]);
-		assert.strictEqual((await waitForCrispyTabCount(0)).length, 0);
+		assert.strictEqual(
+			(await waitForWebviewTabCount(graphWebviewType, 0)).length,
+			0,
+		);
 
-		await vscode.commands.executeCommand(commandId);
-		const reopenedTabs = await waitForCrispyTabCount(1);
+		await vscode.commands.executeCommand(graphCommandId);
+		const reopenedTabs = await waitForWebviewTabCount(graphWebviewType, 1);
 		assert.strictEqual(reopenedTabs.length, 1);
 		await vscode.window.tabGroups.close(reopenedTabs[0]);
+	});
+
+	test('reuses the independent Chat Webview panel', async () => {
+		await vscode.commands.executeCommand(chatCommandId);
+		await vscode.commands.executeCommand(chatCommandId);
+
+		const chatTabs = await waitForWebviewTabCount(chatWebviewType, 1);
+		assert.strictEqual(chatTabs.length, 1);
+		assert.strictEqual(chatTabs[0].label, 'Crispy Chat');
+		await vscode.window.tabGroups.close(chatTabs[0]);
+		assert.strictEqual(
+			(await waitForWebviewTabCount(chatWebviewType, 0)).length,
+			0,
+		);
+	});
+
+	test('opens Graph and Chat as separate Webview panels', async () => {
+		await vscode.commands.executeCommand(openGraphAndChatCommandId);
+
+		const graphTabs = await waitForWebviewTabCount(graphWebviewType, 1);
+		const chatTabs = await waitForWebviewTabCount(chatWebviewType, 1);
+		assert.strictEqual(graphTabs.length, 1);
+		assert.strictEqual(chatTabs.length, 1);
+		assert.notStrictEqual(
+			vscode.window.tabGroups.all.find((group) => group.tabs.includes(graphTabs[0])),
+			vscode.window.tabGroups.all.find((group) => group.tabs.includes(chatTabs[0])),
+		);
+		await vscode.window.tabGroups.close([...graphTabs, ...chatTabs]);
 	});
 });

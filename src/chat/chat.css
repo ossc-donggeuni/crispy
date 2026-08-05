@@ -1,0 +1,990 @@
+/**
+ * Crispy Codex Chat WebviewPanel 스타일.
+ *
+ * 기본 규칙이 노트북·데스크톱처럼 충분한 크기의 Panel을 담당하고,
+ * 파일 하단의 container query가 실제 Chat Panel의 폭과 높이가 작을 때만
+ * 간격·요약 정보·입력 높이를 단계적으로 축소한다.
+ */
+
+/* VS Code 테마 토큰을 상속하는 Webview 전역 색상과 글꼴 기준이다. */
+:root {
+	color-scheme: light dark;
+	font-family: var(
+		--vscode-font-family,
+		-apple-system,
+		BlinkMacSystemFont,
+		sans-serif
+	);
+	font-size: var(--vscode-font-size, 13px);
+	color: var(--vscode-editor-foreground);
+	background: var(--vscode-editor-background);
+}
+
+/* padding과 border를 요소 크기에 포함해 Panel 폭 계산을 예측 가능하게 만든다. */
+* {
+	box-sizing: border-box;
+}
+
+/* Webview 문서와 Chat mount 지점이 할당된 Panel 전체를 채우도록 고정한다. */
+html,
+body,
+#chat-app {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	overflow: hidden;
+}
+
+/* 모든 반응형 container query가 참조하는 Chat Panel 크기 컨테이너다. */
+#chat-app {
+	container-name: chat-pane;
+	container-type: size;
+	min-width: 0;
+	min-height: 0;
+	color: var(--vscode-sideBar-foreground, var(--vscode-editor-foreground));
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+/* 폼 컨트롤이 VS Code Webview의 기본 글꼴을 동일하게 사용하도록 한다. */
+button,
+textarea {
+	font: inherit;
+}
+
+/* 아이콘 버튼을 포함한 모든 버튼의 최소 세로 클릭 영역이다. */
+button {
+	min-height: 30px;
+}
+
+/* 조건부 UI가 숨겨졌을 때 Grid/Flex 공간을 남기지 않는다. */
+[hidden] {
+	display: none !important;
+}
+
+/* 상단 도구·대화·하단 Action Slot을 세로로 배치하는 전체 화면 Grid다. */
+.chat-shell {
+	display: grid;
+	grid-template-rows: 42px minmax(0, 1fr) auto;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+/* 새 대화와 이전 대화 기록 버튼이 위치하는 최상단 도구 영역이다. */
+.chat-toolbar {
+	display: flex;
+	grid-row: 1;
+	min-width: 0;
+	align-items: center;
+	justify-content: flex-end;
+	padding: 5px 9px;
+	border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border));
+	background: var(
+		--vscode-sideBarSectionHeader-background,
+		var(--vscode-sideBar-background, var(--vscode-editor-background))
+	);
+}
+
+/* 상단 아이콘 버튼들을 오른쪽에서 가로로 정렬한다. */
+.chat-toolbar-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* 상단 도구 버튼과 설정 팝오버의 뒤로 가기 버튼이 공유하는 아이콘 버튼 스타일이다. */
+.chat-toolbar-button,
+.chat-settings-back-button {
+	display: grid;
+	width: 30px;
+	min-height: 30px;
+	padding: 0;
+	place-items: center;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--vscode-icon-foreground, var(--vscode-editor-foreground));
+	background: transparent;
+	cursor: pointer;
+}
+
+/* 상단 도구 및 뒤로 가기 버튼의 hover 피드백이다. */
+.chat-toolbar-button:hover,
+.chat-settings-back-button:hover {
+	background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* 모든 inline SVG Chat 아이콘이 공유하는 선과 크기 기준이다. */
+.chat-icon {
+	display: block;
+	width: 18px;
+	height: 18px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.8;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+/* 남은 높이를 차지하고 메시지만 독립적으로 스크롤하는 대화 출력 영역이다. */
+.chat-message-list {
+	display: flex;
+	grid-row: 2;
+	min-width: 0;
+	min-height: 0;
+	flex-direction: column;
+	gap: 12px;
+	padding: 14px 10px 18px;
+	overflow-x: hidden;
+	overflow-y: auto;
+	scrollbar-gutter: stable;
+}
+
+/* 사용자·Agent 메시지 한 건의 공통 너비와 세로 구조다. */
+.chat-message {
+	display: flex;
+	width: min(88%, 560px);
+	min-width: 0;
+	flex-direction: column;
+	gap: 4px;
+}
+
+/* 사용자 메시지를 대화 영역 오른쪽에 배치한다. */
+.chat-message.is-user {
+	align-self: flex-end;
+	align-items: flex-end;
+}
+
+/* Agent 메시지를 대화 영역 왼쪽에 배치한다. */
+.chat-message.is-agent {
+	align-self: flex-start;
+	align-items: flex-start;
+}
+
+/* 발신자 이름과 전송 시간을 담는 메시지 메타데이터 행이다. */
+.chat-message-metadata {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	padding-inline: 2px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+}
+
+/* 메시지 메타데이터에서 발신자 이름을 강조한다. */
+.chat-message-sender {
+	font-weight: 650;
+}
+
+/* 메시지 시간이 길이 변화로 흔들리지 않도록 고정폭 숫자를 사용한다. */
+.chat-message-time {
+	font-variant-numeric: tabular-nums;
+}
+
+/* 본문과 조건부 더 보기 도구를 하나의 말풍선으로 묶는 surface다. */
+.chat-message-content {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	overflow: hidden;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+/* 사용자·Agent 메시지 원문을 줄바꿈된 실제 높이로 측정하는 본문이다. */
+.chat-message-body {
+	max-width: 100%;
+	margin: 0;
+	padding: 9px 10px;
+	overflow-wrap: anywhere;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* 완료된 긴 메시지는 원문을 유지한 채 실제 8줄 높이까지만 노출한다. */
+.chat-message-body.is-collapsed {
+	max-height: calc(12em + 18px);
+	overflow: hidden;
+}
+
+/* 접힌 긴 메시지의 생략 기호와 더 보기·접기 버튼을 말풍선 아래에 배치한다. */
+.chat-message-overflow-controls {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 0 10px 8px;
+}
+
+/* 접힌 본문 뒤에 더 내용이 있음을 시각적으로 알리는 생략 기호다. */
+.chat-message-ellipsis {
+	min-width: 0;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1;
+}
+
+/* 메시지 전문 노출 여부를 전환하는 텍스트 버튼이다. */
+.chat-message-toggle {
+	min-height: 26px;
+	margin-left: auto;
+	padding: 2px 4px;
+	border: 0;
+	border-radius: 4px;
+	color: inherit;
+	font: inherit;
+	font-size: 11px;
+	font-weight: 600;
+	background: transparent;
+	cursor: pointer;
+}
+
+/* 메시지 토글의 hover 상태를 현재 VS Code 테마 색상으로 표시한다. */
+.chat-message-toggle:hover {
+	background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* Agent 메시지 말풍선의 왼쪽 배치용 색상과 모서리다. */
+.chat-message.is-agent .chat-message-content {
+	color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground));
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border-top-left-radius: 3px;
+}
+
+/* 사용자 메시지 말풍선의 오른쪽 배치용 강조 색상과 모서리다. */
+.chat-message.is-user .chat-message-content {
+	border-color: var(--vscode-focusBorder, var(--vscode-panel-border));
+	color: var(--vscode-list-activeSelectionForeground, var(--vscode-button-foreground));
+	background: var(--vscode-list-activeSelectionBackground, var(--vscode-button-background));
+	border-top-right-radius: 3px;
+}
+
+/* 메시지가 없을 때 대화 영역 중앙에 표시하는 빈 상태 문구다. */
+.chat-message-empty {
+	align-self: center;
+	margin: auto;
+	padding: 16px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+	text-align: center;
+}
+
+/* 승인 UI와 Composer 중 한 가지만 표시하는 하단 Action Slot이다. */
+.chat-action-slot {
+	display: block;
+	grid-row: 3;
+	width: 100%;
+	min-width: 0;
+	min-height: 0;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+/* 승인 요청이 존재할 때 Action Slot 안에서 Composer를 대체하는 Dock host다. */
+.chat-approval-dock-host {
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	max-height: min(190px, 40cqh);
+	padding: 0 10px 8px;
+	overflow-x: hidden;
+	overflow-y: auto;
+}
+
+/* 승인 요청의 설명과 의사결정 버튼을 담는 카드 본체다. */
+.chat-approval-dock {
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	align-items: center;
+	gap: 12px;
+	padding: 10px;
+	border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border));
+	border-left: 3px solid var(--vscode-notificationsInfoIcon-foreground, var(--vscode-focusBorder));
+	border-radius: 10px;
+	background: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
+}
+
+/* 승인 상태·제목·설명을 세로로 묶는 카드 내용 영역이다. */
+.chat-approval-content {
+	display: flex;
+	min-width: 0;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: 4px;
+}
+
+/* 승인 카드가 일반 메시지가 아님을 알리는 작은 상태 레이블이다. */
+.chat-approval-eyebrow {
+	color: var(--vscode-descriptionForeground);
+	font-size: 9px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+/* 승인 대상 작업을 표시하는 카드 제목이다. */
+.chat-approval-title {
+	margin: 0;
+	color: var(--vscode-notifications-foreground, var(--vscode-editor-foreground));
+	font-size: 12px;
+	font-weight: 650;
+	line-height: 1.35;
+}
+
+/* 승인 대상의 세부 내용을 표시하고 긴 문자열을 안전하게 줄바꿈한다. */
+.chat-approval-description {
+	margin: 0;
+	overflow-wrap: anywhere;
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+/* 거부·승인 버튼을 카드 오른쪽에 배치하고 필요할 때 줄바꿈한다. */
+.chat-approval-actions {
+	display: flex;
+	min-width: min(210px, 42%);
+	flex: 0 1 auto;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+/* 승인 Dock 안의 거부·승인 버튼이 공유하는 크기와 테두리다. */
+.chat-approval-button {
+	flex: 1 1 92px;
+	padding: 4px 9px;
+	border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+/* 거부 동작은 VS Code 보조 버튼 색상을 사용한다. */
+.chat-approval-button.is-reject {
+	color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+	background: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+}
+
+/* 거부 버튼의 hover 피드백이다. */
+.chat-approval-button.is-reject:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* 승인 동작은 VS Code 기본 버튼 색상으로 우선순위를 강조한다. */
+.chat-approval-button.is-approve {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+/* 승인 버튼의 hover 피드백이다. */
+.chat-approval-button.is-approve:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+/* 승인 요청이 없을 때 Action Slot 안에서 Composer를 감싸는 하단 영역이다. */
+.chat-footer {
+	min-width: 0;
+	min-height: 0;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	overflow-x: hidden;
+	overflow-y: visible;
+}
+
+/* 메시지 입력 surface와 접근성 상태 문구를 묶는 form이다. */
+.chat-composer {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	padding: 0 10px 10px;
+}
+
+/* 실행 설정 팝오버가 열리면 버튼을 팝오버 폭까지 확장하고 chevron 방향을 뒤집는다. */
+.chat-runtime-summary-button[aria-expanded="true"] {
+	width: 320px;
+	flex-basis: 320px;
+}
+
+.chat-runtime-summary-button[aria-expanded="true"] > .chat-icon {
+	transform: rotate(180deg);
+}
+
+/* 실행 중 비활성화된 설정 버튼과 입력창에 동일한 비활성 피드백을 준다. */
+.chat-runtime-summary-button:disabled,
+.chat-message-input:disabled {
+	opacity: 0.65;
+	cursor: not-allowed;
+}
+
+/* textarea와 하단 실행 도구를 하나의 둥근 입력창처럼 보이게 하는 Composer 본체다. */
+.chat-composer-surface {
+	display: flex;
+	min-width: 0;
+	min-height: 110px;
+	flex-direction: column;
+	gap: 5px;
+	padding: 8px;
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	border-radius: 16px;
+	color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+}
+
+/* Composer 내부 어디에 focus가 있어도 전체 외곽선으로 focus를 표현한다. */
+.chat-composer-surface:focus-within {
+	border-color: var(--vscode-focusBorder);
+	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+}
+
+/* textarea와 숨겨진 접근성 label을 감싸는 메시지 입력 영역이다. */
+.chat-message-field {
+	display: flex;
+	min-width: 0;
+	flex: 0 0 auto;
+}
+
+/* 3줄부터 자동 증가하고 최대 높이 이후 내부 스크롤을 사용하는 textarea다. */
+.chat-message-input {
+	width: 100%;
+	min-width: 0;
+	height: 58px;
+	min-height: 58px;
+	max-height: 180px;
+	padding: 3px 4px;
+	overflow-x: hidden;
+	overflow-y: hidden;
+	border: 0;
+	outline: 0;
+	color: inherit;
+	background: transparent;
+	line-height: 1.45;
+	resize: none;
+}
+
+/* 입력 전 안내 문구는 VS Code placeholder 테마 색상을 사용한다. */
+.chat-message-input::placeholder {
+	color: var(--vscode-input-placeholderForeground);
+}
+
+/* Composer 하단 실행 도구를 오른쪽에 배치하는 행이다. */
+.chat-composer-tools {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	justify-content: flex-end;
+}
+
+/* 통합 실행 설정과 전송·중지 버튼을 한 줄로 유지하는 컨트롤 그룹이다. */
+.chat-composer-actions {
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+/* 실제 버튼들을 오른쪽으로 밀면서 좁은 폭에서는 먼저 줄어드는 가변 여백이다. */
+.chat-composer-actions::before {
+	min-width: 0;
+	flex: 1 1 auto;
+	content: "";
+}
+
+/* 닫힌 상태에서는 Agent·모델·모델 옵션 문자열 길이만큼만 차지하는 실행 설정 버튼이다. */
+.chat-runtime-summary-button {
+	display: flex;
+	width: fit-content;
+	min-width: 0;
+	max-width: min(380px, calc(100% - 44px));
+	flex: 0 1 auto;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 5px;
+	padding: 5px 8px;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	color: var(--vscode-foreground, var(--vscode-editor-foreground));
+	background: var(--vscode-button-secondaryBackground, var(--vscode-list-hoverBackground));
+	cursor: pointer;
+}
+
+/* 통합 실행 설정 버튼의 hover 피드백이다. */
+.chat-runtime-summary-button:hover:not(:disabled) {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-activeSelectionBackground));
+}
+
+/* 실행 설정 요약 문자열이 가용 폭을 넘으면 말줄임 처리한다. */
+.chat-runtime-summary {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 기본 큰 화면에서는 Agent만 표시하는 축약 요약을 숨긴다. */
+.chat-runtime-summary.is-compact {
+	display: none;
+}
+
+/* 실행 설정 버튼의 chevron은 텍스트가 줄어도 고정 크기를 유지한다. */
+.chat-runtime-summary-button > .chat-icon {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+}
+
+/* Composer 오른쪽 끝에서 고정 크기를 유지하는 원형 전송·중지 버튼이다. */
+.chat-submit-button {
+	display: grid;
+	width: 38px;
+	min-width: 38px;
+	height: 38px;
+	min-height: 38px;
+	padding: 0;
+	place-items: center;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 50%;
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+	cursor: pointer;
+}
+
+/* 활성 전송 버튼의 hover 피드백이다. */
+.chat-submit-button:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground);
+}
+
+/* 빈 입력으로 전송할 수 없을 때의 비활성 상태다. */
+.chat-submit-button:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+/* Agent 실행 중 같은 위치에 나타나는 중지 버튼의 상태 색상이다. */
+.chat-submit-button.is-running {
+	border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-button-border));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+	background: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+}
+
+/* 실행 중지 버튼의 hover 피드백이다. */
+.chat-submit-button.is-running:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* 원형 전송 버튼 내부 화살표 아이콘 크기다. */
+.chat-submit-button .chat-icon {
+	width: 20px;
+	height: 20px;
+}
+
+/* 실행 중지 상태의 사각형 아이콘을 채움 형태로 표시한다. */
+.chat-submit-button.is-running .chat-icon {
+	width: 16px;
+	height: 16px;
+	fill: currentColor;
+	stroke: none;
+}
+
+/* 최근 세션과 실행 설정을 layout 밖 overlay로 띄우는 공통 팝오버 surface다. */
+.chat-history-panel,
+.chat-runtime-settings-panel {
+	position: fixed;
+	z-index: 1000;
+	min-width: 0;
+	overflow-x: hidden;
+	overflow-y: auto;
+	border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+	border-radius: 10px;
+	color: var(--vscode-dropdown-foreground, var(--vscode-editor-foreground));
+	background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
+	box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgb(0 0 0 / 36%));
+}
+
+/* 두 팝오버 내부의 공통 여백이다. */
+.chat-history-panel,
+.chat-runtime-settings-panel {
+	padding: 7px;
+}
+
+/* 최근 세션 및 실행 설정 팝오버의 제목이다. */
+.chat-popover-title {
+	margin: 0;
+	padding: 5px 7px 7px;
+	color: var(--vscode-foreground, var(--vscode-editor-foreground));
+	font-size: 11px;
+	font-weight: 650;
+}
+
+/* 최근 세션 항목을 세로로 나열하는 목록이다. */
+.chat-history-list {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: 3px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* 긴 세션 제목이 부모 폭을 늘리지 않도록 목록 항목 폭을 제한한다. */
+.chat-history-item {
+	min-width: 0;
+}
+
+/* 세션 제목과 최근 응답 시간을 두 열로 표시하는 선택 버튼이다. */
+.chat-session-button {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	width: 100%;
+	min-width: 0;
+	gap: 8px;
+	padding: 7px;
+	border: 1px solid transparent;
+	border-radius: 5px;
+	color: inherit;
+	background: transparent;
+	text-align: left;
+	cursor: pointer;
+}
+
+/* 세션 항목의 hover 피드백이다. */
+.chat-session-button:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+/* 현재 선택된 세션의 강조 상태다. */
+.chat-session-button.is-selected {
+	border-color: var(--vscode-focusBorder);
+	color: var(--vscode-list-activeSelectionForeground);
+	background: var(--vscode-list-activeSelectionBackground);
+}
+
+/* 긴 세션 제목을 한 줄 말줄임으로 제한한다. */
+.chat-session-title {
+	overflow: hidden;
+	font-size: 11px;
+	font-weight: 550;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 세션별 최근 응답 시간을 오른쪽에 고정해 표시한다. */
+.chat-session-time {
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* 선택 배경 위에서 최근 응답 시간의 대비를 유지한다. */
+.chat-session-button.is-selected .chat-session-time {
+	color: inherit;
+	opacity: 0.82;
+}
+
+/* 실행 설정 개요 행과 실제 옵션 목록이 공유하는 세로 목록 구조다. */
+.chat-settings-rows,
+.chat-settings-option-list {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: 3px;
+}
+
+/* 설정 이름·현재 값·이동 아이콘을 세 열로 표시하는 개요 버튼이다. */
+.chat-settings-row {
+	display: grid;
+	grid-template-columns: minmax(70px, auto) minmax(0, 1fr) 18px;
+	width: 100%;
+	min-width: 0;
+	align-items: center;
+	gap: 7px;
+	padding: 8px 7px;
+	border: 1px solid transparent;
+	border-radius: 5px;
+	color: inherit;
+	background: transparent;
+	text-align: left;
+	cursor: pointer;
+}
+
+/* 설정 개요 행과 옵션 행이 공유하는 hover 피드백이다. */
+.chat-settings-row:hover,
+.chat-settings-option:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+/* Agent·모델·모델 옵션의 설정 이름을 강조한다. */
+.chat-settings-label {
+	font-weight: 550;
+}
+
+/* 설정의 현재 값을 오른쪽 정렬하고 긴 값은 말줄임 처리한다. */
+.chat-settings-value {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground);
+	text-align: right;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 설정 개요에서 다음 단계로 이동함을 나타내는 chevron이다. */
+.chat-settings-row .chat-icon {
+	width: 16px;
+	height: 16px;
+	color: var(--vscode-descriptionForeground);
+}
+
+/* 세부 옵션 화면의 뒤로 가기 버튼과 가운데 제목을 배치한다. */
+.chat-settings-subheader {
+	display: grid;
+	grid-template-columns: 30px minmax(0, 1fr) 30px;
+	align-items: center;
+	margin-bottom: 3px;
+}
+
+/* 세부 옵션 화면 제목을 팝오버 중앙 열에 고정한다. */
+.chat-settings-subheader .chat-popover-title {
+	grid-column: 2;
+	text-align: center;
+}
+
+/* Agent·모델·모델 옵션의 개별 선택 항목이다. */
+.chat-settings-option {
+	width: 100%;
+	min-width: 0;
+	padding: 7px;
+	overflow: hidden;
+	border: 1px solid transparent;
+	border-radius: 5px;
+	color: inherit;
+	background: transparent;
+	text-align: left;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+/* 현재 선택된 실행 설정 옵션의 강조 상태다. */
+.chat-settings-option[aria-selected="true"] {
+	color: var(--vscode-list-activeSelectionForeground);
+	background: var(--vscode-list-activeSelectionBackground);
+}
+
+/* 모든 키보드 조작 가능 요소가 공유하는 명확한 focus 표시다. */
+.chat-toolbar-button:focus-visible,
+.chat-session-button:focus-visible,
+.chat-approval-button:focus-visible,
+.chat-runtime-summary-button:focus-visible,
+.chat-settings-row:focus-visible,
+.chat-settings-option:focus-visible,
+.chat-settings-back-button:focus-visible,
+.chat-message-toggle:focus-visible,
+.chat-message-input:focus-visible,
+.chat-submit-button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+/* textarea 자체 outline 대신 Composer 전체 focus 테두리를 사용한다. */
+.chat-message-input:focus-visible {
+	outline: 0;
+}
+
+/* 화면에는 보이지 않지만 screen reader가 읽어야 하는 label과 상태 영역이다. */
+.chat-visually-hidden {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* Webview 초기화 실패 시 화면에 표시하는 오류 카드다. */
+.chat-startup-error {
+	display: flex;
+	width: min(420px, calc(100% - 24px));
+	min-height: 120px;
+	margin: 12px auto;
+	padding: 14px;
+	flex-direction: column;
+	justify-content: center;
+	gap: 6px;
+	border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border));
+	border-radius: 6px;
+	color: var(--vscode-errorForeground);
+	background: var(--vscode-inputValidation-errorBackground, var(--vscode-editorWidget-background));
+}
+
+/* 초기화 오류 카드의 핵심 오류 제목이다. */
+.chat-startup-error-title {
+	font-size: 12px;
+}
+
+/* 초기화 오류의 구체적인 원인을 줄바꿈 가능한 본문으로 표시한다. */
+.chat-startup-error-detail {
+	overflow-wrap: anywhere;
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+/*
+ * 작은 화면 1단계: Chat Panel 폭이 300px 이하일 때의 압축 규칙이다.
+ * VS Code 전체 창이나 모니터 해상도가 아니라 #chat-app의 실제 폭을 기준으로 한다.
+ */
+@container chat-pane (max-width: 300px) {
+	/* 상단 도구의 좌우 여백을 줄여 아이콘 공간을 확보한다. */
+	.chat-toolbar {
+		padding-inline: 7px;
+	}
+
+	/* 대화 목록과 Composer의 좌우 여백을 함께 축소한다. */
+	.chat-message-list,
+	.chat-composer {
+		padding-inline: 7px;
+	}
+
+	/* 좁은 Panel에서 말풍선이 가용 폭을 더 많이 사용하도록 한다. */
+	.chat-message {
+		width: 94%;
+	}
+
+	/* 승인 Dock의 좌우 여백을 Composer와 동일하게 맞춘다. */
+	.chat-approval-dock-host {
+		padding-inline: 7px;
+	}
+
+	/* 실행 설정 요약 버튼의 내부 좌우 여백을 축소한다. */
+	.chat-runtime-summary-button {
+		padding-inline: 7px;
+	}
+}
+
+/*
+ * 작은 화면 2단계: Chat Panel 폭이 240px 이하일 때의 최소 폭 규칙이다.
+ * 설정 요약을 Agent 이름만으로 축약하고 승인 UI를 세로로 전환한다.
+ */
+@container chat-pane (max-width: 240px) {
+	/* Composer surface의 좌우 여백을 한 단계 더 줄인다. */
+	.chat-composer-surface {
+		padding-inline: 6px;
+	}
+
+	/* 통합 설정과 전송 버튼 사이 간격을 최소화한다. */
+	.chat-composer-actions {
+		gap: 4px;
+	}
+
+	/* 통합 설정 버튼 내부 여백을 최소 폭에 맞춘다. */
+	.chat-runtime-summary-button {
+		padding-inline: 6px;
+	}
+
+	/* Agent·모델·옵션 전체 요약 문자열을 숨긴다. */
+	.chat-runtime-summary.is-full {
+		display: none;
+	}
+
+	/* 전체 요약 대신 현재 Agent 이름만 표시한다. */
+	.chat-runtime-summary.is-compact {
+		display: block;
+	}
+
+	/* 축약 요약의 글꼴 크기를 좁은 폭에 맞춘다. */
+	.chat-runtime-summary {
+		font-size: 11px;
+	}
+
+	/* 최근 세션 제목과 시간을 두 줄 구조로 전환한다. */
+	.chat-session-button {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 2px;
+	}
+
+	/* 승인 카드의 설명과 버튼을 위아래로 배치한다. */
+	.chat-approval-dock {
+		align-items: stretch;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	/* 승인·거부 버튼 그룹이 좁은 카드 전체 폭을 사용하도록 한다. */
+	.chat-approval-actions {
+		width: 100%;
+		min-width: 0;
+	}
+}
+
+/*
+ * 낮은 화면: Chat Panel 높이가 560px 이하일 때 대화 공간을 우선 확보한다.
+ * 메시지 간격·Composer 높이·승인 설명 길이를 함께 줄인다.
+ */
+@container chat-pane (max-height: 560px) {
+	/* 대화 목록의 상하 여백과 메시지 간격을 축소한다. */
+	.chat-message-list {
+		gap: 8px;
+		padding-block: 9px;
+	}
+
+	/* Composer form의 상하 여백을 줄인다. */
+	.chat-composer {
+		padding-block: 7px;
+	}
+
+	/* Composer surface의 최소 높이와 내부 상하 여백을 낮춘다. */
+	.chat-composer-surface {
+		min-height: 96px;
+		padding-block: 6px;
+	}
+
+	/* textarea의 기본·최대 높이를 줄이고 최대 이후 내부 스크롤을 유지한다. */
+	.chat-message-input {
+		height: 46px;
+		min-height: 46px;
+		max-height: 100px;
+	}
+
+	/* 승인 설명을 두 줄로 제한해 중요한 입력 영역을 보호한다. */
+	.chat-approval-description {
+		display: -webkit-box;
+		overflow: hidden;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+	}
+}
+
+/* Windows 고대비·forced colors 환경에서 주요 surface의 경계를 명시한다. */
+@media (forced-colors: active) {
+	.chat-toolbar-button,
+	.chat-session-button,
+	.chat-message-content,
+	.chat-message-toggle,
+	.chat-approval-dock,
+	.chat-composer-surface,
+	.chat-runtime-summary-button,
+	.chat-runtime-settings-panel,
+	.chat-history-panel,
+	.chat-submit-button {
+		border-color: CanvasText;
+	}
+}
+
+/* 모션 감소 환경에서는 스크롤과 전환 애니메이션을 사실상 제거한다. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+		transition-duration: 0.01ms !important;
+	}
+}

@@ -10,7 +10,9 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:crispy.openGraph"
+    "onCommand:crispy.openGraph",
+    "onCommand:crispy.openChat",
+    "onCommand:crispy.openGraphAndChat"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -18,6 +20,14 @@
       {
         "command": "crispy.openGraph",
         "title": "Crispy: Open Graph View"
+      },
+      {
+        "command": "crispy.openChat",
+        "title": "Crispy: Open Chat View"
+      },
+      {
+        "command": "crispy.openGraphAndChat",
+        "title": "Crispy: Open Graph and Chat Views"
       }
     ]
   },
@@ -33,22 +43,26 @@
     "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test --label unit",
+    "test:integration:codex": "pnpm run pretest && vscode-test --label integration"
   },
   "devDependencies": {
-    "@types/vscode": "^1.125.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "typescript-eslint": "^8.61.1",
-    "eslint": "^10.5.0",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
     "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
-    "@vscode/test-cli": "^0.0.15",
-    "@vscode/test-electron": "^3.0.0"
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "diff": "^8.0.4",
     "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
   }
 }

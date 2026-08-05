@@ -46,7 +46,7 @@ VS Code에서 Crispy 저장소를 연 뒤 다음 순서로 실행합니다.
 Crispy: Open Graph View
 ```
 
-Crispy Webview가 Editor 탭에 열리고 현재 Workspace의 프로젝트 구조를 분석하여 표시합니다.
+Crispy Graph Webview가 Editor 탭에 열리고 현재 Workspace의 프로젝트 구조를 분석하여 표시합니다.
 
 Workspace를 열지 않은 상태에서 Crispy를 실행하면 다음 안내와 함께 폴더 선택 버튼이 표시됩니다.
 
@@ -54,9 +54,27 @@ Workspace를 열지 않은 상태에서 Crispy를 실행하면 다음 안내와 
 No workspace opened.
 ```
 
+#### Codex Chat 확인
+
+Chat만 열려면 Command Palette에서 다음 명령을 실행합니다.
+
+```text
+Crispy: Open Chat View
+```
+
+Graph와 Chat을 각각 독립된 Webview로 동시에 열려면 다음 명령을 실행합니다.
+
+```text
+Crispy: Open Graph and Chat Views
+```
+
+동시 열기 명령은 Graph를 현재 Editor Group에, Chat을 옆 Editor Group에 배치합니다. 두 영역의 크기는 VS Code Editor Group 구분선을 드래그해 조절할 수 있고, Editor Layout 메뉴를 사용하면 좌우 또는 상하 배치로 변경할 수 있습니다.
+
+현재 Chat은 UI 검토 단계입니다. 메시지 입력, 전송·실행 중지 전환, 승인·거부 UI는 로컬 상태로 동작하며 실제 Codex 실행은 아직 연결되지 않았습니다.
+
 ### 4. 개발 중 자동 빌드
 
-Extension과 Webview를 변경하면서 자동으로 다시 빌드하려면 다음 명령을 사용합니다.
+Extension과 Graph·Chat Webview를 변경하면서 자동으로 다시 빌드하려면 다음 명령을 사용합니다.
 
 ```bash
 pnpm run watch:esbuild

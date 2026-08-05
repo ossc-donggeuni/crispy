@@ -1,7 +1,36 @@
 const esbuild = require("esbuild");
+const fs = require('node:fs/promises');
+const path = require('node:path');
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
+
+const agentAssets = ['common-plan.md', 'changePlan.schema.json'];
+
+/**
+ * 런타임 코드가 개인의 source 경로를 참조하지 않도록 Plan prompt와 Schema를
+ * Extension 배포 디렉터리에 함께 복사합니다.
+ */
+async function copyAgentAssets() {
+	const destination = path.join(__dirname, 'dist', 'agent');
+	await fs.mkdir(destination, { recursive: true });
+	await Promise.all(agentAssets.map((assetName) => fs.copyFile(
+		path.join(__dirname, 'src', 'agent', assetName),
+		path.join(destination, assetName),
+	)));
+}
+
+/** @type {import('esbuild').Plugin} */
+const agentAssetsPlugin = {
+	name: 'agent-assets',
+	setup(build) {
+		build.onEnd(async (result) => {
+			if (result.errors.length === 0) {
+				await copyAgentAssets();
+			}
+		});
+	},
+};
 
 /** function createProblemMatcherPlugin( target )
  *
@@ -42,10 +71,10 @@ const createProblemMatcherPlugin = (target) => ({
 
 /** function main()
  *
- * - Extension Host용 CommonJS와 Webview용 Browser IIFE 빌드 컨텍스트를 만든다.
- * - Watch 모드에서는 두 번들을 감시하고 일반 모드에서는 빌드 후 리소스를 정리한다.
+ * - Extension Host, Graph Webview, Chat Webview용 빌드 컨텍스트를 만든다.
+ * - Watch 모드에서는 세 번들을 감시하고 일반 모드에서는 빌드 후 리소스를 정리한다.
  *
- * @returns 두 esbuild 대상의 실행이 완료되면 끝나는 Promise
+ * @returns 세 esbuild 대상의 실행이 완료되면 끝나는 Promise
  */
 async function main() {
 	const extensionContext = await esbuild.context({
@@ -62,6 +91,7 @@ async function main() {
 		external: ['vscode'],
 		logLevel: 'silent',
 		plugins: [
+			agentAssetsPlugin,
 			createProblemMatcherPlugin('extension'),
 		],
 	});
@@ -83,19 +113,39 @@ async function main() {
 		],
 	});
 
+	const chatContext = await esbuild.context({
+		entryPoints: [
+			'src/chat/chatMain.ts'
+		],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		outfile: 'dist/chat/chat.js',
+		logLevel: 'silent',
+		plugins: [
+			createProblemMatcherPlugin('chat'),
+		],
+	});
+
 	if (watch) {
 		await Promise.all([
 			extensionContext.watch(),
 			webviewContext.watch(),
+			chatContext.watch(),
 		]);
 	} else {
 		await Promise.all([
 			extensionContext.rebuild(),
 			webviewContext.rebuild(),
+			chatContext.rebuild(),
 		]);
 		await Promise.all([
 			extensionContext.dispose(),
 			webviewContext.dispose(),
+			chatContext.dispose(),
 		]);
 	}
 }

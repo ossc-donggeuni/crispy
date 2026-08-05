@@ -8,8 +8,12 @@ import {
 } from './model/webviewMessage';
 import { analyzeDocumentSymbols } from './workspace/documentSymbolAnalyzer';
 import { scanWorkspaceFolder } from './workspace/projectScanner';
+import { disposeCodexRuns } from './agent/runCodex';
+import { CrispyChatPanel } from './chat/chatPanel';
 
 const openGraphCommand = 'crispy.openGraph';
+const openChatCommand = 'crispy.openChat';
+const openGraphAndChatCommand = 'crispy.openGraphAndChat';
 
 type OutputWriter = Pick<vscode.OutputChannel, 'appendLine'>;
 
@@ -118,9 +122,12 @@ class CrispyGraphPanel {
 	public static createOrShow(
 		extensionUri: vscode.Uri,
 		outputChannel: vscode.OutputChannel,
+		viewColumn?: vscode.ViewColumn,
 	): void {
 		// 활성 Editor 열이 없으면 첫 번째 열에 Crispy 패널을 표시한다.
-		const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+		const column = viewColumn
+			?? vscode.window.activeTextEditor?.viewColumn
+			?? vscode.ViewColumn.One;
 
 		// 이미 열린 패널이 있으면 새로 만들지 않고 앞으로 가져온다.
 		if (CrispyGraphPanel.currentPanel) {
@@ -465,7 +472,7 @@ class CrispyGraphPanel {
 
 /** function activate( context )
  *
- * - Crispy Output Channel과 그래프 열기 명령을 등록한다.
+ * - Graph와 Chat을 각각 독립 WebviewPanel로 여는 명령을 등록한다.
  * - Extension 종료 시 함께 정리되도록 구독 목록에 추가한다.
  *
  * @param context VS Code Extension 실행 컨텍스트
@@ -476,18 +483,44 @@ export function activate(context: vscode.ExtensionContext): void {
 	const openGraph = vscode.commands.registerCommand(openGraphCommand, () => {
 		CrispyGraphPanel.createOrShow(context.extensionUri, outputChannel);
 	});
+	const openChat = vscode.commands.registerCommand(openChatCommand, () => {
+		CrispyChatPanel.createOrShow(context.extensionUri);
+	});
+	const openGraphAndChat = vscode.commands.registerCommand(
+		openGraphAndChatCommand,
+		() => {
+			const graphColumn = vscode.window.activeTextEditor?.viewColumn
+				?? vscode.ViewColumn.One;
+			CrispyGraphPanel.createOrShow(
+				context.extensionUri,
+				outputChannel,
+				graphColumn,
+			);
+			CrispyChatPanel.createOrShow(
+				context.extensionUri,
+				vscode.ViewColumn.Beside,
+			);
+		},
+	);
 
-	context.subscriptions.push(outputChannel, openGraph);
+	context.subscriptions.push(
+		outputChannel,
+		openGraph,
+		openChat,
+		openGraphAndChat,
+	);
 }
 
 /** function deactivate()
- *
+ * - Extension Host가 종료될 때 Codex가 별도 process로 남지 않도록 모든 활성 실행을 기다려 정리한다.
  * - Extension 비활성화 시 현재 Crispy 패널을 정리한다.
  *
  * @returns 반환값 없음
  */
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
 	CrispyGraphPanel.disposeCurrent();
+	CrispyChatPanel.disposeCurrent();
+	await disposeCodexRuns();
 }
 
 /** function getErrorMessage( error )
