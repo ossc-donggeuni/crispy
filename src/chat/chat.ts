@@ -289,7 +289,9 @@ export class ChatView {
 			message.status = patch.status;
 		}
 
-		const wasNearBottom = this.isMessageListNearBottom();
+		const wasNearBottom = this.messageList.scrollHeight
+			- this.messageList.scrollTop
+			- this.messageList.clientHeight < 32;
 		this.renderMessages();
 		if (wasNearBottom) {
 			this.messageList.scrollTop = this.messageList.scrollHeight;
@@ -700,14 +702,7 @@ export class ChatView {
 			);
 		}
 	}
-
-	/** 대화 영역 하단과 현재 scroll 위치가 충분히 가까운지 확인한다. */
-	private isMessageListNearBottom(): boolean {
-		return this.messageList.scrollHeight
-			- this.messageList.scrollTop
-			- this.messageList.clientHeight < 32;
-	}
-
+	
 	/** 유효한 입력을 사용자 메시지로 추가하고 선택된 실행 환경과 함께 전달한다. */
 	private sendMessage(): void {
 		if (this.disposed || this.isRunning) {
