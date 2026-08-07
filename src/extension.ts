@@ -9,12 +9,20 @@ import {
 import { analyzeDocumentSymbols } from './workspace/documentSymbolAnalyzer';
 import { scanWorkspaceFolder } from './workspace/projectScanner';
 import { disposeCodexRuns } from './agent/runCodex';
+import {
+	CodexAppServerClient,
+	createCodexClientInfo,
+} from './chat/Codex';
 import { CrispyChatPanel } from './chat/chatPanel';
 
 const openGraphCommand = 'crispy.openGraph';
 const openChatCommand = 'crispy.openChat';
 const openGraphAndChatCommand = 'crispy.openGraphAndChat';
 
+/** Extension 활성화부터 비활성화까지 하나만 유지하는 Codex app-server 연결 소유자다. */
+let codexAppServerClient: CodexAppServerClient | undefined;
+
+/** 기존 VS Code Output Channel에서 메시지 기록에 필요한 최소 계약이다. */
 type OutputWriter = Pick<vscode.OutputChannel, 'appendLine'>;
 
 /** function handleWebviewMessage( message, outputChannel )
@@ -472,6 +480,7 @@ class CrispyGraphPanel {
 
 /** function activate( context )
  *
+ * - 설치된 Extension manifest로 Codex client metadata를 만들고 app-server 연결을 시작한다.
  * - Graph와 Chat을 각각 독립 WebviewPanel로 여는 명령을 등록한다.
  * - Extension 종료 시 함께 정리되도록 구독 목록에 추가한다.
  *
@@ -480,6 +489,16 @@ class CrispyGraphPanel {
  */
 export function activate(context: vscode.ExtensionContext): void {
 	const outputChannel = vscode.window.createOutputChannel('Crispy');
+	codexAppServerClient = new CodexAppServerClient({
+		clientInfo: createCodexClientInfo(
+			context.extension.id,
+			context.extension.packageJSON as unknown,
+		),
+		outputWriter: outputChannel,
+	});
+	void codexAppServerClient.start().catch(() => {
+		// 연결 실패 원인은 client가 구조화된 Output Channel 로그와 상태에 기록한다.
+	});
 	const openGraph = vscode.commands.registerCommand(openGraphCommand, () => {
 		CrispyGraphPanel.createOrShow(context.extensionUri, outputChannel);
 	});
@@ -512,7 +531,9 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /** function deactivate()
- * - Extension Host가 종료될 때 Codex가 별도 process로 남지 않도록 모든 활성 실행을 기다려 정리한다.
+ * - Extension Host가 종료될 때 Codex가 별도 process로 남지 않도록 app-server process tree를 정리한다.
+ * - process만 종료하며 Codex가 디스크에 저장한 Thread 세션은 삭제하지 않는다.
+ * - 기존 ChangePlan Codex 실행도 완료 또는 중단될 때까지 함께 기다린다.
  * - Extension 비활성화 시 현재 Crispy 패널을 정리한다.
  *
  * @returns 반환값 없음
@@ -520,7 +541,12 @@ export function activate(context: vscode.ExtensionContext): void {
 export async function deactivate(): Promise<void> {
 	CrispyGraphPanel.disposeCurrent();
 	CrispyChatPanel.disposeCurrent();
-	await disposeCodexRuns();
+	const appServerClient = codexAppServerClient;
+	codexAppServerClient = undefined;
+	await Promise.all([
+		disposeCodexRuns(),
+		appServerClient?.stop(),
+	]);
 }
 
 /** function getErrorMessage( error )
