@@ -23,6 +23,35 @@ export type {
 	SpawnAppServerProcess,
 } from './appServerClient';
 
+/** Chat Webview와 app-server 대화 상태를 연결하는 3단계 controller다. */
+export { CodexConversationController } from './conversationController';
+/** controller 생성과 snapshot 구독에 필요한 public 타입이다. */
+export type {
+	CodexConversationClient,
+	CodexConversationControllerOptions,
+	CodexConversationSnapshotListener,
+} from './conversationController';
+
+/** Chat Webview 양방향 메시지의 runtime validator다. */
+export {
+	isCodexChatHostMessage,
+	isCodexChatWebviewMessage,
+} from './chatBridgeProtocol';
+/** Chat Webview 양방향 메시지와 표시 snapshot public 타입이다. */
+export type {
+	CodexChatHostMessage,
+	CodexChatItemType,
+	CodexChatNewDraftMessage,
+	CodexChatReadyMessage,
+	CodexChatSelectConversationMessage,
+	CodexChatSendMessage,
+	CodexChatSessionView,
+	CodexChatSnapshotMessage,
+	CodexChatTimelineItemView,
+	CodexChatViewSnapshot,
+	CodexChatWebviewMessage,
+} from './chatBridgeProtocol';
+
 /** Thread·Turn·Item·승인·로그를 관리하는 Crispy 내부 상태와 View Model 타입이다. */
 export type {
 	CodexApprovalChoiceView,

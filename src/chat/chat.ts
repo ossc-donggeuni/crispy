@@ -2,6 +2,7 @@ import './chat.css';
 import { ChatHistoryControl } from './chatHistory';
 import { createChatIcon } from './chatIcons';
 import { ChatRuntimeSettingsControl } from './chatRuntimeSettings';
+import type { CodexChatItemType } from './Codex/chatBridgeProtocol';
 
 /** 대화 말풍선을 좌우에 배치하기 위해 사용하는 메시지 작성자 구분이다. */
 export type ChatRole = 'user' | 'agent';
@@ -28,6 +29,8 @@ export interface ChatMessage {
 	id: string;
 	/** 메시지의 발신자와 말풍선 정렬 방향이다. */
 	role: ChatRole;
+	/** Codex core 5 Item별 제목과 시각 표현을 구분하는 선택적 종류다. */
+	itemType?: CodexChatItemType;
 	/** HTML로 해석하지 않고 textContent로 출력할 메시지 본문이다. */
 	text: string;
 	/** 메시지 메타데이터에 표시할 생성 ISO 시각이다. */
@@ -89,6 +92,8 @@ export interface ChatViewOptions {
 	modelOptions: readonly ChatSelectOption[];
 	/** 처음부터 표시할 선택적 승인 요청이다. */
 	approvalRequest?: ChatApprovalRequest;
+	/** 처음 렌더링할 때 Composer를 사용할 수 있는지 나타낸다. */
+	composerAvailable?: boolean;
 	/** 로컬 메시지 전송 시 실행 환경과 본문을 전달한다. */
 	onSend?: (request: ChatSendRequest) => void;
 	/** 실행 중지 아이콘을 누르면 호출된다. */
@@ -128,6 +133,9 @@ type ChatCopy = {
 	rejectedAnnouncement: string;
 	showMore: string;
 	showLess: string;
+	reasoning: string;
+	commandExecution: string;
+	fileChange: string;
 };
 
 /** 향후 언어별 copy 객체로 교체할 수 있도록 화면 문구를 한곳에서 관리한다. */
@@ -154,6 +162,9 @@ export const koreanChatCopy: Readonly<ChatCopy> = Object.freeze({
 	rejectedAnnouncement: '거부했습니다.',
 	showMore: '더 보기',
 	showLess: '접기',
+	reasoning: '추론',
+	commandExecution: '명령 실행',
+	fileChange: '파일 변경',
 });
 
 /** 완료된 메시지에서 기본으로 노출할 실제 렌더링 줄 수다. */
@@ -162,8 +173,8 @@ const collapsedMessageLineCount = 8;
 /**
  * 독립 Chat WebviewPanel 안에서 동작하는 Chat UI다.
  *
- * 현재 단계에서는 모든 동작을 로컬 상태에 반영한다. callback과 공개 setter는 다음
- * 단계에서 Webview 메시지 및 AgentEvent를 연결할 때 같은 UI를 재사용하기 위한 경계다.
+ * 사용자 입력은 callback으로 Host에 전달하고, 공개 setter로 받은 authoritative
+ * snapshot을 동일한 레이아웃에 반영한다.
  */
 export class ChatView {
 	/** 현재 Chat UI가 사용하는 불변 한국어 copy다. */
@@ -182,8 +193,9 @@ export class ChatView {
 	private selectedSessionId: string | undefined;
 	private approvalRequest: ChatApprovalRequest | undefined;
 	private isRunning = false;
+	private isComposerAvailable: boolean;
+	private errorMessage: string | null = null;
 	private disposed = false;
-	private localMessageSequence = 0;
 	private announcementFrame: number | undefined;
 	private messageMeasurementFrame: number | undefined;
 	private lastMessageListWidth = -1;
@@ -216,6 +228,7 @@ export class ChatView {
 		this.approvalRequest = options.approvalRequest
 			? { ...options.approvalRequest }
 			: undefined;
+		this.isComposerAvailable = options.composerAvailable ?? true;
 		this.callbacks = {
 			onSend: options.onSend,
 			onStop: options.onStop,
@@ -246,6 +259,47 @@ export class ChatView {
 			this.selectedSessionId = undefined;
 		}
 		this.historyControl.setSessions(this.sessions);
+	}
+
+	/**
+	 * Host snapshot의 전체 timeline으로 현재 메시지 목록을 교체한다.
+	 *
+	 * @param messages 순서가 보존된 core 5 표시 메시지 목록.
+	 */
+	public setMessages(messages: readonly ChatMessage[]): void {
+		if (this.disposed) {
+			return;
+		}
+		this.messages = messages.map((message) => ({ ...message }));
+		this.expandedMessageIds.clear();
+		this.renderMessages();
+		this.messageList.scrollTop = this.messageList.scrollHeight;
+	}
+
+	/**
+	 * app-server와 Workspace 준비 여부에 따라 Composer 사용 가능 상태를 바꾼다.
+	 *
+	 * @param available 새 Turn 전송이 가능하면 `true`.
+	 */
+	public setComposerAvailable(available: boolean): void {
+		if (this.disposed || this.isComposerAvailable === available) {
+			return;
+		}
+		this.isComposerAvailable = available;
+		this.updateComposerState();
+	}
+
+	/**
+	 * 요청 또는 Turn 오류를 대화 영역 상단에 표시한다.
+	 *
+	 * @param error 표시할 설명이며 `null`이면 오류 배너를 숨긴다.
+	 */
+	public setError(error: string | null): void {
+		if (this.disposed || this.errorMessage === error) {
+			return;
+		}
+		this.errorMessage = error;
+		this.renderMessages();
 	}
 
 	/**
@@ -482,6 +536,15 @@ export class ChatView {
 	/** 현재 메시지 배열을 역할별 좌우 말풍선 또는 빈 상태로 다시 렌더링한다. */
 	private renderMessages(): void {
 		this.messageList.replaceChildren();
+		if (this.errorMessage) {
+			const errorBanner = createElement(
+				'div',
+				'chat-error-banner',
+				this.errorMessage,
+			);
+			errorBanner.setAttribute('role', 'alert');
+			this.messageList.append(errorBanner);
+		}
 
 		if (this.messages.length === 0) {
 			const empty = createElement(
@@ -492,15 +555,17 @@ export class ChatView {
 			this.messageList.append(empty);
 		} else {
 			for (const [index, message] of this.messages.entries()) {
+				const itemType = message.itemType
+					?? (message.role === 'user' ? 'userMessage' : 'agentMessage');
 				const article = createElement(
 					'article',
-					`chat-message is-${message.role}`,
+					`chat-message is-${message.role} is-${itemType}`,
 				);
 				const metadata = createElement('div', 'chat-message-metadata');
 				const sender = createElement(
 					'span',
 					'chat-message-sender',
-					message.role === 'user' ? this.copy.you : this.copy.agent,
+					this.getMessageSender(itemType),
 				);
 				const time = createElement(
 					'time',
@@ -596,20 +661,13 @@ export class ChatView {
 		this.approvalHost.append(card);
 	}
 
-	/** 대화 관련 로컬 상태만 초기화하고 실행 설정 선택값은 유지한다. */
+	/** 새 대화 생성을 Host에 요청하고 로컬 입력 초안만 정리한다. */
 	private startNewChat(): void {
-		this.selectedSessionId = undefined;
-		this.messages = [];
-		this.expandedMessageIds.clear();
-		this.approvalRequest = undefined;
-		this.isRunning = false;
 		this.messageInput.value = '';
 		this.resetMessageInputHeight();
 		this.historyControl.clearSelection();
 		this.historyControl.close();
 		this.runtimeSettings.close();
-		this.renderMessages();
-		this.renderApproval();
 		this.updateComposerState();
 		this.messageInput.focus();
 		this.invokeSafely(this.callbacks.onNewChat, '새 대화 callback');
@@ -672,8 +730,7 @@ export class ChatView {
 
 			body.classList.remove('is-collapsed');
 			content.classList.remove('is-collapsible', 'is-collapsed', 'is-expanded');
-			const isStreaming = message.role === 'agent'
-				&& message.status === 'streaming';
+			const isStreaming = message.status === 'streaming';
 			const bodyStyles = getComputedStyle(body);
 			const lineHeight = parsePixelValue(bodyStyles.lineHeight, 18);
 			const verticalPadding = parsePixelValue(bodyStyles.paddingTop, 0)
@@ -703,9 +760,9 @@ export class ChatView {
 		}
 	}
 	
-	/** 유효한 입력을 사용자 메시지로 추가하고 선택된 실행 환경과 함께 전달한다. */
+	/** 유효한 입력과 선택된 실행 환경을 Host callback으로 전달한다. */
 	private sendMessage(): void {
-		if (this.disposed || this.isRunning) {
+		if (this.disposed || this.isRunning || !this.isComposerAvailable) {
 			return;
 		}
 
@@ -720,30 +777,19 @@ export class ChatView {
 			model: this.runtimeSettings.modelValue,
 			modelOption: this.runtimeSettings.modelOptionValue,
 		};
-		this.addMessage({
-			id: `local-user-${Date.now()}-${++this.localMessageSequence}`,
-			role: 'user',
-			text,
-			createdAt: new Date().toISOString(),
-		});
 		this.messageInput.value = '';
 		this.resetMessageInputHeight();
-		this.setRunning(true);
 		this.invokeSafely(
 			() => this.callbacks.onSend?.({ ...selection, text }),
 			'메시지 전송 callback',
 		);
 	}
 
-	/** 로컬 실행 상태를 해제하고 외부 실행 중지 callback을 호출한다. */
+	/** 5단계 interrupt 구현 전에는 실행 상태를 임의로 해제하지 않는다. */
 	private stopRun(): void {
 		if (!this.isRunning) {
 			return;
 		}
-
-		this.setRunning(false);
-		this.messageInput.focus();
-		this.invokeSafely(this.callbacks.onStop, '실행 중지 callback');
 	}
 
 	/**
@@ -786,7 +832,7 @@ export class ChatView {
 		});
 	}
 
-	/** 실행 여부와 입력 유무에 맞춰 설정·textarea·전송 버튼 상태를 동기화한다. */
+	/** 실행·연결 준비 여부와 입력 유무에 맞춰 Composer 상태를 동기화한다. */
 	private updateComposerState(): void {
 		if (!this.submitButton) {
 			return;
@@ -794,9 +840,10 @@ export class ChatView {
 
 		const hasMessage = this.messageInput.value.trim().length > 0;
 		this.composerForm.setAttribute('aria-busy', String(this.isRunning));
-		this.runtimeSettings.disabled = this.isRunning;
-		this.messageInput.disabled = this.isRunning;
-		this.submitButton.disabled = !this.isRunning && !hasMessage;
+		const controlsDisabled = this.isRunning || !this.isComposerAvailable;
+		this.runtimeSettings.disabled = controlsDisabled;
+		this.messageInput.disabled = controlsDisabled;
+		this.submitButton.disabled = controlsDisabled || !hasMessage;
 		this.submitButton.classList.toggle('is-running', this.isRunning);
 		this.submitButton.setAttribute(
 			'aria-label',
@@ -809,6 +856,27 @@ export class ChatView {
 		this.runStatus.textContent = this.isRunning
 			? this.copy.runningStatus
 			: '';
+	}
+
+	/**
+	 * core 5 Item 종류를 메시지 메타데이터의 한글 제목으로 바꾼다.
+	 *
+	 * @param itemType Codex core 5 discriminator.
+	 * @returns 사용자에게 표시할 발신자 또는 도구 제목.
+	 */
+	private getMessageSender(itemType: CodexChatItemType): string {
+		switch (itemType) {
+			case 'userMessage':
+				return this.copy.you;
+			case 'agentMessage':
+				return this.copy.agent;
+			case 'reasoning':
+				return this.copy.reasoning;
+			case 'commandExecution':
+				return this.copy.commandExecution;
+			case 'fileChange':
+				return this.copy.fileChange;
+		}
 	}
 
 	/** textarea를 CSS 최소·최대 높이 안에서 자동 확장하고 초과분만 내부 스크롤한다. */
@@ -848,6 +916,29 @@ export class ChatView {
 			console.error(`[Crispy Chat] ${label} 실행 실패:`, error);
 		}
 	}
+}
+
+/**
+ * Host snapshot을 기다리는 실제 Codex Chat의 빈 초기 옵션을 만든다.
+ *
+ * @param callbacks 사용자 전송·새 draft·세션 선택을 Host로 전달하는 callback.
+ * @returns CLI 기본 모델 표시와 비활성 Composer를 포함한 초기 옵션.
+ */
+export function createConnectedChatOptions(
+	callbacks: Pick<
+		ChatViewOptions,
+		'onSend' | 'onNewChat' | 'onSessionSelect'
+	>,
+): ChatViewOptions {
+	return {
+		sessions: [],
+		messages: [],
+		agents: [{ value: 'codex', label: 'Codex' }],
+		models: [{ value: 'default', label: '기본 모델' }],
+		modelOptions: [{ value: 'default', label: '기본 옵션' }],
+		composerAvailable: false,
+		...callbacks,
+	};
 }
 
 /**

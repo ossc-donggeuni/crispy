@@ -1,5 +1,9 @@
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
+import {
+	CodexConversationController,
+	isCodexChatWebviewMessage,
+} from './Codex';
 
 /** VS Code가 Crispy Chat WebviewPanel을 식별하는 고정 view type이다. */
 export const crispyChatViewType = 'crispyChat';
@@ -19,16 +23,31 @@ export class CrispyChatPanel {
 	 *
 	 * @param panel 관리할 Chat WebviewPanel.
 	 * @param extensionUri 빌드된 Chat asset을 찾는 Extension root URI.
+	 * @param controller Chat 명령과 Codex app-server 상태를 연결하는 controller.
 	 */
 	private constructor(
 		private readonly panel: vscode.WebviewPanel,
 		extensionUri: vscode.Uri,
+		private readonly controller: CodexConversationController,
 	) {
 		this.panel.onDidDispose(
 			() => this.dispose(),
 			undefined,
 			this.disposables,
 		);
+		this.panel.webview.onDidReceiveMessage(
+			(message: unknown) => {
+				if (isCodexChatWebviewMessage(message)) {
+					void this.controller.handleWebviewMessage(message);
+				}
+			},
+			undefined,
+			this.disposables,
+		);
+		const unsubscribe = this.controller.subscribe((message) => {
+			void this.panel.webview.postMessage(message);
+		});
+		this.disposables.push(new vscode.Disposable(unsubscribe));
 		this.panel.webview.html = this.getHtml(
 			this.panel.webview,
 			extensionUri,
@@ -39,10 +58,12 @@ export class CrispyChatPanel {
 	 * 기존 Chat Panel을 재사용하거나 지정한 Editor Group에 새 Panel을 연다.
 	 *
 	 * @param extensionUri 빌드된 Chat asset을 찾는 Extension root URI.
+	 * @param controller Chat과 app-server의 Extension Host 상태를 소유하는 controller.
 	 * @param viewColumn Chat Panel을 표시할 Editor Group. 기본값은 현재 Group 옆이다.
 	 */
 	public static createOrShow(
 		extensionUri: vscode.Uri,
+		controller: CodexConversationController,
 		viewColumn: vscode.ViewColumn = vscode.ViewColumn.Beside,
 	): void {
 		if (CrispyChatPanel.currentPanel) {
@@ -62,7 +83,11 @@ export class CrispyChatPanel {
 			},
 		);
 
-		CrispyChatPanel.currentPanel = new CrispyChatPanel(panel, extensionUri);
+		CrispyChatPanel.currentPanel = new CrispyChatPanel(
+			panel,
+			extensionUri,
+			controller,
+		);
 	}
 
 	/** 현재 열려 있는 Chat Panel이 있으면 안전하게 정리한다. */

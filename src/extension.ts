@@ -11,6 +11,7 @@ import { scanWorkspaceFolder } from './workspace/projectScanner';
 import { disposeCodexRuns } from './agent/runCodex';
 import {
 	CodexAppServerClient,
+	CodexConversationController,
 	createCodexClientInfo,
 } from './chat/Codex';
 import { CrispyChatPanel } from './chat/chatPanel';
@@ -21,6 +22,9 @@ const openGraphAndChatCommand = 'crispy.openGraphAndChat';
 
 /** Extension 활성화부터 비활성화까지 하나만 유지하는 Codex app-server 연결 소유자다. */
 let codexAppServerClient: CodexAppServerClient | undefined;
+
+/** Chat draft·Thread·Turn 상태를 Extension 활성화 동안 유지하는 controller다. */
+let codexConversationController: CodexConversationController | undefined;
 
 /** 기존 VS Code Output Channel에서 메시지 기록에 필요한 최소 계약이다. */
 type OutputWriter = Pick<vscode.OutputChannel, 'appendLine'>;
@@ -489,13 +493,28 @@ class CrispyGraphPanel {
  */
 export function activate(context: vscode.ExtensionContext): void {
 	const outputChannel = vscode.window.createOutputChannel('Crispy');
+	let conversationController: CodexConversationController | undefined;
 	codexAppServerClient = new CodexAppServerClient({
 		clientInfo: createCodexClientInfo(
 			context.extension.id,
 			context.extension.packageJSON as unknown,
 		),
 		outputWriter: outputChannel,
+		onMessage: (message) => {
+			conversationController?.handleAppServerMessage(message);
+		},
+		onConnectionStateChanged: (state) => {
+			conversationController?.handleConnectionStateChanged(state);
+		},
 	});
+	const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+	conversationController = new CodexConversationController({
+		client: codexAppServerClient,
+		workspacePath: workspaceFolders.length === 1
+			? workspaceFolders[0].uri.fsPath
+			: null,
+	});
+	codexConversationController = conversationController;
 	void codexAppServerClient.start().catch(() => {
 		// 연결 실패 원인은 client가 구조화된 Output Channel 로그와 상태에 기록한다.
 	});
@@ -503,7 +522,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		CrispyGraphPanel.createOrShow(context.extensionUri, outputChannel);
 	});
 	const openChat = vscode.commands.registerCommand(openChatCommand, () => {
-		CrispyChatPanel.createOrShow(context.extensionUri);
+		CrispyChatPanel.createOrShow(context.extensionUri, conversationController);
 	});
 	const openGraphAndChat = vscode.commands.registerCommand(
 		openGraphAndChatCommand,
@@ -517,6 +536,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			);
 			CrispyChatPanel.createOrShow(
 				context.extensionUri,
+				conversationController,
 				vscode.ViewColumn.Beside,
 			);
 		},
@@ -541,6 +561,8 @@ export function activate(context: vscode.ExtensionContext): void {
 export async function deactivate(): Promise<void> {
 	CrispyGraphPanel.disposeCurrent();
 	CrispyChatPanel.disposeCurrent();
+	codexConversationController?.dispose();
+	codexConversationController = undefined;
 	const appServerClient = codexAppServerClient;
 	codexAppServerClient = undefined;
 	await Promise.all([

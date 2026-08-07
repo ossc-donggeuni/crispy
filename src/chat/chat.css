@@ -262,6 +262,39 @@ button {
 	border-top-right-radius: 3px;
 }
 
+/* 추론 Item을 일반 답변과 구분하되 기존 말풍선 크기와 정렬은 유지한다. */
+.chat-message.is-reasoning .chat-message-content {
+	border-style: dashed;
+	color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+	background: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background));
+}
+
+/* command와 file change Item은 출력과 diff의 공백을 식별하기 쉬운 고정폭 글꼴로 표시한다. */
+.chat-message.is-commandExecution .chat-message-body,
+.chat-message.is-fileChange .chat-message-body {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 12px);
+}
+
+/* command와 file change Item metadata를 도구 실행 계열 색으로 구분한다. */
+.chat-message.is-commandExecution .chat-message-sender,
+.chat-message.is-fileChange .chat-message-sender {
+	color: var(--vscode-symbolIcon-functionForeground, var(--vscode-descriptionForeground));
+}
+
+/* app-server 요청 또는 Turn 오류를 메시지 흐름을 가리지 않는 작은 배너로 표시한다. */
+.chat-error-banner {
+	align-self: stretch;
+	padding: 8px 10px;
+	overflow-wrap: anywhere;
+	border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border));
+	border-radius: 6px;
+	color: var(--vscode-errorForeground);
+	background: var(--vscode-inputValidation-errorBackground, var(--vscode-editorWidget-background));
+	font-size: 11px;
+	line-height: 1.45;
+}
+
 /* 메시지가 없을 때 대화 영역 중앙에 표시하는 빈 상태 문구다. */
 .chat-message-empty {
 	align-self: center;
