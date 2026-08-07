@@ -1,8 +1,9 @@
+import './chat.css';
 import {
 	ChatView,
 	createConnectedChatOptions,
-	type ChatMessage,
 } from './chat';
+import { createChatMarkdownRenderer } from './chatMarkdown';
 import {
 	isCodexChatHostMessage,
 	type CodexChatViewSnapshot,
@@ -34,8 +35,10 @@ let chatView: ChatView | undefined;
 /** Host snapshot에서 받은 현재 draft 또는 Thread 대화 ID다. */
 let selectedConversationId: string | undefined;
 
-try {
+/** ESM Markdown parser를 준비한 뒤 Host와 연결된 ChatView를 시작한다. */
+async function startChat(): Promise<void> {
 	const vscodeApi = acquireVsCodeApi();
+	const renderMarkdown = await createChatMarkdownRenderer();
 	chatView = new ChatView(root, createConnectedChatOptions({
 		onSend: ({ text }) => {
 			if (!selectedConversationId) {
@@ -55,7 +58,13 @@ try {
 				payload: { conversationId },
 			});
 		},
-	}));
+		onOpenExternal: (url) => {
+			vscodeApi.postMessage({
+				type: 'chat/openExternal',
+				payload: { url },
+			});
+		},
+	}, renderMarkdown));
 
 	window.addEventListener('message', (event: MessageEvent<unknown>) => {
 		if (!isCodexChatHostMessage(event.data) || !chatView) {
@@ -73,10 +82,12 @@ try {
 		},
 		{ once: true },
 	);
-} catch (error) {
+}
+
+/** 초기화 오류를 기존 Chat mount 지점에 안전한 plain text로 표시한다. */
+function renderStartupError(error: unknown): void {
 	chatView?.dispose();
 	chatView = undefined;
-
 	const errorState = document.createElement('div');
 	errorState.className = 'chat-startup-error';
 	const title = document.createElement('strong');
@@ -90,34 +101,19 @@ try {
 	console.error('[Crispy Chat] Webview startup failed:', error);
 }
 
-/**
- * Host의 authoritative snapshot을 현재 ChatView에 한 번에 반영한다.
- *
- * @param view 갱신할 ChatView instance.
- * @param snapshot runtime validation을 통과한 Host 표시 상태.
- */
+/** Host의 authoritative snapshot을 현재 ChatView에 한 번에 반영한다. */
 function applySnapshot(view: ChatView, snapshot: CodexChatViewSnapshot): void {
 	selectedConversationId = snapshot.selectedConversationId;
 	view.setSessions(snapshot.sessions);
-	view.setMessages(snapshot.items.map<ChatMessage>((item) => ({
-		id: item.id,
-		role: item.type === 'userMessage' ? 'user' : 'agent',
-		itemType: item.type,
-		text: item.text,
-		createdAt: item.createdAt,
-		status: item.status,
-	})));
+	view.setMessages(snapshot.items);
 	view.setRunning(snapshot.isRunning);
 	view.setComposerAvailable(snapshot.composerAvailable);
 	view.setError(snapshot.error);
 }
 
-/**
- * 알 수 없는 초기화 오류를 사용자에게 표시할 문자열로 정규화한다.
- *
- * @param error ChatView 초기화 과정에서 전달된 오류 값.
- * @returns Error message 또는 오류 값의 문자열 표현.
- */
+/** 알 수 없는 초기화 오류를 사용자에게 표시할 문자열로 정규화한다. */
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
+
+void startChat().catch(renderStartupError);

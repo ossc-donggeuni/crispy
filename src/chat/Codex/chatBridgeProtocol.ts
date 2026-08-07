@@ -1,25 +1,10 @@
-/** Extension Host와 Chat Webview 사이의 3단계 메시지 계약을 정의한다. */
+/** Extension Host와 Chat Webview 사이의 3.5단계 메시지 계약을 정의한다. */
 
-/** Chat timeline에서 구분해 렌더링하는 Codex core 5 Item 종류다. */
-export type CodexChatItemType = 'userMessage'
-	| 'agentMessage'
-	| 'reasoning'
-	| 'commandExecution'
-	| 'fileChange';
-
-/** Webview가 표시하는 단일 Codex timeline Item이다. */
-export interface CodexChatTimelineItemView {
-	/** Webview DOM key로 사용하는 대화 범위 내 안정적인 식별자다. */
-	id: string;
-	/** 말풍선의 의미와 시각 표현을 결정하는 core 5 discriminator다. */
-	type: CodexChatItemType;
-	/** HTML로 해석하지 않고 textContent로 출력할 본문이다. */
-	text: string;
-	/** 메시지 메타데이터에 표시할 ISO 8601 시각이다. */
-	createdAt: string;
-	/** delta 수신 중인지 최종 Item인지 구분하는 표시 상태다. */
-	status: 'streaming' | 'completed';
-}
+import {
+	isChatTimelineItemKind,
+	isChatTimelineItemState,
+	type ChatTimelineItem,
+} from '../chatTimeline';
 
 /** 최근 대화 목록에 표시하는 메모리 내 대화 요약이다. */
 export interface CodexChatSessionView {
@@ -37,8 +22,8 @@ export interface CodexChatViewSnapshot {
 	selectedConversationId: string;
 	/** 최근 대화 팝오버에 표시할 메모리 내 세션 목록이다. */
 	sessions: readonly CodexChatSessionView[];
-	/** 선택된 대화의 순서가 보존된 core 5 timeline이다. */
-	items: readonly CodexChatTimelineItemView[];
+	/** 선택된 대화의 순서가 보존된 Provider 공통 timeline이다. */
+	items: readonly ChatTimelineItem[];
 	/** 선택된 Thread에 활성 Turn 또는 첫 전송 작업이 있는지 나타낸다. */
 	isRunning: boolean;
 	/** 연결과 Workspace가 준비되어 새 Turn을 보낼 수 있는지 나타낸다. */
@@ -83,11 +68,23 @@ export interface CodexChatSendMessage {
 	};
 }
 
+/** Webview가 검증을 Host에 위임할 외부 Markdown 링크 요청이다. */
+export interface ChatOpenExternalMessage {
+	/** Provider와 무관한 외부 링크 요청 discriminator다. */
+	type: 'chat/openExternal';
+	/** 사용자가 클릭한 원본 URL을 포함한다. */
+	payload: {
+		/** Host가 다시 파싱하고 scheme을 검증할 절대 URL이다. */
+		url: string;
+	};
+}
+
 /** Chat Webview가 보낼 수 있는 3단계 메시지 union이다. */
 export type CodexChatWebviewMessage = CodexChatReadyMessage
 	| CodexChatNewDraftMessage
 	| CodexChatSelectConversationMessage
-	| CodexChatSendMessage;
+	| CodexChatSendMessage
+	| ChatOpenExternalMessage;
 
 /** Host가 Chat Webview에 보내는 snapshot 메시지다. */
 export interface CodexChatSnapshotMessage {
@@ -124,6 +121,9 @@ export function isCodexChatWebviewMessage(
 			return isRecord(value.payload)
 				&& isNonEmptyString(value.payload.conversationId)
 				&& typeof value.payload.text === 'string';
+		case 'chat/openExternal':
+			return isRecord(value.payload)
+				&& isNonEmptyString(value.payload.url);
 		default:
 			return false;
 	}
@@ -178,27 +178,46 @@ function isSessionView(value: unknown): value is CodexChatSessionView {
  * @param value 검사할 timeline Item 후보.
  * @returns Webview가 안전하게 소비할 수 있으면 `true`.
  */
-function isTimelineItemView(value: unknown): value is CodexChatTimelineItemView {
-	return isRecord(value)
-		&& isNonEmptyString(value.id)
-		&& isItemType(value.type)
-		&& typeof value.text === 'string'
-		&& isIsoDateString(value.createdAt)
-		&& (value.status === 'streaming' || value.status === 'completed');
+function isTimelineItemView(value: unknown): value is ChatTimelineItem {
+	if (!isRecord(value)) {
+		return false;
+	}
+	if (!isNonEmptyString(value.id)
+		|| !isNonEmptyString(value.turnId)
+		|| !isChatTimelineItemKind(value.kind)
+		|| typeof value.text !== 'string'
+		|| !isIsoDateString(value.createdAt)
+		|| !isChatTimelineItemState(value.state)) {
+		return false;
+	}
+	if (value.kind === 'assistantMessage') {
+		return (value.assistantPhase === 'commentary' || value.assistantPhase === 'final')
+			&& value.activity === undefined;
+	}
+	if (value.kind === 'reasoning'
+		|| value.kind === 'execution'
+		|| value.kind === 'fileChange') {
+		return value.assistantPhase === undefined && isActivity(value.activity);
+	}
+	return value.assistantPhase === undefined && value.activity === undefined;
 }
 
-/**
- * 문자열이 core 5 discriminator인지 검사한다.
- *
- * @param value 검사할 Item 종류.
- * @returns 지원하는 core 5 종류이면 `true`.
- */
-function isItemType(value: unknown): value is CodexChatItemType {
-	return value === 'userMessage'
-		|| value === 'agentMessage'
-		|| value === 'reasoning'
-		|| value === 'commandExecution'
-		|| value === 'fileChange';
+/** Provider 공통 Activity의 표시 필드를 runtime에서 검사한다. */
+function isActivity(value: unknown): boolean {
+	return isRecord(value)
+		&& isNonEmptyString(value.label)
+		&& typeof value.summary === 'string'
+		&& (value.details === undefined || typeof value.details === 'string');
+}
+
+/** Host가 외부 브라우저로 열 수 있는 절대 HTTP(S) URL인지 검사한다. */
+export function isAllowedExternalUrl(value: string): boolean {
+	try {
+		const url = new URL(value);
+		return url.protocol === 'http:' || url.protocol === 'https:';
+	} catch {
+		return false;
+	}
 }
 
 /**

@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import {
 	CodexConversationController,
+	isAllowedExternalUrl,
 	isCodexChatWebviewMessage,
 } from './Codex';
 
@@ -37,9 +38,16 @@ export class CrispyChatPanel {
 		);
 		this.panel.webview.onDidReceiveMessage(
 			(message: unknown) => {
-				if (isCodexChatWebviewMessage(message)) {
-					void this.controller.handleWebviewMessage(message);
+				if (!isCodexChatWebviewMessage(message)) {
+					return;
 				}
+				if (message.type === 'chat/openExternal') {
+					if (isAllowedExternalUrl(message.payload.url)) {
+						void vscode.env.openExternal(vscode.Uri.parse(message.payload.url));
+					}
+					return;
+				}
+				void this.controller.handleWebviewMessage(message);
 			},
 			undefined,
 			this.disposables,

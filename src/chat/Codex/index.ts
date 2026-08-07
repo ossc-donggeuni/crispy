@@ -34,22 +34,22 @@ export type {
 
 /** Chat Webview 양방향 메시지의 runtime validator다. */
 export {
+	isAllowedExternalUrl,
 	isCodexChatHostMessage,
 	isCodexChatWebviewMessage,
 } from './chatBridgeProtocol';
 /** Chat Webview 양방향 메시지와 표시 snapshot public 타입이다. */
 export type {
 	CodexChatHostMessage,
-	CodexChatItemType,
 	CodexChatNewDraftMessage,
 	CodexChatReadyMessage,
 	CodexChatSelectConversationMessage,
 	CodexChatSendMessage,
 	CodexChatSessionView,
 	CodexChatSnapshotMessage,
-	CodexChatTimelineItemView,
 	CodexChatViewSnapshot,
 	CodexChatWebviewMessage,
+	ChatOpenExternalMessage,
 } from './chatBridgeProtocol';
 
 /** Thread·Turn·Item·승인·로그를 관리하는 Crispy 내부 상태와 View Model 타입이다. */

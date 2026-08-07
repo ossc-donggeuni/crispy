@@ -1,5 +1,5 @@
 /**
- * Crispy Codex Chat WebviewPanel 스타일.
+ * Crispy AI Chat WebviewPanel 스타일.
  *
  * 기본 규칙이 노트북·데스크톱처럼 충분한 크기의 Panel을 담당하고,
  * 파일 하단의 container query가 실제 Chat Panel의 폭과 높이가 작을 때만
@@ -18,6 +18,12 @@
 	font-size: var(--vscode-font-size, 13px);
 	color: var(--vscode-editor-foreground);
 	background: var(--vscode-editor-background);
+	--chat-activity-foreground: var(--vscode-descriptionForeground);
+	--chat-activity-background: var(
+		--vscode-textBlockQuote-background,
+		var(--vscode-editorWidget-background)
+	);
+	--chat-activity-border: var(--vscode-panel-border);
 }
 
 /* padding과 border를 요소 크기에 포함해 Panel 폭 계산을 예측 가능하게 만든다. */
@@ -157,7 +163,7 @@ button {
 }
 
 /* Agent 메시지를 대화 영역 왼쪽에 배치한다. */
-.chat-message.is-agent {
+.chat-message.is-assistant {
 	align-self: flex-start;
 	align-items: flex-start;
 }
@@ -248,7 +254,7 @@ button {
 }
 
 /* Agent 메시지 말풍선의 왼쪽 배치용 색상과 모서리다. */
-.chat-message.is-agent .chat-message-content {
+.chat-message.is-assistant .chat-message-content {
 	color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground));
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	border-top-left-radius: 3px;
@@ -262,24 +268,156 @@ button {
 	border-top-right-radius: 3px;
 }
 
-/* 추론 Item을 일반 답변과 구분하되 기존 말풍선 크기와 정렬은 유지한다. */
-.chat-message.is-reasoning .chat-message-content {
-	border-style: dashed;
-	color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
-	background: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background));
+/* Assistant Markdown의 block element가 bubble 안에서 일관된 간격을 사용한다. */
+.chat-message-body.is-markdown {
+	white-space: normal;
 }
 
-/* command와 file change Item은 출력과 diff의 공백을 식별하기 쉬운 고정폭 글꼴로 표시한다. */
-.chat-message.is-commandExecution .chat-message-body,
-.chat-message.is-fileChange .chat-message-body {
+.chat-message-body.is-markdown > :first-child {
+	margin-top: 0;
+}
+
+.chat-message-body.is-markdown > :last-child {
+	margin-bottom: 0;
+}
+
+.chat-message-body.is-markdown p,
+.chat-message-body.is-markdown ul,
+.chat-message-body.is-markdown ol,
+.chat-message-body.is-markdown blockquote,
+.chat-message-body.is-markdown pre,
+.chat-message-body.is-markdown table {
+	margin-block: 0.65em;
+}
+
+/* inline code와 fenced code가 VS Code editor 글꼴을 사용한다. */
+.chat-message-body.is-markdown code {
 	font-family: var(--vscode-editor-font-family, monospace);
 	font-size: var(--vscode-editor-font-size, 12px);
 }
 
-/* command와 file change Item metadata를 도구 실행 계열 색으로 구분한다. */
-.chat-message.is-commandExecution .chat-message-sender,
-.chat-message.is-fileChange .chat-message-sender {
-	color: var(--vscode-symbolIcon-functionForeground, var(--vscode-descriptionForeground));
+.chat-message-body.is-markdown :not(pre) > code {
+	padding: 1px 3px;
+	border-radius: 3px;
+	background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.16));
+}
+
+.chat-message-body.is-markdown pre {
+	max-width: 100%;
+	padding: 8px;
+	overflow-x: auto;
+	background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.16));
+}
+
+.chat-message-body.is-markdown pre code {
+	white-space: pre;
+}
+
+/* GFM 표가 좁은 Panel을 밀어내지 않고 자체 가로 스크롤을 사용한다. */
+.chat-message-body.is-markdown table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+}
+
+.chat-message-body.is-markdown th,
+.chat-message-body.is-markdown td {
+	padding: 4px 6px;
+	border: 1px solid var(--vscode-panel-border);
+}
+
+.chat-message-body.is-markdown blockquote {
+	margin-inline: 0;
+	padding-left: 10px;
+	border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border));
+	color: var(--vscode-descriptionForeground);
+}
+
+.chat-message-body.is-markdown a {
+	color: var(--vscode-textLink-foreground);
+}
+
+/* Provider 공통 Activity는 답변 bubble보다 간결한 회색 행으로 표시한다. */
+.chat-activity {
+	align-self: stretch;
+	min-width: 0;
+	color: var(--chat-activity-foreground);
+	border: 1px solid var(--chat-activity-border);
+	border-radius: 6px;
+	background: var(--chat-activity-background);
+	font-size: 11px;
+}
+
+.chat-activity-summary {
+	display: grid;
+	grid-template-columns: auto auto minmax(0, 1fr);
+	align-items: center;
+	gap: 7px;
+	padding: 7px 9px;
+	cursor: pointer;
+}
+
+.chat-activity-summary::marker {
+	color: var(--chat-activity-foreground);
+}
+
+.chat-activity-label {
+	font-weight: 650;
+}
+
+.chat-activity-state {
+	padding: 1px 4px;
+	border-radius: 3px;
+	background: color-mix(in srgb, currentColor 12%, transparent);
+	font-size: 10px;
+}
+
+.chat-activity-headline {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-activity-details {
+	max-width: 100%;
+	margin: 0;
+	padding: 8px 9px;
+	border-top: 1px solid var(--chat-activity-border);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 12px);
+	line-height: 1.5;
+}
+
+.chat-activity-details.is-output {
+	overflow-x: auto;
+	white-space: pre;
+}
+
+.chat-activity-details.is-prose {
+	font-family: inherit;
+	font-size: inherit;
+	white-space: pre-wrap;
+}
+
+.chat-activity.has-no-details .chat-activity-summary {
+	cursor: default;
+}
+
+.chat-activity.is-failed,
+.chat-activity.is-interrupted {
+	color: var(--vscode-errorForeground, var(--chat-activity-foreground));
+}
+
+/* thinking·실패·중단·무응답을 bubble 밖의 회색 한 줄로 표시한다. */
+.chat-timeline-status {
+	align-self: stretch;
+	margin: 0;
+	padding: 4px 2px;
+	color: var(--chat-activity-foreground);
+	font-size: 11px;
+	line-height: 1.45;
 }
 
 /* app-server 요청 또는 Turn 오류를 메시지 흐름을 가리지 않는 작은 배너로 표시한다. */
@@ -817,7 +955,8 @@ button {
 .chat-settings-row:focus-visible,
 .chat-settings-option:focus-visible,
 .chat-settings-back-button:focus-visible,
-.chat-message-toggle:focus-visible,
+	.chat-message-toggle:focus-visible,
+	.chat-activity-summary:focus-visible,
 .chat-message-input:focus-visible,
 .chat-submit-button:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);

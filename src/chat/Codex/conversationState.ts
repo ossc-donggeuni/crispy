@@ -6,9 +6,14 @@ import type { TurnItemsView } from './generated/v2/TurnItemsView';
 import type { TurnStatus } from './generated/v2/TurnStatus';
 import type {
 	CodexChatSessionView,
-	CodexChatTimelineItemView,
 	CodexChatViewSnapshot,
 } from './chatBridgeProtocol';
+import type {
+	ChatAssistantPhase,
+	ChatTimelineActivity,
+	ChatTimelineItem,
+	ChatTimelineItemState,
+} from '../chatTimeline';
 import type { CodexConnectionState, CodexTimelineItem } from './contracts';
 import type { CoreThreadItem } from './protocol';
 import type { CodexServerNotificationMessage } from './runtimeValidation';
@@ -78,6 +83,8 @@ interface MutableConversationState {
 	starting: boolean;
 	/** 활성 Turn ID이며 요청 시작 직후에는 아직 존재하지 않을 수 있다. */
 	activeTurnId?: string;
+	/** turn/start 전 provisional ID와 응답 뒤 실제 ID를 잇는 현재 Turn 식별자다. */
+	pendingTurnId?: string;
 	/** Codex Thread의 최신 runtime 상태다. */
 	threadStatus: ThreadStatus;
 	/** Turn ID별 상태다. */
@@ -85,7 +92,7 @@ interface MutableConversationState {
 	/** 여러 Turn의 timeline 순서를 보존한다. */
 	turnOrder: string[];
 	/** 서버 userMessage가 오기 전 표시하는 client ID별 사용자 입력이다. */
-	pendingUsers: Map<string, CodexChatTimelineItemView>;
+	pendingUsers: Map<string, ChatTimelineItem>;
 	/** 마지막 요청 또는 Turn 실패 설명이다. */
 	error: string | null;
 }
@@ -210,12 +217,15 @@ export class CodexConversationStateStore {
 		if (conversation.title === emptyConversationTitle) {
 			conversation.title = makeConversationTitle(normalizedText);
 		}
+		const provisionalTurnId = `pending:${clientUserMessageId}`;
+		conversation.pendingTurnId = provisionalTurnId;
 		conversation.pendingUsers.set(clientUserMessageId, {
 			id: `pending-${clientUserMessageId}`,
-			type: 'userMessage',
+			turnId: provisionalTurnId,
+			kind: 'userMessage',
 			text: normalizedText,
 			createdAt: toIso(conversation.updatedAtMs),
-			status: 'completed',
+			state: 'completed',
 		});
 
 		return {
@@ -258,6 +268,7 @@ export class CodexConversationStateStore {
 	public attachStartedTurn(conversationId: string, result: unknown): string {
 		const conversation = this.requireConversation(conversationId);
 		const turn = parseTurnStartResult(result);
+		this.bindPendingTurn(conversation, turn.id);
 		this.mergeTurn(conversation, turn, false);
 		const mergedTurn = conversation.turns.get(turn.id);
 		conversation.starting = false;
@@ -280,6 +291,7 @@ export class CodexConversationStateStore {
 			return;
 		}
 		conversation.starting = false;
+		conversation.pendingTurnId = undefined;
 		conversation.error = getErrorMessage(error);
 		conversation.updatedAtMs = this.now();
 	}
@@ -410,15 +422,16 @@ export class CodexConversationStateStore {
 		if (!conversation) {
 			return 'unknownThread';
 		}
+		this.bindPendingTurn(conversation, turn.id);
 		this.mergeTurn(conversation, turn, completed);
 		conversation.starting = false;
 		conversation.activeTurnId = completed || turn.status !== 'inProgress'
 			? undefined
 			: turn.id;
-		conversation.updatedAtMs = this.now();
-		if (completed && turn.status === 'failed') {
-			conversation.error = turn.error?.message ?? 'Codex Turn이 실패했습니다.';
+		if (completed || turn.status !== 'inProgress') {
+			conversation.pendingTurnId = undefined;
 		}
+		conversation.updatedAtMs = this.now();
 		return 'applied';
 	}
 
@@ -447,6 +460,7 @@ export class CodexConversationStateStore {
 		if (!conversation) {
 			return 'unknownThread';
 		}
+		this.bindPendingTurn(conversation, params.turnId);
 		const turn = this.ensureTurn(conversation, params.turnId);
 		const existing = turn.items.get(item.id);
 		if (!turn.itemOrder.includes(item.id)) {
@@ -582,6 +596,23 @@ export class CodexConversationStateStore {
 		return created;
 	}
 
+	/** provisional Turn 표시 항목을 최초로 확인한 서버 Turn ID에 결합한다. */
+	private bindPendingTurn(
+		conversation: MutableConversationState,
+		turnId: string,
+	): void {
+		const provisionalTurnId = conversation.pendingTurnId;
+		if (!provisionalTurnId || provisionalTurnId === turnId) {
+			return;
+		}
+		conversation.pendingTurnId = turnId;
+		for (const [clientId, item] of conversation.pendingUsers) {
+			if (item.turnId === provisionalTurnId) {
+				conversation.pendingUsers.set(clientId, { ...item, turnId });
+			}
+		}
+	}
+
 	/**
 	 * 선택된 대화의 pending 메시지와 Turn Item을 시간·Turn 순서로 펼친다.
 	 *
@@ -590,21 +621,35 @@ export class CodexConversationStateStore {
 	 */
 	private createTimeline(
 		conversation: MutableConversationState,
-	): CodexChatTimelineItemView[] {
-		const timeline: CodexChatTimelineItemView[] = [];
+	): ChatTimelineItem[] {
+		const timeline: ChatTimelineItem[] = [];
+		const pendingByTurn = new Map<string, ChatTimelineItem[]>();
+		for (const pending of conversation.pendingUsers.values()) {
+			const items = pendingByTurn.get(pending.turnId) ?? [];
+			items.push(pending);
+			pendingByTurn.set(pending.turnId, items);
+		}
 		for (const turnId of conversation.turnOrder) {
 			const turn = conversation.turns.get(turnId);
 			if (!turn) {
 				continue;
 			}
-			for (const itemId of turn.itemOrder) {
-				const item = turn.items.get(itemId);
-				if (item) {
-					timeline.push(toTimelineView(item, turn.startedAt));
-				}
+			timeline.push(...(pendingByTurn.get(turnId) ?? []));
+			pendingByTurn.delete(turnId);
+			timeline.push(...projectTurnTimeline(turn, this.now()));
+		}
+		for (const pendingItems of pendingByTurn.values()) {
+			timeline.push(...pendingItems);
+			if (conversation.pendingTurnId === pendingItems[0]?.turnId) {
+				timeline.push(createStatusItem(
+					pendingItems[0].turnId,
+					'thinking',
+					'생각중..',
+					'pending',
+					pendingItems[0].createdAt,
+				));
 			}
 		}
-		timeline.push(...conversation.pendingUsers.values());
 		return timeline;
 	}
 
@@ -864,59 +909,199 @@ function isPatchChangeKind(value: unknown): boolean {
 	return value.type === 'update' && isNullableString(value.move_path);
 }
 
-/**
- * 내부 timeline Item을 Webview 전용 표시 모델로 변환한다.
- *
- * @param timeline 생성 Item과 lifecycle metadata.
- * @param turnStartedAt Item 시각이 없을 때 사용할 Unix seconds Turn 시각.
- * @returns HTML을 포함하지 않는 표시 모델.
- */
-function toTimelineView(
+/** Turn의 원본 Codex Item을 commentary/final 규칙이 적용된 공통 타임라인으로 투영한다. */
+function projectTurnTimeline(turn: MutableTurnState, nowMs: number): ChatTimelineItem[] {
+	const rawItems = turn.itemOrder
+		.map((itemId) => turn.items.get(itemId))
+		.filter((item): item is CodexTimelineItem => item !== undefined);
+	const finalMessages = rawItems.filter((timeline) =>
+		timeline.item.type === 'agentMessage'
+		&& timeline.item.phase === 'final_answer');
+	const nullPhaseMessages = rawItems.filter((timeline) =>
+		timeline.item.type === 'agentMessage' && timeline.item.phase === null);
+	const hasAnyAgentMessage = rawItems.some((timeline) =>
+		timeline.item.type === 'agentMessage');
+	const completedNormally = turn.status === 'completed';
+	const failedWithoutFinal = (turn.status === 'failed' || turn.status === 'interrupted')
+		&& finalMessages.length === 0;
+
+	if (failedWithoutFinal) {
+		const users = rawItems
+			.filter((timeline) => timeline.item.type === 'userMessage')
+			.map((timeline) => toCommonTimelineItem(timeline, turn.startedAt));
+		const statusText = turn.status === 'interrupted'
+			? '요청이 중지되었습니다.'
+			: turn.error?.message ?? '응답 생성에 실패했습니다.';
+		return [...users, createStatusItem(
+			turn.id,
+			turn.status,
+			statusText,
+			turn.status === 'interrupted' ? 'interrupted' : 'failed',
+			turnTimestamp(turn, nowMs),
+		)];
+	}
+
+	let visibleAgentIds: ReadonlySet<string> | undefined;
+	let promotedFinalId: string | undefined;
+	if (finalMessages.length > 0) {
+		visibleAgentIds = new Set(finalMessages.map((timeline) => timeline.item.id));
+	} else if (completedNormally && nullPhaseMessages.length > 0) {
+		promotedFinalId = nullPhaseMessages.at(-1)?.item.id;
+		visibleAgentIds = new Set(promotedFinalId ? [promotedFinalId] : []);
+	}
+
+	const result: ChatTimelineItem[] = [];
+	for (const timeline of rawItems) {
+		if (timeline.item.type === 'agentMessage'
+			&& visibleAgentIds
+			&& !visibleAgentIds.has(timeline.item.id)) {
+			continue;
+		}
+		const view = toCommonTimelineItem(timeline, turn.startedAt);
+		if (view.kind === 'assistantMessage' && view.id.endsWith(`:${promotedFinalId}`)) {
+			view.assistantPhase = 'final';
+		}
+		result.push(view);
+	}
+
+	if (turn.status === 'inProgress' && !hasAnyAgentMessage) {
+		result.push(createStatusItem(
+			turn.id,
+			'thinking',
+			'생각중..',
+			'pending',
+			turnTimestamp(turn, nowMs),
+		));
+	} else if (completedNormally && !hasAnyAgentMessage) {
+		result.push(createStatusItem(
+			turn.id,
+			'empty',
+			'응답 없이 완료되었습니다.',
+			'completed',
+			turnTimestamp(turn, nowMs),
+		));
+	}
+	return result;
+}
+
+/** 검증된 Codex core Item 하나를 Provider 공통 표시 항목으로 변환한다. */
+function toCommonTimelineItem(
 	timeline: CodexTimelineItem,
 	turnStartedAt: number | null,
-): CodexChatTimelineItemView {
-	const timestamp = timeline.startedAtMs
+): ChatTimelineItem {
+	const item = timeline.item;
+	const createdAt = toIso(timeline.startedAtMs
 		?? timeline.completedAtMs
-		?? (turnStartedAt === null ? Date.now() : secondsToMilliseconds(turnStartedAt));
+		?? (turnStartedAt === null ? Date.now() : secondsToMilliseconds(turnStartedAt)));
+	const state: ChatTimelineItemState = timeline.lifecycle === 'completed'
+		? 'completed'
+		: 'streaming';
+	const base = {
+		id: `${timeline.turnId}:${item.id}`,
+		turnId: timeline.turnId,
+		createdAt,
+		state,
+	};
+	if (item.type === 'userMessage') {
+		return {
+			...base,
+			kind: 'userMessage',
+			text: item.content
+				.filter((input) => input.type === 'text')
+				.map((input) => input.text)
+				.join('\n'),
+		};
+	}
+	if (item.type === 'agentMessage') {
+		return {
+			...base,
+			kind: 'assistantMessage',
+			text: item.text,
+			assistantPhase: mapAssistantPhase(item.phase),
+		};
+	}
+	const activity = createActivity(item);
 	return {
-		id: `${timeline.turnId}:${timeline.item.id}`,
-		type: timeline.item.type,
-		text: formatCoreItem(timeline.item),
-		createdAt: toIso(timestamp),
-		status: timeline.lifecycle === 'completed' ? 'completed' : 'streaming',
+		...base,
+		kind: item.type === 'commandExecution' ? 'execution' : item.type,
+		text: activity.summary,
+		state: item.type === 'reasoning' ? state : mapExecutionState(item.status),
+		activity,
 	};
 }
 
-/**
- * core 5 생성 Item을 읽기 쉬운 plain text로 변환한다.
- *
- * @param item runtime validation을 통과한 생성 Item.
- * @returns Webview가 textContent로 표시할 본문.
- */
-function formatCoreItem(item: CoreThreadItem): string {
-	switch (item.type) {
-		case 'userMessage':
-			return item.content
-				.filter((input) => input.type === 'text')
-				.map((input) => input.text)
-				.join('\n');
-		case 'agentMessage':
-			return item.text;
-		case 'reasoning':
-			return [...item.summary, ...item.content].join('\n');
-		case 'commandExecution': {
-			const output = item.aggregatedOutput?.trimEnd();
-			return output ? `$ ${item.command}\n${output}` : `$ ${item.command}`;
-		}
-		case 'fileChange':
-			return item.changes.map((change) => {
-				const diff = change.diff.trimEnd();
-				const kind = change.kind.type;
-				return diff
-					? `[${kind}] ${change.path}\n${diff}`
-					: `[${kind}] ${change.path}`;
-			}).join('\n\n');
+/** Codex Agent phase를 Webview 공통 phase로 변환한다. */
+function mapAssistantPhase(
+	phase: 'commentary' | 'final_answer' | null,
+): ChatAssistantPhase {
+	return phase === 'final_answer' ? 'final' : 'commentary';
+}
+
+/** Codex Activity Item을 접힌 요약과 plain text 세부 정보로 변환한다. */
+function createActivity(
+	item: Extract<CoreThreadItem, { type: 'reasoning' | 'commandExecution' | 'fileChange' }>,
+): ChatTimelineActivity {
+	if (item.type === 'reasoning') {
+		return {
+			label: '추론',
+			summary: item.summary.join(' ') || '내용을 분석하고 있습니다.',
+			details: item.content.join('\n') || undefined,
+		};
 	}
+	if (item.type === 'commandExecution') {
+		return {
+			label: '실행',
+			summary: item.command,
+			details: item.aggregatedOutput?.trimEnd() || undefined,
+		};
+	}
+	const details = item.changes.map((change) => {
+		const diff = change.diff.trimEnd();
+		return diff
+			? `[${change.kind.type}] ${change.path}\n${diff}`
+			: `[${change.kind.type}] ${change.path}`;
+	}).join('\n\n');
+	return {
+		label: '파일 변경',
+		summary: item.changes.length === 1
+			? item.changes[0]?.path ?? '파일 1개'
+			: `파일 ${item.changes.length}개`,
+		details: details || undefined,
+	};
+}
+
+/** command/file 상태를 Provider 공통 진행 상태로 변환한다. */
+function mapExecutionState(
+	status: 'inProgress' | 'completed' | 'failed' | 'declined',
+): ChatTimelineItemState {
+	if (status === 'inProgress') {
+		return 'streaming';
+	}
+	return status === 'completed' ? 'completed' : 'failed';
+}
+
+/** Turn 투영에서 사용하는 한 줄 status 항목을 만든다. */
+function createStatusItem(
+	turnId: string,
+	suffix: string,
+	text: string,
+	state: ChatTimelineItemState,
+	createdAt: string,
+): ChatTimelineItem {
+	return {
+		id: `${turnId}:status:${suffix}`,
+		turnId,
+		kind: 'status',
+		text,
+		createdAt,
+		state,
+	};
+}
+
+/** Turn의 완료·시작 시각을 status 항목용 ISO 문자열로 정규화한다. */
+function turnTimestamp(turn: MutableTurnState, nowMs: number): string {
+	const seconds = turn.completedAt ?? turn.startedAt;
+	return toIso(seconds === null ? nowMs : secondsToMilliseconds(seconds));
 }
 
 /**

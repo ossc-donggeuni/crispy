@@ -1,14 +1,8 @@
-import './chat.css';
 import { ChatHistoryControl } from './chatHistory';
 import { createChatIcon } from './chatIcons';
+import type { ChatMarkdownRenderer } from './chatMarkdown';
 import { ChatRuntimeSettingsControl } from './chatRuntimeSettings';
-import type { CodexChatItemType } from './Codex/chatBridgeProtocol';
-
-/** 대화 말풍선을 좌우에 배치하기 위해 사용하는 메시지 작성자 구분이다. */
-export type ChatRole = 'user' | 'agent';
-
-/** Agent 메시지가 아직 생성 중인지 완료되었는지 나타내는 렌더링 상태다. */
-export type ChatMessageStatus = 'streaming' | 'completed';
+import type { ChatTimelineItem, ChatTimelineItemKind } from './chatTimeline';
 
 /** 승인 요청 callback에 전달되는 사용자의 최종 결정이다. */
 export type ChatApprovalDecision = 'approved' | 'rejected';
@@ -23,25 +17,12 @@ export interface ChatSessionSummary {
 	lastResponseAt: string;
 }
 
-/** 대화 출력 영역에 렌더링할 사용자 또는 Agent 메시지다. */
-export interface ChatMessage {
-	/** 메시지의 안정적인 식별자다. */
-	id: string;
-	/** 메시지의 발신자와 말풍선 정렬 방향이다. */
-	role: ChatRole;
-	/** Codex core 5 Item별 제목과 시각 표현을 구분하는 선택적 종류다. */
-	itemType?: CodexChatItemType;
-	/** HTML로 해석하지 않고 textContent로 출력할 메시지 본문이다. */
-	text: string;
-	/** 메시지 메타데이터에 표시할 생성 ISO 시각이다. */
-	createdAt: string;
-	/** 생략하면 이전 데이터와 호환되도록 완료된 메시지로 처리한다. */
-	status?: ChatMessageStatus;
-}
+/** 기존 ChatView API 이름으로 노출하는 Provider 공통 타임라인 항목이다. */
+export type ChatMessage = ChatTimelineItem;
 
 /** 스트리밍 delta 또는 완료 이벤트가 기존 메시지에서 변경할 수 있는 필드다. */
 export type ChatMessagePatch = Partial<
-	Pick<ChatMessage, 'text' | 'createdAt' | 'status'>
+	Pick<ChatMessage, 'text' | 'createdAt' | 'state'>
 >;
 
 /** Agent·모델·모델 옵션에서 공통으로 사용하는 선택 항목이다. */
@@ -82,6 +63,8 @@ export interface ChatSendRequest extends ChatSelection {
 export interface ChatViewOptions {
 	/** 최근 대화 기록 팝오버의 초기 세션 목록이다. */
 	sessions: readonly ChatSessionSummary[];
+	/** Assistant 메시지를 안전한 HTML로 변환하는 초기화 완료 렌더러다. */
+	renderMarkdown: ChatMarkdownRenderer;
 	/** 대화 출력 영역의 초기 메시지 목록이다. */
 	messages: readonly ChatMessage[];
 	/** 통합 실행 설정에서 선택 가능한 Agent 목록이다. */
@@ -102,6 +85,8 @@ export interface ChatViewOptions {
 	onNewChat?: () => void;
 	/** 최근 세션을 선택했을 때 세션 ID를 전달한다. */
 	onSessionSelect?: (sessionId: string) => void;
+	/** Markdown 외부 링크를 Host 검증 계층에 전달한다. */
+	onOpenExternal?: (url: string) => void;
 	/** 승인 Dock에서 승인 또는 거부를 결정했을 때 호출된다. */
 	onApprovalDecision?: (
 		requestId: string,
@@ -134,27 +119,28 @@ type ChatCopy = {
 	showMore: string;
 	showLess: string;
 	reasoning: string;
-	commandExecution: string;
+	execution: string;
 	fileChange: string;
+	status: string;
 };
 
 /** 향후 언어별 copy 객체로 교체할 수 있도록 화면 문구를 한곳에서 관리한다. */
 export const koreanChatCopy: Readonly<ChatCopy> = Object.freeze({
-	chatLabel: 'Crispy Codex 대화',
+	chatLabel: 'Crispy AI 대화',
 	recentSessions: '최근 세션',
 	newChat: '새 대화',
 	emptyMessages: '새로운 대화를 시작해 보세요.',
 	you: '나',
-	agent: 'Codex',
+	agent: 'AI',
 	agentSelector: 'Agent',
 	modelSelector: '모델',
 	modelOptionSelector: '모델 옵션',
 	messageLabel: '메시지',
-	messagePlaceholder: 'Codex에게 요청할 내용을 입력하세요',
+	messagePlaceholder: 'AI에게 요청할 내용을 입력하세요',
 	send: '전송',
 	stop: '실행 중지',
 	idleStatus: '메시지를 입력할 수 있습니다.',
-	runningStatus: 'Codex가 실행 중인 화면 예시입니다.',
+	runningStatus: 'AI가 실행 중입니다.',
 	approvalHeading: '승인 요청',
 	approve: '승인',
 	reject: '거부',
@@ -163,8 +149,9 @@ export const koreanChatCopy: Readonly<ChatCopy> = Object.freeze({
 	showMore: '더 보기',
 	showLess: '접기',
 	reasoning: '추론',
-	commandExecution: '명령 실행',
+	execution: '실행',
 	fileChange: '파일 변경',
+	status: '상태',
 });
 
 /** 완료된 메시지에서 기본으로 노출할 실제 렌더링 줄 수다. */
@@ -179,6 +166,8 @@ const collapsedMessageLineCount = 8;
 export class ChatView {
 	/** 현재 Chat UI가 사용하는 불변 한국어 copy다. */
 	private readonly copy = koreanChatCopy;
+	/** 스트리밍 snapshot마다 재사용하는 안전한 동기 Markdown 렌더러다. */
+	private readonly renderMarkdown: ChatMarkdownRenderer;
 	/** Extension 연동 단계에서 연결할 외부 이벤트 callback 모음이다. */
 	private readonly callbacks: Pick<
 		ChatViewOptions,
@@ -186,6 +175,7 @@ export class ChatView {
 		| 'onStop'
 		| 'onNewChat'
 		| 'onSessionSelect'
+		| 'onOpenExternal'
 		| 'onApprovalDecision'
 	>;
 	private sessions: ChatSessionSummary[];
@@ -224,6 +214,7 @@ export class ChatView {
 		options: ChatViewOptions,
 	) {
 		this.sessions = options.sessions.map((session) => ({ ...session }));
+		this.renderMarkdown = options.renderMarkdown;
 		this.messages = options.messages.map((message) => ({ ...message }));
 		this.approvalRequest = options.approvalRequest
 			? { ...options.approvalRequest }
@@ -234,6 +225,7 @@ export class ChatView {
 			onStop: options.onStop,
 			onNewChat: options.onNewChat,
 			onSessionSelect: options.onSessionSelect,
+			onOpenExternal: options.onOpenExternal,
 			onApprovalDecision: options.onApprovalDecision,
 		};
 
@@ -339,8 +331,8 @@ export class ChatView {
 		if (patch.createdAt !== undefined) {
 			message.createdAt = patch.createdAt;
 		}
-		if (patch.status !== undefined) {
-			message.status = patch.status;
+		if (patch.state !== undefined) {
+			message.state = patch.state;
 		}
 
 		const wasNearBottom = this.messageList.scrollHeight
@@ -533,7 +525,7 @@ export class ChatView {
 		this.root.append(shell, this.decisionAnnouncer);
 	}
 
-	/** 현재 메시지 배열을 역할별 좌우 말풍선 또는 빈 상태로 다시 렌더링한다. */
+	/** 현재 공통 타임라인을 메시지·Activity·status 표현으로 다시 렌더링한다. */
 	private renderMessages(): void {
 		this.messageList.replaceChildren();
 		if (this.errorMessage) {
@@ -555,17 +547,32 @@ export class ChatView {
 			this.messageList.append(empty);
 		} else {
 			for (const [index, message] of this.messages.entries()) {
-				const itemType = message.itemType
-					?? (message.role === 'user' ? 'userMessage' : 'agentMessage');
+				if (message.kind === 'status') {
+					const status = createElement(
+						'p',
+						`chat-timeline-status is-${message.state}`,
+						message.text,
+					);
+					status.setAttribute('role', 'status');
+					this.messageList.append(status);
+					continue;
+				}
+				if (message.activity) {
+					this.messageList.append(this.createActivity(message));
+					continue;
+				}
+				const isUser = message.kind === 'userMessage';
 				const article = createElement(
 					'article',
-					`chat-message is-${message.role} is-${itemType}`,
+					`chat-message ${isUser ? 'is-user' : 'is-assistant'}${
+						message.assistantPhase ? ` is-${message.assistantPhase}` : ''
+					}`,
 				);
 				const metadata = createElement('div', 'chat-message-metadata');
 				const sender = createElement(
 					'span',
 					'chat-message-sender',
-					this.getMessageSender(itemType),
+					this.getMessageSender(message.kind),
 				);
 				const time = createElement(
 					'time',
@@ -575,8 +582,26 @@ export class ChatView {
 				time.dateTime = message.createdAt;
 				const content = createElement('div', 'chat-message-content');
 				content.dataset.messageId = message.id;
-				const body = createElement('p', 'chat-message-body', message.text);
+				const body = createElement('div', 'chat-message-body');
 				body.id = `chat-message-body-${index}`;
+				if (message.kind === 'assistantMessage') {
+					body.classList.add('is-markdown');
+					body.innerHTML = this.renderMarkdown(message.text);
+					body.addEventListener('click', (event) => {
+						const target = event.target;
+						const link = target instanceof Element ? target.closest('a[href]') : null;
+						if (!(link instanceof HTMLAnchorElement)) {
+							return;
+						}
+						event.preventDefault();
+						this.invokeSafely(
+							() => this.callbacks.onOpenExternal?.(link.getAttribute('href') ?? ''),
+							'외부 링크 callback',
+						);
+					});
+				} else {
+					body.textContent = message.text;
+				}
 				const overflowControls = createElement(
 					'div',
 					'chat-message-overflow-controls',
@@ -596,7 +621,10 @@ export class ChatView {
 					this.toggleMessageExpansion(message.id, article);
 				});
 				overflowControls.append(ellipsis, toggleButton);
-				content.append(body, overflowControls);
+				content.append(body);
+				if (message.assistantPhase !== 'final') {
+					content.append(overflowControls);
+				}
 				metadata.append(sender, time);
 				article.append(metadata, content);
 				this.messageList.append(article);
@@ -604,6 +632,47 @@ export class ChatView {
 		}
 
 		this.scheduleMessageOverflowMeasurement();
+	}
+
+	/** reasoning·execution·fileChange를 동일한 접이식 Activity 행으로 만든다. */
+	private createActivity(message: ChatMessage): HTMLDetailsElement {
+		const activity = message.activity;
+		if (!activity) {
+			throw new Error('Activity 항목에 표시 정보가 없습니다.');
+		}
+		const details = createElement(
+			'details',
+			`chat-activity is-${message.kind} is-${message.state}`,
+		);
+		const summary = createElement('summary', 'chat-activity-summary');
+		const label = createElement('span', 'chat-activity-label', activity.label);
+		const state = createElement(
+			'span',
+			'chat-activity-state',
+			formatTimelineState(message.state),
+		);
+		const headline = createElement(
+			'span',
+			'chat-activity-headline',
+			activity.summary,
+		);
+		summary.append(label, state, headline);
+		details.append(summary);
+		if (activity.details) {
+			const isOutput = message.kind === 'execution' || message.kind === 'fileChange';
+			const body = createElement(
+				message.kind === 'reasoning' ? 'div' : 'pre',
+				`chat-activity-details${
+					message.kind === 'reasoning' ? ' is-prose' : isOutput ? ' is-output' : ''
+				}`,
+				activity.details,
+			);
+			details.append(body);
+		} else {
+			details.classList.add('has-no-details');
+			summary.addEventListener('click', (event) => event.preventDefault());
+		}
+		return details;
 	}
 
 	/** 현재 승인 요청을 조건부 Dock으로 렌더링하고 요청이 없으면 공간을 회수한다. */
@@ -730,7 +799,7 @@ export class ChatView {
 
 			body.classList.remove('is-collapsed');
 			content.classList.remove('is-collapsible', 'is-collapsed', 'is-expanded');
-			const isStreaming = message.status === 'streaming';
+			const isStreaming = message.state === 'streaming';
 			const bodyStyles = getComputedStyle(body);
 			const lineHeight = parsePixelValue(bodyStyles.lineHeight, 18);
 			const verticalPadding = parsePixelValue(bodyStyles.paddingTop, 0)
@@ -859,23 +928,25 @@ export class ChatView {
 	}
 
 	/**
-	 * core 5 Item 종류를 메시지 메타데이터의 한글 제목으로 바꾼다.
+	 * 공통 Item 종류를 메시지 메타데이터의 한글 제목으로 바꾼다.
 	 *
-	 * @param itemType Codex core 5 discriminator.
+	 * @param kind Provider 공통 timeline discriminator.
 	 * @returns 사용자에게 표시할 발신자 또는 도구 제목.
 	 */
-	private getMessageSender(itemType: CodexChatItemType): string {
-		switch (itemType) {
+	private getMessageSender(kind: ChatTimelineItemKind): string {
+		switch (kind) {
 			case 'userMessage':
 				return this.copy.you;
-			case 'agentMessage':
+			case 'assistantMessage':
 				return this.copy.agent;
 			case 'reasoning':
 				return this.copy.reasoning;
-			case 'commandExecution':
-				return this.copy.commandExecution;
+			case 'execution':
+				return this.copy.execution;
 			case 'fileChange':
 				return this.copy.fileChange;
+			case 'status':
+				return this.copy.status;
 		}
 	}
 
@@ -922,16 +993,19 @@ export class ChatView {
  * Host snapshot을 기다리는 실제 Codex Chat의 빈 초기 옵션을 만든다.
  *
  * @param callbacks 사용자 전송·새 draft·세션 선택을 Host로 전달하는 callback.
+ * @param renderMarkdown 초기화가 완료된 안전한 Markdown 렌더러.
  * @returns CLI 기본 모델 표시와 비활성 Composer를 포함한 초기 옵션.
  */
 export function createConnectedChatOptions(
 	callbacks: Pick<
 		ChatViewOptions,
-		'onSend' | 'onNewChat' | 'onSessionSelect'
+		'onSend' | 'onNewChat' | 'onSessionSelect' | 'onOpenExternal'
 	>,
+	renderMarkdown: ChatMarkdownRenderer,
 ): ChatViewOptions {
 	return {
 		sessions: [],
+		renderMarkdown,
 		messages: [],
 		agents: [{ value: 'codex', label: 'Codex' }],
 		models: [{ value: 'default', label: '기본 모델' }],
@@ -953,6 +1027,7 @@ export function createDemoChatOptions(now = new Date()): ChatViewOptions {
 		new Date(now.getTime() - milliseconds).toISOString();
 
 	return {
+		renderMarkdown: renderPlainTextAsHtml,
 		sessions: [
 			{
 				id: 'session-agent-ui',
@@ -973,14 +1048,16 @@ export function createDemoChatOptions(now = new Date()): ChatViewOptions {
 		messages: [
 			{
 				id: 'message-user-demo',
-				role: 'user',
+				turnId: 'turn-demo',
+				kind: 'userMessage',
 				text: '현재 프로젝트 구조를 확인하고 다음 구현 계획을 정리해 줘.',
 				createdAt: isoBefore(12 * minute),
-				status: 'completed',
+				state: 'completed',
 			},
 			{
 				id: 'message-agent-demo',
-				role: 'agent',
+				turnId: 'turn-demo',
+				kind: 'assistantMessage',
 				text: [
 					'프로젝트 구조를 확인했습니다.',
 					'변경 대상과 검증 순서를 포함한 계획을 준비했습니다.',
@@ -994,7 +1071,8 @@ export function createDemoChatOptions(now = new Date()): ChatViewOptions {
 					'7. 좁은 화면과 낮은 화면을 함께 검증합니다.',
 				].join(' '),
 				createdAt: isoBefore(8 * minute),
-				status: 'completed',
+				state: 'completed',
+				assistantPhase: 'final',
 			},
 		],
 		agents: [{ value: 'codex', label: 'Codex' }],
@@ -1006,6 +1084,16 @@ export function createDemoChatOptions(now = new Date()): ChatViewOptions {
 			description: 'Agent가 준비한 ChangePlan을 다음 단계로 전달하도록 승인하시겠습니까?',
 		},
 	};
+}
+
+/** Demo 옵션에서 HTML 실행 없이 문자열을 표시하기 위한 최소 escape 렌더러다. */
+function renderPlainTextAsHtml(value: string): string {
+	return value
+		.replaceAll('&', '&amp;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;')
+		.replaceAll("'", '&#39;');
 }
 
 /**
@@ -1045,6 +1133,22 @@ function formatClockTime(value: string): string {
 		hour: '2-digit',
 		minute: '2-digit',
 	}).format(time);
+}
+
+/** Provider 공통 진행 상태를 Activity에 표시할 한국어 문구로 변환한다. */
+function formatTimelineState(state: ChatMessage['state']): string {
+	switch (state) {
+		case 'pending':
+			return '대기';
+		case 'streaming':
+			return '진행 중';
+		case 'completed':
+			return '완료';
+		case 'failed':
+			return '실패';
+		case 'interrupted':
+			return '중단';
+	}
 }
 
 /**

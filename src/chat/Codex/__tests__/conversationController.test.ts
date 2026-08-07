@@ -128,16 +128,16 @@ suite('CodexConversationController', () => {
 
 		const snapshot = controller.snapshot;
 		assert.deepStrictEqual(
-			snapshot.items.map((item) => item.type),
-			['userMessage', 'agentMessage', 'reasoning', 'commandExecution', 'fileChange'],
+			snapshot.items.map((item) => item.kind),
+			['userMessage', 'assistantMessage', 'reasoning', 'execution', 'fileChange'],
 		);
 		assert.strictEqual(
-			snapshot.items.filter((item) => item.type === 'userMessage').length,
+			snapshot.items.filter((item) => item.kind === 'userMessage').length,
 			1,
 		);
 		assert.strictEqual(snapshot.items[1]?.text, '최종 답변');
-		assert.strictEqual(snapshot.items[3]?.text, '$ pnpm test\nfinal output');
-		assert.ok(snapshot.items.every((item) => item.status === 'completed'));
+		assert.strictEqual(snapshot.items[3]?.activity?.details, 'final output');
+		assert.ok(snapshot.items.every((item) => item.state === 'completed'));
 		controller.dispose();
 	});
 
@@ -165,7 +165,12 @@ suite('CodexConversationController', () => {
 			}),
 		}));
 		assert.strictEqual(controller.snapshot.isRunning, false);
-		assert.strictEqual(controller.snapshot.error, '모델 요청 실패');
+		assert.strictEqual(controller.snapshot.error, null);
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'status')
+				.map((item) => item.text),
+			['모델 요청 실패'],
+		);
 		controller.dispose();
 	});
 
@@ -206,8 +211,517 @@ suite('CodexConversationController', () => {
 			turn: turn('turn-2', 'completed', [reasoningItem('reasoning-1')], null, 'summary'),
 		}));
 		assert.deepStrictEqual(
-			controller.snapshot.items.map((item) => item.type),
-			['agentMessage', 'reasoning', 'userMessage'],
+			controller.snapshot.items.map((item) => item.kind),
+			['userMessage', 'assistantMessage', 'reasoning'],
+		);
+		controller.dispose();
+	});
+
+	test('전송 직후 optimistic 사용자 메시지와 provisional thinking을 생성한다', async () => {
+		let resolveTurn: ((value: unknown) => void) | undefined;
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1')
+			: new Promise((resolve) => {
+				resolveTurn = resolve;
+			}));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		const sending = send(controller, conversationId, '질문');
+		await flushMicrotasks();
+		const turnRequest = client.requests.find((request) => request.method === 'turn/start');
+		assert.ok(turnRequest && turnRequest.method === 'turn/start');
+		const provisionalTurnId = `pending:${turnRequest.params.clientUserMessageId}`;
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.kind, item.turnId, item.text]),
+			[
+				['userMessage', provisionalTurnId, '질문'],
+				['status', provisionalTurnId, '생각중..'],
+			],
+		);
+		resolveTurn?.(turnStartResult('turn-1'));
+		await sending;
+		controller.dispose();
+	});
+
+	test('최초 Turn 응답에서 provisional Turn을 실제 Turn ID로 결합한다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.kind, item.turnId, item.text]),
+			[
+				['userMessage', 'turn-1', '질문'],
+				['status', 'turn-1', '생각중..'],
+			],
+		);
+		controller.dispose();
+	});
+
+	test('Turn 응답보다 먼저 온 notification에서도 provisional Turn을 실제 ID로 결합한다', async () => {
+		let resolveTurn: ((value: unknown) => void) | undefined;
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1')
+			: new Promise((resolve) => {
+				resolveTurn = resolve;
+			}));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		const sending = send(controller, conversationId, '질문');
+		await flushMicrotasks();
+		applyItem(
+			controller,
+			'item/started',
+			agentItem('commentary-1', '진행', 'commentary'),
+			1_100,
+			'thread-1',
+			'turn-notification',
+		);
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.turnId, item.kind, item.text]),
+			[
+				['turn-notification', 'userMessage', '질문'],
+				['turn-notification', 'assistantMessage', '진행'],
+			],
+		);
+		resolveTurn?.(turnStartResult('turn-notification'));
+		await sending;
+		controller.dispose();
+	});
+
+	for (const activity of [
+		{ label: 'reasoning', item: reasoningItem('activity-1') },
+		{ label: 'execution', item: commandItem('activity-1', null) },
+		{ label: 'fileChange', item: fileItem('activity-1') },
+	]) {
+		test(`${activity.label}만 먼저 도착해도 thinking을 유지한다`, async () => {
+			const controller = createController(readyClient());
+			const conversationId = controller.snapshot.selectedConversationId;
+			await send(controller, conversationId, '질문');
+			applyItem(controller, 'item/started', activity.item, 1_100);
+
+			assert.strictEqual(
+				controller.snapshot.items.filter((item) => item.text === '생각중..').length,
+				1,
+			);
+			controller.dispose();
+		});
+	}
+
+	for (const [label, phase] of [
+		['commentary', 'commentary'],
+		['null-phase', null],
+	] as const) {
+		test(`${label} Agent 메시지는 thinking을 제거한다`, async () => {
+			const controller = createController(readyClient());
+			const conversationId = controller.snapshot.selectedConversationId;
+			await send(controller, conversationId, '질문');
+			applyItem(controller, 'item/started', agentItem('agent-1', '진행', phase), 1_100);
+
+			assert.strictEqual(
+				controller.snapshot.items.some((item) => item.text === '생각중..'),
+				false,
+			);
+			assert.strictEqual(
+				controller.snapshot.items.find((item) => item.id.endsWith(':agent-1'))
+					?.assistantPhase,
+				'commentary',
+			);
+			controller.dispose();
+		});
+	}
+
+	test('final은 같은 Turn commentary와 null만 제거하고 모든 final 순서를 보존한다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(controller, 'item/completed', agentItem('commentary-1', '진행', 'commentary'), 1_100);
+		applyItem(controller, 'item/completed', agentItem('null-1', '임시', null), 1_200);
+		applyItem(controller, 'item/completed', agentItem('final-1', '최종 1', 'final_answer'), 1_300);
+		applyItem(controller, 'item/completed', agentItem('final-2', '최종 2', 'final_answer'), 1_400);
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => [item.text, item.assistantPhase]),
+			[['최종 1', 'final'], ['최종 2', 'final']],
+		);
+		controller.dispose();
+	});
+
+	test('명시적 final이 있으면 null-phase 메시지를 final로 승격하지 않는다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(controller, 'item/completed', agentItem('null-1', '임시', null), 1_100);
+		applyItem(controller, 'item/completed', agentItem('final-1', '명시적 최종', 'final_answer'), 1_200);
+		completeTurn(controller, 'completed');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => [item.id, item.text, item.assistantPhase]),
+			[['turn-1:final-1', '명시적 최종', 'final']],
+		);
+		controller.dispose();
+	});
+
+	test('정상 완료 시 마지막 null-phase만 final로 승격하고 commentary를 제거한다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(controller, 'item/completed', agentItem('commentary-1', '진행', 'commentary'), 1_100);
+		applyItem(controller, 'item/completed', agentItem('null-1', '임시 1', null), 1_200);
+		applyItem(controller, 'item/completed', agentItem('null-2', '임시 2', null), 1_300);
+		completeTurn(controller, 'completed');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => [item.text, item.assistantPhase]),
+			[['임시 2', 'final']],
+		);
+		controller.dispose();
+	});
+
+	test('commentary-only 완료는 유지하고 Agent 무응답 완료는 status를 남긴다', async () => {
+		const commentaryController = createController(readyClient());
+		const commentaryId = commentaryController.snapshot.selectedConversationId;
+		await send(commentaryController, commentaryId, '질문');
+		applyItem(
+			commentaryController,
+			'item/completed',
+			agentItem('commentary-1', '진행 완료', 'commentary'),
+			1_100,
+		);
+		completeTurn(commentaryController, 'completed');
+		assert.deepStrictEqual(
+			commentaryController.snapshot.items.filter((item) =>
+				item.kind === 'assistantMessage').map((item) => item.text),
+			['진행 완료'],
+		);
+		commentaryController.dispose();
+
+		const emptyController = createController(readyClient());
+		const emptyId = emptyController.snapshot.selectedConversationId;
+		await send(emptyController, emptyId, '질문');
+		completeTurn(emptyController, 'completed');
+		assert.strictEqual(
+			emptyController.snapshot.items.at(-1)?.text,
+			'응답 없이 완료되었습니다.',
+		);
+		emptyController.dispose();
+	});
+
+	test('정상 완료된 commentary-only Turn은 commentary를 유지한다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('commentary-1', '진행 완료', 'commentary'),
+			1_100,
+		);
+		completeTurn(controller, 'completed');
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => [item.text, item.assistantPhase]),
+			[['진행 완료', 'commentary']],
+		);
+		controller.dispose();
+	});
+
+	test('Agent 메시지 없는 정상 완료 Turn은 정확한 무응답 status를 남긴다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		completeTurn(controller, 'completed');
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'status')
+				.map((item) => [item.text, item.state]),
+			[['응답 없이 완료되었습니다.', 'completed']],
+		);
+		controller.dispose();
+	});
+
+	test('final 없는 실패는 임시 항목과 Activity를 제거하고 서버 오류 또는 fallback 한 줄만 남긴다', async () => {
+		for (const error of [
+			{ message: '서버 실패', codexErrorInfo: null, additionalDetails: null },
+			null,
+		]) {
+			const controller = createController(readyClient());
+			const conversationId = controller.snapshot.selectedConversationId;
+			await send(controller, conversationId, '질문');
+			applyItem(controller, 'item/completed', reasoningItem('reasoning-1'), 1_100);
+			applyItem(controller, 'item/completed', agentItem('commentary-1', '진행', null), 1_200);
+			controller.handleAppServerMessage(notification('turn/completed', {
+				threadId: 'thread-1',
+				turn: turn('turn-1', 'failed', [], error),
+			}));
+
+			assert.deepStrictEqual(
+				controller.snapshot.items.map((item) => [item.kind, item.text]),
+				[
+					['userMessage', '질문'],
+					['status', error ? '서버 실패' : '응답 생성에 실패했습니다.'],
+				],
+			);
+			assert.strictEqual(controller.snapshot.error, null);
+			controller.dispose();
+		}
+	});
+
+	test('final 없는 interrupted Turn은 중단 status 한 줄만 남긴다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(controller, 'item/completed', fileItem('file-1'), 1_100);
+		completeTurn(controller, 'interrupted');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.kind, item.text]),
+			[['userMessage', '질문'], ['status', '요청이 중지되었습니다.']],
+		);
+		controller.dispose();
+	});
+
+	test('서버 오류가 있는 실패 Turn은 오류 한 줄만 남기고 배너를 만들지 않는다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(controller, 'item/completed', reasoningItem('reasoning-1'), 1_100);
+		controller.handleAppServerMessage(notification('turn/completed', {
+			threadId: 'thread-1',
+			turn: turn('turn-1', 'failed', [], {
+				message: '서버 실패',
+				codexErrorInfo: null,
+				additionalDetails: null,
+			}),
+		}));
+		assert.strictEqual(controller.snapshot.error, null);
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.kind, item.text]),
+			[['userMessage', '질문'], ['status', '서버 실패']],
+		);
+		controller.dispose();
+	});
+
+	test('서버 오류가 없는 실패 Turn은 정확한 fallback status만 남긴다', async () => {
+		const controller = createController(readyClient());
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '질문');
+		applyItem(controller, 'item/completed', agentItem('null-1', '임시', null), 1_100);
+		completeTurn(controller, 'failed');
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.kind, item.text]),
+			[['userMessage', '질문'], ['status', '응답 생성에 실패했습니다.']],
+		);
+		controller.dispose();
+	});
+
+	test('이전 Turn final은 다음 Turn final 전환에 영향받지 않는다', async () => {
+		let sequence = 0;
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1')
+			: turnStartResult(`turn-${++sequence}`));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '첫 질문');
+		applyItem(controller, 'item/completed', agentItem('final-1', '첫 최종', 'final_answer'), 1_100);
+		completeTurn(controller, 'completed', 'turn-1');
+		await send(controller, conversationId, '둘째 질문');
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('commentary-2', '둘째 진행', 'commentary'),
+			1_200,
+			'thread-1',
+			'turn-2',
+		);
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('final-2', '둘째 최종', 'final_answer'),
+			1_300,
+			'thread-1',
+			'turn-2',
+		);
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.assistantPhase === 'final')
+				.map((item) => [item.turnId, item.text]),
+			[['turn-1', '첫 최종'], ['turn-2', '둘째 최종']],
+		);
+		controller.dispose();
+	});
+
+	test('새 Turn final은 다른 Turn의 commentary를 제거하지 않는다', async () => {
+		let turnSequence = 0;
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1')
+			: turnStartResult(`turn-${++turnSequence}`));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '첫 질문');
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('commentary-1', '첫 진행', 'commentary'),
+			1_100,
+		);
+		completeTurn(controller, 'completed');
+		await send(controller, conversationId, '둘째 질문');
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('final-2', '둘째 최종', 'final_answer'),
+			1_200,
+			'thread-1',
+			'turn-2',
+		);
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => [item.turnId, item.text, item.assistantPhase]),
+			[
+				['turn-1', '첫 진행', 'commentary'],
+				['turn-2', '둘째 최종', 'final'],
+			],
+		);
+		controller.dispose();
+	});
+
+	test('다른 Thread의 final 전환은 선택된 대화의 commentary를 제거하지 않는다', async () => {
+		let threadSequence = 0;
+		let turnSequence = 0;
+		const client = new FakeConversationClient((request) => {
+			if (request.method === 'thread/start') {
+				threadSequence += 1;
+				return threadStartResult(`thread-${threadSequence}`);
+			}
+			turnSequence += 1;
+			return turnStartResult(`turn-${turnSequence}`);
+		});
+		const controller = createController(client);
+		const firstConversationId = controller.snapshot.selectedConversationId;
+		await send(controller, firstConversationId, '첫 질문');
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('commentary-1', '첫 진행', 'commentary'),
+			1_100,
+			'thread-1',
+			'turn-1',
+		);
+		completeTurn(controller, 'completed', 'turn-1');
+		await controller.handleWebviewMessage({ type: 'codexChat/newDraft' });
+		const secondConversationId = controller.snapshot.selectedConversationId;
+		await send(controller, secondConversationId, '둘째 질문');
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('commentary-2', '둘째 진행', 'commentary'),
+			1_200,
+			'thread-2',
+			'turn-2',
+		);
+		applyItem(
+			controller,
+			'item/completed',
+			agentItem('final-1', '첫 최종', 'final_answer'),
+			1_300,
+			'thread-1',
+			'turn-1',
+		);
+
+		assert.strictEqual(controller.snapshot.selectedConversationId, secondConversationId);
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => item.text),
+			['둘째 진행'],
+		);
+		await controller.handleWebviewMessage({
+			type: 'codexChat/selectConversation',
+			payload: { conversationId: firstConversationId },
+		});
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.kind === 'assistantMessage')
+				.map((item) => item.text),
+			['첫 최종'],
+		);
+		controller.dispose();
+	});
+
+	test('여러 Turn에서 사용자 메시지 위치와 optimistic 중복 제거를 시간순으로 유지한다', async () => {
+		let turnSequence = 0;
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1')
+			: turnStartResult(`turn-${++turnSequence}`));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '첫 질문');
+		const firstTurnRequest = client.requests.find((request) => request.method === 'turn/start');
+		assert.ok(firstTurnRequest && firstTurnRequest.method === 'turn/start');
+		const firstClientId = firstTurnRequest.params.clientUserMessageId;
+		assert.strictEqual(typeof firstClientId, 'string');
+		applyItem(
+			controller,
+			'item/completed',
+			userItem('user-1', firstClientId as string),
+			1_100,
+		);
+		applyItem(controller, 'item/completed', agentItem('final-1', '첫 답', 'final_answer'), 1_200);
+		completeTurn(controller, 'completed');
+		await send(controller, conversationId, '둘째 질문');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.map((item) => [item.turnId, item.kind, item.text]),
+			[
+				['turn-1', 'userMessage', '코드를 확인해 줘'],
+				['turn-1', 'assistantMessage', '첫 답'],
+				['turn-2', 'userMessage', '둘째 질문'],
+				['turn-2', 'status', '생각중..'],
+			],
+		);
+		controller.dispose();
+	});
+
+	test('thread/start의 복원 full Turn에도 동일한 null-phase 승격 규칙을 적용한다', async () => {
+		const restored = turn('restored-turn', 'completed', [
+			agentItem('restored-commentary', '복원 진행', 'commentary'),
+			agentItem('restored-null-1', '복원 임시 1', null),
+			agentItem('restored-null-2', '복원 최종', null),
+		]);
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1', [restored])
+			: turnStartResult('turn-1'));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '새 질문');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.turnId === 'restored-turn')
+				.map((item) => [item.text, item.assistantPhase]),
+			[['복원 최종', 'final']],
+		);
+		controller.dispose();
+	});
+
+	test('thread/start의 복원 summary Turn도 공통 투영으로 표시한다', async () => {
+		const restored = turn('restored-summary', 'completed', [
+			agentItem('restored-final', '복원 최종', 'final_answer'),
+		], null, 'summary');
+		const client = new FakeConversationClient((request) => request.method === 'thread/start'
+			? threadStartResult('thread-1', [restored])
+			: turnStartResult('turn-1'));
+		const controller = createController(client);
+		const conversationId = controller.snapshot.selectedConversationId;
+		await send(controller, conversationId, '새 질문');
+
+		assert.deepStrictEqual(
+			controller.snapshot.items.filter((item) => item.turnId === 'restored-summary')
+				.map((item) => [item.kind, item.text, item.assistantPhase]),
+			[['assistantMessage', '복원 최종', 'final']],
 		);
 		controller.dispose();
 	});
@@ -227,6 +741,13 @@ function createController(client: CodexConversationClient): CodexConversationCon
 		createId: () => `local-${++idSequence}`,
 		now: () => 1_000,
 	});
+}
+
+/** thread-1과 turn-1을 즉시 반환하는 기본 ready fake client를 만든다. */
+function readyClient(): FakeConversationClient {
+	return new FakeConversationClient((request) => request.method === 'thread/start'
+		? threadStartResult('thread-1')
+		: turnStartResult('turn-1'));
 }
 
 /**
@@ -254,13 +775,13 @@ function send(
  * @param threadId 생성할 Thread ID.
  * @returns 최소 Thread start result.
  */
-function threadStartResult(threadId: string): unknown {
+function threadStartResult(threadId: string, turns: unknown[] = []): unknown {
 	return {
 		thread: {
 			id: threadId,
 			updatedAt: 1,
 			status: { type: 'idle' },
-			turns: [],
+			turns,
 		},
 	};
 }
@@ -333,10 +854,12 @@ function applyItem(
 	method: 'item/started' | 'item/completed',
 	item: unknown,
 	timestamp: number,
+	threadId = 'thread-1',
+	turnId = 'turn-1',
 ): void {
 	controller.handleAppServerMessage(notification(method, {
-		threadId: 'thread-1',
-		turnId: 'turn-1',
+		threadId,
+		turnId,
 		item,
 		[method === 'item/started' ? 'startedAtMs' : 'completedAtMs']: timestamp,
 	}));
@@ -353,8 +876,12 @@ function userItem(id: string, clientId: string): unknown {
 }
 
 /** @returns 지정 본문을 가진 agentMessage Item. */
-function agentItem(id: string, text: string): unknown {
-	return { type: 'agentMessage', id, text, phase: null, memoryCitation: null };
+function agentItem(
+	id: string,
+	text: string,
+	phase: 'commentary' | 'final_answer' | null = null,
+): unknown {
+	return { type: 'agentMessage', id, text, phase, memoryCitation: null };
 }
 
 /** @returns summary와 content를 가진 reasoning Item. */
@@ -393,6 +920,18 @@ function fileItem(id: string): unknown {
 		}],
 		status: 'completed',
 	};
+}
+
+/** 지정 Turn의 완료 notification을 controller에 전달한다. */
+function completeTurn(
+	controller: CodexConversationController,
+	status: 'completed' | 'interrupted' | 'failed',
+	turnId = 'turn-1',
+): void {
+	controller.handleAppServerMessage(notification('turn/completed', {
+		threadId: 'thread-1',
+		turn: turn(turnId, status),
+	}));
 }
 
 /** @returns 현재 queue에 예약된 Promise callback을 처리할 기회. */

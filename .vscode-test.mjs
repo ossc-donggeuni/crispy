@@ -7,6 +7,7 @@ export default defineConfig([
 		files: [
 			'out/test/**/*.test.js',
 			'out/agent/__tests__/**/*.test.js',
+			'out/chat/__tests__/**/*.test.js',
 			'out/chat/Codex/__tests__/**/*.test.js',
 		],
 		mocha: { timeout: 10_000 },
