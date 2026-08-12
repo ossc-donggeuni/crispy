@@ -7,14 +7,12 @@ Graph와 Agent Chat은 각각 별도의 VS Code Panel이 아니며, 하나의 We
 ## 구조
 
 ```text
-src/
-├── extension.ts
-└── webview/
-    ├── webview.ts
-    ├── panelState.ts
-    ├── panelDock.ts
-    ├── panelResize.ts
-    └── webview.css
+src/webview/
+├── webview.ts
+├── panelState.ts
+├── panelDock.ts
+├── panelResize.ts
+└── webview.css
 ```
 
 ### `extension.ts`
@@ -32,6 +30,7 @@ src/
 - 필요한 DOM 요소 조회
 - 저장된 Layout 상태 복원
 - Dock과 Resize 기능 초기화
+- 로드 후 ready 메시지 전송
 
 ### `panelState.ts`
 
