@@ -14,8 +14,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "crispy.helloWorld",
-        "title": "Hello World"
+        "command": "crispy.openCanvas",
+        "title": "Crispy: Open Canvas"
       }
     ]
   },
