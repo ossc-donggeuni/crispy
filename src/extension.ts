@@ -1,4 +1,12 @@
 import * as vscode from 'vscode';
+import {
+	getPanelLayoutStateFromMessage,
+	serializePanelLayoutState,
+	type PanelLayoutState,
+} from './webview/panelState';
+
+let currentPanel: vscode.WebviewPanel | undefined;
+let lastLayoutState: PanelLayoutState | undefined;
 
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
@@ -7,9 +15,14 @@ import * as vscode from 'vscode';
  */
 export function activate(context: vscode.ExtensionContext) {
 	/**
-	 * 하나의 WebviewPanel을 생성하고 Dock 및 Resize UI에 필요한 리소스와 HTML을 설정한다.
+	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
 	const openCanvas = () => {
+		if (currentPanel) {
+			currentPanel.reveal();
+			return;
+		}
+
 		const webviewRoot = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview');
 		const panel = vscode.window.createWebviewPanel(
 			'crispy.webview',
@@ -20,6 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
 				localResourceRoots: [webviewRoot],
 			},
 		);
+		currentPanel = panel;
 
 		const stylesUri = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(webviewRoot, 'webview.css'),
@@ -28,7 +42,24 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
 		);
 
-		panel.webview.html = getWebviewHtml(panel.webview, stylesUri, scriptUri);
+		panel.webview.onDidReceiveMessage((message: unknown) => {
+			const layoutState = getPanelLayoutStateFromMessage(message);
+
+			if (layoutState) {
+				lastLayoutState = layoutState;
+			}
+		});
+
+		panel.webview.html = getWebviewHtml(
+			panel.webview,
+			stylesUri,
+			scriptUri,
+			lastLayoutState,
+		);
+
+		panel.onDidDispose(() => {
+			currentPanel = undefined;
+		});
 	};
 
 	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
@@ -37,10 +68,13 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * 확장이 비활성화될 때 호출된다.
- * 현재 리소스는 VS Code의 구독 및 Webview 수명 주기로 정리되므로 별도 작업을 수행하지 않는다.
+ * 확장이 비활성화될 때 열린 WebviewPanel과 참조를 정리한다.
  */
-export function deactivate() {}
+export function deactivate() {
+	currentPanel?.dispose();
+	currentPanel = undefined;
+	lastLayoutState = undefined;
+}
 
 /**
  * Graph와 Agent Chat 영역 및 Webview 리소스 참조를 포함하는 HTML 문서를 생성한다.
@@ -48,13 +82,17 @@ export function deactivate() {}
  * @param webview Content Security Policy에 사용할 Webview 인스턴스
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
+ * @param initialLayoutState 새 Panel에 전달할 마지막 Webview Layout 상태
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
 	webview: vscode.Webview,
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
+	initialLayoutState: PanelLayoutState | undefined,
 ): string {
+	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
+
 	return `<!DOCTYPE html>
 			<html lang="en">
 			<head>
@@ -74,7 +112,7 @@ function getWebviewHtml(
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}"></script>
+				<script src="${scriptUri}" data-layout-state="${serializedLayoutState}"></script>
 			</body>
 			</html>`;
 }

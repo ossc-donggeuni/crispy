@@ -1,5 +1,12 @@
-import { initializePanelDock, type PanelLayoutState } from './panelDock';
+import { initializePanelDock } from './panelDock';
 import { initializePanelResize } from './panelResize';
+import {
+	restorePanelLayoutState,
+	savePanelLayoutState,
+	type WebviewStateApi,
+} from './panelState';
+
+declare function acquireVsCodeApi(): WebviewStateApi;
 
 /**
  * CSS 선택자에 해당하는 필수 DOM 요소를 조회한다.
@@ -18,20 +25,29 @@ function getRequiredElement<T extends HTMLElement>(selector: string): T {
 	return element;
 }
 
+const vscodeApi = acquireVsCodeApi();
+const serializedInitialState = document.currentScript?.getAttribute('data-layout-state')
+	?? undefined;
+const state = restorePanelLayoutState(vscodeApi, serializedInitialState);
+
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 
-// 기본 Panel size, status 설정
-const state: PanelLayoutState = {
-	preferredDock: 'right',
-	effectiveDock: 'right',
-	sideSize: 360,
-	verticalSize: 300,
-};
-
 // Dock 초기화
-const refreshDock = initializePanelDock(layout, dragHandle, dockPreview, state);
+const refreshDock = initializePanelDock(
+	layout,
+	dragHandle,
+	dockPreview,
+	state,
+	() => savePanelLayoutState(vscodeApi, state),
+);
 // Resize 초기화
-initializePanelResize(layout, resizeHandle, state, refreshDock);
+initializePanelResize(
+	layout,
+	resizeHandle,
+	state,
+	refreshDock,
+	() => savePanelLayoutState(vscodeApi, state),
+);

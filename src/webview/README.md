@@ -11,6 +11,7 @@ src/
 ├── extension.ts
 └── webview/
     ├── webview.ts
+    ├── panelState.ts
     ├── panelDock.ts
     ├── panelResize.ts
     └── webview.css
@@ -22,13 +23,23 @@ src/
 - `WebviewPanel` 생성
 - Webview HTML 구성
 - 빌드된 CSS와 JavaScript 리소스 연결
+- Panel 종료 후 다시 열 때 사용할 마지막 Layout 상태를 Extension Host 메모리에 유지
 
 ### `webview.ts`
 
 - Webview의 진입점
+- VS Code Webview API 단일 획득
 - 필요한 DOM 요소 조회
-- 기본 Panel 상태 설정
+- 저장된 Layout 상태 복원
 - Dock과 Resize 기능 초기화
+
+### `panelState.ts`
+
+- 사용자 선호 Dock과 가로·세로 크기 상태 정의
+- 유효한 저장 상태 복원 및 기본값 적용
+- VS Code Webview `getState()` / `setState()` 연결
+- 변경된 Layout을 Extension Host 인메모리 캐시에 전달
+- 실제 반응형 Dock 및 Pointer 진행 상태는 저장하지 않음
 
 ### `panelDock.ts`
 
@@ -46,28 +57,12 @@ src/
 - 상하 배치에서 Agent Chat 높이 조절
 - 최소 크기와 Webview 영역을 넘지 않는 최대 크기 적용
 
-### `webview.css`
-
-- Dock 방향별 CSS Grid Layout
-- Graph와 Agent Chat 영역 스타일
-- Drag Handle과 Resize Handle 스타일
-- Dock Preview 스타일
-- VS Code 테마 변수 적용
-
 ## 기본 상태
 
 ```ts
 preferredDock = 'right';
-effectiveDock = 'right';
-sideSize = 360;
-verticalSize = 300;
+sideSize = INITIAL_SIDE_SIZE;
+verticalSize = INITIAL_VERTICAL_SIZE;
 ```
 
-Panel 위치와 크기는 Webview가 열려 있는 동안만 유지되며 별도로 저장하지 않는다.
-
-## 현재 미구현된 기능
-
-- Graph 및 Agent Chat의 실제 콘텐츠
-- Extension과 Webview 사이 메시지 통신
-- 위치와 크기 영구 저장
-- 외부 Dock 또는 Resize 라이브러리
+사용자가 Drop으로 변경한 `preferredDock`과 Resize 완료 시점의 크기는 VS Code Webview 상태에 저장한다.

@@ -1,4 +1,4 @@
-import type { DockPosition, PanelLayoutState } from './panelDock';
+import type { DockPosition, PanelLayoutState } from './panelState';
 
 const MIN_SIDE_SIZE = 240;
 const MIN_VERTICAL_SIZE = 180;
@@ -17,14 +17,16 @@ interface ResizeSession {
  *
  * @param layout Graph와 Agent Chat을 포함하는 전체 Layout 요소
  * @param resizeHandle Graph와 Agent Chat 사이의 Resize Handle 요소
- * @param state 현재 Dock 위치와 가로·세로 크기를 담는 Layout 상태
+ * @param state 사용자가 선택한 Dock 위치와 가로·세로 크기를 담는 Layout 상태
  * @param onSizeChange 크기 변경 후 반응형 Dock 위치를 다시 계산하는 콜백
+ * @param onResizeEnd Resize가 완료된 뒤 최종 크기를 저장하는 콜백
  */
 export function initializePanelResize(
 	layout: HTMLElement,
 	resizeHandle: HTMLElement,
 	state: PanelLayoutState,
 	onSizeChange: () => void,
+	onResizeEnd: () => void,
 ): void {
 	let session: ResizeSession | undefined;
 
@@ -55,8 +57,18 @@ export function initializePanelResize(
 			return;
 		}
 
+		const dock = layout.dataset.dock;
+
+		if (
+			dock !== 'left'
+			&& dock !== 'right'
+			&& dock !== 'top'
+			&& dock !== 'bottom'
+		) {
+			return;
+		}
+
 		event.preventDefault();
-		const dock = state.effectiveDock;
 		const isSideDock = dock === 'left' || dock === 'right';
 
 		session = {
@@ -107,6 +119,7 @@ export function initializePanelResize(
 		}
 
 		stopResizing(event.pointerId);
+		onResizeEnd();
 	};
 
 	/**
