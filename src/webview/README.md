@@ -61,8 +61,8 @@ src/
 
 ```ts
 preferredDock = 'right';
-sideSize = 360;
-verticalSize = 300;
+sideSize = INITIAL_SIDE_SIZE;
+verticalSize = INITIAL_VERTICAL_SIZE;
 ```
 
 사용자가 Drop으로 변경한 `preferredDock`과 Resize 완료 시점의 크기는 VS Code Webview 상태에 저장한다.
