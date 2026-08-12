@@ -1,0 +1,51 @@
+#graph-area {
+	min-width: 0;
+	min-height: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+.graph-viewport {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	background-color: var(--vscode-editor-background);
+	background-image: radial-gradient(
+		circle,
+		var(--vscode-editorWhitespace-foreground, rgba(128, 128, 128, 0.35)) 1px,
+		transparent 1px
+	);
+	background-size: 20px 20px;
+}
+
+.graph-world {
+	position: absolute;
+	inset: 0;
+	transform-origin: 0 0;
+}
+
+.graph-edge-layer,
+.graph-node-layer {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+
+.graph-edge-layer {
+	z-index: 0;
+	overflow: visible;
+	pointer-events: none;
+}
+
+.graph-node-layer {
+	z-index: 1;
+}
+
+.graph-overlay-layer {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	pointer-events: none;
+}

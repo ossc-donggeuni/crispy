@@ -2,6 +2,7 @@ import type {
 	ExtensionToWebviewMessage,
 	WebviewToExtensionMessage,
 } from '../messages';
+import { initializeGraphView } from './graph/graphView';
 import { initializePanelDock } from './panelDock';
 import { initializePanelResize } from './panelResize';
 import {
@@ -37,9 +38,12 @@ const serializedInitialState = document.currentScript?.getAttribute('data-layout
 const state = restorePanelLayoutState(vscodeApi, serializedInitialState);
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
+const graphArea = getRequiredElement<HTMLElement>('#graph-area');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
+
+initializeGraphView(graphArea);
 
 // Dock 초기화
 const refreshDock = initializePanelDock(
