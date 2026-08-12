@@ -1,4 +1,8 @@
 import * as vscode from 'vscode';
+import type {
+	ExtensionToWebviewMessage,
+	WebviewToExtensionMessage,
+} from './messages';
 import {
 	getPanelLayoutStateFromMessage,
 	serializePanelLayoutState,
@@ -43,10 +47,29 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 
 		panel.webview.onDidReceiveMessage((message: unknown) => {
+			// Layout State Message Handler
 			const layoutState = getPanelLayoutStateFromMessage(message);
-
 			if (layoutState) {
 				lastLayoutState = layoutState;
+				return;
+			}
+
+			// Webview Message Handler
+			if (!message || typeof message !== 'object') {
+				return;
+			}
+
+			const webviewMessage = message as WebviewToExtensionMessage;
+
+			switch (webviewMessage.type) {
+				case 'webview.ready':
+					console.log('[Crispy] Webview ready');
+
+					panel.webview.postMessage({
+						type: 'extension.ready',
+					} satisfies ExtensionToWebviewMessage);
+
+					break;
 			}
 		});
 

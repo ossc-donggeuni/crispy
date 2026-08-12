@@ -1,3 +1,7 @@
+import type {
+	ExtensionToWebviewMessage,
+	WebviewToExtensionMessage,
+} from '../messages';
 import { initializePanelDock } from './panelDock';
 import { initializePanelResize } from './panelResize';
 import {
@@ -6,7 +10,9 @@ import {
 	type WebviewStateApi,
 } from './panelState';
 
-declare function acquireVsCodeApi(): WebviewStateApi;
+declare function acquireVsCodeApi(): WebviewStateApi & {
+	postMessage(message: WebviewToExtensionMessage): void;
+};
 
 /**
  * CSS 선택자에 해당하는 필수 DOM 요소를 조회한다.
@@ -51,3 +57,18 @@ initializePanelResize(
 	refreshDock,
 	() => savePanelLayoutState(vscodeApi, state),
 );
+
+window.addEventListener('message', (event) => {
+	const message = event.data as ExtensionToWebviewMessage;
+
+	switch (message.type) {
+		// Ready
+		case 'extension.ready':
+			console.log('[Crispy] Extension ready');
+			break;
+	}
+});
+
+vscodeApi.postMessage({
+	type: 'webview.ready',
+} satisfies WebviewToExtensionMessage);
