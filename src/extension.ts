@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+let currentPanel: vscode.WebviewPanel | undefined;
+
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
  *
@@ -7,9 +9,14 @@ import * as vscode from 'vscode';
  */
 export function activate(context: vscode.ExtensionContext) {
 	/**
-	 * 하나의 WebviewPanel을 생성하고 Dock 및 Resize UI에 필요한 리소스와 HTML을 설정한다.
+	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
 	const openCanvas = () => {
+		if (currentPanel) {
+			currentPanel.reveal();
+			return;
+		}
+
 		const webviewRoot = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview');
 		const panel = vscode.window.createWebviewPanel(
 			'crispy.webview',
@@ -20,6 +27,7 @@ export function activate(context: vscode.ExtensionContext) {
 				localResourceRoots: [webviewRoot],
 			},
 		);
+		currentPanel = panel;
 
 		const stylesUri = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(webviewRoot, 'webview.css'),
@@ -29,6 +37,10 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 
 		panel.webview.html = getWebviewHtml(panel.webview, stylesUri, scriptUri);
+
+		panel.onDidDispose(() => {
+			currentPanel = undefined;
+		});
 	};
 
 	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
@@ -37,10 +49,12 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * 확장이 비활성화될 때 호출된다.
- * 현재 리소스는 VS Code의 구독 및 Webview 수명 주기로 정리되므로 별도 작업을 수행하지 않는다.
+ * 확장이 비활성화될 때 열린 WebviewPanel과 참조를 정리한다.
  */
-export function deactivate() {}
+export function deactivate() {
+	currentPanel?.dispose();
+	currentPanel = undefined;
+}
 
 /**
  * Graph와 Agent Chat 영역 및 Webview 리소스 참조를 포함하는 HTML 문서를 생성한다.
