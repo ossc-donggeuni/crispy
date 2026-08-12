@@ -1,11 +1,4 @@
-export type DockPosition = 'left' | 'right' | 'top' | 'bottom';
-
-export interface PanelLayoutState {
-	preferredDock: DockPosition;
-	effectiveDock: DockPosition;
-	sideSize: number;
-	verticalSize: number;
-}
+import type { DockPosition, PanelLayoutState } from './panelState';
 
 /**
  * Agent Chat의 Dock 이동, Preview 표시, 반응형 bottom 전환을 초기화한다.
@@ -13,7 +6,8 @@ export interface PanelLayoutState {
  * @param layout Graph와 Agent Chat을 포함하는 전체 Layout 요소
  * @param dragHandle Agent Chat 이동을 시작하는 전용 Drag Handle 요소
  * @param dockPreview 드래그 중 배치 후보 영역을 표시하는 단일 Preview 요소
- * @param state 사용자가 선택한 위치와 실제 위치 및 Panel 크기를 담는 Layout 상태
+ * @param state 사용자가 선택한 위치와 Panel 크기를 담는 Layout 상태
+ * @param onPreferredDockChange 사용자가 선호 Dock 위치를 변경한 뒤 실행할 콜백
  * @returns Panel 크기나 Webview 너비가 변경됐을 때 실제 Dock 위치를 다시 계산하는 함수
  */
 export function initializePanelDock(
@@ -21,6 +15,7 @@ export function initializePanelDock(
 	dragHandle: HTMLElement,
 	dockPreview: HTMLElement,
 	state: PanelLayoutState,
+	onPreferredDockChange: () => void,
 ): () => void {
 	let activePointerId: number | undefined;
 	let candidateDock: DockPosition | undefined;
@@ -33,10 +28,10 @@ export function initializePanelDock(
 		const prefersSide = state.preferredDock === 'left' || state.preferredDock === 'right';
 		const lacksSideSpace = layout.clientWidth - state.sideSize < state.sideSize;
 
-		state.effectiveDock = prefersSide && lacksSideSpace
+		const effectiveDock: DockPosition = prefersSide && lacksSideSpace
 			? 'bottom'
 			: state.preferredDock;
-		layout.dataset.dock = state.effectiveDock;
+		layout.dataset.dock = effectiveDock;
 	};
 
 	/**
@@ -114,9 +109,10 @@ export function initializePanelDock(
 
 		const isInsideLayout = getDockCandidate(layout, event.clientX, event.clientY) !== undefined;
 
-		if (candidateDock && isInsideLayout) {
+		if (candidateDock && isInsideLayout && candidateDock !== state.preferredDock) {
 			state.preferredDock = candidateDock;
 			refreshDock();
+			onPreferredDockChange();
 		}
 
 		hidePreview();

@@ -1,6 +1,12 @@
 import * as vscode from 'vscode';
+import {
+	getPanelLayoutStateFromMessage,
+	serializePanelLayoutState,
+	type PanelLayoutState,
+} from './webview/panelState';
 
 let currentPanel: vscode.WebviewPanel | undefined;
+let lastLayoutState: PanelLayoutState | undefined;
 
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
@@ -36,7 +42,20 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
 		);
 
-		panel.webview.html = getWebviewHtml(panel.webview, stylesUri, scriptUri);
+		panel.webview.onDidReceiveMessage((message: unknown) => {
+			const layoutState = getPanelLayoutStateFromMessage(message);
+
+			if (layoutState) {
+				lastLayoutState = layoutState;
+			}
+		});
+
+		panel.webview.html = getWebviewHtml(
+			panel.webview,
+			stylesUri,
+			scriptUri,
+			lastLayoutState,
+		);
 
 		panel.onDidDispose(() => {
 			currentPanel = undefined;
@@ -54,6 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
 	currentPanel?.dispose();
 	currentPanel = undefined;
+	lastLayoutState = undefined;
 }
 
 /**
@@ -62,13 +82,17 @@ export function deactivate() {
  * @param webview Content Security Policy에 사용할 Webview 인스턴스
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
+ * @param initialLayoutState 새 Panel에 전달할 마지막 Webview Layout 상태
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
 	webview: vscode.Webview,
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
+	initialLayoutState: PanelLayoutState | undefined,
 ): string {
+	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
+
 	return `<!DOCTYPE html>
 			<html lang="en">
 			<head>
@@ -88,7 +112,7 @@ function getWebviewHtml(
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}"></script>
+				<script src="${scriptUri}" data-layout-state="${serializedLayoutState}"></script>
 			</body>
 			</html>`;
 }

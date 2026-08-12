@@ -11,6 +11,7 @@ src/
 ├── extension.ts
 └── webview/
     ├── webview.ts
+    ├── panelState.ts
     ├── panelDock.ts
     ├── panelResize.ts
     └── webview.css
@@ -22,13 +23,23 @@ src/
 - `WebviewPanel` 생성
 - Webview HTML 구성
 - 빌드된 CSS와 JavaScript 리소스 연결
+- Panel 종료 후 다시 열 때 사용할 마지막 Layout 상태를 Extension Host 메모리에 유지
 
 ### `webview.ts`
 
 - Webview의 진입점
+- VS Code Webview API 단일 획득
 - 필요한 DOM 요소 조회
-- 기본 Panel 상태 설정
+- 저장된 Layout 상태 복원
 - Dock과 Resize 기능 초기화
+
+### `panelState.ts`
+
+- 사용자 선호 Dock과 가로·세로 크기 상태 정의
+- 유효한 저장 상태 복원 및 기본값 적용
+- VS Code Webview `getState()` / `setState()` 연결
+- 변경된 Layout을 Extension Host 인메모리 캐시에 전달
+- 실제 반응형 Dock 및 Pointer 진행 상태는 저장하지 않음
 
 ### `panelDock.ts`
 
@@ -58,16 +69,18 @@ src/
 
 ```ts
 preferredDock = 'right';
-effectiveDock = 'right';
 sideSize = 360;
 verticalSize = 300;
 ```
 
-Panel 위치와 크기는 Webview가 열려 있는 동안만 유지되며 별도로 저장하지 않는다.
+사용자가 Drop으로 변경한 `preferredDock`과 Resize 완료 시점의 크기는 VS Code Webview 상태에 저장한다.
+좌우 공간 부족으로 적용되는 임시 `bottom` 배치는 저장하지 않으며, Webview 크기에 따라 다시 계산한다.
+Panel 자체를 닫으면 VS Code Webview 상태가 삭제되므로, 마지막 Layout은 Extension Host 메모리에도 복사해 새 Panel에 전달한다.
+이 인메모리 상태는 Extension 비활성화 또는 VS Code 재시작 시 삭제된다.
 
 ## 현재 미구현된 기능
 
 - Graph 및 Agent Chat의 실제 콘텐츠
-- Extension과 Webview 사이 메시지 통신
-- 위치와 크기 영구 저장
+- Layout 상태 외 Extension과 Webview 사이 애플리케이션 메시지
+- VS Code 재시작 후 닫힌 WebviewPanel 복원
 - 외부 Dock 또는 Resize 라이브러리
