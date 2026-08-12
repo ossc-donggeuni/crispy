@@ -1,0 +1,80 @@
+import * as vscode from 'vscode';
+
+/**
+ * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
+ *
+ * @param context 확장의 구독 항목과 설치 경로를 제공하는 VS Code 확장 컨텍스트
+ */
+export function activate(context: vscode.ExtensionContext) {
+	/**
+	 * 하나의 WebviewPanel을 생성하고 Dock 및 Resize UI에 필요한 리소스와 HTML을 설정한다.
+	 */
+	const openCanvas = () => {
+		const webviewRoot = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview');
+		const panel = vscode.window.createWebviewPanel(
+			'crispy.webview',
+			'Crispy',
+			vscode.ViewColumn.One,
+			{
+				enableScripts: true,
+				localResourceRoots: [webviewRoot],
+			},
+		);
+
+		const stylesUri = panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(webviewRoot, 'webview.css'),
+		);
+		const scriptUri = panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
+		);
+
+		panel.webview.html = getWebviewHtml(panel.webview, stylesUri, scriptUri);
+	};
+
+	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
+
+	context.subscriptions.push(disposable);
+}
+
+/**
+ * 확장이 비활성화될 때 호출된다.
+ * 현재 리소스는 VS Code의 구독 및 Webview 수명 주기로 정리되므로 별도 작업을 수행하지 않는다.
+ */
+export function deactivate() {}
+
+/**
+ * Graph와 Agent Chat 영역 및 Webview 리소스 참조를 포함하는 HTML 문서를 생성한다.
+ *
+ * @param webview Content Security Policy에 사용할 Webview 인스턴스
+ * @param stylesUri Webview 전용 CSS 리소스 URI
+ * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
+ * @returns WebviewPanel에 설정할 완성된 HTML 문자열
+ */
+function getWebviewHtml(
+	webview: vscode.Webview,
+	stylesUri: vscode.Uri,
+	scriptUri: vscode.Uri,
+): string {
+	return `<!DOCTYPE html>
+			<html lang="en">
+			<head>
+				<meta charset="UTF-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src ${webview.cspSource};">
+				<link rel="stylesheet" href="${stylesUri}">
+				<title>Crispy</title>
+			</head>
+			<body>
+				<main class="crispy-layout" data-dock="right">
+					<section id="graph-area">Graph</section>
+					<div id="panel-resize-handle"></div>
+					<section id="agent-chat-area">
+						Agent Chat
+						<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
+					</section>
+					<div id="dock-preview" aria-hidden="true" hidden></div>
+				</main>
+				<script src="${scriptUri}"></script>
+			</body>
+			</html>`;
+}
