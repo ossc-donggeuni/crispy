@@ -1,4 +1,8 @@
-import type { DockPosition, PanelLayoutState } from './panelState';
+import {
+	INITIAL_SIDE_SIZE,
+	type DockPosition,
+	type PanelLayoutState,
+} from './panelState';
 
 /**
  * Agent Chat의 Dock 이동, Preview 표시, 반응형 bottom 전환을 초기화한다.
@@ -26,7 +30,7 @@ export function initializePanelDock(
 	 */
 	const refreshDock = () => {
 		const prefersSide = state.preferredDock === 'left' || state.preferredDock === 'right';
-		const lacksSideSpace = layout.clientWidth - state.sideSize < state.sideSize;
+		const lacksSideSpace = layout.clientWidth < INITIAL_SIDE_SIZE * 2;
 
 		const effectiveDock: DockPosition = prefersSide && lacksSideSpace
 			? 'bottom'
@@ -108,8 +112,24 @@ export function initializePanelDock(
 		}
 
 		const isInsideLayout = getDockCandidate(layout, event.clientX, event.clientY) !== undefined;
+		const isSideCandidate = candidateDock === 'left' || candidateDock === 'right';
+		const prefersSide = state.preferredDock === 'left' || state.preferredDock === 'right';
+		const isAutomaticBottom = layout.dataset.dock === 'bottom' && prefersSide;
+		const movesFromPreferredBottomToSide = layout.dataset.dock === 'bottom'
+			&& state.preferredDock === 'bottom'
+			&& isSideCandidate;
 
-		if (candidateDock && isInsideLayout && candidateDock !== state.preferredDock) {
+		if (
+			candidateDock
+			&& isInsideLayout
+			&& candidateDock !== state.preferredDock
+			&& !(isAutomaticBottom && isSideCandidate)
+		) {
+			if (movesFromPreferredBottomToSide) {
+				state.sideSize = INITIAL_SIDE_SIZE;
+				layout.style.setProperty('--chat-side-size', `${INITIAL_SIDE_SIZE}px`);
+			}
+
 			state.preferredDock = candidateDock;
 			refreshDock();
 			onPreferredDockChange();

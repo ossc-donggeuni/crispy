@@ -19,10 +19,13 @@ export interface WebviewStateApi {
 	postMessage(message: PanelLayoutStateMessage): void;
 }
 
+export const INITIAL_SIDE_SIZE = 360;
+export const INITIAL_VERTICAL_SIZE = 300;
+
 export const DEFAULT_PANEL_LAYOUT_STATE: Readonly<PanelLayoutState> = {
 	preferredDock: 'right',
-	sideSize: 360,
-	verticalSize: 300,
+	sideSize: INITIAL_SIDE_SIZE,
+	verticalSize: INITIAL_VERTICAL_SIZE,
 };
 
 /**

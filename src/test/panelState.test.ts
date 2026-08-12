@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import {
 	DEFAULT_PANEL_LAYOUT_STATE,
 	getPanelLayoutStateFromMessage,
+	INITIAL_SIDE_SIZE,
+	INITIAL_VERTICAL_SIZE,
 	restorePanelLayoutState,
 	savePanelLayoutState,
 	serializePanelLayoutState,
@@ -38,9 +40,21 @@ suite('Panel Layout State', () => {
 	test('저장된 상태가 유효하지 않으면 기본 상태를 복원한다', () => {
 		const invalidStates: unknown[] = [
 			null,
-			{ preferredDock: 'center', sideSize: 360, verticalSize: 300 },
-			{ preferredDock: 'right', sideSize: -1, verticalSize: 300 },
-			{ preferredDock: 'right', sideSize: 360, verticalSize: Number.NaN },
+			{
+				preferredDock: 'center',
+				sideSize: INITIAL_SIDE_SIZE,
+				verticalSize: INITIAL_VERTICAL_SIZE,
+			},
+			{
+				preferredDock: 'right',
+				sideSize: -1,
+				verticalSize: INITIAL_VERTICAL_SIZE,
+			},
+			{
+				preferredDock: 'right',
+				sideSize: INITIAL_SIDE_SIZE,
+				verticalSize: Number.NaN,
+			},
 		];
 
 		for (const invalidState of invalidStates) {
