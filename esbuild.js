@@ -27,6 +27,7 @@ async function main() {
 	const ctx = await esbuild.context({
 		entryPoints: [
 			'src/extension.ts',
+			'src/webview/webview.ts',
 			'src/webview/webview.css',
 		],
 		bundle: true,
