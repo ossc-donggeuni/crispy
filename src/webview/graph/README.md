@@ -1,81 +1,45 @@
 # `src/webview/graph/`
 
-Graph가 렌더링될 DOM 계층과 Camera의 Pan / Zoom 및 좌표 변환을 관리한다.
+하나의 VS Code Webview 안에서 Graph를 렌더링하고 Camera 상태와 Pan / Zoom 동작을 관리한다.
 
-Graph World에만 Camera transform을 적용하며, Overlay Layer는 Viewport 좌표계를 유지한다.
+Graph State를 단일 상태 기준으로 사용하며, World 변환과 Grid 및 좌표 변환 기능을 제공한다.
 
 ## 구조
 
 ```text
 src/webview/graph/
 ├── graphView.ts
+├── graphState.ts
 ├── graphCamera.ts
-├── graphView.css
-└── README.md
+└── graphView.css
 ```
 
 ### `graphView.ts`
 
-- Graph View의 기본 DOM 계층 생성
-- `graph-viewport`, `graph-world`, Edge / Node / Overlay Layer 구성
-- Graph Camera 초기화 및 외부 인터페이스 제공
-- `dispose()`에서 Camera와 Graph View DOM 정리
-- 중복 `dispose()`에 안전한 lifecycle 관리
+> Graph를 렌더링할 DOM 계층과 Graph View lifecycle을 관리합니다.
+
+- Viewport, World, Edge / Node / Overlay Layer 생성
+- Graph State와 Graph Camera 초기화
+- 외부 Graph 기능을 위한 State와 Camera 인터페이스 제공
+- `dispose()` 시 Camera와 Graph View DOM 정리
+
+### `graphState.ts`
+
+> Camera를 포함한 Graph 전체 상태를 정의하고 변경 사항을 관리합니다.
+
+- 기본 Camera 상태 적용
+- 외부에서 직접 변경할 수 없는 State snapshot 제공
+- Graph State 조회 및 변경
+- State 변경 구독 및 구독 해제
+- Camera `scale` 최소값과 최대값 적용
 
 ### `graphCamera.ts`
 
-- `x`, `y`, `scale` 기반 Camera 상태 관리
-- `graph-world`의 `translate + scale` transform 갱신
-- Viewport의 World Grid 위치와 간격을 Camera 상태에 동기화
-- Pointer Capture 기반 Pan 처리
-- Cursor 아래 World 위치를 유지하는 Wheel Zoom 처리
-- 최소 / 최대 `scale` 제한
+> Graph State의 Camera 값을 기준으로 Pan / Zoom과 좌표 변환을 관리합니다.
+
+- Pointer Capture 기반 Drag Pan 처리
+- Cursor 아래 World 좌표를 유지하는 Wheel Zoom 처리
+- Camera State 변경을 World transform과 Grid에 반영
 - Viewport / World 좌표 상호 변환
-- Camera 입력 차단 DOM 규약 처리
-- `dispose()`에서 Pointer / Wheel Listener와 진행 중인 Pointer 상태 정리
-
-## DOM 계층
-
-```text
-graph-viewport
-├── graph-world              ← Camera transform 적용
-│   ├── graph-edge-layer
-│   └── graph-node-layer
-└── graph-overlay-layer      ← Camera transform 미적용
-```
-
-`graph-world`의 Edge Layer와 Node Layer는 동일한 World 좌표계를 사용한다.
-
-`graph-overlay-layer`는 Inspector, Navigator 등 화면에 고정되는 UI를 위한 Layer이며 Camera transform을 적용하지 않는다.
-
-## Camera 기본 상태
-
-```ts
-x = 0;
-y = 0;
-scale = 1;
-```
-
-`scale`은 `MIN_CAMERA_SCALE`과 `MAX_CAMERA_SCALE` 범위로 제한한다.
-
-Camera 상태 변경은 DOM transform을 직접 수정하지 않고 `GraphCamera.setState()`를 통해 수행한다.
-
-## Camera 입력 차단 규약
-
-Camera 입력과 충돌하는 실제 Interactive Element에 `data-graph-camera-ignore` 속성을 지정한다.
-
-```html
-<button data-graph-camera-ignore>Graph UI</button>
-```
-
-- Camera는 이벤트 Target에서 가장 가까운 `[data-graph-camera-ignore]` 요소를 확인한다.
-- 속성이 지정된 요소와 그 하위 요소에서는 Pan / Zoom을 실행하지 않는다.
-- Overlay 내부의 클릭 가능한 UI는 `pointer-events: auto`와 해당 속성을 함께 사용해야 한다.
-
-```css
-.graph-overlay-control {
-	pointer-events: auto;
-}
-```
-
-`graph-overlay-layer` 자체에는 입력 차단 속성을 지정하지 않으며 기본 `pointer-events: none` 정책을 유지한다.
+- `data-graph-camera-ignore` 입력 차단 규약 처리
+- `dispose()` 시 Pointer / Wheel Listener와 State 구독 정리

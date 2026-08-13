@@ -1,8 +1,17 @@
-export interface GraphCameraState {
-	x: number;
-	y: number;
-	scale: number;
-}
+import {
+	createGraphState,
+	MAX_CAMERA_SCALE,
+	MIN_CAMERA_SCALE,
+	type GraphCameraState,
+	type GraphStateSnapshot,
+	type GraphStateStore,
+} from './graphState';
+
+export {
+	MAX_CAMERA_SCALE,
+	MIN_CAMERA_SCALE,
+	type GraphCameraState,
+};
 
 export interface GraphPoint {
 	x: number;
@@ -17,15 +26,8 @@ export interface GraphCamera {
 	dispose(): void;
 }
 
-export const MIN_CAMERA_SCALE = 0.25;
-export const MAX_CAMERA_SCALE = 4;
 export const GRAPH_CAMERA_IGNORE_ATTRIBUTE = 'data-graph-camera-ignore';
 
-const INITIAL_CAMERA_STATE: GraphCameraState = {
-	x: 0,
-	y: 0,
-	scale: 1,
-};
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
 const WHEEL_LINE_HEIGHT = 16;
 const GRAPH_GRID_SIZE = 20;
@@ -41,39 +43,46 @@ interface PanSession {
 
 /**
  * Graph World의 화면 이동과 확대/축소를 관리한다.
- * 모든 Camera 변경은 이 핸들을 거쳐 graph-world의 transform에 반영된다.
+ * Camera 입력과 좌표 계산은 Graph State의 현재 Camera 값을 기준으로 처리한다.
  *
  * @param viewport Pointer와 Wheel 입력을 받는 Graph Viewport
  * @param world Camera transform을 적용할 Graph World
- * @param initialState 선택적인 초기 Camera 상태
+ * @param graphStateOrInitialState Graph State Store 또는 호환용 초기 Camera 상태
  * @returns Camera 상태, 좌표 변환 및 lifecycle을 관리하는 핸들
  */
 export function initializeGraphCamera(
 	viewport: HTMLElement,
 	world: HTMLElement,
-	initialState: GraphCameraState = INITIAL_CAMERA_STATE,
+	graphStateOrInitialState: GraphStateStore | GraphCameraState = createGraphState(),
 ): GraphCamera {
-	let state: GraphCameraState = normalizeState(initialState);
+	const graphState = isGraphStateStore(graphStateOrInitialState)
+		? graphStateOrInitialState
+		: createGraphState({ camera: graphStateOrInitialState });
 	let panSession: PanSession | undefined;
 	let disposed = false;
 
 	/** Camera transform과 Viewport의 World Grid 표시를 함께 갱신한다. */
-	const applyTransform = () => {
-		const gridSize = GRAPH_GRID_SIZE * state.scale;
+	const applyTransform = (state: GraphStateSnapshot = graphState.getState()) => {
+		const { camera } = state;
+		const gridSize = GRAPH_GRID_SIZE * camera.scale;
 
-		world.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
-		viewport.style.backgroundPosition = `${state.x}px ${state.y}px`;
+		world.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
+		viewport.style.backgroundPosition = `${camera.x}px ${camera.y}px`;
 		viewport.style.backgroundSize = `${gridSize}px ${gridSize}px`;
 	};
 
-	const getState = (): GraphCameraState => ({ ...state });
+	const getState = (): GraphCameraState => ({ ...graphState.getState().camera });
 
 	const setState = (nextState: GraphCameraState): void => {
-		state = normalizeState(nextState);
-		applyTransform();
+		graphState.setState({
+			...graphState.getState(),
+			camera: nextState,
+		});
 	};
 
 	const viewportToWorld = (point: GraphPoint): GraphPoint => {
+		const state = graphState.getState().camera;
+
 		return {
 			x: (point.x - state.x) / state.scale,
 			y: (point.y - state.y) / state.scale,
@@ -81,6 +90,8 @@ export function initializeGraphCamera(
 	};
 
 	const worldToViewport = (point: GraphPoint): GraphPoint => {
+		const state = graphState.getState().camera;
+
 		return {
 			x: point.x * state.scale + state.x,
 			y: point.y * state.scale + state.y,
@@ -120,8 +131,8 @@ export function initializeGraphCamera(
 			pointerId: event.pointerId,
 			startClientX: event.clientX,
 			startClientY: event.clientY,
-			startCameraX: state.x,
-			startCameraY: state.y,
+			startCameraX: graphState.getState().camera.x,
+			startCameraY: graphState.getState().camera.y,
 		};
 		viewport.classList.add('is-panning');
 		viewport.setPointerCapture(event.pointerId);
@@ -133,10 +144,11 @@ export function initializeGraphCamera(
 		}
 
 		event.preventDefault();
+		const currentCamera = graphState.getState().camera;
 		setState({
 			x: panSession.startCameraX + event.clientX - panSession.startClientX,
 			y: panSession.startCameraY + event.clientY - panSession.startClientY,
-			scale: state.scale,
+			scale: currentCamera.scale,
 		});
 	};
 
@@ -170,8 +182,9 @@ export function initializeGraphCamera(
 		};
 		const worldAtCursor = viewportToWorld(cursor);
 		const wheelDelta = normalizeWheelDelta(event, viewport.clientHeight);
+		const currentCamera = graphState.getState().camera;
 		const nextScale = clampScale(
-			state.scale * Math.exp(-wheelDelta * WHEEL_ZOOM_SENSITIVITY),
+			currentCamera.scale * Math.exp(-wheelDelta * WHEEL_ZOOM_SENSITIVITY),
 		);
 
 		setState({
@@ -187,6 +200,7 @@ export function initializeGraphCamera(
 	viewport.addEventListener('pointercancel', handlePointerEnd);
 	viewport.addEventListener('lostpointercapture', handleLostPointerCapture);
 	viewport.addEventListener('wheel', handleWheel, { passive: false });
+	const unsubscribeState = graphState.subscribe(applyTransform);
 	applyTransform();
 
 	return {
@@ -200,6 +214,7 @@ export function initializeGraphCamera(
 			}
 
 			disposed = true;
+			unsubscribeState();
 			viewport.removeEventListener('pointerdown', handlePointerDown);
 			viewport.removeEventListener('pointermove', handlePointerMove);
 			viewport.removeEventListener('pointerup', handlePointerEnd);
@@ -214,13 +229,12 @@ export function initializeGraphCamera(
 	};
 }
 
-/** Camera의 scale을 허용 범위로 제한하고 외부 객체와 분리된 상태를 만든다. */
-function normalizeState(state: GraphCameraState): GraphCameraState {
-	return {
-		x: state.x,
-		y: state.y,
-		scale: clampScale(state.scale),
-	};
+function isGraphStateStore(
+	value: GraphStateStore | GraphCameraState,
+): value is GraphStateStore {
+	return 'getState' in value
+		&& 'setState' in value
+		&& 'subscribe' in value;
 }
 
 function clampScale(scale: number): number {

@@ -4,13 +4,19 @@ import {
 	initializeGraphCamera,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
-} from '../webview/graph/graphCamera';
+} from '../../webview/graph/graphCamera';
+import { createGraphState } from '../../webview/graph/graphState';
 
 suite('Graph Camera', () => {
 	test('초기 상태와 setState를 graph-world transform에 적용한다', () => {
 		const fixture = createCameraFixture();
 
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.deepStrictEqual(fixture.graphState.getState().camera, {
+			x: 0,
+			y: 0,
+			scale: 1,
+		});
 		assert.strictEqual(
 			fixture.world.style.transform,
 			'translate(0px, 0px) scale(1)',
@@ -19,6 +25,11 @@ suite('Graph Camera', () => {
 		fixture.camera.setState({ x: 120, y: -45, scale: 1.5 });
 
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 120, y: -45, scale: 1.5 });
+		assert.deepStrictEqual(fixture.graphState.getState().camera, {
+			x: 120,
+			y: -45,
+			scale: 1.5,
+		});
 		assert.strictEqual(
 			fixture.world.style.transform,
 			'translate(120px, -45px) scale(1.5)',
@@ -37,7 +48,7 @@ suite('Graph Camera', () => {
 
 	test('viewport 좌표와 world 좌표를 Camera 상태 기준으로 상호 변환한다', () => {
 		const fixture = createCameraFixture();
-		fixture.camera.setState({ x: 100, y: -40, scale: 2 });
+		fixture.graphState.setState({ camera: { x: 100, y: -40, scale: 2 } });
 
 		assert.deepStrictEqual(
 			fixture.camera.worldToViewport({ x: 25, y: 30 }),
@@ -59,6 +70,11 @@ suite('Graph Camera', () => {
 
 		fixture.viewport.dispatch('pointermove', createPointerEvent(145, 50));
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 55, y: -10, scale: 1.5 });
+		assert.deepStrictEqual(fixture.graphState.getState().camera, {
+			x: 55,
+			y: -10,
+			scale: 1.5,
+		});
 
 		fixture.viewport.dispatch('pointerup', createPointerEvent(145, 50));
 		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
@@ -152,9 +168,25 @@ suite('Graph Camera', () => {
 		fixture.viewport.dispatch('wheel', event);
 
 		const after = fixture.camera.viewportToWorld(cursor);
-		assert.ok(fixture.camera.getState().scale > 1.25);
+		const graphCameraState = fixture.graphState.getState().camera;
+		assert.ok(graphCameraState.scale > 1.25);
+		assert.notStrictEqual(graphCameraState.x, 70);
+		assert.notStrictEqual(graphCameraState.y, -20);
 		assertPointAlmostEqual(after, before);
 		assert.strictEqual(event.defaultPrevented, true);
+	});
+
+	test('외부 Graph State 변경을 World transform과 Grid에 즉시 반영한다', () => {
+		const fixture = createCameraFixture();
+
+		fixture.graphState.setState({ camera: { x: -80, y: 65, scale: 2 } });
+
+		assert.strictEqual(
+			fixture.world.style.transform,
+			'translate(-80px, 65px) scale(2)',
+		);
+		assert.strictEqual(fixture.viewport.style.backgroundPosition, '-80px 65px');
+		assert.strictEqual(fixture.viewport.style.backgroundSize, '40px 40px');
 	});
 
 	test('Wheel Zoom Out과 Zoom In을 scale 범위에서 제한한다', () => {
@@ -193,6 +225,7 @@ suite('Graph Camera', () => {
 
 		fixture.viewport.dispatch('pointerdown', createPointerEvent(10, 10));
 		fixture.camera.dispose();
+		fixture.camera.dispose();
 		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 
@@ -200,6 +233,12 @@ suite('Graph Camera', () => {
 		fixture.viewport.dispatch('pointermove', createPointerEvent(30, 40));
 		fixture.viewport.dispatch('wheel', createWheelEvent(100, 100, -120));
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+
+		fixture.graphState.setState({ camera: { x: 90, y: 70, scale: 2 } });
+		assert.strictEqual(
+			fixture.world.style.transform,
+			'translate(0px, 0px) scale(1)',
+		);
 	});
 });
 
@@ -211,12 +250,14 @@ function createCameraFixture(
 ) {
 	const viewport = new FakeElement(width, height, left, top);
 	const world = new FakeElement();
+	const graphState = createGraphState();
 	const camera = initializeGraphCamera(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),
+		graphState,
 	);
 
-	return { viewport, world, camera };
+	return { viewport, world, camera, graphState };
 }
 
 function createPointerEvent(
@@ -274,7 +315,11 @@ type GraphEvent = PointerEvent | WheelEvent;
 type GraphEventListener = (event: never) => void;
 
 class FakeElement {
-	readonly style = { transform: '' };
+	readonly style = {
+		transform: '',
+		backgroundPosition: '',
+		backgroundSize: '',
+	};
 	private readonly attributes = new Set<string>();
 	private readonly classNames = new Set<string>();
 	readonly classList = {
