@@ -1,4 +1,7 @@
+import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
+import { ShellTerminalController } from './agent/host/shellTerminalController';
+import { resolveTerminalWorkspace } from './agent/workspace';
 import {
 	getPanelLayoutStateFromMessage,
 	serializePanelLayoutState,
@@ -6,7 +9,9 @@ import {
 } from './webview/panelState';
 
 let currentPanel: vscode.WebviewPanel | undefined;
+let currentTerminalController: ShellTerminalController | undefined;
 let lastLayoutState: PanelLayoutState | undefined;
+const pendingTerminalCleanups = new Set<Promise<boolean>>();
 
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
@@ -30,6 +35,7 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.ViewColumn.One,
 			{
 				enableScripts: true,
+				retainContextWhenHidden: true,
 				localResourceRoots: [webviewRoot],
 			},
 		);
@@ -49,6 +55,14 @@ export function activate(context: vscode.ExtensionContext) {
 				lastLayoutState = layoutState;
 			}
 		});
+		const terminalController = new ShellTerminalController(
+			panel,
+			resolveTerminalWorkspace(
+				vscode.workspace.isTrusted,
+				vscode.workspace.workspaceFolders,
+			),
+		);
+		currentTerminalController = terminalController;
 
 		panel.webview.html = getWebviewHtml(
 			panel.webview,
@@ -58,7 +72,13 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 
 		panel.onDidDispose(() => {
-			currentPanel = undefined;
+			if (currentPanel === panel) {
+				currentPanel = undefined;
+			}
+			if (currentTerminalController === terminalController) {
+				currentTerminalController = undefined;
+			}
+			trackTerminalCleanup(terminalController.dispose());
 		});
 	};
 
@@ -70,8 +90,18 @@ export function activate(context: vscode.ExtensionContext) {
 /**
  * 확장이 비활성화될 때 열린 WebviewPanel과 참조를 정리한다.
  */
-export function deactivate() {
-	currentPanel?.dispose();
+export async function deactivate(): Promise<void> {
+	const panel = currentPanel;
+	const terminalController = currentTerminalController;
+	currentPanel = undefined;
+	currentTerminalController = undefined;
+
+	const cleanup = terminalController?.dispose();
+	panel?.dispose();
+	if (cleanup) {
+		await cleanup;
+	}
+	await Promise.all([...pendingTerminalCleanups]);
 	currentPanel = undefined;
 	lastLayoutState = undefined;
 }
@@ -92,13 +122,14 @@ function getWebviewHtml(
 	initialLayoutState: PanelLayoutState | undefined,
 ): string {
 	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
+	const nonce = crypto.randomBytes(18).toString('base64');
 
 	return `<!DOCTYPE html>
-			<html lang="en">
+			<html lang="ko">
 			<head>
 				<meta charset="UTF-8">
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
-				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src ${webview.cspSource};">
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 				<link rel="stylesheet" href="${stylesUri}">
 				<title>Crispy</title>
 			</head>
@@ -106,13 +137,25 @@ function getWebviewHtml(
 				<main class="crispy-layout" data-dock="right">
 					<section id="graph-area">Graph</section>
 					<div id="panel-resize-handle"></div>
-					<section id="agent-chat-area">
-						Agent Chat
+					<section id="agent-chat-area" aria-label="Crispy terminal">
+						<div id="terminal-shell">
+							<div id="terminal"></div>
+							<div id="terminal-overlay" role="status" aria-live="polite">
+								<p id="terminal-status">기본 shell을 시작하는 중입니다…</p>
+								<button id="terminal-restart" type="button" hidden>Restart</button>
+							</div>
+						</div>
 						<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-layout-state="${serializedLayoutState}"></script>
+				<script nonce="${nonce}" src="${scriptUri}" data-layout-state="${serializedLayoutState}"></script>
 			</body>
 			</html>`;
+}
+
+function trackTerminalCleanup(cleanup: Promise<boolean>): void {
+	let tracked: Promise<boolean>;
+	tracked = cleanup.finally(() => pendingTerminalCleanups.delete(tracked));
+	pendingTerminalCleanups.add(tracked);
 }

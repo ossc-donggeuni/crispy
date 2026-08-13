@@ -66,17 +66,19 @@ body {
 #agent-chat-area {
 	min-width: 0;
 	min-height: 0;
-	padding: 16px;
 	overflow: auto;
 }
 
 #graph-area {
 	grid-area: graph;
+	padding: 16px;
 }
 
 #agent-chat-area {
 	position: relative;
 	grid-area: chat;
+	overflow: hidden;
+	background: var(--vscode-terminal-background, var(--vscode-editor-background));
 }
 
 .crispy-layout[data-dock='right'] #agent-chat-area {
@@ -97,6 +99,7 @@ body {
 
 #chat-drag-handle {
 	position: absolute;
+	z-index: 5;
 	top: 8px;
 	right: 8px;
 	display: grid;
@@ -131,6 +134,77 @@ body {
 	grid-area: resize;
 	z-index: 2;
 	touch-action: none;
+}
+
+#terminal-shell {
+	position: absolute;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	padding: 8px;
+	overflow: hidden;
+	background: var(--vscode-terminal-background, var(--vscode-editor-background));
+}
+
+#terminal {
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	padding-right: 20px;
+	overflow: hidden;
+}
+
+#terminal .xterm {
+	height: 100%;
+}
+
+#terminal-overlay {
+	position: absolute;
+	z-index: 4;
+	inset: 0;
+	display: grid;
+	align-content: center;
+	justify-items: center;
+	gap: 10px;
+	padding: 24px;
+	background: color-mix(
+		in srgb,
+		var(--vscode-terminal-background, var(--vscode-editor-background)) 94%,
+		transparent
+	);
+	text-align: center;
+}
+
+#terminal-overlay[hidden] {
+	display: none;
+}
+
+#terminal-status {
+	max-width: 420px;
+	margin: 0;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.45;
+}
+
+#terminal-restart {
+	border: 0;
+	border-radius: 3px;
+	padding: 5px 12px;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	font: inherit;
+	cursor: pointer;
+}
+
+#terminal-restart:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+#terminal-restart:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
 }
 
 .crispy-layout[data-dock='left'] #panel-resize-handle,
