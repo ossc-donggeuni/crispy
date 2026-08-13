@@ -7,7 +7,7 @@ import {
 	getPanelLayoutStateFromMessage,
 	serializePanelLayoutState,
 	type PanelLayoutState,
-} from './webview/panelState';
+} from './webview/panel/panelState';
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let lastLayoutState: PanelLayoutState | undefined;
