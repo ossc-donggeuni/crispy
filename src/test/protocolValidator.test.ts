@@ -11,7 +11,7 @@ import {
 	parseWebviewToHostMessage,
 	type MessageParseResult,
 	type MessageValidationErrorCode,
-} from '../protocol/index';
+} from '../agent/protocol/index';
 
 const TAB_ID = 'tab:one';
 const SESSION_ID = 'session-1';
