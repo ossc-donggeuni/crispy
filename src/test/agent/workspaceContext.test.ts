@@ -4,7 +4,7 @@ import {
 	readVsCodeWorkspaceContext,
 	type WorkspaceContextReader,
 	type WorkspaceContextSnapshot,
-} from '../agent/host/workspace/workspaceContext';
+} from '../../agent/host/workspace/workspaceContext';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =

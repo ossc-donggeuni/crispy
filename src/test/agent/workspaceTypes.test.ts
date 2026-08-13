@@ -5,7 +5,7 @@ import type {
 	WorkspaceValidationErrorCode,
 	WorkspaceValidationFailure,
 	WorkspaceValidationResult,
-} from '../agent/host/workspace/types';
+} from '../../agent/host/workspace/types';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =

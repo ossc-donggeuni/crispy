@@ -10,7 +10,7 @@ import {
 	type TerminalSessionStateSnapshot,
 	type TerminalStateValidationSnapshot,
 	type WebviewToHostWireMessage,
-} from '../agent/protocol/index';
+} from '../../agent/protocol/index';
 
 const TAB_ID = 'tab:one';
 const OTHER_TAB_ID = 'tab:two';

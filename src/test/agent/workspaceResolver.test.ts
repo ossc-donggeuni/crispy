@@ -1,14 +1,14 @@
 import * as assert from 'assert';
 import { parse, sep } from 'node:path';
-import type { WorkspaceContextSnapshot } from '../agent/host/workspace/workspaceContext';
-import { validateWorkspacePolicy } from '../agent/host/workspace/workspacePolicy';
+import type { WorkspaceContextSnapshot } from '../../agent/host/workspace/workspaceContext';
+import { validateWorkspacePolicy } from '../../agent/host/workspace/workspacePolicy';
 import {
 	createWorkspaceResolver,
 	resolveCurrentWorkspace,
 	type WorkspaceResolver,
 	type WorkspaceResolverDependencies,
-} from '../agent/host/workspace/workspaceResolver';
-import type { WorkspaceValidationResult } from '../agent/host/workspace/types';
+} from '../../agent/host/workspace/workspaceResolver';
+import type { WorkspaceValidationResult } from '../../agent/host/workspace/types';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =

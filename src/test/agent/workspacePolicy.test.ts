@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { isAbsolute, parse, sep } from 'node:path';
-import type { WorkspaceContextSnapshot } from '../agent/host/workspace/workspaceContext';
-import { validateWorkspacePolicy } from '../agent/host/workspace/workspacePolicy';
+import type { WorkspaceContextSnapshot } from '../../agent/host/workspace/workspaceContext';
+import { validateWorkspacePolicy } from '../../agent/host/workspace/workspacePolicy';
 
 const hostRoot = parse(process.cwd()).root;
 const absoluteWorkspacePath = `${hostRoot}workspace${sep}..${sep}validated-root`;

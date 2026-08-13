@@ -1,13 +1,13 @@
 import * as assert from 'assert';
-import { parseHostToWebviewMessage } from '../agent/protocol/validator';
+import { parseHostToWebviewMessage } from '../../agent/protocol/validator';
 import {
 	mapWorkspaceFailureToTerminalError,
 	type WorkspaceTerminalErrorMessage,
-} from '../agent/host/workspace/workspaceErrorMessage';
+} from '../../agent/host/workspace/workspaceErrorMessage';
 import type {
 	WorkspaceValidationFailure,
 	WorkspaceValidationSuccess,
-} from '../agent/host/workspace/types';
+} from '../../agent/host/workspace/types';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =
