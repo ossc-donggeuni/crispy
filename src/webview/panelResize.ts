@@ -48,6 +48,30 @@ export function initializePanelResize(
 	};
 
 	/**
+	 * 취소된 Resize를 시작 크기로 되돌리고 진행 중인 세션과 Pointer Capture를 정리한다.
+	 *
+	 * @param pointerId 취소할 Pointer의 식별자
+	 */
+	const rollbackResize = (pointerId: number) => {
+		if (!session) {
+			return;
+		}
+
+		const isSideDock = session.dock === 'left' || session.dock === 'right';
+
+		if (isSideDock) {
+			state.sideSize = session.startSize;
+			layout.style.setProperty('--chat-side-size', `${session.startSize}px`);
+		} else {
+			state.verticalSize = session.startSize;
+			layout.style.setProperty('--chat-vertical-size', `${session.startSize}px`);
+		}
+
+		onSizeChange();
+		stopResizing(pointerId);
+	};
+
+	/**
 	 * 기본 Pointer로 Resize Handle을 누르면 현재 Dock 방향과 시작 크기를 저장한다.
 	 *
 	 * @param event Resize Handle에서 발생한 Pointer Down 이벤트
@@ -123,7 +147,7 @@ export function initializePanelResize(
 	};
 
 	/**
-	 * 브라우저가 Pointer 동작을 취소하면 현재 Resize 세션과 Capture를 정리한다.
+	 * 브라우저가 Pointer 동작을 취소하면 시작 크기로 복원하고 세션과 Capture를 정리한다.
 	 *
 	 * @param event 취소된 Pointer 이벤트
 	 */
@@ -132,11 +156,11 @@ export function initializePanelResize(
 			return;
 		}
 
-		stopResizing(event.pointerId);
+		rollbackResize(event.pointerId);
 	};
 
 	/**
-	 * 예기치 않게 Pointer Capture를 잃으면 남아 있는 Resize 상태를 초기화한다.
+	 * 예기치 않게 Pointer Capture를 잃으면 시작 크기로 복원하고 Resize 상태를 초기화한다.
 	 *
 	 * @param event Capture를 잃은 Pointer 이벤트
 	 */
@@ -145,8 +169,7 @@ export function initializePanelResize(
 			return;
 		}
 
-		session = undefined;
-		layout.classList.remove('is-resizing');
+		rollbackResize(event.pointerId);
 	};
 
 	resizeHandle.addEventListener('pointerdown', handleResizeStart);
