@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { assertHostTerminalRuntimeAvailable } from './agent/host/runtimeDependencies';
 import {
 	parseWebviewToHostMessage,
 	type WebviewToHostMessage,
@@ -20,8 +19,6 @@ let lastLayoutState: PanelLayoutState | undefined;
  * @param context 확장의 구독 항목과 설치 경로를 제공하는 VS Code 확장 컨텍스트
  */
 export function activate(context: vscode.ExtensionContext) {
-	assertHostTerminalRuntimeAvailable();
-
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
