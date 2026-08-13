@@ -1,4 +1,10 @@
+import {
+	initializeGraphCamera,
+	type GraphCamera,
+} from './graphCamera';
+
 export interface GraphView {
+	readonly camera: GraphCamera;
 	dispose(): void;
 }
 
@@ -28,16 +34,19 @@ export function initializeGraphView(root: HTMLElement): GraphView {
 	world.append(edgeLayer, nodeLayer);
 	viewport.append(world, overlayLayer);
 	root.append(viewport);
+	const camera = initializeGraphCamera(viewport, world);
 
 	let disposed = false;
 
 	return {
+		camera,
 		dispose(): void {
 			if (disposed) {
 				return;
 			}
 
 			disposed = true;
+			camera.dispose();
 			viewport.remove();
 		},
 	};
