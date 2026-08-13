@@ -142,7 +142,7 @@ function getWebviewHtml(
 			</head>
 			<body>
 				<main class="crispy-layout" data-dock="right">
-					<section id="graph-area">Graph</section>
+					<section id="graph-area"></section>
 					<div id="panel-resize-handle"></div>
 					<section id="agent-chat-area">
 						Agent Chat
