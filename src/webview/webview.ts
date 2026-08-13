@@ -1,12 +1,14 @@
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import type { WebviewToExtensionMessage } from '../messages';
-import { initializePanelDock } from './panelDock';
-import { initializePanelResize } from './panelResize';
+import { initializeGraphView } from './graph/graphView';
+import { initializePanelDock } from './panel/panelDock';
+import { initializePanelResize } from './panel/panelResize';
+
 import {
 	restorePanelLayoutState,
 	savePanelLayoutState,
 	type WebviewStateApi,
-} from './panelState';
+} from './panel/panelState';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
@@ -36,9 +38,14 @@ const serializedInitialState = document.currentScript?.getAttribute('data-layout
 const state = restorePanelLayoutState(vscodeApi, serializedInitialState);
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
+const graphArea = getRequiredElement<HTMLElement>('#graph-area');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
+
+const graphView = initializeGraphView(graphArea);
+
+window.addEventListener('unload', () => graphView.dispose(), { once: true });
 
 // Dock 초기화
 const refreshDock = initializePanelDock(

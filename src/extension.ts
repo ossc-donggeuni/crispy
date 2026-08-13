@@ -8,7 +8,7 @@ import {
 	getPanelLayoutStateFromMessage,
 	serializePanelLayoutState,
 	type PanelLayoutState,
-} from './webview/panelState';
+} from './webview/panel/panelState';
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let lastLayoutState: PanelLayoutState | undefined;
@@ -160,7 +160,7 @@ function getWebviewHtml(
 			</head>
 			<body>
 				<main class="crispy-layout" data-dock="right">
-					<section id="graph-area">Graph</section>
+					<section id="graph-area"></section>
 					<div id="panel-resize-handle"></div>
 					<section id="agent-chat-area">
 						Agent Chat
