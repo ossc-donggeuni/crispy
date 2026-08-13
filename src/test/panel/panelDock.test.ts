@@ -1,11 +1,11 @@
 import * as assert from 'assert';
-import { initializePanelDock } from '../webview/panelDock';
+import { initializePanelDock } from '../../webview/panel/panelDock';
 import {
 	INITIAL_SIDE_SIZE,
 	INITIAL_VERTICAL_SIZE,
 	type DockPosition,
 	type PanelLayoutState,
-} from '../webview/panelState';
+} from '../../webview/panel/panelState';
 
 suite('Panel Dock', () => {
 	const originalResizeObserver = globalThis.ResizeObserver;

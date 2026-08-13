@@ -7,7 +7,7 @@ import {
 	serializePanelLayoutState,
 	type PanelLayoutState,
 	type PanelLayoutStateMessage,
-} from '../webview/panelState';
+} from '../webview/panel/panelState';
 
 import * as vscode from 'vscode';
 

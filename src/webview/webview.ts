@@ -1,12 +1,13 @@
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import type { WebviewToExtensionMessage } from '../messages';
-import { initializePanelDock } from './panelDock';
-import { initializePanelResize } from './panelResize';
+import { initializePanelDock } from './panel/panelDock';
+import { initializePanelResize } from './panel/panelResize';
+
 import {
 	restorePanelLayoutState,
 	savePanelLayoutState,
 	type WebviewStateApi,
-} from './panelState';
+} from './panel/panelState';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
