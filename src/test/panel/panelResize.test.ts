@@ -1,11 +1,11 @@
 import * as assert from 'assert';
-import { initializePanelResize } from '../webview/panelResize';
+import { initializePanelResize } from '../../webview/panel/panelResize';
 import {
 	INITIAL_SIDE_SIZE,
 	INITIAL_VERTICAL_SIZE,
 	type DockPosition,
 	type PanelLayoutState,
-} from '../webview/panelState';
+} from '../../webview/panel/panelState';
 
 suite('Panel Resize', () => {
 	test('Dock 방향에 따라 Pointer 이동 방향을 크기 증감으로 변환한다', () => {

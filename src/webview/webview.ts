@@ -2,14 +2,15 @@ import type {
 	ExtensionToWebviewMessage,
 	WebviewToExtensionMessage,
 } from '../messages';
+
 import { initializeGraphView } from './graph/graphView';
-import { initializePanelDock } from './panelDock';
-import { initializePanelResize } from './panelResize';
+import { initializePanelDock } from './panel/panelDock';
+import { initializePanelResize } from './panel/panelResize';
 import {
 	restorePanelLayoutState,
 	savePanelLayoutState,
 	type WebviewStateApi,
-} from './panelState';
+} from './panel/panelState';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;

@@ -10,7 +10,7 @@ import {
 	type PanelLayoutState,
 	type PanelLayoutStateMessage,
 	type WebviewStateApi,
-} from '../webview/panelState';
+} from '../../webview/panel/panelState';
 
 suite('Panel Layout State', () => {
 	test('저장된 상태가 없으면 기본 상태를 복원한다', () => {
