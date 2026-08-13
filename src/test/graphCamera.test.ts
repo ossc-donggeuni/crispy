@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import {
+	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	initializeGraphCamera,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
@@ -85,6 +86,62 @@ suite('Graph Camera', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
+	test('Camera 입력 차단 속성이 지정된 요소에서 Pointer Drag로 Pan하지 않는다', () => {
+		const fixture = createCameraFixture();
+		const interactiveElement = new FakeElement();
+		interactiveElement.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE);
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(10, 10, 1, 0, interactiveElement.asEventTarget()),
+		);
+		fixture.viewport.dispatch('pointermove', createPointerEvent(30, 40));
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
+		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
+	});
+
+	test('Camera 입력 차단 요소의 자식에서 발생한 Pointer와 Wheel 입력을 처리하지 않는다', () => {
+		const fixture = createCameraFixture();
+		const interactiveElement = new FakeElement();
+		const child = new FakeElement();
+		interactiveElement.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE);
+		interactiveElement.append(child);
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(10, 10, 1, 0, child.asEventTarget()),
+		);
+		fixture.viewport.dispatch('pointermove', createPointerEvent(30, 40));
+		const wheelEvent = createWheelEvent(100, 100, -120, child.asEventTarget());
+		fixture.viewport.dispatch('wheel', wheelEvent);
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
+		assert.strictEqual(wheelEvent.defaultPrevented, false);
+	});
+
+	test('Camera 입력 차단 속성이 없는 일반 요소에서는 Pan과 Zoom이 동작한다', () => {
+		const fixture = createCameraFixture();
+		const graphElement = new FakeElement();
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(10, 10, 1, 0, graphElement.asEventTarget()),
+		);
+		fixture.viewport.dispatch('pointermove', createPointerEvent(30, 40));
+		fixture.viewport.dispatch('pointerup', createPointerEvent(30, 40));
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 20, y: 30, scale: 1 });
+
+		fixture.viewport.dispatch(
+			'wheel',
+			createWheelEvent(100, 100, -120, graphElement.asEventTarget()),
+		);
+		assert.ok(fixture.camera.getState().scale > 1);
+	});
+
 	test('Wheel Zoom 전후 Cursor 아래 World 위치를 고정한다', () => {
 		const fixture = createCameraFixture(800, 600, 40, 30);
 		fixture.camera.setState({ x: 70, y: -20, scale: 1.25 });
@@ -108,6 +165,23 @@ suite('Graph Camera', () => {
 
 		fixture.viewport.dispatch('wheel', createWheelEvent(100, 100, -100_000));
 		assert.strictEqual(fixture.camera.getState().scale, MAX_CAMERA_SCALE);
+	});
+
+	test('Camera 입력 차단 속성이 지정된 요소에서 Wheel로 Zoom하지 않는다', () => {
+		const fixture = createCameraFixture();
+		const interactiveElement = new FakeElement();
+		interactiveElement.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE);
+		const event = createWheelEvent(
+			100,
+			100,
+			-120,
+			interactiveElement.asEventTarget(),
+		);
+
+		fixture.viewport.dispatch('wheel', event);
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(event.defaultPrevented, false);
 	});
 
 	test('lostpointercapture와 dispose가 진행 상태 및 등록한 이벤트를 정리한다', () => {
@@ -150,6 +224,7 @@ function createPointerEvent(
 	clientY: number,
 	pointerId = 1,
 	button = 0,
+	target: EventTarget | null = null,
 ): PointerEvent {
 	return {
 		isPrimary: true,
@@ -157,11 +232,17 @@ function createPointerEvent(
 		pointerId,
 		clientX,
 		clientY,
+		target,
 		preventDefault: () => undefined,
 	} as PointerEvent;
 }
 
-function createWheelEvent(clientX: number, clientY: number, deltaY: number): WheelEvent & {
+function createWheelEvent(
+	clientX: number,
+	clientY: number,
+	deltaY: number,
+	target: EventTarget | null = null,
+): WheelEvent & {
 	defaultPrevented: boolean;
 } {
 	let defaultPrevented = false;
@@ -171,6 +252,7 @@ function createWheelEvent(clientX: number, clientY: number, deltaY: number): Whe
 		clientY,
 		deltaY,
 		deltaMode: 0,
+		target,
 		preventDefault: () => {
 			defaultPrevented = true;
 		},
@@ -193,6 +275,7 @@ type GraphEventListener = (event: never) => void;
 
 class FakeElement {
 	readonly style = { transform: '' };
+	private readonly attributes = new Set<string>();
 	private readonly classNames = new Set<string>();
 	readonly classList = {
 		add: (...tokens: string[]) => {
@@ -208,6 +291,7 @@ class FakeElement {
 	};
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
 	private readonly capturedPointers = new Set<number>();
+	private parent: FakeElement | undefined;
 
 	constructor(
 		public clientWidth = 1000,
@@ -218,6 +302,28 @@ class FakeElement {
 
 	asHtmlElement(): HTMLElement {
 		return this as unknown as HTMLElement;
+	}
+
+	asEventTarget(): EventTarget {
+		return this as unknown as EventTarget;
+	}
+
+	setAttribute(name: string): void {
+		this.attributes.add(name);
+	}
+
+	append(child: FakeElement): void {
+		child.parent = this;
+	}
+
+	closest(selector: string): FakeElement | null {
+		const attribute = selector.slice(1, -1);
+
+		if (this.attributes.has(attribute)) {
+			return this;
+		}
+
+		return this.parent?.closest(selector) ?? null;
 	}
 
 	hasClass(className: string): boolean {

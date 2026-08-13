@@ -19,6 +19,7 @@ export interface GraphCamera {
 
 export const MIN_CAMERA_SCALE = 0.25;
 export const MAX_CAMERA_SCALE = 4;
+export const GRAPH_CAMERA_IGNORE_ATTRIBUTE = 'data-graph-camera-ignore';
 
 const INITIAL_CAMERA_STATE: GraphCameraState = {
 	x: 0,
@@ -28,6 +29,7 @@ const INITIAL_CAMERA_STATE: GraphCameraState = {
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
 const WHEEL_LINE_HEIGHT = 16;
 const GRAPH_GRID_SIZE = 20;
+const GRAPH_CAMERA_IGNORE_SELECTOR = `[${GRAPH_CAMERA_IGNORE_ATTRIBUTE}]`;
 
 interface PanSession {
 	pointerId: number;
@@ -85,6 +87,13 @@ export function initializeGraphCamera(
 		};
 	};
 
+	const shouldIgnoreCameraInput = (event: Event): boolean => {
+		const target = event.target;
+
+		return isElement(target)
+			&& target.closest(GRAPH_CAMERA_IGNORE_SELECTOR) !== null;
+	};
+
 	/** 진행 중인 Pan을 종료하고 Pointer Capture와 표시 상태를 정리한다. */
 	const stopPanning = (pointerId: number, releaseCapture: boolean) => {
 		panSession = undefined;
@@ -101,6 +110,7 @@ export function initializeGraphCamera(
 			|| panSession
 			|| !event.isPrimary
 			|| event.button !== 0
+			|| shouldIgnoreCameraInput(event)
 		) {
 			return;
 		}
@@ -147,6 +157,10 @@ export function initializeGraphCamera(
 	};
 
 	const handleWheel = (event: WheelEvent) => {
+		if (shouldIgnoreCameraInput(event)) {
+			return;
+		}
+
 		event.preventDefault();
 
 		const bounds = viewport.getBoundingClientRect();
@@ -196,8 +210,8 @@ export function initializeGraphCamera(
 			if (panSession) {
 				stopPanning(panSession.pointerId, true);
 			}
-			},
-		};
+		},
+	};
 }
 
 /** Camera의 scale을 허용 범위로 제한하고 외부 객체와 분리된 상태를 만든다. */
@@ -223,4 +237,9 @@ function normalizeWheelDelta(event: WheelEvent, viewportHeight: number): number 
 		default:
 			return event.deltaY;
 	}
+}
+
+function isElement(target: EventTarget | null): target is Element {
+	return target !== null
+		&& typeof (target as Element).closest === 'function';
 }
