@@ -1,4 +1,5 @@
 import { parseHostToWebviewMessage } from '../agent/protocol';
+import { assertWebviewTerminalRuntimeAvailable } from '../agent/webview/runtimeDependencies';
 import type { WebviewToExtensionMessage } from '../messages';
 import { initializePanelDock } from './panelDock';
 import { initializePanelResize } from './panelResize';
@@ -30,6 +31,8 @@ function getRequiredElement<T extends HTMLElement>(selector: string): T {
 }
 
 const vscodeApi = acquireVsCodeApi();
+assertWebviewTerminalRuntimeAvailable();
+
 const serializedInitialState = document.currentScript?.getAttribute('data-layout-state')
 	?? undefined;
 const state = restorePanelLayoutState(vscodeApi, serializedInitialState);
