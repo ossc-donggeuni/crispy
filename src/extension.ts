@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
-import type {
-	ExtensionToWebviewMessage,
-	WebviewToExtensionMessage,
-} from './messages';
+import {
+	parseWebviewToHostMessage,
+	type WebviewToHostMessage,
+} from './agent/protocol';
+import type { ExtensionToWebviewMessage } from './messages';
 import {
 	getPanelLayoutStateFromMessage,
 	serializePanelLayoutState,
@@ -46,8 +47,11 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
 		);
 
+		/**
+		 * Webview 메시지 중 레이아웃 상태를 기존 경계에서 먼저 처리하고,
+		 * 나머지 메시지만 Host protocol 수신 경계로 전달한다.
+		 */
 		panel.webview.onDidReceiveMessage((message: unknown) => {
-			// Layout State Message Handler
 			const layoutState = getPanelLayoutStateFromMessage(message);
 			if (layoutState) {
 				lastLayoutState = layoutState;
@@ -77,7 +81,9 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * Webview가 전송한 Extension 수준 메시지를 처리한다.
+ * Webview가 전송한 unknown 메시지를 구조적으로 검증한 뒤 처리한다.
+ * 검증 실패 시 원본 payload를 기록하거나 Webview로 반사하지 않으며,
+ * 검증된 terminal 메시지만 별도의 실행 전 dispatch 경계로 전달한다.
  *
  * @param webview 응답 메시지를 전송할 Webview
  * @param message Webview에서 수신한 메시지
@@ -87,21 +93,33 @@ export function handleWebviewMessage(
 	webview: Pick<vscode.Webview, 'postMessage'>,
 	message: unknown,
 ): Thenable<boolean> | undefined {
-	if (!message || typeof message !== 'object') {
+	const parseResult = parseWebviewToHostMessage(message);
+	if (!parseResult.ok) {
 		return undefined;
 	}
 
-	const webviewMessage = message as WebviewToExtensionMessage;
-
-	switch (webviewMessage.type) {
+	switch (parseResult.value.type) {
 		case 'webview.ready':
 			console.log('[Crispy] Webview ready');
 
 			return webview.postMessage({
 				type: 'extension.ready',
 			} satisfies ExtensionToWebviewMessage);
+		default:
+			return handleTerminalMessage(parseResult.value);
 	}
+}
 
+/**
+ * 구조 검증을 통과한 terminal 메시지의 향후 Host dispatch 경계다.
+ * PTY, workspace 및 session 정책이 구현되기 전에는 어떤 실행도 시작하지 않는다.
+ *
+ * @param message 허용된 type과 필드만 포함하는 terminal protocol 메시지
+ * @returns 현재 단계에서는 의도적으로 아무 응답도 전송하지 않음
+ */
+function handleTerminalMessage(
+	_message: WebviewToHostMessage,
+): undefined {
 	return undefined;
 }
 

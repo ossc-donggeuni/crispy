@@ -136,7 +136,7 @@ suite('Crispy Extension Host', () => {
 		);
 	});
 
-	test('handleWebviewMessage responds to webview.ready with extension.ready', async () => {
+	test('webview.ready에 extension.ready로 응답한다', async () => {
 		const postedMessages: ExtensionToWebviewMessage[] = [];
 		const webview = {
 			postMessage: (message: ExtensionToWebviewMessage) => {
@@ -153,6 +153,58 @@ suite('Crispy Extension Host', () => {
 		assert.ok(result);
 		assert.strictEqual(await result, true);
 		assert.deepStrictEqual(postedMessages, [{ type: 'extension.ready' }]);
+	});
+
+	test('검증되지 않은 ready payload를 반사하지 않고 거부한다', () => {
+		const postedMessages: unknown[] = [];
+		const webview = {
+			postMessage: (message: unknown) => {
+				postedMessages.push(message);
+				return Promise.resolve(true);
+			},
+		};
+
+		const result = extensionModule.handleWebviewMessage(webview, {
+			type: 'webview.ready',
+			cwd: '/sensitive/workspace',
+			token: 'sensitive-token',
+		});
+
+		assert.strictEqual(result, undefined);
+		assert.deepStrictEqual(postedMessages, []);
+	});
+
+	test('검증된 terminal 메시지를 input log 없이 안전한 no-op dispatch로 전달한다', () => {
+		const postedMessages: unknown[] = [];
+		const loggedValues: unknown[][] = [];
+		const originalConsoleLog = console.log;
+		console.log = (...values: unknown[]) => {
+			loggedValues.push(values);
+		};
+
+		try {
+			const result = extensionModule.handleWebviewMessage(
+				{
+					postMessage: (message: unknown) => {
+						postedMessages.push(message);
+						return Promise.resolve(true);
+					},
+				},
+				{
+					type: 'terminal.input',
+					tabId: 'tab:one',
+					sessionId: 'session-1',
+					data: 'authorization code=sensitive-token',
+				},
+			);
+
+			assert.strictEqual(result, undefined);
+		} finally {
+			console.log = originalConsoleLog;
+		}
+
+		assert.deepStrictEqual(postedMessages, []);
+		assert.deepStrictEqual(loggedValues, []);
 	});
 });
 

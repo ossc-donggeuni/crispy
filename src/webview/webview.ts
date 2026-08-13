@@ -1,7 +1,5 @@
-import type {
-	ExtensionToWebviewMessage,
-	WebviewToExtensionMessage,
-} from '../messages';
+import { parseHostToWebviewMessage } from '../agent/protocol';
+import type { WebviewToExtensionMessage } from '../messages';
 import { initializePanelDock } from './panelDock';
 import { initializePanelResize } from './panelResize';
 import {
@@ -58,17 +56,31 @@ initializePanelResize(
 	() => savePanelLayoutState(vscodeApi, state),
 );
 
-window.addEventListener('message', (event) => {
-	const message = event.data as ExtensionToWebviewMessage;
+/**
+ * Extension Host에서 받은 unknown 메시지를 구조적으로 검증한 뒤 처리한다.
+ * 검증되지 않은 payload는 내용이나 민감 정보를 기록하지 않고 무시한다.
+ *
+ * @param message Extension Host에서 수신한 검증 전 메시지
+ */
+function handleHostMessage(message: unknown): void {
+	const parseResult = parseHostToWebviewMessage(message);
+	if (!parseResult.ok) {
+		return;
+	}
 
-	switch (message.type) {
-		// Ready
+	switch (parseResult.value.type) {
 		case 'extension.ready':
 			console.log('[Crispy] Extension ready');
 			break;
 	}
+}
+
+/** Extension Host가 전송한 메시지를 Webview protocol 수신 경계로 전달한다. */
+window.addEventListener('message', (event) => {
+	handleHostMessage(event.data);
 });
 
+/** 현재 Webview 초기화 완료 사실만 Host에 알리며 terminal.ready는 전송하지 않는다. */
 vscodeApi.postMessage({
 	type: 'webview.ready',
 } satisfies WebviewToExtensionMessage);
