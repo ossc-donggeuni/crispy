@@ -21,10 +21,10 @@ export function activate(context: vscode.ExtensionContext) {
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
-	const openCanvas = () => {
+	const openCanvas = (): vscode.WebviewPanel => {
 		if (currentPanel) {
 			currentPanel.reveal();
-			return;
+			return currentPanel;
 		}
 
 		const webviewRoot = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview');
@@ -54,23 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// Webview Message Handler
-			if (!message || typeof message !== 'object') {
-				return;
-			}
-
-			const webviewMessage = message as WebviewToExtensionMessage;
-
-			switch (webviewMessage.type) {
-				case 'webview.ready':
-					console.log('[Crispy] Webview ready');
-
-					panel.webview.postMessage({
-						type: 'extension.ready',
-					} satisfies ExtensionToWebviewMessage);
-
-					break;
-			}
+			handleWebviewMessage(panel.webview, message);
 		});
 
 		panel.webview.html = getWebviewHtml(
@@ -83,11 +67,42 @@ export function activate(context: vscode.ExtensionContext) {
 		panel.onDidDispose(() => {
 			currentPanel = undefined;
 		});
+
+		return panel;
 	};
 
 	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
 
 	context.subscriptions.push(disposable);
+}
+
+/**
+ * Webview가 전송한 Extension 수준 메시지를 처리한다.
+ *
+ * @param webview 응답 메시지를 전송할 Webview
+ * @param message Webview에서 수신한 메시지
+ * @returns 메시지를 Webview에 전달한 결과 또는 처리 대상이 아닐 때 `undefined`
+ */
+export function handleWebviewMessage(
+	webview: Pick<vscode.Webview, 'postMessage'>,
+	message: unknown,
+): Thenable<boolean> | undefined {
+	if (!message || typeof message !== 'object') {
+		return undefined;
+	}
+
+	const webviewMessage = message as WebviewToExtensionMessage;
+
+	switch (webviewMessage.type) {
+		case 'webview.ready':
+			console.log('[Crispy] Webview ready');
+
+			return webview.postMessage({
+				type: 'extension.ready',
+			} satisfies ExtensionToWebviewMessage);
+	}
+
+	return undefined;
 }
 
 /**
