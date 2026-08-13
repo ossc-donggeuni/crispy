@@ -43,7 +43,9 @@ const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 
-initializeGraphView(graphArea);
+const graphView = initializeGraphView(graphArea);
+
+window.addEventListener('unload', () => graphView.dispose(), { once: true });
 
 // Dock 초기화
 const refreshDock = initializePanelDock(
