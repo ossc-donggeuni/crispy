@@ -1,32 +1,84 @@
 import type { ValidatedWorkspaceRoot } from '../workspace/types';
 import { resolvePosixShellLaunchPolicy } from './posixShellResolver';
-import type { ShellLaunchPolicyResult } from './types';
+import { validateShellExecutable } from './shellExecutableValidator';
+import {
+	nodeShellFilesystemAdapter,
+	type ShellFilesystemAdapter,
+} from './shellFilesystem';
+import type {
+	ShellLaunchPolicyResult,
+	SupportedShellPlatform,
+} from './types';
 import { resolveWindowsShellLaunchPolicy } from './windowsShellResolver';
 
-/**
- * Host가 주입한 플랫폼에 맞는 Shell 정책 resolver를 선택한다.
- * OS별 실행 계약은 POSIX와 Windows 전용 모듈에 계속 격리한다.
- *
- * @param platform Extension Host가 제공한 Node.js 플랫폼 식별자다.
- * @param env Extension Host가 제공한 환경 변수 snapshot이다.
- * @param workspaceRoot 1-3 정책을 통과한 canonical workspace root다.
- * @returns Host 내부 Shell 실행 정책 또는 typed 플랫폼·환경 실패다.
- */
-export function resolveShellLaunchPolicy(
+/** Host가 플랫폼별 Shell 선택과 executable 검증을 수행하는 비동기 진입점이다. */
+export type ShellLaunchPolicyResolver = (
 	platform: NodeJS.Platform,
 	env: NodeJS.ProcessEnv,
 	workspaceRoot: ValidatedWorkspaceRoot,
-): ShellLaunchPolicyResult {
+) => Promise<ShellLaunchPolicyResult>;
+
+/** 지원 플랫폼의 resolver를 호출하고 선택된 플랫폼을 함께 반환한다. */
+function selectShellLaunchPolicy(
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv,
+	workspaceRoot: ValidatedWorkspaceRoot,
+): {
+	readonly platform: SupportedShellPlatform;
+	readonly result: ShellLaunchPolicyResult;
+} | undefined {
 	switch (platform) {
 		case 'darwin':
 		case 'linux':
-			return resolvePosixShellLaunchPolicy(env, workspaceRoot);
+			return {
+				platform,
+				result: resolvePosixShellLaunchPolicy(env, workspaceRoot),
+			};
 		case 'win32':
-			return resolveWindowsShellLaunchPolicy(env, workspaceRoot);
+			return {
+				platform,
+				result: resolveWindowsShellLaunchPolicy(env, workspaceRoot),
+			};
 		default:
+			return undefined;
+	}
+}
+
+/**
+ * 주입된 filesystem adapter로 플랫폼 선택과 검증을 수행하는 resolver를 만든다.
+ * 반환된 resolver의 입력은 platform, Host env와 검증된 workspace root뿐이다.
+ *
+ * @param filesystem executable 검증 I/O를 격리하는 Host adapter다.
+ * @returns 선택된 후보를 검증한 뒤에만 정책을 반환하는 비동기 resolver다.
+ */
+export function createShellLaunchPolicyResolver(
+	filesystem: ShellFilesystemAdapter,
+): ShellLaunchPolicyResolver {
+	return async function resolveShellLaunchPolicy(
+		platform: NodeJS.Platform,
+		env: NodeJS.ProcessEnv,
+		workspaceRoot: ValidatedWorkspaceRoot,
+	): Promise<ShellLaunchPolicyResult> {
+		const selected = selectShellLaunchPolicy(platform, env, workspaceRoot);
+		if (!selected) {
 			return {
 				ok: false,
 				error: { code: 'unsupported_platform' },
 			};
-	}
+		}
+		if (!selected.result.ok) {
+			return selected.result;
+		}
+
+		return validateShellExecutable(
+			selected.platform,
+			selected.result.policy,
+			filesystem,
+		);
+	};
 }
+
+/** 실제 Node filesystem adapter를 사용하는 Extension Host 표준 진입점이다. */
+export const resolveShellLaunchPolicy = createShellLaunchPolicyResolver(
+	nodeShellFilesystemAdapter,
+);
