@@ -6,6 +6,13 @@ import {
 } from '../../agent/host/terminal/terminalSession';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
 
+const launchPolicy = {
+	executable: '/host/selected/shell',
+	args: ['--host-owned'],
+	cwd: '/validated/workspace',
+	env: { CRISPY_TERMINAL_TEST: 'enabled' },
+} as const;
+
 function createSession(): {
 	readonly adapter: FakePtyAdapter;
 	readonly session: TerminalSession;
@@ -64,6 +71,36 @@ suite('TerminalSession state model', () => {
 		assert.strictEqual(Object.isFrozen(session.state), true);
 		assert.strictEqual(session.tabId, 'tab-state-test');
 		assert.strictEqual(session.sessionId, 'session-state-test');
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+	});
+
+	test('starting 상태에서 Host policy로 PTY를 spawn하고 handle과 PID를 소유한다', () => {
+		const { adapter, session } = createSession();
+		session.markStarting();
+
+		session.start(launchPolicy, 132, 43);
+
+		assert.deepStrictEqual(adapter.spawnCalls, [{
+			...launchPolicy,
+			args: ['--host-owned'],
+			env: { CRISPY_TERMINAL_TEST: 'enabled' },
+			cols: 132,
+			rows: 43,
+		}]);
+		assert.deepStrictEqual(session.state, { kind: 'running', pid: 8101 });
+		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
+		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+	});
+
+	test('starting 전에는 PTY spawn을 호출하지 않는다', () => {
+		const { adapter, session } = createSession();
+
+		assertStateError(
+			() => session.start(launchPolicy, 80, 24),
+			'invalid_transition',
+		);
+
+		assert.deepStrictEqual(session.state, { kind: 'idle' });
 		assert.strictEqual(adapter.spawnCalls.length, 0);
 	});
 
@@ -158,4 +195,3 @@ suite('TerminalSession state model', () => {
 		assert.strictEqual(adapter.spawnCalls.length, 0);
 	});
 });
-

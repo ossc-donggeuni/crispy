@@ -3,7 +3,8 @@ import {
 	type TerminalErrorCode,
 } from '../../protocol/errors';
 import type { SessionId, TabId } from '../../protocol/messages';
-import type { PtyAdapter } from './ptyAdapter';
+import type { ShellLaunchPolicy } from '../shell/types';
+import type { PtyAdapter, PtyProcessHandle } from './ptyAdapter';
 
 /** PTY를 아직 시작하지 않은 새 session 상태다. */
 export interface TerminalSessionIdleState {
@@ -119,7 +120,7 @@ export interface TerminalSessionOptions {
 	/** TerminalHost가 생성한 session 수명주기 고유 식별자다. */
 	readonly sessionId: SessionId;
 
-	/** 다음 start 단계에서 사용할 주입 가능한 PTY 생성 경계다. */
+	/** Host가 검증한 실행 계약으로 process를 생성할 PTY 경계다. */
 	readonly ptyAdapter: PtyAdapter;
 }
 
@@ -181,8 +182,8 @@ function isTerminalErrorCode(value: unknown): value is TerminalErrorCode {
 }
 
 /**
- * Terminal 하나의 immutable identity와 lifecycle 상태를 관리한다.
- * PTY adapter는 다음 start 단계에서 사용할 수 있도록 주입만 받으며 여기서는 spawn하지 않는다.
+ * Terminal 하나의 immutable identity, lifecycle 상태와 생성된 PTY handle을 관리한다.
+ * 실제 실행 계약 준비와 protocol 메시지 발행은 상위 TerminalHost가 담당한다.
  */
 export class TerminalSession {
 	/** session이 소속된 Webview tab의 변경 불가능한 식별자다. */
@@ -191,8 +192,11 @@ export class TerminalSession {
 	/** TerminalHost가 발급한 변경 불가능한 session 식별자다. */
 	readonly sessionId: SessionId;
 
-	/** 다음 start 단계에서 사용할 PTY 생성 경계이며 이 단계에서는 호출하지 않는다. */
+	/** Host가 검증한 실행 계약만 전달받는 PTY 생성 경계다. */
 	private readonly ptyAdapter: PtyAdapter;
+
+	/** spawn 성공 뒤 session이 소유하는 PTY handle이다. */
+	private activeProcess: PtyProcessHandle | undefined;
 
 	/** 오직 `transition()`을 통해서만 교체되는 현재 lifecycle 상태다. */
 	private currentState: TerminalSessionState = IDLE_STATE;
@@ -225,6 +229,32 @@ export class TerminalSession {
 	 */
 	markStarting(): void {
 		this.transition(['idle'], STARTING_STATE);
+	}
+
+	/**
+	 * Host가 검증한 Shell 정책과 terminal 크기로 PTY를 생성한다.
+	 * executable, args, cwd와 env를 별도 인자로 받지 않아 Webview 값이 실행 계약을
+	 * 덮어쓸 수 없으며 output/exit listener는 후속 단계 전까지 연결하지 않는다.
+	 *
+	 * @param policy workspace와 Shell policy가 확정한 Host 내부 실행 계약이다.
+	 * @param cols protocol validator를 통과한 초기 terminal 열 수다.
+	 * @param rows protocol validator를 통과한 초기 terminal 행 수다.
+	 * @throws {TerminalSessionStateError} starting 상태가 아니거나 PID가 유효하지 않은 경우 발생한다.
+	 * @throws {unknown} 주입된 PTY adapter가 안전한 상위 오류 변환을 위해 보고한 spawn 실패다.
+	 */
+	start(policy: ShellLaunchPolicy, cols: number, rows: number): void {
+		this.assertCanTransitionFrom(['starting']);
+		const process = this.ptyAdapter.spawn({
+			executable: policy.executable,
+			args: policy.args,
+			cwd: policy.cwd,
+			env: policy.env,
+			cols,
+			rows,
+		});
+
+		this.markRunning(process.pid);
+		this.activeProcess = process;
 	}
 
 	/**

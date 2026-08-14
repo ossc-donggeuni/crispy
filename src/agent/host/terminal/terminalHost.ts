@@ -1,126 +1,213 @@
 import { randomUUID } from 'crypto';
-import type { SessionId, TabId } from '../../protocol/messages';
-import { ID_MAX_LENGTH, ID_PATTERN } from '../../protocol/limits';
+import type {
+	HostToWebviewMessage,
+	SessionId,
+	TabId,
+} from '../../protocol/messages';
 import type { PtyAdapter } from './ptyAdapter';
+import {
+	prepareTerminalLaunch,
+	type PrepareTerminalLaunch,
+} from './prepareTerminalLaunch';
 import { TerminalSession } from './terminalSession';
 
 /**
- * TerminalHost가 session 등록을 거부한 안정적인 내부 원인이다.
- * 원본 tabId나 생성된 sessionId를 오류 payload에 포함하지 않는다.
- */
-export type TerminalHostRegistrationErrorCode =
-	| 'tab_already_has_session'
-	| 'session_id_collision'
-	| 'invalid_generated_session_id';
-
-/** 등록 오류 code를 외부 값을 포함하지 않는 고정 메시지로 변환하는 allowlist다. */
-const REGISTRATION_ERROR_MESSAGES: Readonly<
-	Record<TerminalHostRegistrationErrorCode, string>
-> = Object.freeze({
-	tab_already_has_session: 'Terminal tab already has an active session.',
-	session_id_collision: 'Generated terminal session identifier already exists.',
-	invalid_generated_session_id: 'Generated terminal session identifier is invalid.',
-});
-
-/** 원본 tabId나 sessionId를 포함하지 않는 Host 내부 등록 오류다. */
-export class TerminalHostRegistrationError extends Error {
-	/**
-	 * 고정된 code와 메시지만 가진 session 등록 오류를 생성한다.
-	 *
-	 * @param code 등록을 거부한 안전한 내부 원인이다.
-	 */
-	constructor(readonly code: TerminalHostRegistrationErrorCode) {
-		super(REGISTRATION_ERROR_MESSAGES[code]);
-		this.name = 'TerminalHostRegistrationError';
-	}
-}
-
-/**
- * 새 sessionId 문자열을 반환하는 Host 내부 생성기다.
- * 테스트에서는 순서를 예측할 수 있는 deterministic 구현을 주입할 수 있다.
- */
-export type SessionIdGenerator = () => string;
-
-/**
- * UUID에 Host 전용 prefix를 붙여 protocol 규칙을 만족하는 sessionId를 생성한다.
+ * `TerminalHost`가 생성한 생명주기 메시지를 Webview 전송 계층에 전달하는 함수다.
  *
- * @returns 충돌 가능성이 낮고 protocol ID 형식과 최대 길이를 만족하는 식별자다.
+ * @param message Webview로 전달할 검증된 Host 메시지
  */
-export function generateTerminalSessionId(): SessionId {
+export type TerminalHostMessageEmitter = (
+	message: HostToWebviewMessage,
+) => void;
+
+/**
+ * UUID에 Host 전용 접두사를 붙여 프로토콜 규칙을 만족하는 `sessionId`를 생성한다.
+ *
+ * @returns 충돌 가능성이 낮고 프로토콜 ID 형식과 최대 길이를 만족하는 식별자
+ */
+function generateTerminalSessionId(): SessionId {
 	return `session-${randomUUID()}`;
 }
 
-/** TerminalHost 생성에 필요한 Host 소유 의존성이다. */
+/**
+ * `TerminalHost` 생성에 필요한 Host 소유 의존성이다.
+ */
 export interface TerminalHostOptions {
-	/** 새 TerminalSession에 전달할 주입 가능한 PTY 생성 경계다. */
+	/** 새 `TerminalSession`에 전달할 주입 가능한 PTY 생성 경계다. */
 	readonly ptyAdapter: PtyAdapter;
 
-	/** 테스트 또는 특수 Host 구성을 위한 선택적 sessionId 생성기다. */
-	readonly sessionIdGenerator?: SessionIdGenerator;
+	/** 작업공간과 셸 정책을 적용하는 시작 및 재시작 공통 준비 함수다. */
+	readonly prepareLaunch?: PrepareTerminalLaunch;
+
+	/** 생성된 생명주기 메시지를 Webview 전송 계층으로 넘기는 함수다. */
+	readonly emitMessage: TerminalHostMessageEmitter;
 }
 
 /**
- * 생성된 sessionId가 protocol 문자 규칙과 최대 길이를 만족하는지 확인한다.
- *
- * @param value generator가 반환한 검증 전 값이다.
- * @returns Host sessionId로 안전하게 사용할 수 있으면 true다.
+ * 터미널 시작 단계별 고정 오류 메시지 정책이다.
  */
-function isValidSessionId(value: unknown): value is SessionId {
-	return typeof value === 'string'
-		&& value.length <= ID_MAX_LENGTH
-		&& ID_PATTERN.test(value);
-}
+const START_ERROR_MESSAGES = Object.freeze({
+	duplicate: 'Terminal tab already has an active session.',
+	registration: 'Terminal session could not be created.',
+	preparation: 'Terminal launch policy could not be prepared.',
+	spawn: 'Terminal process could not be started.',
+});
 
 /**
- * tab별 현재 session과 전체 session을 두 개의 Map으로 관리하는 Host 골격이다.
- * 실제 PTY 시작, 입출력, restart 및 cleanup orchestration은 수행하지 않는다.
+ * 탭별 현재 세션 저장소와 Host 소유 PTY 시작 경로를 관리한다.
+ * 입력, 크기 변경, 출력, 재시작 및 정리 조정은 후속 단계의 책임이다.
  */
 export class TerminalHost {
-	/** 모든 등록 session을 Host 소유 sessionId로 조회하는 기본 Map이다. */
+	/** 등록된 모든 세션을 Host 소유 `sessionId`로 조회하는 저장소다. */
 	private readonly sessionsById = new Map<SessionId, TerminalSession>();
 
-	/** 각 Webview tab을 현재 sessionId 하나에 연결하는 ownership Map이다. */
+	/** 각 Webview 탭을 현재 `sessionId` 하나에 연결하는 소유권 저장소다. */
 	private readonly activeSessionByTab = new Map<TabId, SessionId>();
 
-	/** 생성되는 모든 TerminalSession에 전달할 PTY adapter다. */
+	/** 생성되는 모든 `TerminalSession`에 전달할 PTY 어댑터다. */
 	private readonly ptyAdapter: PtyAdapter;
 
-	/** Webview 입력과 독립적으로 sessionId를 발급하는 Host 생성기다. */
-	private readonly sessionIdGenerator: SessionIdGenerator;
+	/** 작업공간과 셸 실행 정책을 순서대로 적용하는 준비 경계다. */
+	private readonly prepareLaunch: PrepareTerminalLaunch;
+
+	/** Host 생명주기 메시지를 Webview 전송 계층으로 넘기는 경계다. */
+	private readonly emitMessage: TerminalHostMessageEmitter;
 
 	/**
-	 * 비어 있는 Map registry와 Host 소유 의존성을 초기화한다.
-	 * 생성만으로 session을 만들거나 native PTY를 로드하지 않는다.
+	 * 비어 있는 세션 저장소와 Host 소유 의존성을 초기화한다.
+	 * 객체 생성만으로 세션을 만들거나 네이티브 PTY를 불러오지 않는다.
 	 *
-	 * @param options PTY adapter와 선택적인 sessionId 생성기다.
+	 * @param options PTY 어댑터, 실행 준비 함수 및 메시지 전달 함수
 	 */
 	constructor(options: TerminalHostOptions) {
 		this.ptyAdapter = options.ptyAdapter;
-		this.sessionIdGenerator = options.sessionIdGenerator
-			?? generateTerminalSessionId;
+		this.prepareLaunch = options.prepareLaunch ?? prepareTerminalLaunch;
+		this.emitMessage = options.emitMessage;
 	}
 
 	/**
-	 * Host가 새 sessionId를 생성하여 tab의 현재 session을 등록한다.
-	 * Webview가 제공한 sessionId를 받을 수 있는 인자를 두지 않는다.
+	 * 검증된 `terminal.ready` 값으로 새 PTY 세션을 시작한다.
+	 * `sessionId`와 실행 계약은 Host만 생성하며 중복 요청이나 내부 실패를 던지지 않고
+	 * 고정된 `terminal.error` 결과로 변환한다.
 	 *
-	 * @param tabId Webview가 생성하고 protocol validator를 통과한 tab 식별자다.
-	 * @returns idle 상태로 등록된 새 TerminalSession이다.
-	 * @throws {TerminalHostRegistrationError} tab 중복, ID 충돌 또는 잘못된 생성 ID다.
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 * @param cols 프로토콜 검증을 통과한 초기 터미널 열 수
+	 * @param rows 프로토콜 검증을 통과한 초기 터미널 행 수
+	 * @returns 시작 흐름과 메시지 발행이 끝나면 완료되는 Promise
 	 */
-	createSession(tabId: TabId): TerminalSession {
-		if (this.activeSessionByTab.has(tabId)) {
-			throw new TerminalHostRegistrationError('tab_already_has_session');
+	async startSession(
+		tabId: TabId,
+		cols: number,
+		rows: number,
+	): Promise<void> {
+		const current = this.getActiveSession(tabId);
+		if (
+			current !== undefined
+			&& (
+				current.state.kind === 'starting'
+				|| current.state.kind === 'running'
+				|| current.state.kind === 'stopping'
+			)
+		) {
+			this.failWithoutTransition(
+				tabId,
+				current,
+				'invalid_session_state',
+				START_ERROR_MESSAGES.duplicate,
+				false,
+			);
+			return;
 		}
 
-		const generatedSessionId = this.sessionIdGenerator();
-		if (!isValidSessionId(generatedSessionId)) {
-			throw new TerminalHostRegistrationError(
-				'invalid_generated_session_id',
-			);
+		let session: TerminalSession | undefined;
+		if (current?.state.kind === 'idle') {
+			session = current;
+		} else {
+			if (current !== undefined) {
+				this.activeSessionByTab.delete(tabId);
+			}
+			session = this.createSession(tabId);
 		}
+		if (session === undefined) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'internal_error',
+				START_ERROR_MESSAGES.registration,
+				true,
+			);
+			return;
+		}
+
+		try {
+			session.markStarting();
+		} catch {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'internal_error',
+				START_ERROR_MESSAGES.registration,
+				true,
+			);
+			return;
+		}
+
+		this.publish({ type: 'terminal.starting', tabId });
+
+		let preparation: Awaited<ReturnType<PrepareTerminalLaunch>>;
+		try {
+			preparation = await this.prepareLaunch(tabId, session.sessionId);
+		} catch {
+			this.failSession(
+				session,
+				'internal_error',
+				START_ERROR_MESSAGES.preparation,
+				true,
+			);
+			return;
+		}
+
+		if (!preparation.ok) {
+			session.markError(preparation.error.code);
+			this.publish(preparation.error);
+			return;
+		}
+
+		try {
+			session.start(preparation.policy, cols, rows);
+		} catch {
+			this.failSession(
+				session,
+				'start_failed',
+				START_ERROR_MESSAGES.spawn,
+				true,
+			);
+			return;
+		}
+
+		const message = {
+			type: 'terminal.started',
+			tabId,
+			sessionId: session.sessionId,
+		} as const;
+		this.publish(message);
+	}
+
+	/**
+	 * Host가 새 `sessionId`를 생성하여 탭의 현재 세션을 등록한다.
+	 * Webview가 제공한 `sessionId`를 받을 수 있는 인자는 두지 않는다.
+	 *
+	 * @param tabId Webview가 생성하고 프로토콜 검증을 통과한 탭 식별자
+	 * @returns 대기 상태로 등록된 새 `TerminalSession` 또는 등록할 수 없으면 `undefined`
+	 */
+	private createSession(tabId: TabId): TerminalSession | undefined {
+		if (this.activeSessionByTab.has(tabId)) {
+			return undefined;
+		}
+
+		const generatedSessionId = generateTerminalSessionId();
 		if (this.sessionsById.has(generatedSessionId)) {
-			throw new TerminalHostRegistrationError('session_id_collision');
+			return undefined;
 		}
 
 		const session = new TerminalSession({
@@ -134,20 +221,20 @@ export class TerminalHost {
 	}
 
 	/**
-	 * Host sessionId로 등록된 session을 조회한다.
+	 * Host의 `sessionId`로 등록된 세션을 조회한다.
 	 *
-	 * @param sessionId 조회할 Host 소유 session 식별자다.
-	 * @returns 등록된 TerminalSession 또는 찾을 수 없으면 undefined다.
+	 * @param sessionId 조회할 Host 소유 세션 식별자
+	 * @returns 등록된 `TerminalSession` 또는 찾을 수 없으면 `undefined`
 	 */
 	getSession(sessionId: SessionId): TerminalSession | undefined {
 		return this.sessionsById.get(sessionId);
 	}
 
 	/**
-	 * tabId에 연결된 현재 session을 두 Map을 통해 조회한다.
+	 * `tabId`에 연결된 현재 세션을 소유권 저장소에서 조회한다.
 	 *
-	 * @param tabId Webview가 소유하는 tab 식별자다.
-	 * @returns 해당 tab의 현재 TerminalSession 또는 연결이 없으면 undefined다.
+	 * @param tabId Webview가 소유하는 탭 식별자
+	 * @returns 해당 탭의 현재 `TerminalSession` 또는 연결이 없으면 `undefined`
 	 */
 	getActiveSession(tabId: TabId): TerminalSession | undefined {
 		const sessionId = this.activeSessionByTab.get(tabId);
@@ -157,12 +244,12 @@ export class TerminalHost {
 	}
 
 	/**
-	 * tab과 session이 현재 양방향 ownership 관계인지 확인한다.
-	 * session의 tabId와 activeSessionByTab의 역방향 연결을 모두 확인한다.
+	 * 탭과 세션이 현재 양방향 소유 관계인지 확인한다.
+	 * 세션의 `tabId`와 `activeSessionByTab`의 역방향 연결을 모두 검사한다.
 	 *
-	 * @param tabId 소유 관계를 확인할 Webview tab 식별자다.
-	 * @param sessionId 소유 관계를 확인할 Host session 식별자다.
-	 * @returns 두 Map과 session identity가 모두 일치하면 true다.
+	 * @param tabId 소유 관계를 확인할 Webview 탭 식별자
+	 * @param sessionId 소유 관계를 확인할 Host 세션 식별자
+	 * @returns 두 저장소와 세션 식별 정보가 모두 일치하면 `true`
 	 */
 	ownsSession(tabId: TabId, sessionId: SessionId): boolean {
 		const session = this.sessionsById.get(sessionId);
@@ -172,11 +259,11 @@ export class TerminalHost {
 	}
 
 	/**
-	 * session을 두 Map에서 원자적으로 제거한다.
-	 * lifecycle dispose나 PTY cleanup은 수행하지 않으며 이후 단계의 호출자가 먼저 완료해야 한다.
+	 * 세션을 식별자 및 탭 소유권 저장소에서 원자적으로 제거한다.
+	 * 생명주기 폐기나 PTY 정리는 수행하지 않으며 후속 단계의 호출자가 먼저 완료해야 한다.
 	 *
-	 * @param sessionId 제거할 Host 소유 session 식별자다.
-	 * @returns 제거한 session 또는 등록된 session이 없으면 undefined다.
+	 * @param sessionId 제거할 Host 소유 세션 식별자
+	 * @returns 제거한 세션 또는 등록된 세션이 없으면 `undefined`
 	 */
 	removeSession(sessionId: SessionId): TerminalSession | undefined {
 		const session = this.sessionsById.get(sessionId);
@@ -189,5 +276,69 @@ export class TerminalHost {
 			this.activeSessionByTab.delete(session.tabId);
 		}
 		return session;
+	}
+
+	/**
+	 * 생명주기 메시지 전송 실패가 터미널 시작 흐름을 중단하지 않게 한다.
+	 *
+	 * @param message Webview 전송 계층으로 전달할 Host 메시지
+	 */
+	private publish(message: HostToWebviewMessage): void {
+		try {
+			this.emitMessage(message);
+		} catch {
+			/* 메시지 전송 생명주기는 PTY 시작 결과와 별도로 관리한다. */
+		}
+	}
+
+	/**
+	 * 시작 중인 세션을 안전한 오류 상태로 전환하고 고정 프로토콜 메시지를 만든다.
+	 *
+	 * @param session 오류 상태로 전환할 시작 중 세션
+	 * @param code Webview에 공개할 허용된 오류 코드
+	 * @param message 외부 실행 정보를 포함하지 않는 고정 오류 메시지
+	 * @param canRestart Webview에서 재시도를 허용할지 여부
+	 */
+	private failSession(
+		session: TerminalSession,
+		code: 'start_failed' | 'internal_error',
+		message: string,
+		canRestart: boolean,
+	): void {
+		session.markError(code);
+		this.failWithoutTransition(
+			session.tabId,
+			session,
+			code,
+			message,
+			canRestart,
+		);
+	}
+
+	/**
+	 * 세션 상태 변경 없이 고정 `terminal.error`를 발행한다.
+	 *
+	 * @param tabId 오류가 발생한 Webview 탭 식별자
+	 * @param session 관련 세션 또는 등록 전에 실패했을 때의 `null`
+	 * @param code Webview에 공개할 허용된 오류 코드
+	 * @param message 외부 실행 정보를 포함하지 않는 고정 오류 메시지
+	 * @param canRestart Webview에서 재시도를 허용할지 여부
+	 */
+	private failWithoutTransition(
+		tabId: TabId,
+		session: TerminalSession | null,
+		code: 'invalid_session_state' | 'start_failed' | 'internal_error',
+		message: string,
+		canRestart: boolean,
+	): void {
+		const error = {
+			type: 'terminal.error',
+			tabId,
+			sessionId: session?.sessionId ?? null,
+			code,
+			message,
+			canRestart,
+		} as const;
+		this.publish(error);
 	}
 }

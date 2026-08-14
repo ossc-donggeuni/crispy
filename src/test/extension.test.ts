@@ -18,6 +18,13 @@ interface CrispyExtensionModule {
 	handleWebviewMessage(
 		webview: Pick<vscode.Webview, 'postMessage'>,
 		message: unknown,
+		terminalHost?: {
+			startSession(
+				tabId: string,
+				cols: number,
+				rows: number,
+			): Promise<unknown>;
+		},
 	): Thenable<boolean> | undefined;
 }
 
@@ -205,6 +212,60 @@ suite('Crispy Extension Host', () => {
 
 		assert.deepStrictEqual(postedMessages, []);
 		assert.deepStrictEqual(loggedValues, []);
+	});
+
+	test('검증된 terminal.ready 값만 TerminalHost start 경계로 전달한다', () => {
+		const starts: Array<{ tabId: string; cols: number; rows: number }> = [];
+		const terminalHost = {
+			async startSession(tabId: string, cols: number, rows: number) {
+				starts.push({ tabId, cols, rows });
+			},
+		};
+
+		const result = extensionModule.handleWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'terminal.ready',
+				tabId: 'tab-ready-dispatch',
+				providerId: 'codex',
+				cols: 132,
+				rows: 43,
+			},
+			terminalHost,
+		);
+
+		assert.strictEqual(result, undefined);
+		assert.deepStrictEqual(starts, [{
+			tabId: 'tab-ready-dispatch',
+			cols: 132,
+			rows: 43,
+		}]);
+	});
+
+	test('실행 계약을 포함한 terminal.ready는 start 경계 전에 거부한다', () => {
+		let startCalls = 0;
+		const terminalHost = {
+			async startSession() {
+				startCalls += 1;
+			},
+		};
+
+		const result = extensionModule.handleWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'terminal.ready',
+				tabId: 'tab-forbidden-ready',
+				providerId: 'codex',
+				cols: 80,
+				rows: 24,
+				executable: '/webview/controlled/shell',
+				cwd: '/webview/controlled/workspace',
+			},
+			terminalHost,
+		);
+
+		assert.strictEqual(result, undefined);
+		assert.strictEqual(startCalls, 0);
 	});
 });
 

@@ -1,169 +1,362 @@
 import * as assert from 'assert';
+import type { ShellLaunchPolicy } from '../../agent/host/shell/types';
 import {
-	generateTerminalSessionId,
 	TerminalHost,
-	TerminalHostRegistrationError,
-	type TerminalHostRegistrationErrorCode,
+	type TerminalHostOptions,
 } from '../../agent/host/terminal/terminalHost';
-import type { TerminalSession } from '../../agent/host/terminal/terminalSession';
+import {
+	createPrepareTerminalLaunch,
+	type PrepareTerminalLaunch,
+} from '../../agent/host/terminal/prepareTerminalLaunch';
+import type { PtyAdapter } from '../../agent/host/terminal/ptyAdapter';
 import { ID_MAX_LENGTH, ID_PATTERN } from '../../agent/protocol/limits';
+import type { HostToWebviewMessage } from '../../agent/protocol/messages';
+import type {
+	ValidatedWorkspaceFsPath,
+	ValidatedWorkspaceRoot,
+} from '../../agent/host/workspace/types';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
 
-/** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =
 	(<Value>() => Value extends Left ? 1 : 2) extends
 	(<Value>() => Value extends Right ? 1 : 2)
 		? true
 		: false;
 
-/** 전달된 타입 조건이 참인 경우에만 컴파일되는 테스트 전용 단언이다. */
 type Assert<Condition extends true> = Condition;
 
-/** createSession에는 Webview sessionId를 받을 수 있는 인자가 없음을 검증한다. */
-type CreateSessionAcceptsOnlyTabId = Assert<Equal<
-	Parameters<TerminalHost['createSession']>,
-	[tabId: string]
+type StartSessionAcceptsOnlyReadyDimensions = Assert<Equal<
+	Parameters<TerminalHost['startSession']>,
+	[tabId: string, cols: number, rows: number]
 >>;
 
-function assertRegistrationError(
-	action: () => void,
-	code: TerminalHostRegistrationErrorCode,
-): void {
-	assert.throws(action, (error: unknown) => {
-		assert.ok(error instanceof TerminalHostRegistrationError);
-		assert.strictEqual(error.code, code);
-		return true;
-	});
+const root = {
+	scheme: 'file',
+	fsPath: '/validated/workspace' as ValidatedWorkspaceFsPath,
+} as ValidatedWorkspaceRoot;
+
+const launchPolicy: ShellLaunchPolicy = {
+	executable: '/host/selected/shell',
+	args: ['--host-owned'],
+	cwd: root.fsPath,
+	env: { CRISPY_HOST_ENV: 'present' },
+};
+
+const successfulPrepare: PrepareTerminalLaunch = async () => ({
+	ok: true,
+	policy: launchPolicy,
+});
+
+function createHost(
+	options: Omit<TerminalHostOptions, 'emitMessage'>,
+): {
+	readonly host: TerminalHost;
+	readonly messages: HostToWebviewMessage[];
+} {
+	const messages: HostToWebviewMessage[] = [];
+	return {
+		host: new TerminalHost({
+			...options,
+			emitMessage: (message) => messages.push(message),
+		}),
+		messages,
+	};
 }
 
-suite('TerminalHost session registry', () => {
-	test('Host generator로 protocol 규칙을 만족하는 sessionId를 생성한다', () => {
-		const first = generateTerminalSessionId();
-		const second = generateTerminalSessionId();
+suite('TerminalHost public session behavior', () => {
+	test('Host가 protocol 규칙을 만족하는 고유 sessionId를 생성한다', async () => {
+		const { host, messages } = createHost({
+			ptyAdapter: new FakePtyAdapter(),
+			prepareLaunch: successfulPrepare,
+		});
 
-		assert.match(first, ID_PATTERN);
-		assert.ok(first.length <= ID_MAX_LENGTH);
-		assert.notStrictEqual(first, second);
+		await host.startSession('tab-generated-one', 80, 24);
+		await host.startSession('tab-generated-two', 80, 24);
+
+		const started = messages.filter((message) =>
+			message.type === 'terminal.started'
+		);
+		assert.strictEqual(started.length, 2);
+		assert.match(started[0].sessionId, ID_PATTERN);
+		assert.ok(started[0].sessionId.length <= ID_MAX_LENGTH);
+		assert.notStrictEqual(started[0].sessionId, started[1].sessionId);
 	});
 
-	test('주입한 Host generator만 사용하고 Webview 추가 값을 sessionId로 사용하지 않는다', () => {
+	test('Webview 추가 값을 무시하고 Host가 생성한 sessionId만 전달한다', async () => {
 		const adapter = new FakePtyAdapter();
-		const host = new TerminalHost({
+		const { host, messages } = createHost({
 			ptyAdapter: adapter,
-			sessionIdGenerator: () => 'session-host-generated',
+			prepareLaunch: successfulPrepare,
 		});
-		const createWithUntrustedExtra = host.createSession.bind(host) as unknown as (
+		const startWithUntrustedExtra = host.startSession.bind(host) as unknown as (
 			tabId: string,
+			cols: number,
+			rows: number,
 			webviewSessionId: string,
-		) => TerminalSession;
+		) => Promise<void>;
 
-		const session = createWithUntrustedExtra(
+		await startWithUntrustedExtra(
 			'tab-one',
+			80,
+			24,
 			'session-from-webview',
 		);
 
-		assert.strictEqual(session.sessionId, 'session-host-generated');
+		const session = host.getActiveSession('tab-one');
+		assert.ok(session);
+		assert.match(session.sessionId, ID_PATTERN);
 		assert.notStrictEqual(session.sessionId, 'session-from-webview');
-		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.strictEqual(host.getSession('session-from-webview'), undefined);
+		assert.deepStrictEqual(messages[1], {
+			type: 'terminal.started',
+			tabId: 'tab-one',
+			sessionId: session.sessionId,
+		});
+		assert.strictEqual(adapter.spawnCalls.length, 1);
 	});
 
-	test('한 tab에 현재 session을 하나만 등록한다', () => {
-		let generatorCalls = 0;
-		const host = new TerminalHost({
+	test('sessionId와 tabId 조회 및 양방향 ownership을 제공한다', async () => {
+		const { host } = createHost({
 			ptyAdapter: new FakePtyAdapter(),
-			sessionIdGenerator: () => {
-				generatorCalls += 1;
-				return `session-${generatorCalls}`;
-			},
+			prepareLaunch: successfulPrepare,
 		});
-		const first = host.createSession('tab-one');
 
-		assertRegistrationError(
-			() => host.createSession('tab-one'),
-			'tab_already_has_session',
-		);
-		assert.strictEqual(generatorCalls, 1);
-		assert.strictEqual(host.getActiveSession('tab-one'), first);
-	});
+		await host.startSession('tab-one', 80, 24);
+		await host.startSession('tab-two', 80, 24);
 
-	test('sessionId와 tabId lookup 및 양방향 ownership을 제공한다', () => {
-		const generatedIds = ['session-one', 'session-two'];
-		const host = new TerminalHost({
-			ptyAdapter: new FakePtyAdapter(),
-			sessionIdGenerator: () => generatedIds.shift() ?? 'session-unused',
-		});
-		const first = host.createSession('tab-one');
-		const second = host.createSession('tab-two');
-
-		assert.strictEqual(host.getSession('session-one'), first);
-		assert.strictEqual(host.getSession('session-two'), second);
-		assert.strictEqual(host.getSession('session-unknown'), undefined);
+		const first = host.getActiveSession('tab-one');
+		const second = host.getActiveSession('tab-two');
+		assert.ok(first);
+		assert.ok(second);
+		assert.strictEqual(host.getSession(first.sessionId), first);
+		assert.strictEqual(host.getSession(second.sessionId), second);
 		assert.strictEqual(host.getActiveSession('tab-one'), first);
 		assert.strictEqual(host.getActiveSession('tab-two'), second);
+		assert.strictEqual(host.getSession('session-unknown'), undefined);
 		assert.strictEqual(host.getActiveSession('tab-unknown'), undefined);
-		assert.strictEqual(host.ownsSession('tab-one', 'session-one'), true);
-		assert.strictEqual(host.ownsSession('tab-two', 'session-two'), true);
-		assert.strictEqual(host.ownsSession('tab-one', 'session-two'), false);
-		assert.strictEqual(host.ownsSession('tab-two', 'session-one'), false);
+		assert.strictEqual(host.ownsSession('tab-one', first.sessionId), true);
+		assert.strictEqual(host.ownsSession('tab-two', second.sessionId), true);
+		assert.strictEqual(host.ownsSession('tab-one', second.sessionId), false);
+		assert.strictEqual(host.ownsSession('tab-two', first.sessionId), false);
 	});
 
-	test('sessionId collision 시 기존 session과 tab mapping을 덮어쓰지 않는다', () => {
-		const host = new TerminalHost({
-			ptyAdapter: new FakePtyAdapter(),
-			sessionIdGenerator: () => 'session-collision',
-		});
-		const existing = host.createSession('tab-existing');
-
-		assertRegistrationError(
-			() => host.createSession('tab-new'),
-			'session_id_collision',
-		);
-		assert.strictEqual(host.getSession('session-collision'), existing);
-		assert.strictEqual(host.getActiveSession('tab-existing'), existing);
-		assert.strictEqual(host.getActiveSession('tab-new'), undefined);
-		assert.strictEqual(
-			host.ownsSession('tab-existing', 'session-collision'),
-			true,
-		);
-	});
-
-	test('잘못 생성된 sessionId를 Map에 등록하지 않는다', () => {
-		for (const generatedId of ['', 'invalid id', `s${'x'.repeat(ID_MAX_LENGTH)}`]) {
-			const host = new TerminalHost({
-				ptyAdapter: new FakePtyAdapter(),
-				sessionIdGenerator: () => generatedId,
-			});
-
-			assertRegistrationError(
-				() => host.createSession('tab-invalid-id'),
-				'invalid_generated_session_id',
-			);
-			assert.strictEqual(host.getActiveSession('tab-invalid-id'), undefined);
-		}
-	});
-
-	test('session을 두 Map에서 제거하고 같은 tab에 새 session을 등록한다', () => {
-		const generatedIds = ['session-before-remove', 'session-after-remove'];
+	test('session 제거 후 같은 tab에서 새 Host session을 시작한다', async () => {
 		const adapter = new FakePtyAdapter();
-		const host = new TerminalHost({
+		const { host } = createHost({
 			ptyAdapter: adapter,
-			sessionIdGenerator: () => generatedIds.shift() ?? 'session-unused',
+			prepareLaunch: successfulPrepare,
 		});
-		const before = host.createSession('tab-reusable');
 
+		await host.startSession('tab-reusable', 80, 24);
+		const before = host.getActiveSession('tab-reusable');
+		assert.ok(before);
 		assert.strictEqual(host.removeSession(before.sessionId), before);
 		assert.strictEqual(host.removeSession(before.sessionId), undefined);
-		assert.strictEqual(host.getSession(before.sessionId), undefined);
-		assert.strictEqual(host.getActiveSession('tab-reusable'), undefined);
-		assert.strictEqual(
-			host.ownsSession('tab-reusable', before.sessionId),
-			false,
-		);
 
-		const after = host.createSession('tab-reusable');
-		assert.strictEqual(after.sessionId, 'session-after-remove');
-		assert.strictEqual(host.getActiveSession('tab-reusable'), after);
-		assert.strictEqual(adapter.spawnCalls.length, 0);
+		await host.startSession('tab-reusable', 100, 30);
+		const after = host.getActiveSession('tab-reusable');
+		assert.ok(after);
+		assert.notStrictEqual(after.sessionId, before.sessionId);
+		assert.strictEqual(adapter.spawnCalls.length, 2);
 	});
 });
 
+suite('TerminalHost start orchestration', () => {
+	test('workspace와 Shell policy 결과로 PTY를 시작하고 Host sessionId를 전달한다', async () => {
+		let workspaceCalls = 0;
+		let shellCalls = 0;
+		const adapter = new FakePtyAdapter(9201);
+		const prepare = createPrepareTerminalLaunch({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return { ok: true, root };
+			},
+			shellResolver: async (platform, env, workspaceRoot) => {
+				shellCalls += 1;
+				assert.strictEqual(platform, 'linux');
+				assert.deepStrictEqual(env, { HOST_ENV: 'snapshot' });
+				assert.strictEqual(workspaceRoot, root);
+				return { ok: true, policy: launchPolicy };
+			},
+			readPlatform: () => 'linux',
+			readEnvironment: () => ({ HOST_ENV: 'snapshot' }),
+		});
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: prepare,
+		});
+
+		await host.startSession('tab-start-success', 120, 36);
+
+		const session = host.getActiveSession('tab-start-success');
+		assert.ok(session);
+		assert.strictEqual(workspaceCalls, 1);
+		assert.strictEqual(shellCalls, 1);
+		assert.deepStrictEqual(adapter.spawnCalls, [{
+			...launchPolicy,
+			args: ['--host-owned'],
+			env: { CRISPY_HOST_ENV: 'present' },
+			cols: 120,
+			rows: 36,
+		}]);
+		assert.deepStrictEqual(session.state, { kind: 'running', pid: 9201 });
+		assert.deepStrictEqual(messages, [
+			{ type: 'terminal.starting', tabId: 'tab-start-success' },
+			{
+				type: 'terminal.started',
+				tabId: 'tab-start-success',
+				sessionId: session.sessionId,
+			},
+		]);
+	});
+
+	test('정책 준비 중 starting 상태를 유지하고 같은 tab의 중복 start를 거부한다', async () => {
+		let finishPreparation!: (
+			value: Awaited<ReturnType<PrepareTerminalLaunch>>,
+		) => void;
+		const prepare: PrepareTerminalLaunch = () => new Promise((resolve) => {
+			finishPreparation = resolve;
+		});
+		const adapter = new FakePtyAdapter(9202);
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: prepare,
+		});
+
+		const firstStart = host.startSession('tab-pending', 80, 24);
+		const pendingSession = host.getActiveSession('tab-pending');
+		assert.ok(pendingSession);
+		assert.deepStrictEqual(pendingSession.state, { kind: 'starting' });
+
+		await host.startSession('tab-pending', 100, 30);
+
+		assert.strictEqual(host.getActiveSession('tab-pending'), pendingSession);
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(pendingSession.state, { kind: 'starting' });
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-pending',
+			sessionId: pendingSession.sessionId,
+			code: 'invalid_session_state',
+			message: 'Terminal tab already has an active session.',
+			canRestart: false,
+		});
+
+		finishPreparation({ ok: true, policy: launchPolicy });
+		await firstStart;
+		assert.strictEqual(pendingSession.state.kind, 'running');
+	});
+
+	test('workspace policy 실패를 starting에서 안전한 error 상태로 전환한다', async () => {
+		let workspaceCalls = 0;
+		let shellCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: createPrepareTerminalLaunch({
+				workspaceResolver: () => {
+					workspaceCalls += 1;
+					return { ok: false, code: 'workspace_untrusted' };
+				},
+				shellResolver: async () => {
+					shellCalls += 1;
+					return { ok: true, policy: launchPolicy };
+				},
+				readPlatform: () => 'darwin',
+				readEnvironment: () => ({}),
+			}),
+		});
+
+		await host.startSession('tab-workspace-failure', 80, 24);
+
+		assert.strictEqual(workspaceCalls, 1);
+		assert.strictEqual(shellCalls, 0);
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(host.getActiveSession('tab-workspace-failure')?.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(messages.at(-1)?.type, 'terminal.error');
+	});
+
+	test('Shell policy 실패를 starting에서 안전한 error 상태로 전환한다', async () => {
+		let shellCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: createPrepareTerminalLaunch({
+				workspaceResolver: () => ({ ok: true, root }),
+				shellResolver: async () => {
+					shellCalls += 1;
+					return {
+						ok: false,
+						error: { code: 'shell_not_executable' },
+					};
+				},
+				readPlatform: () => 'linux',
+				readEnvironment: () => ({}),
+			}),
+		});
+
+		await host.startSession('tab-shell-failure', 80, 24);
+
+		assert.strictEqual(shellCalls, 1);
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(host.getActiveSession('tab-shell-failure')?.state, {
+			kind: 'error',
+			code: 'shell_unavailable',
+		});
+		const error = messages.at(-1);
+		assert.strictEqual(
+			error?.type === 'terminal.error' ? error.code : undefined,
+			'shell_unavailable',
+		);
+	});
+
+	test('PTY spawn 원본 예외와 실행 계약을 노출하지 않고 start_failed로 변환한다', async () => {
+		const secrets = [
+			'/private/workspace/secret',
+			'/private/executable/secret',
+			'--secret-argument',
+			'SECRET_TOKEN=value',
+			'raw native exception',
+		];
+		const unsafePolicy: ShellLaunchPolicy = {
+			executable: secrets[1],
+			args: [secrets[2]],
+			cwd: secrets[0],
+			env: { SECRET_TOKEN: secrets[3] },
+		};
+		const adapter: PtyAdapter = {
+			spawn: () => {
+				throw new Error(secrets[4]);
+			},
+		};
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: async () => ({ ok: true, policy: unsafePolicy }),
+		});
+
+		await host.startSession('tab-spawn-failure', 80, 24);
+
+		const failedSession = host.getActiveSession('tab-spawn-failure');
+		assert.ok(failedSession);
+		assert.deepStrictEqual(failedSession.state, {
+			kind: 'error',
+			code: 'start_failed',
+		});
+		assert.strictEqual(messages.length, 2);
+		const serialized = JSON.stringify(messages);
+		for (const secret of secrets) {
+			assert.strictEqual(serialized.includes(secret), false);
+		}
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-spawn-failure',
+			sessionId: failedSession.sessionId,
+			code: 'start_failed',
+			message: 'Terminal process could not be started.',
+			canRestart: true,
+		});
+	});
+});

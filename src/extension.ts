@@ -3,6 +3,8 @@ import {
 	parseWebviewToHostMessage,
 	type WebviewToHostMessage,
 } from './agent/protocol';
+import { nodePtyAdapter } from './agent/host/terminal/nodePtyAdapter';
+import { TerminalHost } from './agent/host/terminal/terminalHost';
 import type { ExtensionToWebviewMessage } from './messages';
 import {
 	getPanelLayoutStateFromMessage,
@@ -12,6 +14,11 @@ import {
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let lastLayoutState: PanelLayoutState | undefined;
+
+/** 검증된 terminal.ready를 실제 TerminalHost 시작 경계로 전달하는 최소 계약이다. */
+export interface TerminalSessionStarter {
+	startSession(tabId: string, cols: number, rows: number): Promise<unknown>;
+}
 
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
@@ -39,6 +46,14 @@ export function activate(context: vscode.ExtensionContext) {
 			},
 		);
 		currentPanel = panel;
+		const terminalHost = new TerminalHost({
+			ptyAdapter: nodePtyAdapter,
+			emitMessage: (message) => {
+				void Promise.resolve(panel.webview.postMessage(message)).catch(
+					() => undefined,
+				);
+			},
+		});
 
 		const stylesUri = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(webviewRoot, 'webview.css'),
@@ -58,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			handleWebviewMessage(panel.webview, message);
+			handleWebviewMessage(panel.webview, message, terminalHost);
 		});
 
 		panel.webview.html = getWebviewHtml(
@@ -92,6 +107,7 @@ export function activate(context: vscode.ExtensionContext) {
 export function handleWebviewMessage(
 	webview: Pick<vscode.Webview, 'postMessage'>,
 	message: unknown,
+	terminalHost?: TerminalSessionStarter,
 ): Thenable<boolean> | undefined {
 	const parseResult = parseWebviewToHostMessage(message);
 	if (!parseResult.ok) {
@@ -106,20 +122,31 @@ export function handleWebviewMessage(
 				type: 'extension.ready',
 			} satisfies ExtensionToWebviewMessage);
 		default:
-			return handleTerminalMessage(parseResult.value);
+			return handleTerminalMessage(parseResult.value, terminalHost);
 	}
 }
 
 /**
  * 구조 검증을 통과한 terminal 메시지의 향후 Host dispatch 경계다.
- * PTY, workspace 및 session 정책이 구현되기 전에는 어떤 실행도 시작하지 않는다.
+ * 이번 단계에서는 terminal.ready만 start 경계로 연결하고 나머지 lifecycle 메시지는
+ * 후속 input/resize/restart 단계 전까지 실행하지 않는다.
  *
  * @param message 허용된 type과 필드만 포함하는 terminal protocol 메시지
- * @returns 현재 단계에서는 의도적으로 아무 응답도 전송하지 않음
+ * @param terminalHost 검증된 ready 값으로 session을 시작할 Host 경계
+ * @returns 메시지 전송은 TerminalHost emitter가 담당하므로 직접 응답하지 않음
  */
 function handleTerminalMessage(
-	_message: WebviewToHostMessage,
+	message: WebviewToHostMessage,
+	terminalHost: TerminalSessionStarter | undefined,
 ): undefined {
+	if (message.type === 'terminal.ready' && terminalHost !== undefined) {
+		void terminalHost.startSession(
+			message.tabId,
+			message.cols,
+			message.rows,
+		).catch(() => undefined);
+	}
+
 	return undefined;
 }
 
