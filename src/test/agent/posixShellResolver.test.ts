@@ -1,19 +1,10 @@
 import * as assert from 'assert';
-import {
-	resolveDarwinShellLaunchPolicy,
-	resolveLinuxShellLaunchPolicy,
-} from '../../agent/host/shell/posixShellResolver';
-import type { ShellLaunchPolicyResult } from '../../agent/host/shell/types';
+import { resolvePosixShellLaunchPolicy } from '../../agent/host/shell/posixShellResolver';
 import type {
 	ValidatedWorkspaceFsPath,
 	ValidatedWorkspaceRoot,
 } from '../../agent/host/workspace/types';
 import { parseWebviewToHostMessage } from '../../agent/protocol/validator';
-
-type PosixShellResolver = (
-	env: NodeJS.ProcessEnv,
-	workspaceRoot: ValidatedWorkspaceRoot,
-) => ShellLaunchPolicyResult;
 
 const workspaceFsPath = '/validated/workspace' as ValidatedWorkspaceFsPath;
 const workspaceRoot = {
@@ -24,21 +15,18 @@ const workspaceRoot = {
 const platformCases = [
 	{
 		platform: 'darwin',
-		resolver: resolveDarwinShellLaunchPolicy,
 		shell: '/opt/host/bin/zsh',
 	},
 	{
 		platform: 'linux',
-		resolver: resolveLinuxShellLaunchPolicy,
 		shell: '/opt/host/bin/fish',
 	},
 ] as const satisfies readonly {
 	readonly platform: 'darwin' | 'linux';
-	readonly resolver: PosixShellResolver;
 	readonly shell: string;
 }[];
 
-suite('darwin/linux Shell resolver', () => {
+suite('POSIX Shell resolver', () => {
 	for (const testCase of platformCases) {
 		suite(testCase.platform, () => {
 			test('주입된 SHELL과 검증된 workspace root를 그대로 선택한다', () => {
@@ -47,7 +35,7 @@ suite('darwin/linux Shell resolver', () => {
 					PATH: '/host/controlled/path',
 					CRISPY_TEST_VALUE: 'preserved',
 				};
-				const result = testCase.resolver(env, workspaceRoot);
+				const result = resolvePosixShellLaunchPolicy(env, workspaceRoot);
 
 				assert.strictEqual(result.ok, true);
 				if (result.ok) {
@@ -58,7 +46,7 @@ suite('darwin/linux Shell resolver', () => {
 			});
 
 			test('args는 비어 있고 login shell 인자를 추가하지 않는다', () => {
-				const result = testCase.resolver(
+				const result = resolvePosixShellLaunchPolicy(
 					{ SHELL: testCase.shell },
 					workspaceRoot,
 				);
@@ -74,21 +62,24 @@ suite('darwin/linux Shell resolver', () => {
 					{ PATH: '/bin:/usr/bin' },
 					{ SHELL: '', PATH: '/bin:/usr/bin' },
 				] satisfies readonly NodeJS.ProcessEnv[]) {
-					assert.deepStrictEqual(testCase.resolver(env, workspaceRoot), {
-						ok: false,
-						error: { code: 'shell_environment_missing' },
-					});
+					assert.deepStrictEqual(
+						resolvePosixShellLaunchPolicy(env, workspaceRoot),
+						{
+							ok: false,
+							error: { code: 'shell_environment_missing' },
+						},
+					);
 				}
 			});
 
 			test('누락되거나 잘못된 SHELL을 다른 실행 파일로 fallback하지 않는다', () => {
-				const missing = testCase.resolver({
+				const missing = resolvePosixShellLaunchPolicy({
 					PATH: '/bin:/usr/bin',
 				}, workspaceRoot);
 				assert.strictEqual(missing.ok, false);
 
 				const configuredPath = '/definitely/missing/custom-shell';
-				const unvalidated = testCase.resolver({
+				const unvalidated = resolvePosixShellLaunchPolicy({
 					SHELL: configuredPath,
 					PATH: '/bin:/usr/bin',
 				}, workspaceRoot);
@@ -106,7 +97,7 @@ suite('darwin/linux Shell resolver', () => {
 					PATH: '/host/controlled/path',
 				};
 				const before = { ...env };
-				const result = testCase.resolver(env, workspaceRoot);
+				const result = resolvePosixShellLaunchPolicy(env, workspaceRoot);
 
 				assert.deepStrictEqual(env, before);
 				assert.strictEqual(result.ok, true);
@@ -119,7 +110,7 @@ suite('darwin/linux Shell resolver', () => {
 	}
 
 	test('반환된 실행 계약을 Webview 요청으로 보내면 기존 validator가 거부한다', () => {
-		const result = resolveDarwinShellLaunchPolicy({
+		const result = resolvePosixShellLaunchPolicy({
 			SHELL: '/opt/host/bin/zsh',
 		}, workspaceRoot);
 		assert.strictEqual(result.ok, true);

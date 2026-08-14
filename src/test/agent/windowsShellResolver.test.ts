@@ -1,8 +1,5 @@
 import * as assert from 'assert';
-import {
-	resolveDarwinShellLaunchPolicy,
-	resolveLinuxShellLaunchPolicy,
-} from '../../agent/host/shell/posixShellResolver';
+import { resolvePosixShellLaunchPolicy } from '../../agent/host/shell/posixShellResolver';
 import { resolveWindowsShellLaunchPolicy } from '../../agent/host/shell/windowsShellResolver';
 import type {
 	ValidatedWorkspaceFsPath,
@@ -120,14 +117,10 @@ suite('Windows Shell resolver', () => {
 		}
 	});
 
-	test('Windows와 macOS/Linux 환경 선택 로직을 서로 섞지 않는다', () => {
+	test('Windows와 POSIX 환경 선택 로직을 서로 섞지 않는다', () => {
 		const windowsOnlyEnv = { SystemRoot: 'C:\\Windows' };
 		assert.strictEqual(
-			resolveDarwinShellLaunchPolicy(windowsOnlyEnv, workspaceRoot).ok,
-			false,
-		);
-		assert.strictEqual(
-			resolveLinuxShellLaunchPolicy(windowsOnlyEnv, workspaceRoot).ok,
+			resolvePosixShellLaunchPolicy(windowsOnlyEnv, workspaceRoot).ok,
 			false,
 		);
 
