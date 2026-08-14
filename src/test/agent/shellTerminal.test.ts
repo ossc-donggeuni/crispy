@@ -7,6 +7,8 @@ import {
 	TERMINAL_INITIAL_FIT_MAX_FRAMES,
 	TERMINAL_INITIALIZATION_ERROR_MESSAGE,
 	type ShellTerminalDependencies,
+	type TerminalOverlayState,
+	type TerminalOverlayView,
 } from '../../agent/webview/shellTerminal';
 
 const TAB_ID = 'tab-webview-terminal';
@@ -513,6 +515,290 @@ suite('Shell Terminal Webview', () => {
 		assert.deepStrictEqual(terminal.writes, []);
 	});
 
+	test('Shell 종료 시 buffer를 유지한 채 exit code 덮개를 표시한다', () => {
+		const terminal = new FakeTerminal();
+		const overlayView = new FakeOverlayView();
+		const elements = createElements();
+		const controller = initializeShellTerminal(
+			elements.surface,
+			elements.mount,
+			elements.overlay,
+			() => undefined,
+			createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: 'kept output',
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 3,
+			signal: 15,
+		});
+
+		assert.deepStrictEqual(overlayView.shownStates, [{
+			kind: 'exited',
+			exitCode: 3,
+			signal: 15,
+		}]);
+		assert.strictEqual(terminal.resetCalls, 0);
+		assert.deepStrictEqual(terminal.writes, ['kept output']);
+		assert.strictEqual(elements.surfaceElement.dataset.state, 'exited');
+	});
+
+	test('시작 실패 덮개는 Host의 안전한 메시지만 표시한다', () => {
+		const overlayView = new FakeOverlayView();
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			createDependencies(
+				new FakeTerminal(),
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId: TAB_ID,
+			sessionId: 'session-failed-start',
+			code: 'shell_unavailable',
+			message: 'Terminal launch policy could not be prepared.',
+			canRestart: true,
+		});
+
+		assert.deepStrictEqual(overlayView.shownStates, [{
+			kind: 'error',
+			message: 'Terminal launch policy could not be prepared.',
+			canRestart: true,
+		}]);
+	});
+
+	test('재시작 버튼은 tabId와 sessionId만 담은 restart를 한 번 보낸다', () => {
+		const messages: unknown[] = [];
+		const overlayView = new FakeOverlayView();
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				new FakeTerminal(),
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 0,
+		});
+		overlayView.clickRestart();
+		overlayView.clickRestart();
+
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.restart',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		}]);
+	});
+
+	test('새 PTY가 시작된 뒤에만 buffer를 reset하고 덮개를 제거한다', () => {
+		const terminal = new FakeTerminal();
+		const overlayView = new FakeOverlayView();
+		const elements = createElements();
+		const controller = initializeShellTerminal(
+			elements.surface,
+			elements.mount,
+			elements.overlay,
+			() => undefined,
+			createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		assert.strictEqual(terminal.resetCalls, 0, '최초 시작은 buffer를 지우지 않는다.');
+
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 0,
+		});
+		overlayView.clickRestart();
+		assert.strictEqual(terminal.resetCalls, 0, 'restart 요청만으로는 지우지 않는다.');
+		assert.strictEqual(overlayView.hideCalls, 0);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: 'session-restarted',
+		});
+
+		assert.strictEqual(terminal.resetCalls, 1);
+		assert.strictEqual(overlayView.hideCalls, 1);
+		assert.strictEqual(elements.surfaceElement.dataset.state, 'ready');
+	});
+
+	test('재시작 시작이 실패하면 buffer를 유지한 채 오류 덮개를 다시 표시한다', () => {
+		const terminal = new FakeTerminal();
+		const overlayView = new FakeOverlayView();
+		const messages: unknown[] = [];
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: 'kept output',
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 1,
+		});
+		overlayView.clickRestart();
+		controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId: TAB_ID,
+			sessionId: 'session-restart-failed',
+			code: 'start_failed',
+			message: 'Terminal process could not be started.',
+			canRestart: true,
+		});
+
+		assert.strictEqual(terminal.resetCalls, 0);
+		assert.deepStrictEqual(terminal.writes, ['kept output']);
+		assert.strictEqual(overlayView.hideCalls, 0);
+		assert.deepStrictEqual(overlayView.shownStates[1], {
+			kind: 'error',
+			message: 'Terminal process could not be started.',
+			canRestart: true,
+		});
+
+		overlayView.clickRestart();
+		assert.deepStrictEqual(messages[1], {
+			type: 'terminal.restart',
+			tabId: TAB_ID,
+			sessionId: 'session-restart-failed',
+		});
+	});
+
+	test('재시작 뒤 이전 session의 늦은 output, exit 및 error를 무시한다', () => {
+		const terminal = new FakeTerminal();
+		const overlayView = new FakeOverlayView();
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 0,
+		});
+		overlayView.clickRestart();
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: 'session-restarted',
+		});
+
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: 'late output',
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 9,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			code: 'internal_error',
+			message: 'Terminal process operation failed.',
+			canRestart: true,
+		});
+
+		assert.deepStrictEqual(terminal.writes, []);
+		assert.strictEqual(overlayView.shownStates.length, 1);
+		assert.strictEqual(overlayView.hideCalls, 1);
+	});
+
 	test('초기화 예외 원문을 노출하지 않고 Terminal 영역만 error 상태로 바꾼다', () => {
 		const terminal = new FakeTerminal();
 		const elements = createElements();
@@ -560,6 +846,7 @@ class FakeTerminal {
 	openedContainer: HTMLElement | undefined;
 	disposeCalls = 0;
 	focusCalls = 0;
+	resetCalls = 0;
 	private dataListener: ((data: string) => void) | undefined;
 
 	constructor(private readonly events: string[] = []) {}
@@ -581,6 +868,10 @@ class FakeTerminal {
 		this.writes.push(data);
 	}
 
+	reset(): void {
+		this.resetCalls += 1;
+	}
+
 	onData(listener: (data: string) => void): unknown {
 		this.events.push('onData');
 		this.dataListener = listener;
@@ -593,6 +884,30 @@ class FakeTerminal {
 
 	emitData(data: string): void {
 		this.dataListener?.(data);
+	}
+}
+
+/** 덮개 DOM 대신 표시 상태와 재시작 클릭만 기록하는 테스트 대역이다. */
+class FakeOverlayView implements TerminalOverlayView {
+	readonly shownStates: TerminalOverlayState[] = [];
+	hideCalls = 0;
+	private requestRestart: (() => void) | undefined;
+
+	attach(_overlay: HTMLElement, onRestart: () => void): TerminalOverlayView {
+		this.requestRestart = onRestart;
+		return this;
+	}
+
+	show(state: TerminalOverlayState): void {
+		this.shownStates.push(state);
+	}
+
+	hide(): void {
+		this.hideCalls += 1;
+	}
+
+	clickRestart(): void {
+		this.requestRestart?.();
 	}
 }
 
@@ -658,6 +973,7 @@ function createDependencies(
 	events: string[] = [],
 	animationFrames = new FakeAnimationFrames(),
 	environment = new FakeTerminalEnvironment(),
+	overlayView = new FakeOverlayView(),
 ): ShellTerminalDependencies {
 	return {
 		createTerminal: () => {
@@ -669,6 +985,8 @@ function createDependencies(
 			return fitAddon;
 		},
 		createTabId: () => TAB_ID,
+		createOverlayView: (overlay, onRestart) =>
+			overlayView.attach(overlay, onRestart),
 		requestAnimationFrame: (callback) => animationFrames.request(callback),
 		createResizeObserver: (callback) => environment.createResizeObserver(callback),
 		addWindowResizeListener: (listener) => environment.addWindowResizeListener(listener),

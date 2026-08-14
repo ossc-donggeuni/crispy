@@ -53,7 +53,13 @@ const START_ERROR_MESSAGES = Object.freeze({
 	preparation: 'Terminal launch policy could not be prepared.',
 	spawn: 'Terminal process could not be started.',
 	operation: 'Terminal process operation failed.',
+	restartUnknown: 'Terminal session could not be found.',
+	restartInProgress: 'Terminal restart is already in progress.',
+	restartUnavailable: 'Terminal session can no longer be restarted.',
 });
+
+/** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
+const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
 
 /**
  * 탭별 현재 세션 저장소와 Host 소유 PTY 시작·입력·크기 변경·출력·종료 경로를 관리한다.
@@ -65,6 +71,12 @@ export class TerminalHost {
 
 	/** 각 Webview 탭을 현재 `sessionId` 하나에 연결하는 소유권 저장소다. */
 	private readonly activeSessionByTab = new Map<TabId, SessionId>();
+
+	/** 재시작 PTY를 이전과 같은 크기로 생성하기 위한 탭별 마지막 terminal 크기다. */
+	private readonly lastDimensionsByTab = new Map<
+		TabId,
+		{ readonly cols: number; readonly rows: number }
+	>();
 
 	/** 생성되는 모든 `TerminalSession`에 전달할 PTY 어댑터다. */
 	private readonly ptyAdapter: PtyAdapter;
@@ -178,6 +190,7 @@ export class TerminalHost {
 			return;
 		}
 
+		this.lastDimensionsByTab.set(tabId, { cols, rows });
 		try {
 			session.start(preparation.policy, cols, rows);
 		} catch {
@@ -238,10 +251,70 @@ export class TerminalHost {
 			return;
 		}
 
+		this.lastDimensionsByTab.set(message.tabId, {
+			cols: message.cols,
+			rows: message.rows,
+		});
 		this.performPtyOperation(
 			session,
 			() => session.resize(message.cols, message.rows),
 		);
+	}
+
+	/**
+	 * 검증된 `terminal.restart`로 같은 탭의 세션을 새 `sessionId`로 다시 시작한다.
+	 * 요청은 소유 관계만 지정하므로 실행 계약과 terminal 크기는 Host가 다시 결정하며,
+	 * 시작 흐름은 workspace/Shell 정책 재검증을 포함한 `startSession`을 그대로 재사용한다.
+	 *
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 * @param sessionId 재시작 대상으로 지목된 Host 소유 세션 식별자
+	 * @returns 정리와 재시작 흐름이 끝나면 완료되는 Promise
+	 */
+	async restartSession(tabId: TabId, sessionId: SessionId): Promise<void> {
+		const session = this.sessionsById.get(sessionId);
+		if (session === undefined || !this.ownsSession(tabId, sessionId)) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'session_not_found',
+				START_ERROR_MESSAGES.restartUnknown,
+				false,
+			);
+			return;
+		}
+
+		if (
+			session.state.kind === 'starting'
+			|| session.state.kind === 'running'
+			|| session.state.kind === 'stopping'
+		) {
+			this.failWithoutTransition(
+				tabId,
+				session,
+				'invalid_session_state',
+				START_ERROR_MESSAGES.restartInProgress,
+				false,
+			);
+			return;
+		}
+
+		if (session.state.kind === 'disposed') {
+			this.failWithoutTransition(
+				tabId,
+				session,
+				'invalid_session_state',
+				START_ERROR_MESSAGES.restartUnavailable,
+				false,
+			);
+			return;
+		}
+
+		this.disposeSessionProcess(session);
+		this.removeSession(sessionId);
+
+		const dimensions = this.lastDimensionsByTab.get(tabId)
+			?? RESTART_FALLBACK_DIMENSIONS;
+		await this.startSession(tabId, dimensions.cols, dimensions.rows);
 	}
 
 	/**
@@ -407,6 +480,26 @@ export class TerminalHost {
 	}
 
 	/**
+	 * 재시작 전에 이전 세션의 PTY와 구독을 정리하고 최종 상태로 전이한다.
+	 * 정리 실패는 원본 예외를 노출하지 않고 새 세션 시작 흐름을 막지 않는다.
+	 *
+	 * @param session 새 세션으로 교체하기 전에 정리할 이전 세션
+	 */
+	private disposeSessionProcess(session: TerminalSession): void {
+		try {
+			session.disposeProcess();
+		} catch {
+			/* PTY 정리 실패가 새 세션 생성을 막지 않게 한다. */
+		}
+
+		try {
+			session.markDisposed();
+		} catch {
+			/* 상태 전이 실패도 재시작 흐름 밖으로 전파하지 않는다. */
+		}
+	}
+
+	/**
 	 * PTY 동작 실패를 원본 예외 노출 없이 안전한 세션 오류로 전환한다.
 	 *
 	 * @param session PTY 동작을 수행할 실행 중 세션
@@ -481,7 +574,11 @@ export class TerminalHost {
 	private failWithoutTransition(
 		tabId: TabId,
 		session: TerminalSession | null,
-		code: 'invalid_session_state' | 'start_failed' | 'internal_error',
+		code:
+			| 'invalid_session_state'
+			| 'session_not_found'
+			| 'start_failed'
+			| 'internal_error',
 		message: string,
 		canRestart: boolean,
 	): void {

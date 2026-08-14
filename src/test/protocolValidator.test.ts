@@ -66,8 +66,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 					type: 'terminal.restart',
 					tabId: TAB_ID,
 					sessionId: SESSION_ID,
-					cols: 80,
-					rows: 24,
 				},
 				{ type: 'terminal.visible', tabId: TAB_ID, visible: false },
 			];

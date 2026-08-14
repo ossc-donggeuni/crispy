@@ -349,6 +349,25 @@ export class TerminalSession {
 		}
 	}
 
+	/**
+	 * 재시작 전 정리 단계에서 session이 소유한 PTY와 구독을 멱등하게 해제한다.
+	 * 입력 차단 → 크기 변경 차단 → PTY 종료 요청 → listener 해제 순서를 유지하며
+	 * 개별 정리 실패를 상위 재시작 흐름으로 전파하지 않는다.
+	 */
+	disposeProcess(): void {
+		const process = this.activeProcess;
+		/* activeProcess를 먼저 비워 남은 입력과 크기 변경을 PTY에 전달하지 않는다. */
+		this.activeProcess = undefined;
+		this.pendingOutput = [];
+
+		try {
+			process?.kill();
+		} catch {
+			/* PTY 종료 요청 실패도 listener 정리와 재시작 흐름을 막지 않는다. */
+		}
+		this.disposePtyListeners();
+	}
+
 	/** PTY data/exit listener 구독을 멱등하게 해제한다. */
 	private disposePtyListeners(): void {
 		for (const listener of [this.dataListener, this.exitListener]) {

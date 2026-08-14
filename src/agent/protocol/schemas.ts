@@ -143,11 +143,10 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		cols: colsSchema,
 		rows: rowsSchema,
 	},
+	/* Webview는 실행 계약도 terminal 크기도 다시 보내지 않고 소유 관계만 지정한다. */
 	'terminal.restart': {
 		tabId: idSchema,
 		sessionId: idSchema,
-		cols: colsSchema,
-		rows: rowsSchema,
 	},
 	'terminal.visible': {
 		tabId: idSchema,

@@ -282,8 +282,6 @@ function restartMessage(): WebviewToHostWireMessage {
 		type: 'terminal.restart',
 		tabId: TAB_ID,
 		sessionId: SESSION_ID,
-		cols: 80,
-		rows: 24,
 	});
 }
 

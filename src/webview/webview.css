@@ -118,6 +118,48 @@ body {
 	display: none;
 }
 
+#terminal-surface[data-state='exited'] #terminal-overlay {
+	color: var(--vscode-foreground);
+}
+
+.terminal-overlay-panel {
+	display: grid;
+	gap: 8px;
+	justify-items: center;
+}
+
+.terminal-overlay-title {
+	margin: 0;
+	font-weight: 600;
+}
+
+.terminal-overlay-detail {
+	margin: 0;
+	opacity: 0.85;
+}
+
+.terminal-overlay-detail[hidden] {
+	display: none;
+}
+
+.terminal-overlay-restart {
+	padding: 4px 14px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	color: var(--vscode-button-foreground);
+	background-color: var(--vscode-button-background);
+	cursor: pointer;
+	font: inherit;
+}
+
+.terminal-overlay-restart:hover {
+	background-color: var(--vscode-button-hoverBackground);
+}
+
+.terminal-overlay-restart[hidden] {
+	display: none;
+}
+
 .crispy-layout[data-dock='right'] #agent-chat-area {
 	border-left: 1px solid var(--vscode-panel-border);
 }

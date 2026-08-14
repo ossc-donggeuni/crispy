@@ -674,3 +674,223 @@ suite('TerminalHost PTY output and exit routing', () => {
 		);
 	});
 });
+
+suite('TerminalHost restart orchestration', () => {
+	test('종료된 session을 정리하고 새 sessionId로 정책을 다시 적용해 시작한다', async () => {
+		let workspaceCalls = 0;
+		let shellCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const prepare = createPrepareTerminalLaunch({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return { ok: true, root };
+			},
+			shellResolver: async () => {
+				shellCalls += 1;
+				return { ok: true, policy: launchPolicy };
+			},
+			readPlatform: () => 'linux',
+			readEnvironment: () => ({ HOST_ENV: 'snapshot' }),
+		});
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: prepare,
+		});
+
+		await host.startSession('tab-restart', 120, 36);
+		const first = host.getActiveSession('tab-restart');
+		assert.ok(first);
+		adapter.handles[0].emitExit({ exitCode: 1 });
+
+		await host.restartSession('tab-restart', first.sessionId);
+
+		const second = host.getActiveSession('tab-restart');
+		assert.ok(second);
+		assert.notStrictEqual(second.sessionId, first.sessionId);
+		assert.strictEqual(second.state.kind, 'running');
+		assert.strictEqual(host.getSession(first.sessionId), undefined);
+		assert.strictEqual(first.state.kind, 'disposed');
+		assert.strictEqual(workspaceCalls, 2);
+		assert.strictEqual(shellCalls, 2);
+		assert.strictEqual(adapter.spawnCalls.length, 2);
+		assert.deepStrictEqual(adapter.spawnCalls[1], {
+			...launchPolicy,
+			args: ['--host-owned'],
+			env: { CRISPY_HOST_ENV: 'present' },
+			cols: 120,
+			rows: 36,
+		});
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.started',
+			tabId: 'tab-restart',
+			sessionId: second.sessionId,
+		});
+	});
+
+	test('재시작 PTY는 마지막으로 확인된 terminal 크기를 재사용한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-restart-size', 80, 24);
+		const session = host.getActiveSession('tab-restart-size');
+		assert.ok(session);
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: 'tab-restart-size',
+			sessionId: session.sessionId,
+			cols: 132,
+			rows: 43,
+		});
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		await host.restartSession('tab-restart-size', session.sessionId);
+
+		assert.strictEqual(adapter.spawnCalls[1].cols, 132);
+		assert.strictEqual(adapter.spawnCalls[1].rows, 43);
+	});
+
+	test('error 상태 session의 재시작에서 이전 PTY와 구독을 먼저 정리한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-restart-cleanup', 80, 24);
+		const session = host.getActiveSession('tab-restart-cleanup');
+		assert.ok(session);
+		const handle = adapter.handles[0];
+		/* 실행 중 PTY 동작 실패는 PTY를 살려 둔 채 session을 error로 만든다. */
+		handle.resize = () => {
+			throw new Error('resize failed');
+		};
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: 'tab-restart-cleanup',
+			sessionId: session.sessionId,
+			cols: 100,
+			rows: 30,
+		});
+		assert.strictEqual(session.state.kind, 'error');
+
+		await host.restartSession('tab-restart-cleanup', session.sessionId);
+
+		assert.strictEqual(handle.killCallCount, 1);
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
+		assert.strictEqual(adapter.spawnCalls.length, 2);
+	});
+
+	test('starting, running 및 stopping 상태의 중복 restart를 거부한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-restart-duplicate', 80, 24);
+		const session = host.getActiveSession('tab-restart-duplicate');
+		assert.ok(session);
+
+		await host.restartSession('tab-restart-duplicate', session.sessionId);
+		session.markStopping();
+		await host.restartSession('tab-restart-duplicate', session.sessionId);
+
+		assert.strictEqual(host.getActiveSession('tab-restart-duplicate'), session);
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		for (const message of messages.slice(-2)) {
+			assert.deepStrictEqual(message, {
+				type: 'terminal.error',
+				tabId: 'tab-restart-duplicate',
+				sessionId: session.sessionId,
+				code: 'invalid_session_state',
+				message: 'Terminal restart is already in progress.',
+				canRestart: false,
+			});
+		}
+	});
+
+	test('소유 관계가 다른 restart 요청을 session_not_found로 거부한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-owner', 80, 24);
+		const session = host.getActiveSession('tab-owner');
+		assert.ok(session);
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		await host.restartSession('tab-other', session.sessionId);
+		await host.restartSession('tab-owner', 'session-unknown');
+
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.strictEqual(host.getActiveSession('tab-owner'), session);
+		for (const message of messages.slice(-2)) {
+			assert.strictEqual(
+				message.type === 'terminal.error' ? message.code : undefined,
+				'session_not_found',
+			);
+			assert.strictEqual(
+				message.type === 'terminal.error' ? message.sessionId : undefined,
+				null,
+			);
+		}
+	});
+
+	test('재시작 spawn 실패를 start_failed로 변환하고 이전 session 메시지를 차단한다', async () => {
+		const workingAdapter = new FakePtyAdapter();
+		let spawnCalls = 0;
+		const adapter: PtyAdapter = {
+			spawn: (options) => {
+				spawnCalls += 1;
+				if (spawnCalls > 1) {
+					throw new Error('raw native exception');
+				}
+
+				return workingAdapter.spawn(options);
+			},
+		};
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-restart-failure', 80, 24);
+		const first = host.getActiveSession('tab-restart-failure');
+		assert.ok(first);
+		const handle = workingAdapter.handles[0];
+		handle.emitExit({ exitCode: 0 });
+
+		await host.restartSession('tab-restart-failure', first.sessionId);
+
+		const second = host.getActiveSession('tab-restart-failure');
+		assert.ok(second);
+		assert.notStrictEqual(second.sessionId, first.sessionId);
+		assert.deepStrictEqual(second.state, {
+			kind: 'error',
+			code: 'start_failed',
+		});
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-restart-failure',
+			sessionId: second.sessionId,
+			code: 'start_failed',
+			message: 'Terminal process could not be started.',
+			canRestart: true,
+		});
+		assert.strictEqual(
+			JSON.stringify(messages).includes('raw native exception'),
+			false,
+		);
+
+		const messageCount = messages.length;
+		handle.emitData('late output');
+		await Promise.resolve();
+		assert.strictEqual(messages.length, messageCount);
+	});
+});

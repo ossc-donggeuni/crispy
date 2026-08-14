@@ -12,6 +12,15 @@ import type {
 export const TERMINAL_INITIALIZATION_ERROR_MESSAGE =
 	'Terminal could not be initialized.';
 
+/** Shell 종료를 알리는 덮개 제목이며 종료 코드와 무관하게 동일하다. */
+export const TERMINAL_EXITED_OVERLAY_TITLE = 'Terminal exited';
+
+/** 시작 실패를 알리는 덮개 제목이며 실행 계약 정보를 포함하지 않는다. */
+export const TERMINAL_START_FAILED_OVERLAY_TITLE = 'Unable to start terminal';
+
+/** 재시작 요청 버튼에 표시하는 고정 문구다. */
+export const TERMINAL_RESTART_BUTTON_LABEL = 'Restart';
+
 type TerminalInputMessage = Extract<
 	WebviewToHostMessage,
 	{ type: 'terminal.input' }
@@ -25,6 +34,11 @@ type TerminalReadyMessage = Extract<
 type TerminalResizeMessage = Extract<
 	WebviewToHostMessage,
 	{ type: 'terminal.resize' }
+>;
+
+type TerminalRestartMessage = Extract<
+	WebviewToHostMessage,
+	{ type: 'terminal.restart' }
 >;
 
 /** 초기 layout을 기다리는 최대 animation frame 수다. */
@@ -42,8 +56,34 @@ interface XtermTerminal {
 	open(container: HTMLElement): void;
 	focus(): void;
 	write(data: string): void;
+	reset(): void;
 	onData(listener: (data: string) => void): unknown;
 	dispose(): void;
+}
+
+/**
+ * 기존 Terminal buffer를 지우지 않고 그 위에 표시하는 세션 종료 상태다.
+ * Host가 제공한 안전한 종료 정보와 고정 오류 메시지만 값으로 가진다.
+ */
+export type TerminalOverlayState =
+	| {
+		readonly kind: 'exited';
+		readonly exitCode?: number;
+		readonly signal?: number;
+	}
+	| {
+		readonly kind: 'error';
+		readonly message: string;
+		readonly canRestart: boolean;
+	};
+
+/** 종료 및 오류 덮개 DOM을 교체 가능하게 감싸는 최소 표시 경계다. */
+export interface TerminalOverlayView {
+	/** 현재 Terminal buffer를 유지한 채 주어진 상태를 덮개로 표시한다. */
+	show(state: TerminalOverlayState): void;
+
+	/** 표시 중인 덮개를 숨기고 내용을 비운다. */
+	hide(): void;
 }
 
 /** xterm 생성 순서와 실패 경로를 외부 영향 없이 검증하기 위한 의존성 경계다. */
@@ -51,6 +91,10 @@ export interface ShellTerminalDependencies {
 	createTerminal(): XtermTerminal;
 	createFitAddon(): FitAddon;
 	createTabId(): TabId;
+	createOverlayView(
+		overlay: HTMLElement,
+		onRestart: () => void,
+	): TerminalOverlayView;
 	requestAnimationFrame(callback: FrameRequestCallback): number;
 	createResizeObserver(callback: ResizeObserverCallback): ResizeObserver;
 	addWindowResizeListener(listener: () => void): () => void;
@@ -58,9 +102,13 @@ export interface ShellTerminalDependencies {
 	isDocumentHidden(): boolean;
 }
 
-/** 터미널 준비, 입력과 크기 변경을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
+/** 터미널 준비, 입력, 크기 변경과 재시작을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
 export type PostTerminalMessage = (
-	message: TerminalReadyMessage | TerminalInputMessage | TerminalResizeMessage,
+	message:
+		| TerminalReadyMessage
+		| TerminalInputMessage
+		| TerminalResizeMessage
+		| TerminalRestartMessage,
 ) => void;
 
 /** 웹뷰 진입점이 터미널 세션 메시지를 전달하는 데 사용하는 최소 제어 경계다. */
@@ -113,10 +161,84 @@ export function readVsCodeAnsiTheme(): ITheme {
 	}
 }
 
+/**
+ * 종료 상태를 Host가 제공한 값만 사용하는 한 줄 설명으로 변환한다.
+ * 실행 파일 경로, 환경 변수 또는 원본 예외는 어떤 상태에서도 포함하지 않는다.
+ *
+ * @param state 표시할 종료 또는 오류 상태
+ * @returns 제목 아래에 표시할 설명 문자열이며 표시할 정보가 없으면 빈 문자열
+ */
+function describeTerminalOverlayState(state: TerminalOverlayState): string {
+	if (state.kind === 'error') {
+		return state.message;
+	}
+
+	const details: string[] = [];
+	if (state.exitCode !== undefined) {
+		details.push(`Exit code: ${state.exitCode}`);
+	}
+	if (state.signal !== undefined) {
+		details.push(`Signal: ${state.signal}`);
+	}
+
+	return details.join('  ');
+}
+
+/**
+ * Terminal 영역 안에서만 상태와 재시작 버튼을 표시하는 기본 덮개를 만든다.
+ * 덮개는 xterm mount와 분리된 요소만 교체하므로 기존 buffer를 지우지 않는다.
+ *
+ * @param overlay 터미널 영역 안의 덮개 컨테이너
+ * @param onRestart 재시작 버튼 클릭을 제어 객체로 전달하는 함수
+ * @returns 상태 표시와 숨김만 노출하는 덮개 제어 객체
+ */
+function createDefaultOverlayView(
+	overlay: HTMLElement,
+	onRestart: () => void,
+): TerminalOverlayView {
+	const panel = document.createElement('div');
+	panel.className = 'terminal-overlay-panel';
+
+	const title = document.createElement('p');
+	title.className = 'terminal-overlay-title';
+
+	const detail = document.createElement('p');
+	detail.className = 'terminal-overlay-detail';
+
+	const restartButton = document.createElement('button');
+	restartButton.type = 'button';
+	restartButton.className = 'terminal-overlay-restart';
+	restartButton.textContent = TERMINAL_RESTART_BUTTON_LABEL;
+	restartButton.addEventListener('click', () => onRestart());
+
+	panel.append(title, detail, restartButton);
+
+	return {
+		show(state): void {
+			title.textContent = state.kind === 'exited'
+				? TERMINAL_EXITED_OVERLAY_TITLE
+				: TERMINAL_START_FAILED_OVERLAY_TITLE;
+			detail.textContent = describeTerminalOverlayState(state);
+			detail.hidden = detail.textContent.length === 0;
+			restartButton.hidden = state.kind === 'error' && !state.canRestart;
+			overlay.replaceChildren(panel);
+			overlay.setAttribute('role', state.kind === 'error' ? 'alert' : 'status');
+			overlay.hidden = false;
+		},
+		hide(): void {
+			overlay.hidden = true;
+			overlay.removeAttribute('role');
+			overlay.replaceChildren();
+		},
+	};
+}
+
 const defaultDependencies: ShellTerminalDependencies = {
 	createTerminal: () => new Terminal({ theme: readVsCodeAnsiTheme() }),
 	createFitAddon: () => new FitAddon(),
 	createTabId: () => `tab-${globalThis.crypto.randomUUID()}`,
+	createOverlayView: (overlay, onRestart) =>
+		createDefaultOverlayView(overlay, onRestart),
 	requestAnimationFrame: (callback) => globalThis.requestAnimationFrame(callback),
 	createResizeObserver: (callback) => new ResizeObserver(callback),
 	addWindowResizeListener: (listener) => {
@@ -132,13 +254,14 @@ const defaultDependencies: ShellTerminalDependencies = {
 
 /**
  * xterm을 터미널 영역에 장착하고 기존 터미널 입출력 프로토콜에 연결한다.
+ * 세션 종료와 시작 실패는 기존 buffer를 유지한 채 덮개로 표시하고 재시작 요청으로 연결한다.
  * 초기화 실패는 이 함수 안에서 고정된 화면 상태로 격리하고 호출자에게 전파하지 않는다.
  *
  * @param surface xterm 장착 영역과 상태 덮개를 포함하는 터미널 영역
  * @param mount xterm이 실제 DOM을 생성하는 컨테이너
  * @param overlay 터미널 영역 안에서만 상태를 표시하는 덮개
  * @param postMessage Terminal 메시지를 호스트로 보내는 웹뷰 API 경계
- * @param dependencies xterm과 탭 식별자를 생성하는 의존성
+ * @param dependencies xterm, 탭 식별자와 상태 덮개를 생성하는 의존성
  * @returns 현재 탭과 세션의 소유 관계를 관리하는 제어 객체
  */
 export function initializeShellTerminal(
@@ -150,7 +273,11 @@ export function initializeShellTerminal(
 ): ShellTerminalController {
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
+	let restartSessionId: SessionId | undefined;
+	let restartRequested = false;
+	let overlayVisible = false;
 	let terminal: XtermTerminal | undefined;
+	let overlayView: TerminalOverlayView | undefined;
 	let fitAddon: FitAddon | undefined;
 	let resizeObserver: ResizeObserver | undefined;
 	let removeWindowResizeListener: (() => void) | undefined;
@@ -250,6 +377,63 @@ export function initializeShellTerminal(
 		}
 	}
 
+	/**
+	 * 기존 Terminal buffer를 유지한 채 종료 또는 오류 상태를 덮개로 표시한다.
+	 * 표시 실패는 Terminal 영역 밖의 Webview 기능으로 전파하지 않는다.
+	 */
+	const showOverlay = (state: TerminalOverlayState): void => {
+		if (disposed) {
+			return;
+		}
+
+		try {
+			overlayView?.show(state);
+			overlayVisible = true;
+			surface.dataset.state = state.kind === 'exited' ? 'exited' : 'error';
+		} catch {
+			// 덮개 렌더링 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다.
+		}
+	};
+
+	/** 새 PTY가 시작된 뒤에만 호출해 덮개를 제거하고 준비 상태로 되돌린다. */
+	const hideOverlay = (): void => {
+		try {
+			overlayView?.hide();
+		} catch {
+			// 덮개 제거 실패도 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다.
+		}
+		overlayVisible = false;
+		surface.dataset.state = 'ready';
+	};
+
+	/**
+	 * 재시작 버튼 클릭을 소유 관계만 담은 호스트 요청으로 변환한다.
+	 * 실행 계약과 terminal 크기는 Host가 다시 결정하므로 전송하지 않으며,
+	 * 세션이 만들어지기 전에 실패한 경우에만 최초 시작 경로를 다시 사용한다.
+	 */
+	const requestRestart = (): void => {
+		if (disposed || restartRequested) {
+			return;
+		}
+
+		restartRequested = true;
+		const sessionId = restartSessionId;
+		if (sessionId === undefined) {
+			postReady(
+				lastSentDimensions?.cols ?? TERMINAL_INITIAL_FALLBACK_DIMENSIONS.cols,
+				lastSentDimensions?.rows ?? TERMINAL_INITIAL_FALLBACK_DIMENSIONS.rows,
+			);
+			return;
+		}
+
+		try {
+			postMessage({ type: 'terminal.restart', tabId, sessionId });
+		} catch {
+			// 재시작 전송 실패 뒤에도 사용자가 같은 덮개에서 다시 시도할 수 있게 한다.
+			restartRequested = false;
+		}
+	};
+
 	const postReady = (cols: number, rows: number): void => {
 		readySent = true;
 		try {
@@ -286,6 +470,7 @@ export function initializeShellTerminal(
 		}
 		terminal = undefined;
 		fitAddon = undefined;
+		overlayView = undefined;
 	};
 
 	const controller: ShellTerminalController = {
@@ -297,6 +482,17 @@ export function initializeShellTerminal(
 				case 'terminal.started':
 					if (message.tabId === tabId) {
 						activeSessionId = message.sessionId;
+						restartSessionId = undefined;
+						restartRequested = false;
+						if (overlayVisible) {
+							/* 새 PTY 시작을 확인한 뒤에만 이전 세션 buffer를 정리한다. */
+							try {
+								terminal?.reset();
+							} catch {
+								// Buffer 초기화 실패가 새 세션 입출력 연결을 막지 않게 한다.
+							}
+							hideOverlay();
+						}
 						try {
 							terminal?.focus();
 						} catch {
@@ -326,21 +522,46 @@ export function initializeShellTerminal(
 						&& message.sessionId === activeSessionId
 					) {
 						activeSessionId = undefined;
+						restartSessionId = message.sessionId;
+						restartRequested = false;
+						showOverlay({
+							kind: 'exited',
+							...(message.exitCode === undefined
+								? {}
+								: { exitCode: message.exitCode }),
+							...(message.signal === undefined
+								? {}
+								: { signal: message.signal }),
+						});
 					}
 					break;
 				case 'terminal.error':
+					/* 현재 세션이 없을 때만 Host가 새로 만든 세션의 시작 실패를 받아들인다. */
 					if (
-						message.tabId === tabId
-						&& message.sessionId === activeSessionId
+						message.tabId !== tabId
+						|| (
+							activeSessionId !== undefined
+							&& message.sessionId !== activeSessionId
+						)
 					) {
-						activeSessionId = undefined;
+						return;
 					}
+
+					activeSessionId = undefined;
+					restartSessionId = message.sessionId ?? undefined;
+					restartRequested = false;
+					showOverlay({
+						kind: 'error',
+						message: message.message,
+						canRestart: message.canRestart,
+					});
 					break;
 			}
 		},
 	};
 
 	try {
+		overlayView = dependencies.createOverlayView(overlay, requestRestart);
 		terminal = dependencies.createTerminal();
 		fitAddon = dependencies.createFitAddon();
 		terminal.loadAddon(fitAddon);
@@ -378,6 +599,8 @@ export function initializeShellTerminal(
 		overlay.textContent = TERMINAL_INITIALIZATION_ERROR_MESSAGE;
 		overlay.hidden = false;
 		overlay.setAttribute('role', 'alert');
+		overlayView = undefined;
+		overlayVisible = false;
 	}
 
 	return controller;

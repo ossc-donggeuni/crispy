@@ -24,6 +24,7 @@ interface CrispyExtensionModule {
 				cols: number,
 				rows: number,
 			): Promise<unknown>;
+			restartSession(tabId: string, sessionId: string): Promise<unknown>;
 			routeInput(message: unknown): void;
 			routeResize(message: unknown): void;
 		},
@@ -209,6 +210,7 @@ suite('Crispy Extension Host', () => {
 		try {
 			const terminalHost = {
 				async startSession() {},
+				async restartSession() {},
 				routeInput: (message: unknown) => routedInputs.push(message),
 				routeResize: (message: unknown) => routedResizes.push(message),
 			};
@@ -261,6 +263,7 @@ suite('Crispy Extension Host', () => {
 			async startSession(tabId: string, cols: number, rows: number) {
 				starts.push({ tabId, cols, rows });
 			},
+			async restartSession() {},
 			routeInput() {},
 			routeResize() {},
 		};
@@ -284,12 +287,76 @@ suite('Crispy Extension Host', () => {
 		}]);
 	});
 
+	test('검증된 terminal.restart의 소유 관계만 TerminalHost restart 경계로 전달한다', () => {
+		const restarts: Array<{ tabId: string; sessionId: string }> = [];
+		const terminalHost = {
+			async startSession() {},
+			async restartSession(tabId: string, sessionId: string) {
+				restarts.push({ tabId, sessionId });
+			},
+			routeInput() {},
+			routeResize() {},
+		};
+
+		const result = extensionModule.handleWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'terminal.restart',
+				tabId: 'tab-restart-dispatch',
+				sessionId: 'session-restart-dispatch',
+			},
+			terminalHost,
+		);
+
+		assert.strictEqual(result, undefined);
+		assert.deepStrictEqual(restarts, [{
+			tabId: 'tab-restart-dispatch',
+			sessionId: 'session-restart-dispatch',
+		}]);
+	});
+
+	test('실행 계약을 포함한 terminal.restart는 restart 경계 전에 거부한다', () => {
+		let restartCalls = 0;
+		const terminalHost = {
+			async startSession() {},
+			async restartSession() {
+				restartCalls += 1;
+			},
+			routeInput() {},
+			routeResize() {},
+		};
+
+		for (const forbidden of [
+			{ executable: '/host/owned/shell' },
+			{ cwd: '/workspace/root' },
+			{ env: { FORCE_COLOR: '1' } },
+			{ args: ['--login'] },
+			{ pid: 4242 },
+		]) {
+			const result = extensionModule.handleWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				{
+					type: 'terminal.restart',
+					tabId: 'tab-restart-forbidden',
+					sessionId: 'session-restart-forbidden',
+					...forbidden,
+				},
+				terminalHost,
+			);
+
+			assert.strictEqual(result, undefined);
+		}
+
+		assert.strictEqual(restartCalls, 0);
+	});
+
 	test('실행 계약을 포함한 terminal.ready는 start 경계 전에 거부한다', () => {
 		let startCalls = 0;
 		const terminalHost = {
 			async startSession() {
 				startCalls += 1;
 			},
+			async restartSession() {},
 			routeInput() {},
 			routeResize() {},
 		};

@@ -67,10 +67,8 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 			type: 'terminal.restart',
 			tabId: TAB_ID,
 			sessionId: SESSION_ID,
-			cols: TERMINAL_COLS_MIN,
-			rows: TERMINAL_ROWS_MAX,
 		},
-		requiredFields: ['tabId', 'sessionId', 'cols', 'rows'],
+		requiredFields: ['tabId', 'sessionId'],
 	},
 	{
 		message: {
@@ -247,9 +245,18 @@ suite('Host↔Webview protocol completion contract', () => {
 				tabId: TAB_ID,
 				sessionId: SESSION_ID,
 				providerId: PROVIDER_IDS[0],
-				cols: 80,
-				rows: 24,
 			}), 'unexpected_field', 'providerId');
+		});
+
+		test('restart는 소유 관계만 받고 terminal 크기 재지정을 거부한다', () => {
+			for (const field of ['cols', 'rows'] as const) {
+				assertFailure(parseWebviewToHostMessage({
+					type: 'terminal.restart',
+					tabId: TAB_ID,
+					sessionId: SESSION_ID,
+					[field]: 80,
+				}), 'unexpected_field', field);
+			}
 		});
 
 		test('빈 ID, 허용하지 않는 문자 및 최대 길이 초과를 거부한다', () => {
