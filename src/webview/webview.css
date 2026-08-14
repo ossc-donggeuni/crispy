@@ -68,8 +68,7 @@ body {
 #agent-chat-area {
 	min-width: 0;
 	min-height: 0;
-	padding: 16px;
-	overflow: auto;
+	overflow: hidden;
 }
 
 #graph-area {
@@ -79,6 +78,44 @@ body {
 #agent-chat-area {
 	position: relative;
 	grid-area: chat;
+}
+
+#terminal-surface {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	padding: 8px;
+	overflow: hidden;
+}
+
+#terminal-mount {
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+
+#terminal-mount > .xterm {
+	height: 100%;
+}
+
+#terminal-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	display: grid;
+	padding: 24px;
+	place-items: center;
+	color: var(--vscode-errorForeground);
+	background-color: var(--vscode-editor-background);
+	text-align: center;
+}
+
+#terminal-overlay[hidden] {
+	display: none;
 }
 
 .crispy-layout[data-dock='right'] #agent-chat-area {
@@ -99,6 +136,7 @@ body {
 
 #chat-drag-handle {
 	position: absolute;
+	z-index: 4;
 	top: 8px;
 	right: 8px;
 	display: grid;

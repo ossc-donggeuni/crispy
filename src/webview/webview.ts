@@ -1,4 +1,5 @@
 import { parseHostToWebviewMessage } from '../agent/protocol';
+import { initializeShellTerminal } from '../agent/webview/shellTerminal';
 import type { WebviewToExtensionMessage } from '../messages';
 import { initializeGraphView } from './graph/graphView';
 import { initializePanelDock } from './panel/panelDock';
@@ -42,6 +43,9 @@ const graphArea = getRequiredElement<HTMLElement>('#graph-area');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
+const terminalSurface = getRequiredElement<HTMLElement>('#terminal-surface');
+const terminalMount = getRequiredElement<HTMLElement>('#terminal-mount');
+const terminalOverlay = getRequiredElement<HTMLElement>('#terminal-overlay');
 
 const graphView = initializeGraphView(graphArea);
 
@@ -64,6 +68,13 @@ initializePanelResize(
 	() => savePanelLayoutState(vscodeApi, state),
 );
 
+const shellTerminal = initializeShellTerminal(
+	terminalSurface,
+	terminalMount,
+	terminalOverlay,
+	(message) => vscodeApi.postMessage(message),
+);
+
 /**
  * Extension Host에서 받은 unknown 메시지를 구조적으로 검증한 뒤 처리한다.
  * 검증되지 않은 payload는 내용이나 민감 정보를 기록하지 않고 무시한다.
@@ -80,6 +91,8 @@ function handleHostMessage(message: unknown): void {
 		case 'extension.ready':
 			console.log('[Crispy] Extension ready');
 			break;
+		default:
+			shellTerminal.handleHostMessage(parseResult.value);
 	}
 }
 

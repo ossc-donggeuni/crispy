@@ -86,6 +86,15 @@ suite('Crispy Extension Host', () => {
 			panel.webview.options.localResourceRoots?.map((uri) => uri.toString()),
 			[vscode.Uri.joinPath(extension.extensionUri, 'dist', 'webview').toString()],
 		);
+		assert.match(
+			panel.webview.html,
+			/default-src 'none'; style-src [^;]+; script-src [^;]+;/,
+		);
+		assert.doesNotMatch(panel.webview.html, /'unsafe-inline'|'unsafe-eval'/);
+		assert.ok(panel.webview.html.includes('<section id="agent-chat-area">'));
+		assert.ok(panel.webview.html.includes('<div id="terminal-surface"'));
+		assert.ok(panel.webview.html.includes('<div id="terminal-mount"></div>'));
+		assert.ok(panel.webview.html.includes('<div id="terminal-overlay"'));
 	});
 
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {

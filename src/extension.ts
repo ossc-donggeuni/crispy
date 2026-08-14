@@ -209,8 +209,11 @@ function getWebviewHtml(
 					<section id="graph-area"></section>
 					<div id="panel-resize-handle"></div>
 					<section id="agent-chat-area">
-						Agent Chat
 						<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
+						<div id="terminal-surface" data-state="ready">
+							<div id="terminal-mount"></div>
+							<div id="terminal-overlay" aria-live="polite" hidden></div>
+						</div>
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
