@@ -34,6 +34,44 @@ export const INITIAL_GRAPH_STATE: GraphStateSnapshot = Object.freeze({
 });
 
 /**
+ * 복원 후보에서 유효한 Graph 상태 필드만 복사한다.
+ *
+ * @param value Graph 상태 후보
+ * @returns 검증 및 복사된 Graph 상태이며, 값이 잘못되었으면 undefined
+ */
+export function parseGraphState(value: unknown): GraphState | undefined {
+	if (!value || typeof value !== 'object') {
+		return undefined;
+	}
+
+	const candidate = value as Record<string, unknown>;
+
+	if (!candidate.camera || typeof candidate.camera !== 'object') {
+		return undefined;
+	}
+
+	const camera = candidate.camera as Record<string, unknown>;
+
+	if (
+		!isFiniteNumber(camera.x)
+		|| !isFiniteNumber(camera.y)
+		|| !isFiniteNumber(camera.scale)
+		|| camera.scale < MIN_CAMERA_SCALE
+		|| camera.scale > MAX_CAMERA_SCALE
+	) {
+		return undefined;
+	}
+
+	return {
+		camera: {
+			x: camera.x,
+			y: camera.y,
+			scale: camera.scale,
+		},
+	};
+}
+
+/**
  * Graph 전체 상태의 immutable snapshot을 관리한다.
  * Store에 전달된 객체와 외부에 반환하는 상태를 분리해 직접 mutation을 방지한다.
  *
@@ -93,4 +131,8 @@ function isSameState(
 
 function clampCameraScale(scale: number): number {
 	return Math.min(Math.max(scale, MIN_CAMERA_SCALE), MAX_CAMERA_SCALE);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value);
 }

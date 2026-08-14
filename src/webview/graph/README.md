@@ -8,10 +8,11 @@ Graph State를 단일 상태 기준으로 사용하며, World 변환과 Grid 및
 
 ```text
 src/webview/graph/
-├── graphView.ts
-├── graphState.ts
 ├── graphCamera.ts
-└── graphView.css
+├── graphState.ts
+├── graphView.css
+├── graphView.ts
+└── README.md
 ```
 
 ### `graphView.ts`
@@ -19,7 +20,8 @@ src/webview/graph/
 > Graph를 렌더링할 DOM 계층과 Graph View lifecycle을 관리합니다.
 
 - Viewport, World, Edge / Node / Overlay Layer 생성
-- Graph State와 Graph Camera 초기화
+- 전달받은 초기 `GraphState`로 기존 `createGraphState(initialState)` Store 초기화
+- 초기 Camera 상태를 World transform과 Grid에 적용
 - 외부 Graph 기능을 위한 State와 Camera 인터페이스 제공
 - `dispose()` 시 Camera와 Graph View DOM 정리
 
@@ -31,6 +33,7 @@ src/webview/graph/
 - 외부에서 직접 변경할 수 없는 State snapshot 제공
 - Graph State 조회 및 변경
 - State 변경 구독 및 구독 해제
+- 복원 후보의 Graph 상태 검증 및 독립 객체 복사
 - Camera `scale` 최소값과 최대값 적용
 
 ### `graphCamera.ts`
