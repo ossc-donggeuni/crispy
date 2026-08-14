@@ -534,3 +534,121 @@ suite('TerminalHost input and resize routing', () => {
 		}
 	});
 });
+
+suite('TerminalHost PTY output and exit routing', () => {
+	test('fake PTY output을 원문 그대로 같은 microtask에서 병합해 전달한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		await host.startSession('tab-output', 80, 24);
+		const session = host.getActiveSession('tab-output');
+		assert.ok(session);
+
+		adapter.handles[0].emitData('hello');
+		adapter.handles[0].emitData('\r\n\x1b[32m한글🙂\x1b[0m  ');
+		assert.strictEqual(
+			messages.some((message) => message.type === 'terminal.output'),
+			false,
+		);
+
+		await Promise.resolve();
+
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.output',
+			tabId: 'tab-output',
+			sessionId: session.sessionId,
+			data: 'hello\r\n\x1b[32m한글🙂\x1b[0m  ',
+		});
+	});
+
+	test('fake PTY exit을 보존하고 exited 메시지 뒤 input과 resize를 차단한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		await host.startSession('tab-exit', 80, 24);
+		const session = host.getActiveSession('tab-exit');
+		assert.ok(session);
+		const handle = adapter.handles[0];
+
+		handle.emitExit({ exitCode: 9, signal: 15 });
+
+		assert.strictEqual(host.getActiveSession('tab-exit'), session);
+		assert.strictEqual(host.getSession(session.sessionId), session);
+		assert.deepStrictEqual(session.state, {
+			kind: 'exited',
+			exitCode: 9,
+			signal: 15,
+		});
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.exited',
+			tabId: 'tab-exit',
+			sessionId: session.sessionId,
+			exitCode: 9,
+			signal: 15,
+		});
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
+
+		host.routeInput({
+			type: 'terminal.input',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			data: 'blocked-after-exit',
+		});
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			cols: 120,
+			rows: 40,
+		});
+
+		assert.deepStrictEqual(handle.writes, []);
+		assert.deepStrictEqual(handle.resizes, []);
+	});
+
+	test('signal이 없으면 terminal.exited에서 signal 필드를 생략한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		await host.startSession('tab-exit-no-signal', 80, 24);
+		const session = host.getActiveSession('tab-exit-no-signal');
+		assert.ok(session);
+
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.exited',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			exitCode: 0,
+		});
+	});
+
+	test('Webview dispose 이후 output과 exit 메시지 전달을 중단한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		await host.startSession('tab-disposed-webview', 80, 24);
+		const messageCount = messages.length;
+
+		host.stopMessageDelivery();
+		adapter.handles[0].emitData('must-not-be-delivered');
+		await Promise.resolve();
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		assert.strictEqual(messages.length, messageCount);
+		assert.strictEqual(
+			host.getActiveSession('tab-disposed-webview')?.state.kind,
+			'exited',
+		);
+	});
+});

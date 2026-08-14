@@ -18,7 +18,6 @@ export type StateValidationErrorCode =
 	| 'duplicate_start'
 	| 'duplicate_restart'
 	| 'invalid_session_state'
-	| 'invalid_ack_sequence'
 	| 'disposed_session';
 
 /** 원본 ID나 terminal 본문을 반사하지 않는 상태 validation 오류다. */
@@ -55,8 +54,6 @@ export function validateWebviewToHostMessageState(
 		case 'terminal.input':
 		case 'terminal.resize':
 			return validateRunningSessionMessage(message, snapshot);
-		case 'terminal.outputAck':
-			return validateTerminalOutputAck(message, snapshot);
 		case 'terminal.visible':
 			return findTab(snapshot, message.tabId) === undefined
 				? stateValidationFailure('unknown_tab', 'tabId')
@@ -160,28 +157,6 @@ function validateRunningSessionMessage<Message extends Extract<
 	return stateValidationSuccess(message);
 }
 
-/** terminal.outputAck를 lifecycle과 독립적으로 정확한 in-flight sequence와 대조한다. */
-function validateTerminalOutputAck<Message extends Extract<
-	WebviewToHostWireMessage,
-	{ type: 'terminal.outputAck' }
->>(
-	message: Message,
-	snapshot: TerminalStateValidationSnapshot,
-): StateValidationResult<Message> {
-	const lookup = findOwnedSession(snapshot, message.tabId, message.sessionId);
-	if (!lookup.ok) {
-		return lookup;
-	}
-	if (isDisposed(lookup.session)) {
-		return stateValidationFailure('disposed_session', 'sessionId');
-	}
-	if (lookup.session.inFlightOutputSequence !== message.sequence) {
-		return stateValidationFailure('invalid_ack_sequence', 'sequence');
-	}
-
-	return stateValidationSuccess(message);
-}
-
 type OwnedSessionLookup =
 	| {
 		readonly ok: true;
@@ -264,6 +239,5 @@ const STATE_VALIDATION_ERROR_MESSAGES: Readonly<
 	duplicate_start: 'Terminal start is already in progress.',
 	duplicate_restart: 'Terminal restart is already in progress.',
 	invalid_session_state: 'Terminal session state does not allow this message.',
-	invalid_ack_sequence: 'Output acknowledgement sequence does not match.',
 	disposed_session: 'Terminal session is disposed.',
 });

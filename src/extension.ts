@@ -90,6 +90,7 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 
 		panel.onDidDispose(() => {
+			terminalHost.stopMessageDelivery();
 			currentPanel = undefined;
 		});
 

@@ -8,7 +8,6 @@ export const TERMINAL_ERROR_CODES = [
 	'provider_not_allowed',
 	'shell_unavailable',
 	'start_failed',
-	'output_limit_exceeded',
 	'session_not_found',
 	'invalid_session_state',
 	'cleanup_failed',

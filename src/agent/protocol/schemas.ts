@@ -2,7 +2,6 @@ import { TERMINAL_ERROR_CODES } from './errors';
 import {
 	ID_MAX_LENGTH,
 	ID_PATTERN,
-	OUTPUT_SEQUENCE_MIN,
 	TERMINAL_COLS_MAX,
 	TERMINAL_COLS_MIN,
 	TERMINAL_INPUT_MAX_BYTES,
@@ -23,6 +22,9 @@ import {
  * @typeParam Value 검증 성공 시 반환할 필드 값 타입
  */
 interface FieldSchema<Value> {
+	/** true이면 wire message에서 이 필드를 생략할 수 있다. */
+	readonly optional?: true;
+
 	/**
 	 * 필드 값을 검증한다.
 	 *
@@ -46,7 +48,13 @@ type InferFieldSchema<Schema> = Schema extends FieldSchema<infer Value>
 
 /** 필드 schema map을 검증 완료 메시지의 필드 타입으로 변환한다. */
 type InferFields<Schemas extends FieldSchemaMap> = {
-	-readonly [Field in keyof Schemas]: InferFieldSchema<Schemas[Field]>;
+	-readonly [Field in keyof Schemas as Schemas[Field] extends { readonly optional: true }
+		? never
+		: Field]: InferFieldSchema<Schemas[Field]>;
+} & {
+	-readonly [Field in keyof Schemas as Schemas[Field] extends { readonly optional: true }
+		? Field
+		: never]?: InferFieldSchema<Schemas[Field]>;
 };
 
 /**
@@ -105,11 +113,8 @@ const booleanSchema = defineFieldSchema<boolean>((value, field) => {
 
 	return validationSuccess(value);
 });
-/** exitCode와 signal에 사용하는 유한 number 또는 null schema다. */
-const nullableNumberSchema = defineFieldSchema<number | null>((value, field) => {
-	if (value === null) {
-		return validationSuccess(null);
-	}
+/** exitCode와 signal에 사용하는 유한 number schema다. */
+const numberSchema = defineFieldSchema<number>((value, field) => {
 	if (typeof value !== 'number' || !Number.isFinite(value)) {
 		return validationFailure('invalid_field', field);
 	}
@@ -118,18 +123,6 @@ const nullableNumberSchema = defineFieldSchema<number | null>((value, field) => 
 });
 /** terminal.error가 session 생성 전에도 전송될 수 있도록 null을 허용하는 ID schema다. */
 const nullableIdSchema = nullableSchema(idSchema);
-
-/** Output sequence가 1 이상의 safe integer인지 검증한다. */
-const sequenceSchema = defineFieldSchema<number>((value, field) => {
-	if (typeof value !== 'number' || !Number.isInteger(value)) {
-		return validationFailure('invalid_field', field);
-	}
-	if (!Number.isSafeInteger(value) || value < OUTPUT_SEQUENCE_MIN) {
-		return validationFailure('value_out_of_range', field);
-	}
-
-	return validationSuccess(value);
-});
 
 /**
  * Webview→Host 전체 wire 계약의 단일 runtime schema registry다.
@@ -156,11 +149,6 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		sessionId: idSchema,
 		cols: colsSchema,
 		rows: rowsSchema,
-	},
-	'terminal.outputAck': {
-		tabId: idSchema,
-		sessionId: idSchema,
-		sequence: sequenceSchema,
 	},
 	'terminal.restart': {
 		tabId: idSchema,
@@ -191,14 +179,13 @@ export const HOST_TO_WEBVIEW_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'terminal.output': {
 		tabId: idSchema,
 		sessionId: idSchema,
-		sequence: sequenceSchema,
 		data: stringSchema,
 	},
 	'terminal.exited': {
 		tabId: idSchema,
 		sessionId: idSchema,
-		exitCode: nullableNumberSchema,
-		signal: nullableNumberSchema,
+		exitCode: optionalFieldSchema(numberSchema),
+		signal: optionalFieldSchema(numberSchema),
 	},
 	'terminal.error': {
 		tabId: idSchema,
@@ -255,7 +242,7 @@ export function parseMessageWithSchemaRegistry<
 	const type = value.type;
 	const fieldSchemas = registry[type];
 	for (const field of Object.keys(fieldSchemas)) {
-		if (!hasOwn(value, field)) {
+		if (!hasOwn(value, field) && fieldSchemas[field].optional !== true) {
 			return validationFailure('missing_field', field);
 		}
 	}
@@ -268,6 +255,9 @@ export function parseMessageWithSchemaRegistry<
 
 	const parsedMessage: Record<string, unknown> = { type };
 	for (const [field, schema] of Object.entries(fieldSchemas)) {
+		if (!hasOwn(value, field) && schema.optional === true) {
+			continue;
+		}
 		const fieldResult = schema.parse(value[field], field);
 		if (!fieldResult.ok) {
 			return fieldResult;
@@ -305,6 +295,13 @@ function defineFieldSchema<Value>(
 	parse: FieldSchema<Value>['parse'],
 ): FieldSchema<Value> {
 	return { parse };
+}
+
+/** 기존 field schema를 wire message에서 생략 가능한 schema로 표시한다. */
+function optionalFieldSchema<Value>(
+	schema: FieldSchema<Value>,
+): FieldSchema<Value> & { readonly optional: true } {
+	return { ...schema, optional: true };
 }
 
 /**

@@ -2,7 +2,6 @@ import * as assert from 'assert';
 import {
 	ID_MAX_LENGTH,
 	PROVIDER_IDS,
-	SESSION_OUTPUT_BUFFER_MAX_BYTES,
 	TERMINAL_COLS_MAX,
 	TERMINAL_COLS_MIN,
 	TERMINAL_ERROR_CODES,
@@ -66,15 +65,6 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 	},
 	{
 		message: {
-			type: 'terminal.outputAck',
-			tabId: TAB_ID,
-			sessionId: SESSION_ID,
-			sequence: Number.MAX_SAFE_INTEGER,
-		},
-		requiredFields: ['tabId', 'sessionId', 'sequence'],
-	},
-	{
-		message: {
 			type: 'terminal.restart',
 			tabId: TAB_ID,
 			sessionId: SESSION_ID,
@@ -115,10 +105,9 @@ const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 			type: 'terminal.output',
 			tabId: TAB_ID,
 			sessionId: SESSION_ID,
-			sequence: 1,
 			data: 'output',
 		},
-		requiredFields: ['tabId', 'sessionId', 'sequence', 'data'],
+		requiredFields: ['tabId', 'sessionId', 'data'],
 	},
 	{
 		message: {
@@ -128,7 +117,7 @@ const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 			exitCode: 0,
 			signal: 15,
 		},
-		requiredFields: ['tabId', 'sessionId', 'exitCode', 'signal'],
+		requiredFields: ['tabId', 'sessionId'],
 	},
 	{
 		message: {
@@ -168,10 +157,10 @@ suite('Host↔Webview protocol completion contract', () => {
 			);
 		});
 
-		test('terminal.exited는 number 조합과 null 조합을 각각 허용한다', () => {
+		test('terminal.exited는 유한 number와 생략된 종료 정보를 허용한다', () => {
 			for (const pair of [
 				{ exitCode: 0, signal: 15 },
-				{ exitCode: null, signal: null },
+				{},
 			] as const) {
 				assertSuccess(parseHostToWebviewMessage({
 					type: 'terminal.exited',
@@ -317,24 +306,6 @@ suite('Host↔Webview protocol completion contract', () => {
 					testCase.code,
 					testCase.field,
 				);
-			}
-		});
-
-		test('sequence의 0, 음수, 소수, 비유한 값 및 safe integer 초과를 거부한다', () => {
-			for (const testCase of [
-				{ value: 0, code: 'value_out_of_range' },
-				{ value: -1, code: 'value_out_of_range' },
-				{ value: 1.5, code: 'invalid_field' },
-				{ value: Number.NaN, code: 'invalid_field' },
-				{ value: Number.POSITIVE_INFINITY, code: 'invalid_field' },
-				{ value: Number.MAX_SAFE_INTEGER + 1, code: 'value_out_of_range' },
-			] as const) {
-				assertFailure(parseWebviewToHostMessage({
-					type: 'terminal.outputAck',
-					tabId: TAB_ID,
-					sessionId: SESSION_ID,
-					sequence: testCase.value,
-				}), testCase.code, 'sequence');
 			}
 		});
 
@@ -484,7 +455,6 @@ suite('Host↔Webview protocol completion contract', () => {
 				type: 'terminal.output',
 				tabId: TAB_ID,
 				sessionId: SESSION_ID,
-				sequence: 1,
 				data: { providerResponse: token },
 			};
 
@@ -529,8 +499,8 @@ suite('Host↔Webview protocol completion contract', () => {
 	});
 
 	suite('output 전달 계약', () => {
-		test('terminal.output과 outputAck는 sessionId와 sequence를 필수로 요구한다', () => {
-			for (const field of ['sessionId', 'sequence'] as const) {
+		test('terminal.output은 sessionId와 data를 필수로 요구한다', () => {
+			for (const field of ['sessionId', 'data'] as const) {
 				assertFailure(
 					parseHostToWebviewMessage(withoutField(
 						HOST_MESSAGE_FIXTURES[3].message,
@@ -539,38 +509,23 @@ suite('Host↔Webview protocol completion contract', () => {
 					'missing_field',
 					field,
 				);
-				assertFailure(
-					parseWebviewToHostMessage(withoutField(
-						WEBVIEW_MESSAGE_FIXTURES[4].message,
-						field,
-					)),
-					'missing_field',
-					field,
-				);
 			}
 		});
 
-		test('8MiB limit과 output_limit_exceeded 오류 code가 계약에 정의되어 있다', () => {
-			assert.strictEqual(
-				SESSION_OUTPUT_BUFFER_MAX_BYTES,
-				8 * 1024 * 1024,
-			);
-			assert.ok(TERMINAL_ERROR_CODES.includes('output_limit_exceeded'));
-		});
-
-		test('부분 byte 폐기 message나 state가 없고 visible은 sequence를 받지 않는다', () => {
+		test('ACK, sequence, 부분 폐기 및 replay protocol이 정의되어 있지 않다', () => {
 			const messageTypes = [
 				...Object.keys(WEBVIEW_TO_HOST_MESSAGE_SCHEMAS),
 				...Object.keys(HOST_TO_WEBVIEW_MESSAGE_SCHEMAS),
 			];
 			assert.strictEqual(
-				messageTypes.some((type) => /partial|drop|discard|truncate/i.test(type)),
+				messageTypes.some((type) => /ack|partial|drop|discard|truncate|replay/i.test(type)),
 				false,
 			);
-			assertFailure(parseWebviewToHostMessage({
-				type: 'terminal.visible',
+			assertFailure(parseHostToWebviewMessage({
+				type: 'terminal.output',
 				tabId: TAB_ID,
-				visible: false,
+				sessionId: SESSION_ID,
+				data: 'output',
 				sequence: 1,
 			}), 'unexpected_field', 'sequence');
 		});

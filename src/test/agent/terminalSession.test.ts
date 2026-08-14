@@ -4,6 +4,7 @@ import {
 	TerminalSessionStateError,
 	type TerminalSessionStateErrorCode,
 } from '../../agent/host/terminal/terminalSession';
+import type { PtyExitEvent } from '../../agent/host/terminal/ptyAdapter';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
 
 const launchPolicy = {
@@ -16,15 +17,28 @@ const launchPolicy = {
 function createSession(): {
 	readonly adapter: FakePtyAdapter;
 	readonly session: TerminalSession;
+	readonly outputs: string[];
+	readonly exits: PtyExitEvent[];
 } {
 	const adapter = new FakePtyAdapter(8101);
+	const outputs: string[] = [];
+	const exits: PtyExitEvent[] = [];
+	let session!: TerminalSession;
+	session = new TerminalSession({
+		tabId: 'tab-state-test',
+		sessionId: 'session-state-test',
+		ptyAdapter: adapter,
+		onOutput: (data) => outputs.push(data),
+		onExit: (event) => {
+			exits.push(event);
+			session.markExited(event.exitCode, event.signal ?? null);
+		},
+	});
 	return {
 		adapter,
-		session: new TerminalSession({
-			tabId: 'tab-state-test',
-			sessionId: 'session-state-test',
-			ptyAdapter: adapter,
-		}),
+		session,
+		outputs,
+		exits,
 	};
 }
 
@@ -88,8 +102,45 @@ suite('TerminalSession state model', () => {
 			rows: 43,
 		}]);
 		assert.deepStrictEqual(session.state, { kind: 'running', pid: 8101 });
-		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
-		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+		assert.strictEqual(adapter.handles[0].dataListenerCount, 1);
+		assert.strictEqual(adapter.handles[0].exitListenerCount, 1);
+	});
+
+	test('같은 tick의 PTY output을 순서대로 단순 concat해 다음 microtask에 전달한다', async () => {
+		const { adapter, outputs, session } = createSession();
+		session.markStarting();
+		session.start(launchPolicy, 80, 24);
+
+		adapter.handles[0].emitData('  hello\r\n');
+		adapter.handles[0].emitData('\x1b[31m한글🙂\x1b[0m');
+		adapter.handles[0].emitData('');
+		assert.deepStrictEqual(outputs, []);
+
+		await Promise.resolve();
+
+		assert.deepStrictEqual(outputs, [
+			'  hello\r\n\x1b[31m한글🙂\x1b[0m',
+		]);
+	});
+
+	test('PTY exit을 상태에 저장하고 pending output 뒤 listener를 정리한다', () => {
+		const { adapter, exits, outputs, session } = createSession();
+		session.markStarting();
+		session.start(launchPolicy, 80, 24);
+		const handle = adapter.handles[0];
+		handle.emitData('last-output');
+
+		handle.emitExit({ exitCode: 7, signal: 15 });
+
+		assert.deepStrictEqual(outputs, ['last-output']);
+		assert.deepStrictEqual(exits, [{ exitCode: 7, signal: 15 }]);
+		assert.deepStrictEqual(session.state, {
+			kind: 'exited',
+			exitCode: 7,
+			signal: 15,
+		});
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
 	});
 
 	test('starting 전에는 PTY spawn을 호출하지 않는다', () => {

@@ -65,12 +65,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 					rows: TERMINAL_ROWS_MIN,
 				},
 				{
-					type: 'terminal.outputAck',
-					tabId: TAB_ID,
-					sessionId: SESSION_ID,
-					sequence: Number.MAX_SAFE_INTEGER,
-				},
-				{
 					type: 'terminal.restart',
 					tabId: TAB_ID,
 					sessionId: SESSION_ID,
@@ -198,33 +192,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 			);
 		});
 
-		test('sequence가 1 이상의 safe integer인지 검증한다', () => {
-			const base = {
-				type: 'terminal.outputAck',
-				tabId: TAB_ID,
-				sessionId: SESSION_ID,
-			};
-
-			assertFailure(
-				parseWebviewToHostMessage({ ...base, sequence: 1.5 }),
-				'invalid_field',
-				'sequence',
-			);
-			assertFailure(
-				parseWebviewToHostMessage({ ...base, sequence: 0 }),
-				'value_out_of_range',
-				'sequence',
-			);
-			assertFailure(
-				parseWebviewToHostMessage({
-					...base,
-					sequence: Number.MAX_SAFE_INTEGER + 1,
-				}),
-				'value_out_of_range',
-				'sequence',
-			);
-		});
-
 		test('terminal.input 제한을 UTF-8 byte 수로 검증한다', () => {
 			const base = {
 				type: 'terminal.input',
@@ -279,7 +246,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 					type: 'terminal.output',
 					tabId: TAB_ID,
 					sessionId: SESSION_ID,
-					sequence: 1,
 					data: 'output',
 				},
 				{
@@ -287,7 +253,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 					tabId: TAB_ID,
 					sessionId: SESSION_ID,
 					exitCode: 0,
-					signal: null,
 				},
 				{
 					type: 'terminal.error',
@@ -320,7 +285,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 				type: 'terminal.output',
 				tabId: TAB_ID,
 				sessionId: SESSION_ID,
-				sequence: 1,
 				data: { token: 'secret-output-token' },
 			});
 			const errorResult = parseHostToWebviewMessage({
@@ -338,13 +302,11 @@ suite('Host↔Webview protocol runtime validator', () => {
 			assert.doesNotMatch(JSON.stringify(errorResult), /secret-error-code/);
 		});
 
-		test('exitCode와 signal은 유한 number 또는 null만 허용한다', () => {
+		test('exitCode와 signal은 생략 가능하며 포함 시 유한 number만 허용한다', () => {
 			const base = {
 				type: 'terminal.exited',
 				tabId: TAB_ID,
 				sessionId: SESSION_ID,
-				exitCode: null,
-				signal: null,
 			};
 
 			assertFailure(

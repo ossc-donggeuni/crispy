@@ -4,7 +4,12 @@ import {
 } from '../../protocol/errors';
 import type { SessionId, TabId } from '../../protocol/messages';
 import type { ShellLaunchPolicy } from '../shell/types';
-import type { PtyAdapter, PtyProcessHandle } from './ptyAdapter';
+import type {
+	PtyAdapter,
+	PtyExitEvent,
+	PtyListenerDisposable,
+	PtyProcessHandle,
+} from './ptyAdapter';
 
 /** PTY를 아직 시작하지 않은 새 session 상태다. */
 export interface TerminalSessionIdleState {
@@ -122,6 +127,12 @@ export interface TerminalSessionOptions {
 
 	/** Host가 검증한 실행 계약으로 process를 생성할 PTY 경계다. */
 	readonly ptyAdapter: PtyAdapter;
+
+	/** PTY output batch를 상위 Host routing 경계로 전달한다. */
+	readonly onOutput: (data: string) => void;
+
+	/** PTY 종료 이벤트를 상위 Host routing 경계로 전달한다. */
+	readonly onExit: (event: PtyExitEvent) => void;
 }
 
 /** 모든 새 session이 공유하는 변경 불가능한 idle 상태다. */
@@ -195,8 +206,26 @@ export class TerminalSession {
 	/** Host가 검증한 실행 계약만 전달받는 PTY 생성 경계다. */
 	private readonly ptyAdapter: PtyAdapter;
 
+	/** 변형하지 않은 PTY output batch를 Host에 전달하는 callback이다. */
+	private readonly onOutput: (data: string) => void;
+
+	/** PTY exit 정보를 Host에 전달하는 callback이다. */
+	private readonly onExit: (event: PtyExitEvent) => void;
+
 	/** spawn 성공 뒤 session이 소유하는 PTY handle이다. */
 	private activeProcess: PtyProcessHandle | undefined;
+
+	/** 현재 PTY output listener 구독이다. */
+	private dataListener: PtyListenerDisposable | undefined;
+
+	/** 현재 PTY exit listener 구독이다. */
+	private exitListener: PtyListenerDisposable | undefined;
+
+	/** 다음 microtask에 전달할 원본 output 조각을 도착 순서대로 보관한다. */
+	private pendingOutput: string[] = [];
+
+	/** output flush microtask가 이미 예약되었는지 나타낸다. */
+	private outputFlushScheduled = false;
 
 	/** 오직 `transition()`을 통해서만 교체되는 현재 lifecycle 상태다. */
 	private currentState: TerminalSessionState = IDLE_STATE;
@@ -211,6 +240,8 @@ export class TerminalSession {
 		this.tabId = options.tabId;
 		this.sessionId = options.sessionId;
 		this.ptyAdapter = options.ptyAdapter;
+		this.onOutput = options.onOutput;
+		this.onExit = options.onExit;
 	}
 
 	/**
@@ -234,7 +265,7 @@ export class TerminalSession {
 	/**
 	 * Host가 검증한 Shell 정책과 terminal 크기로 PTY를 생성한다.
 	 * executable, args, cwd와 env를 별도 인자로 받지 않아 Webview 값이 실행 계약을
-	 * 덮어쓸 수 없으며 output/exit listener는 후속 단계 전까지 연결하지 않는다.
+	 * 덮어쓸 수 없다. spawn 성공 뒤 output과 exit listener를 session이 소유한다.
 	 *
 	 * @param policy workspace와 Shell policy가 확정한 Host 내부 실행 계약이다.
 	 * @param cols protocol validator를 통과한 초기 terminal 열 수다.
@@ -255,6 +286,80 @@ export class TerminalSession {
 
 		this.markRunning(process.pid);
 		this.activeProcess = process;
+
+		try {
+			this.dataListener = process.onData((data) => this.enqueueOutput(data));
+			this.exitListener = process.onExit((event) => this.handleExit(event));
+		} catch (error: unknown) {
+			this.disposePtyListeners();
+			throw error;
+		}
+	}
+
+	/** PTY output 조각을 변형 없이 같은 microtask batch에 순서대로 추가한다. */
+	private enqueueOutput(data: string): void {
+		if (
+			this.currentState.kind !== 'running'
+			&& this.currentState.kind !== 'stopping'
+		) {
+			return;
+		}
+
+		this.pendingOutput.push(data);
+		if (this.outputFlushScheduled) {
+			return;
+		}
+
+		this.outputFlushScheduled = true;
+		queueMicrotask(() => this.flushOutput());
+	}
+
+	/** 예약된 output을 가공 없이 한 번의 Host callback으로 전달한다. */
+	private flushOutput(): void {
+		this.outputFlushScheduled = false;
+		if (this.pendingOutput.length === 0) {
+			return;
+		}
+
+		const data = this.pendingOutput.join('');
+		this.pendingOutput = [];
+		try {
+			this.onOutput(data);
+		} catch {
+			/* Terminal output listener 오류는 session 경계 밖으로 전파하지 않는다. */
+		}
+	}
+
+	/** 마지막 output을 먼저 전달한 뒤 exit routing을 호출하고 listener를 해제한다. */
+	private handleExit(event: PtyExitEvent): void {
+		if (
+			this.currentState.kind !== 'running'
+			&& this.currentState.kind !== 'stopping'
+		) {
+			return;
+		}
+
+		this.flushOutput();
+		try {
+			this.onExit(event);
+		} catch {
+			/* Terminal exit listener 오류는 다른 extension 기능으로 전파하지 않는다. */
+		} finally {
+			this.disposePtyListeners();
+		}
+	}
+
+	/** PTY data/exit listener 구독을 멱등하게 해제한다. */
+	private disposePtyListeners(): void {
+		for (const listener of [this.dataListener, this.exitListener]) {
+			try {
+				listener?.dispose();
+			} catch {
+				/* 개별 listener 해제 실패가 나머지 listener 정리를 막지 않는다. */
+			}
+		}
+		this.dataListener = undefined;
+		this.exitListener = undefined;
 	}
 
 	/**
@@ -315,14 +420,14 @@ export class TerminalSession {
 	}
 
 	/**
-	 * stopping PTY에서 관찰한 종료 정보를 기록한다.
+	 * running 또는 stopping PTY에서 관찰한 종료 정보를 기록한다.
 	 *
 	 * @param exitCode PTY가 보고한 유한 종료 코드다.
 	 * @param signal PTY가 보고한 유한 signal 또는 signal이 없음을 나타내는 null이다.
-	 * @throws {TerminalSessionStateError} stopping 상태가 아니거나 종료 정보가 유효하지 않은 경우 발생한다.
+	 * @throws {TerminalSessionStateError} 종료 가능한 상태가 아니거나 종료 정보가 유효하지 않은 경우 발생한다.
 	 */
 	markExited(exitCode: number, signal: number | null): void {
-		this.assertCanTransitionFrom(['stopping']);
+		this.assertCanTransitionFrom(['running', 'stopping']);
 		if (
 			!isValidExitNumber(exitCode)
 			|| (signal !== null && !isValidExitNumber(signal))
@@ -331,7 +436,7 @@ export class TerminalSession {
 		}
 
 		this.transition(
-			['stopping'],
+			['running', 'stopping'],
 			Object.freeze({ kind: 'exited', exitCode, signal }),
 		);
 	}

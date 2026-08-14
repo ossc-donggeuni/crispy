@@ -54,23 +54,8 @@ suite('Host session lifecycle completion contract', () => {
 			}
 		});
 
-		test('정확한 in-flight sequence ACK와 exited 직후 남은 ACK를 허용한다', () => {
-			for (const state of ['running', 'exited'] as const) {
-				const message = outputAckMessage(7);
-				assertStateSuccess(
-					validateWebviewToHostMessageState(
-						message,
-						createSnapshot(state, { inFlightOutputSequence: 7 }),
-					),
-					message,
-				);
-			}
-		});
-
-		test('알려진 tab의 terminal.visible을 허용하고 output sequence를 변경하지 않는다', () => {
-			const session = Object.freeze(createSession('running', {
-				inFlightOutputSequence: 11,
-			}));
+		test('알려진 tab의 terminal.visible을 허용하고 session snapshot을 변경하지 않는다', () => {
+			const session = Object.freeze(createSession('running'));
 			const snapshot: TerminalStateValidationSnapshot = Object.freeze({
 				tabs: Object.freeze([{
 					tabId: TAB_ID,
@@ -84,7 +69,7 @@ suite('Host session lifecycle completion contract', () => {
 				validateWebviewToHostMessageState(message, snapshot),
 				message,
 			);
-			assert.strictEqual(session.inFlightOutputSequence, 11);
+			assert.strictEqual(session.state, 'running');
 		});
 	});
 
@@ -172,15 +157,12 @@ suite('Host session lifecycle completion contract', () => {
 		});
 
 		test('disposed session을 대상으로 하는 모든 session 요청을 거부한다', () => {
-			const snapshot = createSnapshot('disposed', {
-				inFlightOutputSequence: 7,
-			});
+			const snapshot = createSnapshot('disposed');
 			for (const message of [
 				readyMessage(),
 				restartMessage(),
 				inputMessage(),
 				resizeMessage(),
-				outputAckMessage(7),
 			]) {
 				assertStateFailure(
 					validateWebviewToHostMessageState(message, snapshot),
@@ -188,62 +170,6 @@ suite('Host session lifecycle completion contract', () => {
 					'sessionId',
 				);
 			}
-		});
-
-		test('in-flight output이 없는 ACK와 이미 처리한 중복 ACK를 거부한다', () => {
-			const noInFlightSnapshot = createSnapshot('running', {
-				inFlightOutputSequence: null,
-			});
-			const afterAcknowledgementSnapshot = createSnapshot('running', {
-				inFlightOutputSequence: null,
-			});
-
-			for (const snapshot of [
-				noInFlightSnapshot,
-				afterAcknowledgementSnapshot,
-			]) {
-				const result = validateWebviewToHostMessageState(
-					outputAckMessage(7),
-					snapshot,
-				);
-				assertStateFailure(result, 'invalid_ack_sequence', 'sequence');
-			}
-		});
-
-		test('과거 및 미래 sequence ACK를 거부한다', () => {
-			for (const sequence of [6, 8]) {
-				assertStateFailure(
-					validateWebviewToHostMessageState(
-						outputAckMessage(sequence),
-						createSnapshot('running', { inFlightOutputSequence: 7 }),
-					),
-					'invalid_ack_sequence',
-					'sequence',
-				);
-			}
-		});
-
-		test('다른 session에 발급된 동일 sequence ACK를 현재 session에서 거부한다', () => {
-			const snapshot: TerminalStateValidationSnapshot = {
-				tabs: [
-					{ tabId: TAB_ID, currentSessionId: SESSION_ID },
-					{ tabId: OTHER_TAB_ID, currentSessionId: OTHER_SESSION_ID },
-				],
-				sessions: [
-					createSession('running', { inFlightOutputSequence: 6 }),
-					createSession('running', {
-						tabId: OTHER_TAB_ID,
-						sessionId: OTHER_SESSION_ID,
-						inFlightOutputSequence: 7,
-					}),
-				],
-			};
-
-			assertStateFailure(
-				validateWebviewToHostMessageState(outputAckMessage(7), snapshot),
-				'invalid_ack_sequence',
-				'sequence',
-			);
 		});
 	});
 
@@ -283,7 +209,6 @@ function createSession(
 		sessionId: SESSION_ID,
 		providerId: PROVIDER_ID,
 		state,
-		inFlightOutputSequence: null,
 		disposed: state === 'disposed',
 		...overrides,
 	};
@@ -332,16 +257,6 @@ function resizeMessage(): WebviewToHostWireMessage {
 		sessionId: SESSION_ID,
 		cols: 100,
 		rows: 30,
-	});
-}
-
-/** 지정 output sequence를 확인하는 terminal.outputAck fixture를 만든다. */
-function outputAckMessage(sequence: number): WebviewToHostWireMessage {
-	return parseMessage({
-		type: 'terminal.outputAck',
-		tabId: TAB_ID,
-		sessionId: SESSION_ID,
-		sequence,
 	});
 }
 

@@ -5,7 +5,7 @@ import type {
 	TabId,
 	WebviewToHostMessage,
 } from '../../protocol/messages';
-import type { PtyAdapter } from './ptyAdapter';
+import type { PtyAdapter, PtyExitEvent } from './ptyAdapter';
 import {
 	prepareTerminalLaunch,
 	type PrepareTerminalLaunch,
@@ -56,8 +56,8 @@ const START_ERROR_MESSAGES = Object.freeze({
 });
 
 /**
- * 탭별 현재 세션 저장소와 Host 소유 PTY 시작·입력·크기 변경 경로를 관리한다.
- * 출력, 재시작 및 정리 조정은 후속 단계의 책임이다.
+ * 탭별 현재 세션 저장소와 Host 소유 PTY 시작·입력·크기 변경·출력·종료 경로를 관리한다.
+ * 재시작 및 process lifecycle 정리 조정은 후속 단계의 책임이다.
  */
 export class TerminalHost {
 	/** 등록된 모든 세션을 Host 소유 `sessionId`로 조회하는 저장소다. */
@@ -74,6 +74,9 @@ export class TerminalHost {
 
 	/** Host 생명주기 메시지를 Webview 전송 계층으로 넘기는 경계다. */
 	private readonly emitMessage: TerminalHostMessageEmitter;
+
+	/** Webview dispose 뒤 모든 terminal message 전송을 중단하는 gate다. */
+	private messageDeliveryActive = true;
 
 	/**
 	 * 비어 있는 세션 저장소와 Host 소유 의존성을 초기화한다.
@@ -258,14 +261,71 @@ export class TerminalHost {
 			return undefined;
 		}
 
-		const session = new TerminalSession({
+		let session!: TerminalSession;
+		session = new TerminalSession({
 			tabId,
 			sessionId: generatedSessionId,
 			ptyAdapter: this.ptyAdapter,
+			onOutput: (data) => this.routeOutput(session, data),
+			onExit: (event) => this.routeExit(session, event),
 		});
 		this.sessionsById.set(generatedSessionId, session);
 		this.activeSessionByTab.set(tabId, generatedSessionId);
 		return session;
+	}
+
+	/** Webview가 dispose된 뒤 terminal output과 lifecycle message 전송을 중단한다. */
+	stopMessageDelivery(): void {
+		this.messageDeliveryActive = false;
+	}
+
+	/** 현재 소유 session에서 온 PTY output만 정확한 identity와 함께 전달한다. */
+	private routeOutput(session: TerminalSession, data: string): void {
+		if (
+			!this.isCurrentSession(session)
+			|| (
+				session.state.kind !== 'running'
+				&& session.state.kind !== 'stopping'
+			)
+		) {
+			return;
+		}
+
+		this.publish({
+			type: 'terminal.output',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			data,
+		});
+	}
+
+	/** 현재 소유 session의 exit만 상태에 저장하고 Webview에 전달한다. */
+	private routeExit(session: TerminalSession, event: PtyExitEvent): void {
+		if (
+			!this.isCurrentSession(session)
+			|| (
+				session.state.kind !== 'running'
+				&& session.state.kind !== 'stopping'
+			)
+		) {
+			return;
+		}
+
+		const signal = event.signal ?? null;
+		session.markExited(event.exitCode, signal);
+		this.publish({
+			type: 'terminal.exited',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			exitCode: event.exitCode,
+			...(event.signal === undefined ? {} : { signal: event.signal }),
+		});
+	}
+
+	/** 전달받은 객체가 현재 tab/session 양방향 소유 관계와 동일한지 확인한다. */
+	private isCurrentSession(session: TerminalSession): boolean {
+		return this.sessionsById.get(session.sessionId) === session
+			&& this.activeSessionByTab.get(session.tabId) === session.sessionId;
 	}
 
 	/**
@@ -374,6 +434,10 @@ export class TerminalHost {
 	 * @param message Webview 전송 계층으로 전달할 Host 메시지
 	 */
 	private publish(message: HostToWebviewMessage): void {
+		if (!this.messageDeliveryActive) {
+			return;
+		}
+
 		try {
 			this.emitMessage(message);
 		} catch {

@@ -1,8 +1,4 @@
-import type {
-	OutputSequence,
-	SessionId,
-	TabId,
-} from './messages';
+import type { SessionId, TabId } from './messages';
 import type { ProviderId } from './providers';
 
 /** Extension Host가 관리하는 terminal session의 전체 lifecycle 상태다. */
@@ -26,7 +22,6 @@ export interface TerminalSessionStateSnapshot {
 	readonly sessionId: SessionId;
 	readonly providerId: ProviderId;
 	readonly state: TerminalSessionState;
-	readonly inFlightOutputSequence: OutputSequence | null;
 	readonly disposed: boolean;
 }
 

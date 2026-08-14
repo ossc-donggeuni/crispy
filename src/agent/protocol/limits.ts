@@ -15,12 +15,6 @@ export const TERMINAL_ROWS_MAX = 1_000;
 /** terminal.input 한 건에 허용되는 UTF-8 byte 크기다. */
 export const TERMINAL_INPUT_MAX_BYTES = 64 * 1024;
 
-/** Host가 session 하나에 보존할 수 있는 output의 UTF-8 byte 크기다. */
-export const SESSION_OUTPUT_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
-
-/** Host가 발급하는 output sequence의 첫 값이다. */
-export const OUTPUT_SEQUENCE_MIN = 1;
-
 /** Validator와 Host 정책이 함께 사용할 protocol 제한값 모음이다. */
 export const PROTOCOL_LIMITS = Object.freeze({
 	idMaxLength: ID_MAX_LENGTH,
@@ -29,6 +23,4 @@ export const PROTOCOL_LIMITS = Object.freeze({
 	terminalRowsMin: TERMINAL_ROWS_MIN,
 	terminalRowsMax: TERMINAL_ROWS_MAX,
 	terminalInputMaxBytes: TERMINAL_INPUT_MAX_BYTES,
-	sessionOutputBufferMaxBytes: SESSION_OUTPUT_BUFFER_MAX_BYTES,
-	outputSequenceMin: OUTPUT_SEQUENCE_MIN,
 });

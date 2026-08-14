@@ -216,60 +216,6 @@ suite('Host session state validator', () => {
 		});
 	});
 
-	suite('terminal.outputAck', () => {
-		test('Host가 기다리는 정확한 in-flight sequence만 허용한다', () => {
-			const message = outputAckMessage(7);
-			assertSuccess(
-				validateWebviewToHostMessageState(
-					message,
-					createSnapshot('running', { inFlightOutputSequence: 7 }),
-				),
-				message,
-			);
-		});
-
-		test('in-flight 없음, 과거, 중복 또는 미래 ACK를 같은 오류로 거부한다', () => {
-			const cases = [
-				{ inFlightOutputSequence: null, receivedSequence: 1 },
-				{ inFlightOutputSequence: 7, receivedSequence: 6 },
-				{ inFlightOutputSequence: 8, receivedSequence: 7 },
-				{ inFlightOutputSequence: 7, receivedSequence: 8 },
-			] as const;
-
-			for (const testCase of cases) {
-				assertStateFailure(
-					validateWebviewToHostMessageState(
-						outputAckMessage(testCase.receivedSequence),
-						createSnapshot('running', {
-							inFlightOutputSequence: testCase.inFlightOutputSequence,
-						}),
-					),
-					'invalid_ack_sequence',
-					'sequence',
-				);
-			}
-		});
-
-		test('exited session의 남은 ACK를 허용하되 disposed session은 거부한다', () => {
-			const message = outputAckMessage(9);
-			assertSuccess(
-				validateWebviewToHostMessageState(
-					message,
-					createSnapshot('exited', { inFlightOutputSequence: 9 }),
-				),
-				message,
-			);
-			assertStateFailure(
-				validateWebviewToHostMessageState(
-					message,
-					createSnapshot('disposed', { inFlightOutputSequence: 9 }),
-				),
-				'disposed_session',
-				'sessionId',
-			);
-		});
-	});
-
 	suite('terminal.visible', () => {
 		test('알려진 tab만 허용하고 session lifecycle을 요구하지 않는다', () => {
 			const message = visibleMessage();
@@ -331,7 +277,6 @@ function createSession(
 		sessionId: SESSION_ID,
 		providerId: PROVIDER_ID,
 		state,
-		inFlightOutputSequence: null,
 		disposed: false,
 		...overrides,
 	};
@@ -373,15 +318,6 @@ function resizeMessage(): WebviewToHostWireMessage {
 		sessionId: SESSION_ID,
 		cols: 100,
 		rows: 30,
-	});
-}
-
-function outputAckMessage(sequence: number): WebviewToHostWireMessage {
-	return parseMessage({
-		type: 'terminal.outputAck',
-		tabId: TAB_ID,
-		sessionId: SESSION_ID,
-		sequence,
 	});
 }
 

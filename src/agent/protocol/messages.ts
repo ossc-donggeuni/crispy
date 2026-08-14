@@ -10,9 +10,6 @@ export type TabId = string;
 /** Host가 생성하고 수명주기를 관리하는 terminal session 식별자다. */
 export type SessionId = string;
 
-/** Host가 session별로 발급하는 1부터 시작하는 output 순서 번호다. */
-export type OutputSequence = number;
-
 /** Ready handshake를 포함해 Webview가 Host로 보낼 수 있는 전체 wire 메시지다. */
 export type WebviewToHostWireMessage = InferMessageSchemaRegistry<
 	typeof WEBVIEW_TO_HOST_MESSAGE_SCHEMAS
