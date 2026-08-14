@@ -38,11 +38,10 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 		message: {
 			type: 'terminal.ready',
 			tabId: TAB_ID,
-			providerId: PROVIDER_IDS[0],
 			cols: TERMINAL_COLS_MIN,
 			rows: TERMINAL_ROWS_MIN,
 		},
-		requiredFields: ['tabId', 'providerId', 'cols', 'rows'],
+		requiredFields: ['tabId', 'cols', 'rows'],
 	},
 	{
 		message: {
@@ -143,7 +142,7 @@ const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 
 suite('Host↔Webview protocol completion contract', () => {
 	suite('구조적 parser 성공', () => {
-		test('모든 Webview→Host message type과 provider allowlist 값을 허용한다', () => {
+		test('모든 Webview→Host message type을 허용한다', () => {
 			assertAllParseSuccessfully(
 				parseWebviewToHostMessage,
 				WEBVIEW_MESSAGE_FIXTURES,
@@ -234,14 +233,14 @@ suite('Host↔Webview protocol completion contract', () => {
 			);
 		});
 
-		test('allowlist 밖의 providerId와 restart의 providerId 재지정을 거부한다', () => {
+		test('ready와 restart의 Webview providerId 지정을 거부한다', () => {
 			assertFailure(parseWebviewToHostMessage({
 				type: 'terminal.ready',
 				tabId: TAB_ID,
 				providerId: 'untrusted-provider',
 				cols: 80,
 				rows: 24,
-			}), 'provider_not_allowed', 'providerId');
+			}), 'unexpected_field', 'providerId');
 
 			assertFailure(parseWebviewToHostMessage({
 				type: 'terminal.restart',
@@ -372,7 +371,7 @@ suite('Host↔Webview protocol completion contract', () => {
 			}
 		});
 
-		test('typed registry와 providerId는 Host 정의를 선택하는 key로만 사용된다', () => {
+		test('typed provider registry는 Host에 남고 ready 계약에서는 제외된다', () => {
 			type HostProviderDefinition = {
 				readonly executable: string;
 				readonly timeoutMs: number;
@@ -390,7 +389,7 @@ suite('Host↔Webview protocol completion contract', () => {
 			);
 			assertSuccess(result);
 			if (result.ok && result.value.type === 'terminal.ready') {
-				assert.strictEqual(result.value.providerId, PROVIDER_IDS[0]);
+				assert.strictEqual('providerId' in result.value, false);
 				assert.strictEqual('executable' in result.value, false);
 			}
 		});

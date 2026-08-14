@@ -101,7 +101,7 @@ window.addEventListener('message', (event) => {
 	handleHostMessage(event.data);
 });
 
-/** 현재 Webview 초기화 완료 사실만 Host에 알리며 terminal.ready는 전송하지 않는다. */
+/** 현재 Webview 초기화 완료 사실을 Host에 알린다. Terminal ready는 초기 fit 뒤 별도로 전송된다. */
 vscodeApi.postMessage({
 	type: 'webview.ready',
 } satisfies WebviewToExtensionMessage);

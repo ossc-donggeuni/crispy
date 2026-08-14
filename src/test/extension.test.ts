@@ -266,7 +266,6 @@ suite('Crispy Extension Host', () => {
 			{
 				type: 'terminal.ready',
 				tabId: 'tab-ready-dispatch',
-				providerId: 'codex',
 				cols: 132,
 				rows: 43,
 			},
@@ -296,7 +295,6 @@ suite('Crispy Extension Host', () => {
 			{
 				type: 'terminal.ready',
 				tabId: 'tab-forbidden-ready',
-				providerId: 'codex',
 				cols: 80,
 				rows: 24,
 				executable: '/webview/controlled/shell',

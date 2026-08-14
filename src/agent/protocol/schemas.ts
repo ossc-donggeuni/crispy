@@ -8,7 +8,6 @@ import {
 	TERMINAL_ROWS_MAX,
 	TERMINAL_ROWS_MIN,
 } from './limits';
-import { PROVIDER_IDS } from './providers';
 import {
 	validationFailure,
 	validationSuccess,
@@ -78,11 +77,6 @@ const idSchema = defineFieldSchema<string>((value, field) => {
 	return validationSuccess(value);
 });
 
-/** Webview가 선택한 providerId가 Host registry allowlist에 있는지 검증한다. */
-const providerIdSchema = stringAllowlistSchema(
-	PROVIDER_IDS,
-	'provider_not_allowed',
-);
 /** Host가 전송한 terminal.error code가 공개 오류 code allowlist에 있는지 검증한다. */
 const terminalErrorCodeSchema = stringAllowlistSchema(
 	TERMINAL_ERROR_CODES,
@@ -135,7 +129,6 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'webview.ready': {},
 	'terminal.ready': {
 		tabId: idSchema,
-		providerId: providerIdSchema,
 		cols: colsSchema,
 		rows: rowsSchema,
 	},

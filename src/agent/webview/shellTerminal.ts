@@ -16,10 +16,25 @@ type TerminalInputMessage = Extract<
 	{ type: 'terminal.input' }
 >;
 
+type TerminalReadyMessage = Extract<
+	WebviewToHostMessage,
+	{ type: 'terminal.ready' }
+>;
+
+/** 초기 layout을 기다리는 최대 animation frame 수다. */
+export const TERMINAL_INITIAL_FIT_MAX_FRAMES = 20;
+
+/** 숨겨진 Terminal surface도 PTY 시작을 막지 않는 초기 크기다. */
+export const TERMINAL_INITIAL_FALLBACK_DIMENSIONS = Object.freeze({
+	cols: 80,
+	rows: 24,
+});
+
 /** 실제 xterm과 테스트 대역이 함께 구현하는 최소 터미널 경계다. */
 interface XtermTerminal {
 	loadAddon(addon: FitAddon): void;
 	open(container: HTMLElement): void;
+	focus(): void;
 	write(data: string): void;
 	onData(listener: (data: string) => void): unknown;
 	dispose(): void;
@@ -30,10 +45,13 @@ export interface ShellTerminalDependencies {
 	createTerminal(): XtermTerminal;
 	createFitAddon(): FitAddon;
 	createTabId(): TabId;
+	requestAnimationFrame(callback: FrameRequestCallback): number;
 }
 
-/** 터미널 입력을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
-export type PostTerminalMessage = (message: TerminalInputMessage) => void;
+/** 터미널 준비와 입력을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
+export type PostTerminalMessage = (
+	message: TerminalReadyMessage | TerminalInputMessage,
+) => void;
 
 /** 웹뷰 진입점이 터미널 세션 메시지를 전달하는 데 사용하는 최소 제어 경계다. */
 export interface ShellTerminalController {
@@ -48,6 +66,7 @@ const defaultDependencies: ShellTerminalDependencies = {
 	createTerminal: () => new Terminal(),
 	createFitAddon: () => new FitAddon(),
 	createTabId: () => `tab-${globalThis.crypto.randomUUID()}`,
+	requestAnimationFrame: (callback) => globalThis.requestAnimationFrame(callback),
 };
 
 /**
@@ -71,6 +90,7 @@ export function initializeShellTerminal(
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
 	let terminal: XtermTerminal | undefined;
+	let readySent = false;
 
 	const controller: ShellTerminalController = {
 		tabId,
@@ -79,6 +99,11 @@ export function initializeShellTerminal(
 				case 'terminal.started':
 					if (message.tabId === tabId) {
 						activeSessionId = message.sessionId;
+						try {
+							terminal?.focus();
+						} catch {
+							// Focus 실패는 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다.
+						}
 					}
 					break;
 				case 'terminal.output':
@@ -113,7 +138,6 @@ export function initializeShellTerminal(
 		const fitAddon = dependencies.createFitAddon();
 		terminal.loadAddon(fitAddon);
 		terminal.open(mount);
-		fitAddon.fit();
 		terminal.onData((data) => {
 			if (activeSessionId === undefined) {
 				return;
@@ -130,6 +154,59 @@ export function initializeShellTerminal(
 				// Webview 전송 실패가 xterm 입력 처리나 Graph 기능으로 전파되지 않게 한다.
 			}
 		});
+
+			let attemptedFrames = 0;
+			const fitAndAnnounceReady = (): void => {
+				if (readySent) {
+					return;
+				}
+
+				attemptedFrames += 1;
+				let dimensions: ReturnType<FitAddon['proposeDimensions']>;
+				try {
+					fitAddon.fit();
+					dimensions = fitAddon.proposeDimensions();
+				} catch {
+					dimensions = undefined;
+				}
+
+				if (
+					dimensions !== undefined
+					&& Number.isInteger(dimensions.cols)
+					&& Number.isInteger(dimensions.rows)
+					&& dimensions.cols >= 1
+					&& dimensions.rows >= 1
+				) {
+					postReady(dimensions.cols, dimensions.rows);
+					return;
+				}
+
+				if (attemptedFrames >= TERMINAL_INITIAL_FIT_MAX_FRAMES) {
+					postReady(
+						TERMINAL_INITIAL_FALLBACK_DIMENSIONS.cols,
+						TERMINAL_INITIAL_FALLBACK_DIMENSIONS.rows,
+					);
+					return;
+				}
+
+				dependencies.requestAnimationFrame(fitAndAnnounceReady);
+			};
+
+			const postReady = (cols: number, rows: number): void => {
+				readySent = true;
+				try {
+					postMessage({
+						type: 'terminal.ready',
+						tabId,
+						cols,
+						rows,
+					});
+				} catch {
+					// Ready 전송 실패가 Graph나 다른 Webview 기능으로 전파되지 않게 한다.
+				}
+			};
+
+			dependencies.requestAnimationFrame(fitAndAnnounceReady);
 	} catch {
 		try {
 			terminal?.dispose();

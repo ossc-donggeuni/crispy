@@ -1,7 +1,6 @@
 import * as assert from 'assert';
 import {
 	ID_MAX_LENGTH,
-	PROVIDER_IDS,
 	TERMINAL_COLS_MAX,
 	TERMINAL_COLS_MIN,
 	TERMINAL_INPUT_MAX_BYTES,
@@ -47,7 +46,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 				{
 					type: 'terminal.ready',
 					tabId: TAB_ID,
-					providerId: PROVIDER_IDS[0],
 					cols: TERMINAL_COLS_MIN,
 					rows: TERMINAL_ROWS_MAX,
 				},
@@ -124,7 +122,6 @@ suite('Host↔Webview protocol runtime validator', () => {
 					parseWebviewToHostMessage({
 						type: 'terminal.ready',
 						tabId: TAB_ID,
-						providerId: PROVIDER_IDS[0],
 						cols: 80,
 						rows: 24,
 						extra: true,
@@ -136,7 +133,7 @@ suite('Host↔Webview protocol runtime validator', () => {
 			}
 		});
 
-		test('provider allowlist 밖의 선택값을 별도 오류로 거부한다', () => {
+		test('Webview provider 선택을 terminal.ready 추가 필드로 거부한다', () => {
 			const result = parseWebviewToHostMessage({
 				type: 'terminal.ready',
 				tabId: TAB_ID,
@@ -145,7 +142,7 @@ suite('Host↔Webview protocol runtime validator', () => {
 				rows: 24,
 			});
 
-			assertFailure(result, 'provider_not_allowed', 'providerId');
+			assertFailure(result, 'unexpected_field', 'providerId');
 			assert.doesNotMatch(JSON.stringify(result), /secret-provider-name/);
 		});
 

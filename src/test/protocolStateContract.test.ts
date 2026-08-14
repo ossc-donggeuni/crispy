@@ -3,7 +3,6 @@ import {
 	PROVIDER_IDS,
 	parseWebviewToHostMessage,
 	validateWebviewToHostMessageState,
-	type ProviderId,
 	type StateValidationErrorCode,
 	type StateValidationResult,
 	type TerminalSessionState,
@@ -20,7 +19,7 @@ const PROVIDER_ID = PROVIDER_IDS[0];
 
 suite('Host session lifecycle completion contract', () => {
 	suite('상태 validator 성공', () => {
-		test('allowlist provider를 선택한 새 tab의 terminal.ready를 허용한다', () => {
+		test('새 tab의 terminal.ready를 허용한다', () => {
 			const message = readyMessage();
 			assertStateSuccess(
 				validateWebviewToHostMessageState(message, {
@@ -108,18 +107,6 @@ suite('Host session lifecycle completion contract', () => {
 				validateWebviewToHostMessageState(inputMessage(), snapshot),
 				'ownership_mismatch',
 				'sessionId',
-			);
-		});
-
-		test('기존 session과 다른 provider의 ready 재시도를 거부한다', () => {
-			const differentProvider = 'future-provider' as ProviderId;
-			assertStateFailure(
-				validateWebviewToHostMessageState(
-					readyMessage(),
-					createSnapshot('exited', { providerId: differentProvider }),
-				),
-				'provider_mismatch',
-				'providerId',
 			);
 		});
 
@@ -214,12 +201,11 @@ function createSession(
 	};
 }
 
-/** allowlist provider를 선택하는 terminal.ready fixture를 만든다. */
+/** Webview 소유 tab과 초기 크기를 담은 terminal.ready fixture를 만든다. */
 function readyMessage(): WebviewToHostWireMessage {
 	return parseMessage({
 		type: 'terminal.ready',
 		tabId: TAB_ID,
-		providerId: PROVIDER_ID,
 		cols: 80,
 		rows: 24,
 	});

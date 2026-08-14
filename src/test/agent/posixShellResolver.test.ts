@@ -121,7 +121,6 @@ suite('POSIX Shell resolver', () => {
 		const parsed = parseWebviewToHostMessage({
 			type: 'terminal.ready',
 			tabId: 'tab-shell-boundary',
-			providerId: 'codex',
 			cols: 80,
 			rows: 24,
 			...result.policy,

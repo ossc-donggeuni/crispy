@@ -3,7 +3,6 @@ import {
 	PROVIDER_IDS,
 	parseWebviewToHostMessage,
 	validateWebviewToHostMessageState,
-	type ProviderId,
 	type StateValidationErrorCode,
 	type StateValidationResult,
 	type TerminalSessionState,
@@ -73,19 +72,6 @@ suite('Host session state validator', () => {
 					'invalid_session_state',
 				);
 			}
-		});
-
-		test('기존 session과 다른 provider 선택을 구분해 거부한다', () => {
-			const mismatchedProvider = 'future-provider' as ProviderId;
-			const snapshot = createSnapshot('exited', {
-				providerId: mismatchedProvider,
-			});
-
-			assertStateFailure(
-				validateWebviewToHostMessageState(readyMessage(), snapshot),
-				'provider_mismatch',
-				'providerId',
-			);
 		});
 	});
 
@@ -286,7 +272,6 @@ function readyMessage(): WebviewToHostWireMessage {
 	return parseMessage({
 		type: 'terminal.ready',
 		tabId: TAB_ID,
-		providerId: PROVIDER_ID,
 		cols: 80,
 		rows: 24,
 	});

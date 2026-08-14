@@ -271,7 +271,6 @@ suite('Terminal launch Host preparation', () => {
 			const parsed = parseWebviewToHostMessage({
 				type: 'terminal.ready',
 				tabId: 'tab-forbidden',
-				providerId: 'codex',
 				cols: 80,
 				rows: 24,
 				[field]: 'webview-controlled-value',
@@ -295,7 +294,7 @@ suite('Terminal launch Host preparation', () => {
 		if (!providerOverride.ok) {
 			assert.strictEqual(
 				providerOverride.error.code,
-				'provider_not_allowed',
+				'unexpected_field',
 			);
 		}
 	});

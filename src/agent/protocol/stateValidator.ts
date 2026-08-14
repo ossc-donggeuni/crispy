@@ -14,7 +14,6 @@ export type StateValidationErrorCode =
 	| 'unknown_tab'
 	| 'unknown_session'
 	| 'ownership_mismatch'
-	| 'provider_mismatch'
 	| 'duplicate_start'
 	| 'duplicate_restart'
 	| 'invalid_session_state'
@@ -95,10 +94,6 @@ function validateTerminalReady<Message extends Extract<
 	) {
 		return stateValidationFailure('duplicate_start');
 	}
-	if (message.providerId !== session.providerId) {
-		return stateValidationFailure('provider_mismatch', 'providerId');
-	}
-
 	/* exited/error session은 ready 재전송 대신 terminal.restart를 사용해야 한다. */
 	return stateValidationFailure('invalid_session_state');
 }
@@ -235,7 +230,6 @@ const STATE_VALIDATION_ERROR_MESSAGES: Readonly<
 	unknown_tab: 'Unknown terminal tab.',
 	unknown_session: 'Unknown terminal session.',
 	ownership_mismatch: 'Terminal session ownership does not match.',
-	provider_mismatch: 'Terminal provider does not match.',
 	duplicate_start: 'Terminal start is already in progress.',
 	duplicate_restart: 'Terminal restart is already in progress.',
 	invalid_session_state: 'Terminal session state does not allow this message.',

@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import type { FitAddon } from '@xterm/addon-fit';
 import {
 	initializeShellTerminal,
+	TERMINAL_INITIAL_FALLBACK_DIMENSIONS,
+	TERMINAL_INITIAL_FIT_MAX_FRAMES,
 	TERMINAL_INITIALIZATION_ERROR_MESSAGE,
 	type ShellTerminalDependencies,
 } from '../../agent/webview/shellTerminal';
@@ -13,7 +15,8 @@ suite('Shell Terminal Webview', () => {
 	test('Terminal, FitAddon, load, open, fit 순서로 xterm을 mount한다', () => {
 		const events: string[] = [];
 		const terminal = new FakeTerminal(events);
-		const fitAddon = createFitAddon(events);
+		const fitAddon = createFitAddon(events, { cols: 100, rows: 32 });
+		const animationFrames = new FakeAnimationFrames(events);
 		const elements = createElements();
 
 		const controller = initializeShellTerminal(
@@ -21,7 +24,7 @@ suite('Shell Terminal Webview', () => {
 			elements.mount,
 			elements.overlay,
 			() => undefined,
-			createDependencies(terminal, fitAddon, events),
+			createDependencies(terminal, fitAddon, events, animationFrames),
 		);
 
 		assert.strictEqual(controller.tabId, TAB_ID);
@@ -30,11 +33,110 @@ suite('Shell Terminal Webview', () => {
 			'createFitAddon',
 			'loadAddon',
 			'open',
-			'fit',
 			'onData',
+			'requestAnimationFrame',
 		]);
+
+		animationFrames.flushNext();
+		assert.deepStrictEqual(events.slice(-2), ['fit', 'proposeDimensions']);
 		assert.strictEqual(terminal.openedContainer, elements.mount);
 		assert.strictEqual(elements.overlay.hidden, true);
+	});
+
+	test('첫 animation frame의 유효한 크기로 terminal.ready를 한 번만 보낸다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon([], { cols: 132, rows: 43 }),
+				[],
+				animationFrames,
+			),
+		);
+
+		assert.deepStrictEqual(messages, []);
+		animationFrames.flushNext();
+
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.ready',
+			tabId: TAB_ID,
+			cols: 132,
+			rows: 43,
+		}]);
+		assert.deepStrictEqual(Object.keys(messages[0] as object).sort(), [
+			'cols',
+			'rows',
+			'tabId',
+			'type',
+		]);
+		assert.strictEqual(animationFrames.pendingCount, 0);
+	});
+
+	test('0 이하 크기에서는 ready를 미루고 다음 frame의 유효한 크기를 사용한다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		let proposals = 0;
+		initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon([], () => {
+					proposals += 1;
+					return proposals === 1
+						? { cols: 0, rows: 0 }
+						: { cols: 96, rows: 28 };
+				}),
+				[],
+				animationFrames,
+			),
+		);
+
+		animationFrames.flushNext();
+		assert.deepStrictEqual(messages, []);
+		assert.strictEqual(animationFrames.pendingCount, 1);
+
+		animationFrames.flushNext();
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.ready',
+			tabId: TAB_ID,
+			cols: 96,
+			rows: 28,
+		}]);
+	});
+
+	test('숨겨진 surface의 크기가 계속 없으면 제한 frame 뒤 80x24로 시작한다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon([], () => undefined),
+				[],
+				animationFrames,
+			),
+		);
+
+		for (let frame = 1; frame < TERMINAL_INITIAL_FIT_MAX_FRAMES; frame += 1) {
+			animationFrames.flushNext();
+			assert.deepStrictEqual(messages, []);
+		}
+		animationFrames.flushNext();
+
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.ready',
+			tabId: TAB_ID,
+			...TERMINAL_INITIAL_FALLBACK_DIMENSIONS,
+		}]);
+		assert.strictEqual(animationFrames.pendingCount, 0);
 	});
 
 	test('현재 tabId와 sessionId가 모두 일치하는 output만 원문 그대로 write한다', () => {
@@ -97,6 +199,30 @@ suite('Shell Terminal Webview', () => {
 			sessionId: SESSION_ID,
 			data: unchangedInput,
 		}]);
+		assert.strictEqual(terminal.focusCalls, 1);
+	});
+
+	test('다른 tab의 started는 focus하지 않고 현재 tab의 started만 입력 focus한다', () => {
+		const terminal = new FakeTerminal();
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			createDependencies(terminal),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: 'tab-other',
+			sessionId: SESSION_ID,
+		});
+		assert.strictEqual(terminal.focusCalls, 0);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		assert.strictEqual(terminal.focusCalls, 1);
 	});
 
 	test('종료된 현재 session에는 input과 늦은 output을 연결하지 않는다', () => {
@@ -177,6 +303,7 @@ class FakeTerminal {
 	readonly writes: string[] = [];
 	openedContainer: HTMLElement | undefined;
 	disposeCalls = 0;
+	focusCalls = 0;
 	private dataListener: ((data: string) => void) | undefined;
 
 	constructor(private readonly events: string[] = []) {}
@@ -188,6 +315,10 @@ class FakeTerminal {
 	open(container: HTMLElement): void {
 		this.events.push('open');
 		this.openedContainer = container;
+	}
+
+	focus(): void {
+		this.focusCalls += 1;
 	}
 
 	write(data: string): void {
@@ -264,6 +395,7 @@ function createDependencies(
 	terminal: FakeTerminal,
 	fitAddon = createFitAddon(),
 	events: string[] = [],
+	animationFrames = new FakeAnimationFrames(),
 ): ShellTerminalDependencies {
 	return {
 		createTerminal: () => {
@@ -275,14 +407,48 @@ function createDependencies(
 			return fitAddon;
 		},
 		createTabId: () => TAB_ID,
+		requestAnimationFrame: (callback) => animationFrames.request(callback),
 	};
 }
 
-function createFitAddon(events: string[] = []): FitAddon {
+type ProposedDimensions = { readonly cols: number; readonly rows: number } | undefined;
+
+function createFitAddon(
+	events: string[] = [],
+	dimensions: ProposedDimensions | (() => ProposedDimensions) = {
+		cols: 80,
+		rows: 24,
+	},
+): FitAddon {
 	return {
 		activate: () => undefined,
 		dispose: () => undefined,
 		fit: () => events.push('fit'),
-		proposeDimensions: () => undefined,
+		proposeDimensions: () => {
+			events.push('proposeDimensions');
+			return typeof dimensions === 'function' ? dimensions() : dimensions;
+		},
 	} as FitAddon;
+}
+
+class FakeAnimationFrames {
+	private readonly callbacks: FrameRequestCallback[] = [];
+
+	constructor(private readonly events: string[] = []) {}
+
+	get pendingCount(): number {
+		return this.callbacks.length;
+	}
+
+	request(callback: FrameRequestCallback): number {
+		this.events.push('requestAnimationFrame');
+		this.callbacks.push(callback);
+		return this.callbacks.length;
+	}
+
+	flushNext(): void {
+		const callback = this.callbacks.shift();
+		assert.ok(callback, 'Expected a pending animation frame callback.');
+		callback(0);
+	}
 }

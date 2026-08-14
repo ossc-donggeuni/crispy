@@ -210,6 +210,28 @@ suite('TerminalHost start orchestration', () => {
 		]);
 	});
 
+	test('Webview fallback 크기 80x24로도 session을 running 상태까지 시작한다', async () => {
+		const adapter = new FakePtyAdapter(9204);
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-fallback-size', 80, 24);
+
+		const session = host.getActiveSession('tab-fallback-size');
+		assert.ok(session);
+		assert.deepStrictEqual(session.state, { kind: 'running', pid: 9204 });
+		assert.deepStrictEqual(adapter.spawnCalls, [{
+			...launchPolicy,
+			args: ['--host-owned'],
+			env: { CRISPY_HOST_ENV: 'present' },
+			cols: 80,
+			rows: 24,
+		}]);
+		assert.strictEqual(messages.at(-1)?.type, 'terminal.started');
+	});
+
 	test('정책 준비 중 starting 상태를 유지하고 같은 tab의 중복 start를 거부한다', async () => {
 		let finishPreparation!: (
 			value: Awaited<ReturnType<PrepareTerminalLaunch>>,
