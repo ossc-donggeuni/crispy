@@ -22,6 +22,11 @@ type TerminalReadyMessage = Extract<
 	{ type: 'terminal.ready' }
 >;
 
+type TerminalResizeMessage = Extract<
+	WebviewToHostMessage,
+	{ type: 'terminal.resize' }
+>;
+
 /** 초기 layout을 기다리는 최대 animation frame 수다. */
 export const TERMINAL_INITIAL_FIT_MAX_FRAMES = 20;
 
@@ -47,11 +52,15 @@ export interface ShellTerminalDependencies {
 	createFitAddon(): FitAddon;
 	createTabId(): TabId;
 	requestAnimationFrame(callback: FrameRequestCallback): number;
+	createResizeObserver(callback: ResizeObserverCallback): ResizeObserver;
+	addWindowResizeListener(listener: () => void): () => void;
+	addVisibilityChangeListener(listener: () => void): () => void;
+	isDocumentHidden(): boolean;
 }
 
-/** 터미널 준비와 입력을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
+/** 터미널 준비, 입력과 크기 변경을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
 export type PostTerminalMessage = (
-	message: TerminalReadyMessage | TerminalInputMessage,
+	message: TerminalReadyMessage | TerminalInputMessage | TerminalResizeMessage,
 ) => void;
 
 /** 웹뷰 진입점이 터미널 세션 메시지를 전달하는 데 사용하는 최소 제어 경계다. */
@@ -61,6 +70,12 @@ export interface ShellTerminalController {
 
 	/** 검증된 호스트 메시지를 현재 탭 및 세션과 대조해 처리한다. */
 	handleHostMessage(message: HostToWebviewMessage): void;
+
+	/** 다음 animation frame에 Terminal fit을 예약한다. */
+	scheduleTerminalFit(): void;
+
+	/** Terminal과 resize 관찰자를 정리한다. */
+	dispose(): void;
 }
 
 /** VS Code가 Webview에 주입한 Terminal 색상을 xterm theme 속성에 연결한다. */
@@ -103,6 +118,16 @@ const defaultDependencies: ShellTerminalDependencies = {
 	createFitAddon: () => new FitAddon(),
 	createTabId: () => `tab-${globalThis.crypto.randomUUID()}`,
 	requestAnimationFrame: (callback) => globalThis.requestAnimationFrame(callback),
+	createResizeObserver: (callback) => new ResizeObserver(callback),
+	addWindowResizeListener: (listener) => {
+		window.addEventListener('resize', listener);
+		return () => window.removeEventListener('resize', listener);
+	},
+	addVisibilityChangeListener: (listener) => {
+		document.addEventListener('visibilitychange', listener);
+		return () => document.removeEventListener('visibilitychange', listener);
+	},
+	isDocumentHidden: () => document.hidden,
 };
 
 /**
@@ -112,7 +137,7 @@ const defaultDependencies: ShellTerminalDependencies = {
  * @param surface xterm 장착 영역과 상태 덮개를 포함하는 터미널 영역
  * @param mount xterm이 실제 DOM을 생성하는 컨테이너
  * @param overlay 터미널 영역 안에서만 상태를 표시하는 덮개
- * @param postMessage `terminal.input` 메시지를 호스트로 보내는 웹뷰 API 경계
+ * @param postMessage Terminal 메시지를 호스트로 보내는 웹뷰 API 경계
  * @param dependencies xterm과 탭 식별자를 생성하는 의존성
  * @returns 현재 탭과 세션의 소유 관계를 관리하는 제어 객체
  */
@@ -126,10 +151,147 @@ export function initializeShellTerminal(
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
 	let terminal: XtermTerminal | undefined;
+	let fitAddon: FitAddon | undefined;
+	let resizeObserver: ResizeObserver | undefined;
+	let removeWindowResizeListener: (() => void) | undefined;
+	let removeVisibilityChangeListener: (() => void) | undefined;
+	let fitScheduled = false;
+	let disposed = false;
 	let readySent = false;
+	let attemptedFrames = 0;
+	let lastSentDimensions: { cols: number; rows: number } | undefined;
+
+	/**
+	 * 모든 layout 및 visibility 이벤트를 한 animation frame으로 병합해 xterm을 맞춘다.
+	 * fit, 측정 또는 전송 실패는 Terminal 경계 안에 격리한다.
+	 */
+	function scheduleTerminalFit(): void {
+		if (disposed || fitScheduled || terminal === undefined || fitAddon === undefined) {
+			return;
+		}
+
+		fitScheduled = true;
+		try {
+			dependencies.requestAnimationFrame(() => {
+				fitScheduled = false;
+				if (disposed || terminal === undefined || fitAddon === undefined) {
+					return;
+				}
+
+				if (!readySent) {
+					attemptedFrames += 1;
+				}
+
+				let dimensions: ReturnType<FitAddon['proposeDimensions']>;
+				try {
+					const isHidden = dependencies.isDocumentHidden()
+						|| surface.hidden
+						|| mount.hidden
+						|| mount.clientWidth <= 0
+						|| mount.clientHeight <= 0;
+
+					if (!isHidden) {
+						fitAddon.fit();
+						dimensions = fitAddon.proposeDimensions();
+					}
+				} catch {
+					dimensions = undefined;
+				}
+
+				if (
+					dimensions !== undefined
+					&& Number.isInteger(dimensions.cols)
+					&& Number.isInteger(dimensions.rows)
+					&& dimensions.cols > 0
+					&& dimensions.rows > 0
+				) {
+					const { cols, rows } = dimensions;
+					if (!readySent) {
+						postReady(cols, rows);
+						return;
+					}
+
+					if (
+						activeSessionId !== undefined
+						&& (lastSentDimensions?.cols !== cols
+							|| lastSentDimensions?.rows !== rows)
+					) {
+						try {
+							postMessage({
+								type: 'terminal.resize',
+								tabId,
+								sessionId: activeSessionId,
+								cols,
+								rows,
+							});
+							lastSentDimensions = { cols, rows };
+						} catch {
+							// Resize 전송 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다.
+						}
+					}
+					return;
+				}
+
+				if (!readySent) {
+					if (attemptedFrames >= TERMINAL_INITIAL_FIT_MAX_FRAMES) {
+						postReady(
+							TERMINAL_INITIAL_FALLBACK_DIMENSIONS.cols,
+							TERMINAL_INITIAL_FALLBACK_DIMENSIONS.rows,
+						);
+						return;
+					}
+
+					scheduleTerminalFit();
+				}
+			});
+		} catch {
+			fitScheduled = false;
+			// animation frame 예약 실패도 다른 Webview 기능으로 전파하지 않는다.
+		}
+	}
+
+	const postReady = (cols: number, rows: number): void => {
+		readySent = true;
+		try {
+			postMessage({
+				type: 'terminal.ready',
+				tabId,
+				cols,
+				rows,
+			});
+			lastSentDimensions = { cols, rows };
+		} catch {
+			// Ready 전송 실패가 Graph나 다른 Webview 기능으로 전파되지 않게 한다.
+		}
+	};
+
+	const dispose = (): void => {
+		if (disposed) {
+			return;
+		}
+
+		disposed = true;
+		const cleanupActions = [
+			() => resizeObserver?.disconnect(),
+			() => removeWindowResizeListener?.(),
+			() => removeVisibilityChangeListener?.(),
+			() => terminal?.dispose(),
+		];
+		for (const cleanup of cleanupActions) {
+			try {
+				cleanup();
+			} catch {
+				// 한 정리 실패가 나머지 Terminal 및 Webview 정리를 막지 않게 한다.
+			}
+		}
+		terminal = undefined;
+		fitAddon = undefined;
+	};
 
 	const controller: ShellTerminalController = {
 		tabId,
+		scheduleTerminalFit,
+		dispose,
 		handleHostMessage(message): void {
 			switch (message.type) {
 				case 'terminal.started':
@@ -140,6 +302,7 @@ export function initializeShellTerminal(
 						} catch {
 							// Focus 실패는 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다.
 						}
+						scheduleTerminalFit();
 					}
 					break;
 				case 'terminal.output':
@@ -165,13 +328,21 @@ export function initializeShellTerminal(
 						activeSessionId = undefined;
 					}
 					break;
+				case 'terminal.error':
+					if (
+						message.tabId === tabId
+						&& message.sessionId === activeSessionId
+					) {
+						activeSessionId = undefined;
+					}
+					break;
 			}
 		},
 	};
 
 	try {
 		terminal = dependencies.createTerminal();
-		const fitAddon = dependencies.createFitAddon();
+		fitAddon = dependencies.createFitAddon();
 		terminal.loadAddon(fitAddon);
 		terminal.open(mount);
 		terminal.onData((data) => {
@@ -191,65 +362,17 @@ export function initializeShellTerminal(
 			}
 		});
 
-			let attemptedFrames = 0;
-			const fitAndAnnounceReady = (): void => {
-				if (readySent) {
-					return;
-				}
-
-				attemptedFrames += 1;
-				let dimensions: ReturnType<FitAddon['proposeDimensions']>;
-				try {
-					fitAddon.fit();
-					dimensions = fitAddon.proposeDimensions();
-				} catch {
-					dimensions = undefined;
-				}
-
-				if (
-					dimensions !== undefined
-					&& Number.isInteger(dimensions.cols)
-					&& Number.isInteger(dimensions.rows)
-					&& dimensions.cols >= 1
-					&& dimensions.rows >= 1
-				) {
-					postReady(dimensions.cols, dimensions.rows);
-					return;
-				}
-
-				if (attemptedFrames >= TERMINAL_INITIAL_FIT_MAX_FRAMES) {
-					postReady(
-						TERMINAL_INITIAL_FALLBACK_DIMENSIONS.cols,
-						TERMINAL_INITIAL_FALLBACK_DIMENSIONS.rows,
-					);
-					return;
-				}
-
-				dependencies.requestAnimationFrame(fitAndAnnounceReady);
-			};
-
-			const postReady = (cols: number, rows: number): void => {
-				readySent = true;
-				try {
-					postMessage({
-						type: 'terminal.ready',
-						tabId,
-						cols,
-						rows,
-					});
-				} catch {
-					// Ready 전송 실패가 Graph나 다른 Webview 기능으로 전파되지 않게 한다.
-				}
-			};
-
-			dependencies.requestAnimationFrame(fitAndAnnounceReady);
+		resizeObserver = dependencies.createResizeObserver(scheduleTerminalFit);
+		resizeObserver.observe(mount);
+		removeWindowResizeListener = dependencies.addWindowResizeListener(
+			scheduleTerminalFit,
+		);
+		removeVisibilityChangeListener = dependencies.addVisibilityChangeListener(
+			scheduleTerminalFit,
+		);
+		scheduleTerminalFit();
 	} catch {
-		try {
-			terminal?.dispose();
-		} catch {
-			// 부분 초기화된 xterm의 정리 실패도 Terminal surface 안에 격리한다.
-		}
-		terminal = undefined;
+		dispose();
 		mount.replaceChildren();
 		surface.dataset.state = 'error';
 		overlay.textContent = TERMINAL_INITIALIZATION_ERROR_MESSAGE;

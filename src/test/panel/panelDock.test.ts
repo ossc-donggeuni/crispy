@@ -198,6 +198,16 @@ suite('Panel Dock', () => {
 		assert.strictEqual(fixture.layout.styleProperties.has('--chat-side-size'), false);
 		assert.strictEqual(fixture.layout.dataset.dock, 'right');
 	});
+
+	test('Dock 변경 완료 콜백을 변경이 확정된 경우에만 호출한다', () => {
+		const fixture = createDockFixture(1000, 'right');
+
+		dragDock(fixture.dragHandle, 1, 400);
+		assert.strictEqual(fixture.getDockChangeCount(), 1);
+
+		dragDock(fixture.dragHandle, -1, 400);
+		assert.strictEqual(fixture.getDockChangeCount(), 1);
+	});
 });
 
 interface DockFixture {
@@ -206,6 +216,7 @@ interface DockFixture {
 	dockPreview: FakeElement;
 	state: PanelLayoutState;
 	getChangeCount(): number;
+	getDockChangeCount(): number;
 }
 
 function createDockFixture(
@@ -218,6 +229,7 @@ function createDockFixture(
 	const dockPreview = new FakeElement();
 	const state = createState(preferredDock, sideSize);
 	let changeCount = 0;
+	let dockChangeCount = 0;
 
 	initializePanelDock(
 		layout.asHtmlElement(),
@@ -225,6 +237,7 @@ function createDockFixture(
 		dockPreview.asHtmlElement(),
 		state,
 		() => changeCount++,
+		() => dockChangeCount++,
 	);
 
 	return {
@@ -233,6 +246,7 @@ function createDockFixture(
 		dockPreview,
 		state,
 		getChangeCount: () => changeCount,
+		getDockChangeCount: () => dockChangeCount,
 	};
 }
 

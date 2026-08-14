@@ -206,6 +206,195 @@ suite('Shell Terminal Webview', () => {
 		assert.strictEqual(animationFrames.pendingCount, 0);
 	});
 
+	test('ResizeObserver, Dock/Drag 호출, Window, Visibility 이벤트를 한 frame으로 병합한다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		const environment = new FakeTerminalEnvironment();
+		let dimensions = { cols: 80, rows: 24 };
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon([], () => dimensions),
+				[],
+				animationFrames,
+				environment,
+			),
+		);
+
+		animationFrames.flushNext();
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		dimensions = { cols: 132, rows: 43 };
+
+		controller.scheduleTerminalFit();
+		controller.scheduleTerminalFit();
+		environment.triggerContainerResize();
+		environment.triggerWindowResize();
+		environment.triggerVisibilityChange();
+		assert.strictEqual(animationFrames.pendingCount, 1);
+
+		animationFrames.flushNext();
+		assert.deepStrictEqual(messages[1], {
+			type: 'terminal.resize',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			cols: 132,
+			rows: 43,
+		});
+		assert.deepStrictEqual(Object.keys(messages[1] as object).sort(), [
+			'cols',
+			'rows',
+			'sessionId',
+			'tabId',
+			'type',
+		]);
+
+		environment.triggerContainerResize();
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 2, '동일한 cols/rows는 중복 전송하지 않아야 한다.');
+	});
+
+	test('hidden 또는 0 크기에서는 resize하지 않고 visible 복귀 뒤 다시 fit한다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		const environment = new FakeTerminalEnvironment();
+		const elements = createElements();
+		let dimensions = { cols: 80, rows: 24 };
+		const controller = initializeShellTerminal(
+			elements.surface,
+			elements.mount,
+			elements.overlay,
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon([], () => dimensions),
+				[],
+				animationFrames,
+				environment,
+			),
+		);
+
+		animationFrames.flushNext();
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		animationFrames.flushNext();
+
+		dimensions = { cols: 120, rows: 36 };
+		environment.hidden = true;
+		environment.triggerVisibilityChange();
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 1);
+
+		environment.hidden = false;
+		elements.surfaceElement.hidden = true;
+		environment.triggerContainerResize();
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 1);
+
+		elements.surfaceElement.hidden = false;
+		elements.mountElement.clientWidth = 0;
+		environment.triggerContainerResize();
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 1);
+
+		elements.mountElement.clientWidth = 800;
+		environment.triggerVisibilityChange();
+		animationFrames.flushNext();
+		assert.deepStrictEqual(messages[1], {
+			type: 'terminal.resize',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			cols: 120,
+			rows: 36,
+		});
+	});
+
+	test('0 이하 cols/rows와 종료된 session에는 resize를 전송하지 않는다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		let dimensions = { cols: 80, rows: 24 };
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(
+				terminal,
+				createFitAddon([], () => dimensions),
+				[],
+				animationFrames,
+			),
+		);
+
+		animationFrames.flushNext();
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		dimensions = { cols: 0, rows: 30 };
+		animationFrames.flushNext();
+		controller.scheduleTerminalFit();
+		dimensions = { cols: 100, rows: 0 };
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 1);
+
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 0,
+		});
+		controller.scheduleTerminalFit();
+		dimensions = { cols: 140, rows: 50 };
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 1);
+	});
+
+	test('fit 계산 실패를 호출자에 전파하지 않고 다음 resize에서 복구한다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const animationFrames = new FakeAnimationFrames();
+		let dimensions = { cols: 80, rows: 24 };
+		let shouldThrow = false;
+		const fitAddon = createFitAddon([], () => dimensions);
+		fitAddon.fit = () => {
+			if (shouldThrow) {
+				throw new Error('fit failed');
+			}
+		};
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			createDependencies(terminal, fitAddon, [], animationFrames),
+		);
+
+		animationFrames.flushNext();
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		shouldThrow = true;
+		assert.doesNotThrow(() => animationFrames.flushNext());
+		assert.strictEqual(messages.length, 1);
+
+		shouldThrow = false;
+		dimensions = { cols: 110, rows: 35 };
+		controller.scheduleTerminalFit();
+		animationFrames.flushNext();
+		assert.strictEqual(messages.length, 2);
+	});
+
 	test('현재 tabId와 sessionId가 모두 일치하는 output만 원문 그대로 write한다', () => {
 		const terminal = new FakeTerminal();
 		const controller = initializeShellTerminal(
@@ -409,10 +598,15 @@ class FakeTerminal {
 
 class FakeElement {
 	readonly dataset: DOMStringMap = {};
-	hidden = true;
 	textContent = '';
 	role: string | undefined;
 	replaceChildrenCalls = 0;
+
+	constructor(
+		public hidden = false,
+		public clientWidth = 800,
+		public clientHeight = 600,
+	) {}
 
 	setAttribute(name: string, value: string): void {
 		if (name === 'role') {
@@ -441,7 +635,7 @@ interface FakeElements {
 function createElements(): FakeElements {
 	const surfaceElement = new FakeElement();
 	const mountElement = new FakeElement();
-	const overlayElement = new FakeElement();
+	const overlayElement = new FakeElement(true);
 
 	return {
 		surfaceElement,
@@ -463,6 +657,7 @@ function createDependencies(
 	fitAddon = createFitAddon(),
 	events: string[] = [],
 	animationFrames = new FakeAnimationFrames(),
+	environment = new FakeTerminalEnvironment(),
 ): ShellTerminalDependencies {
 	return {
 		createTerminal: () => {
@@ -475,7 +670,57 @@ function createDependencies(
 		},
 		createTabId: () => TAB_ID,
 		requestAnimationFrame: (callback) => animationFrames.request(callback),
+		createResizeObserver: (callback) => environment.createResizeObserver(callback),
+		addWindowResizeListener: (listener) => environment.addWindowResizeListener(listener),
+		addVisibilityChangeListener: (listener) =>
+			environment.addVisibilityChangeListener(listener),
+		isDocumentHidden: () => environment.hidden,
 	};
+}
+
+class FakeTerminalEnvironment {
+	hidden = false;
+	private resizeObserverListener: (() => void) | undefined;
+	private windowResizeListener: (() => void) | undefined;
+	private visibilityChangeListener: (() => void) | undefined;
+
+	createResizeObserver(callback: ResizeObserverCallback): ResizeObserver {
+		return {
+			observe: () => {
+				this.resizeObserverListener = () => callback([], {} as ResizeObserver);
+			},
+			disconnect: () => {
+				this.resizeObserverListener = undefined;
+			},
+			unobserve: () => undefined,
+		} as ResizeObserver;
+	}
+
+	addWindowResizeListener(listener: () => void): () => void {
+		this.windowResizeListener = listener;
+		return () => {
+			this.windowResizeListener = undefined;
+		};
+	}
+
+	addVisibilityChangeListener(listener: () => void): () => void {
+		this.visibilityChangeListener = listener;
+		return () => {
+			this.visibilityChangeListener = undefined;
+		};
+	}
+
+	triggerContainerResize(): void {
+		this.resizeObserverListener?.();
+	}
+
+	triggerWindowResize(): void {
+		this.windowResizeListener?.();
+	}
+
+	triggerVisibilityChange(): void {
+		this.visibilityChangeListener?.();
+	}
 }
 
 type ProposedDimensions = { readonly cols: number; readonly rows: number } | undefined;

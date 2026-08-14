@@ -49,7 +49,12 @@ const terminalOverlay = getRequiredElement<HTMLElement>('#terminal-overlay');
 
 const graphView = initializeGraphView(graphArea);
 
-window.addEventListener('unload', () => graphView.dispose(), { once: true });
+const shellTerminal = initializeShellTerminal(
+	terminalSurface,
+	terminalMount,
+	terminalOverlay,
+	(message) => vscodeApi.postMessage(message),
+);
 
 // Dock 초기화
 const refreshDock = initializePanelDock(
@@ -58,6 +63,7 @@ const refreshDock = initializePanelDock(
 	dockPreview,
 	state,
 	() => savePanelLayoutState(vscodeApi, state),
+	shellTerminal.scheduleTerminalFit,
 );
 // Resize 초기화
 initializePanelResize(
@@ -66,14 +72,13 @@ initializePanelResize(
 	state,
 	refreshDock,
 	() => savePanelLayoutState(vscodeApi, state),
+	shellTerminal.scheduleTerminalFit,
 );
 
-const shellTerminal = initializeShellTerminal(
-	terminalSurface,
-	terminalMount,
-	terminalOverlay,
-	(message) => vscodeApi.postMessage(message),
-);
+window.addEventListener('unload', () => {
+	graphView.dispose();
+	shellTerminal.dispose();
+}, { once: true });
 
 /**
  * Extension Host에서 받은 unknown 메시지를 구조적으로 검증한 뒤 처리한다.

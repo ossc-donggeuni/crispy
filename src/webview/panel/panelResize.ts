@@ -20,6 +20,7 @@ interface ResizeSession {
  * @param state 사용자가 선택한 Dock 위치와 가로·세로 크기를 담는 Layout 상태
  * @param onSizeChange 크기 변경 후 반응형 Dock 위치를 다시 계산하는 콜백
  * @param onResizeEnd Resize가 완료된 뒤 최종 크기를 저장하는 콜백
+ * @param onLayoutResize Resize 완료 뒤 layout 의존 기능을 갱신하는 콜백
  */
 export function initializePanelResize(
 	layout: HTMLElement,
@@ -27,6 +28,7 @@ export function initializePanelResize(
 	state: PanelLayoutState,
 	onSizeChange: () => void,
 	onResizeEnd: () => void,
+	onLayoutResize: () => void = () => undefined,
 ): void {
 	let session: ResizeSession | undefined;
 
@@ -144,6 +146,7 @@ export function initializePanelResize(
 
 		stopResizing(event.pointerId);
 		onResizeEnd();
+		onLayoutResize();
 	};
 
 	/**

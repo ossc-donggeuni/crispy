@@ -96,6 +96,7 @@ suite('Panel Resize', () => {
 
 		assertPanelSize(fixture, 'left', 410);
 		assert.strictEqual(fixture.getResizeEndCount(), 1);
+		assert.strictEqual(fixture.getLayoutResizeCount(), 1);
 		assert.strictEqual(fixture.layout.hasClass('is-resizing'), false);
 		assert.strictEqual(fixture.resizeHandle.hasPointerCapture(1), false);
 
@@ -103,6 +104,7 @@ suite('Panel Resize', () => {
 		fixture.resizeHandle.dispatch('pointerup', createPointerEvent(600, 400));
 		assertPanelSize(fixture, 'left', 410);
 		assert.strictEqual(fixture.getResizeEndCount(), 1);
+		assert.strictEqual(fixture.getLayoutResizeCount(), 1);
 	});
 
 	test('pointercancel은 move로 변경된 Side size를 시작 크기로 rollback한다', () => {
@@ -137,6 +139,7 @@ interface ResizeFixture {
 	resizeHandle: FakeElement;
 	state: PanelLayoutState;
 	getResizeEndCount(): number;
+	getLayoutResizeCount(): number;
 }
 
 function createResizeFixture(
@@ -152,6 +155,7 @@ function createResizeFixture(
 		verticalSize: INITIAL_VERTICAL_SIZE,
 	};
 	let resizeEndCount = 0;
+	let layoutResizeCount = 0;
 
 	layout.dataset.dock = dock;
 	initializePanelResize(
@@ -160,6 +164,7 @@ function createResizeFixture(
 		state,
 		() => undefined,
 		() => resizeEndCount++,
+		() => layoutResizeCount++,
 	);
 
 	return {
@@ -167,6 +172,7 @@ function createResizeFixture(
 		resizeHandle,
 		state,
 		getResizeEndCount: () => resizeEndCount,
+		getLayoutResizeCount: () => layoutResizeCount,
 	};
 }
 

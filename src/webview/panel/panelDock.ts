@@ -12,6 +12,7 @@ import {
  * @param dockPreview 드래그 중 배치 후보 영역을 표시하는 단일 Preview 요소
  * @param state 사용자가 선택한 위치와 Panel 크기를 담는 Layout 상태
  * @param onPreferredDockChange 사용자가 선호 Dock 위치를 변경한 뒤 실행할 콜백
+ * @param onDockChange Dock 변경 완료 뒤 layout 의존 기능을 갱신하는 콜백
  * @returns Panel 크기나 Webview 너비가 변경됐을 때 실제 Dock 위치를 다시 계산하는 함수
  */
 export function initializePanelDock(
@@ -20,6 +21,7 @@ export function initializePanelDock(
 	dockPreview: HTMLElement,
 	state: PanelLayoutState,
 	onPreferredDockChange: () => void,
+	onDockChange: () => void = () => undefined,
 ): () => void {
 	let activePointerId: number | undefined;
 	let candidateDock: DockPosition | undefined;
@@ -133,6 +135,7 @@ export function initializePanelDock(
 			state.preferredDock = candidateDock;
 			refreshDock();
 			onPreferredDockChange();
+			onDockChange();
 		}
 
 		hidePreview();
