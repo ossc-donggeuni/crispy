@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import type { FitAddon } from '@xterm/addon-fit';
 import {
 	initializeShellTerminal,
+	readVsCodeAnsiTheme,
 	TERMINAL_INITIAL_FALLBACK_DIMENSIONS,
 	TERMINAL_INITIAL_FIT_MAX_FRAMES,
 	TERMINAL_INITIALIZATION_ERROR_MESSAGE,
@@ -12,6 +13,72 @@ const TAB_ID = 'tab-webview-terminal';
 const SESSION_ID = 'session-current';
 
 suite('Shell Terminal Webview', () => {
+	test('VS Code Terminal CSS 색상을 xterm theme에 매핑한다', () => {
+		const cssValues: Readonly<Record<string, string>> = {
+			'--vscode-terminal-background': ' #010101 ',
+			'--vscode-terminal-foreground': '#f1f1f1',
+			'--vscode-terminalCursor-foreground': '#020202',
+			'--vscode-terminalCursor-background': '#f2f2f2',
+			'--vscode-terminal-selectionBackground': '#030303',
+			'--vscode-terminal-ansiBlack': '#000000',
+			'--vscode-terminal-ansiRed': '#aa0000',
+			'--vscode-terminal-ansiGreen': '#00aa00',
+			'--vscode-terminal-ansiYellow': '#aaaa00',
+			'--vscode-terminal-ansiBlue': '#0000aa',
+			'--vscode-terminal-ansiMagenta': '#aa00aa',
+			'--vscode-terminal-ansiCyan': '#00aaaa',
+			'--vscode-terminal-ansiWhite': '#aaaaaa',
+			'--vscode-terminal-ansiBrightBlack': '#555555',
+			'--vscode-terminal-ansiBrightRed': '#ff5555',
+			'--vscode-terminal-ansiBrightGreen': '#55ff55',
+			'--vscode-terminal-ansiBrightYellow': '#ffff55',
+			'--vscode-terminal-ansiBrightBlue': '#5555ff',
+			'--vscode-terminal-ansiBrightMagenta': '#ff55ff',
+			'--vscode-terminal-ansiBrightCyan': '#55ffff',
+			'--vscode-terminal-ansiBrightWhite': '   ',
+		};
+
+		const theme = withWebviewComputedStyle(
+			(name) => cssValues[name] ?? '',
+			readVsCodeAnsiTheme,
+		);
+
+		assert.deepStrictEqual(theme, {
+			background: '#010101',
+			foreground: '#f1f1f1',
+			cursor: '#020202',
+			cursorAccent: '#f2f2f2',
+			selectionBackground: '#030303',
+			black: '#000000',
+			red: '#aa0000',
+			green: '#00aa00',
+			yellow: '#aaaa00',
+			blue: '#0000aa',
+			magenta: '#aa00aa',
+			cyan: '#00aaaa',
+			white: '#aaaaaa',
+			brightBlack: '#555555',
+			brightRed: '#ff5555',
+			brightGreen: '#55ff55',
+			brightYellow: '#ffff55',
+			brightBlue: '#5555ff',
+			brightMagenta: '#ff55ff',
+			brightCyan: '#55ffff',
+			brightWhite: undefined,
+		});
+	});
+
+	test('VS Code theme 조회 실패 시 xterm 기본 theme로 fallback한다', () => {
+		const theme = withWebviewComputedStyle(
+			() => {
+				throw new Error('computed style unavailable');
+			},
+			readVsCodeAnsiTheme,
+		);
+
+		assert.deepStrictEqual(theme, {});
+	});
+
 	test('Terminal, FitAddon, load, open, fit 순서로 xterm을 mount한다', () => {
 		const events: string[] = [];
 		const terminal = new FakeTerminal(events);
@@ -451,4 +518,46 @@ class FakeAnimationFrames {
 		assert.ok(callback, 'Expected a pending animation frame callback.');
 		callback(0);
 	}
+}
+
+function withWebviewComputedStyle<T>(
+	getPropertyValue: (name: string) => string,
+	action: () => T,
+): T {
+	const documentDescriptor = Object.getOwnPropertyDescriptor(
+		globalThis,
+		'document',
+	);
+	const getComputedStyleDescriptor = Object.getOwnPropertyDescriptor(
+		globalThis,
+		'getComputedStyle',
+	);
+
+	Object.defineProperty(globalThis, 'document', {
+		configurable: true,
+		value: { documentElement: {} },
+	});
+	Object.defineProperty(globalThis, 'getComputedStyle', {
+		configurable: true,
+		value: () => ({ getPropertyValue }),
+	});
+
+	try {
+		return action();
+	} finally {
+		restoreGlobalProperty('document', documentDescriptor);
+		restoreGlobalProperty('getComputedStyle', getComputedStyleDescriptor);
+	}
+}
+
+function restoreGlobalProperty(
+	name: 'document' | 'getComputedStyle',
+	descriptor: PropertyDescriptor | undefined,
+): void {
+	if (descriptor === undefined) {
+		Reflect.deleteProperty(globalThis, name);
+		return;
+	}
+
+	Object.defineProperty(globalThis, name, descriptor);
 }

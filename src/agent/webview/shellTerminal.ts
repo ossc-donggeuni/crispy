@@ -1,5 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
+import type { ITheme } from '@xterm/xterm';
 import type {
 	HostToWebviewMessage,
 	SessionId,
@@ -62,8 +63,43 @@ export interface ShellTerminalController {
 	handleHostMessage(message: HostToWebviewMessage): void;
 }
 
+/** VS Code가 Webview에 주입한 Terminal 색상을 xterm theme 속성에 연결한다. */
+export function readVsCodeAnsiTheme(): ITheme {
+	try {
+		const css = getComputedStyle(document.documentElement);
+		const value = (name: string): string | undefined =>
+			css.getPropertyValue(name).trim() || undefined;
+
+		return {
+			background: value('--vscode-terminal-background'),
+			foreground: value('--vscode-terminal-foreground'),
+			cursor: value('--vscode-terminalCursor-foreground'),
+			cursorAccent: value('--vscode-terminalCursor-background'),
+			selectionBackground: value('--vscode-terminal-selectionBackground'),
+			black: value('--vscode-terminal-ansiBlack'),
+			red: value('--vscode-terminal-ansiRed'),
+			green: value('--vscode-terminal-ansiGreen'),
+			yellow: value('--vscode-terminal-ansiYellow'),
+			blue: value('--vscode-terminal-ansiBlue'),
+			magenta: value('--vscode-terminal-ansiMagenta'),
+			cyan: value('--vscode-terminal-ansiCyan'),
+			white: value('--vscode-terminal-ansiWhite'),
+			brightBlack: value('--vscode-terminal-ansiBrightBlack'),
+			brightRed: value('--vscode-terminal-ansiBrightRed'),
+			brightGreen: value('--vscode-terminal-ansiBrightGreen'),
+			brightYellow: value('--vscode-terminal-ansiBrightYellow'),
+			brightBlue: value('--vscode-terminal-ansiBrightBlue'),
+			brightMagenta: value('--vscode-terminal-ansiBrightMagenta'),
+			brightCyan: value('--vscode-terminal-ansiBrightCyan'),
+			brightWhite: value('--vscode-terminal-ansiBrightWhite'),
+		};
+	} catch {
+		return {};
+	}
+}
+
 const defaultDependencies: ShellTerminalDependencies = {
-	createTerminal: () => new Terminal(),
+	createTerminal: () => new Terminal({ theme: readVsCodeAnsiTheme() }),
 	createFitAddon: () => new FitAddon(),
 	createTabId: () => `tab-${globalThis.crypto.randomUUID()}`,
 	requestAnimationFrame: (callback) => globalThis.requestAnimationFrame(callback),

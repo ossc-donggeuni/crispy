@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import {
+	buildShellEnv,
 	createShellLaunchPolicyResolver,
 } from '../../agent/host/shell/shellResolver';
 import type {
@@ -52,6 +53,46 @@ function filesystemError(code: string): NodeJS.ErrnoException {
 }
 
 suite('Host Shell resolver integration', () => {
+	test('PTY env에서 NO_COLOR를 제거하고 FORCE_COLOR와 기본 TERM을 설정한다', () => {
+		const base: NodeJS.ProcessEnv = {
+			SHELL: '/host/selected/shell',
+			NO_COLOR: '1',
+			FORCE_COLOR: '0',
+		};
+		const result = buildShellEnv(base);
+
+		assert.strictEqual(result.NO_COLOR, undefined);
+		assert.strictEqual(result.FORCE_COLOR, '1');
+		assert.strictEqual(result.TERM, 'xterm-256color');
+		assert.strictEqual(base.NO_COLOR, '1');
+		assert.strictEqual(base.FORCE_COLOR, '0');
+		assert.strictEqual(base.TERM, undefined);
+	});
+
+	test('PTY env의 기존 TERM은 보존한다', () => {
+		const result = buildShellEnv({
+			TERM: 'screen-256color',
+			NO_COLOR: '',
+		});
+
+		assert.strictEqual(result.TERM, 'screen-256color');
+		assert.strictEqual(result.NO_COLOR, undefined);
+		assert.strictEqual(result.FORCE_COLOR, '1');
+	});
+
+	test('색상을 비활성화하는 TERM=dumb는 xterm-256color로 교정한다', () => {
+		const base: NodeJS.ProcessEnv = {
+			TERM: 'dumb',
+			NO_COLOR: '1',
+		};
+		const result = buildShellEnv(base);
+
+		assert.strictEqual(result.TERM, 'xterm-256color');
+		assert.strictEqual(result.NO_COLOR, undefined);
+		assert.strictEqual(result.FORCE_COLOR, '1');
+		assert.strictEqual(base.TERM, 'dumb');
+	});
+
 	for (const platform of ['darwin', 'linux'] as const) {
 		test(`${platform} 후보를 POSIX resolver에서 선택한 뒤 검증한다`, async () => {
 			const filesystem = new FakeShellFilesystem();
@@ -66,6 +107,9 @@ suite('Host Shell resolver integration', () => {
 			if (result.ok) {
 				assert.strictEqual(result.policy.executable, '/host/selected/shell');
 				assert.strictEqual(result.policy.cwd, posixWorkspaceRoot.fsPath);
+				assert.strictEqual(result.policy.env.NO_COLOR, undefined);
+				assert.strictEqual(result.policy.env.FORCE_COLOR, '1');
+				assert.strictEqual(result.policy.env.TERM, 'xterm-256color');
 			}
 			assert.deepStrictEqual(filesystem.statCalls, ['/host/selected/shell']);
 			assert.deepStrictEqual(

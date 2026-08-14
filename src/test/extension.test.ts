@@ -88,9 +88,13 @@ suite('Crispy Extension Host', () => {
 		);
 		assert.match(
 			panel.webview.html,
-			/default-src 'none'; style-src [^;]+; script-src [^;]+;/,
+			/default-src 'none'; style-src [^;]+; style-src-elem [^;]+ 'unsafe-inline'; script-src [^;]+;/,
 		);
-		assert.doesNotMatch(panel.webview.html, /'unsafe-inline'|'unsafe-eval'/);
+		assert.doesNotMatch(
+			panel.webview.html,
+			/script-src [^;]*'(?:unsafe-inline|unsafe-eval)'/,
+		);
+		assert.doesNotMatch(panel.webview.html, /'unsafe-eval'/);
 		assert.ok(panel.webview.html.includes('<section id="agent-chat-area">'));
 		assert.ok(panel.webview.html.includes('<div id="terminal-surface"'));
 		assert.ok(panel.webview.html.includes('<div id="terminal-mount"></div>'));

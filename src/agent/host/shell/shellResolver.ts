@@ -18,6 +18,17 @@ export type ShellLaunchPolicyResolver = (
 	workspaceRoot: ValidatedWorkspaceRoot,
 ) => Promise<ShellLaunchPolicyResult>;
 
+/** 인터랙티브 PTY가 색상 출력을 협상하도록 Host 환경 snapshot을 보정한다. */
+export function buildShellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const env = { ...base };
+	delete env.NO_COLOR;
+	env.FORCE_COLOR = '1';
+	if (env.TERM === undefined || env.TERM === 'dumb') {
+		env.TERM = 'xterm-256color';
+	}
+	return env;
+}
+
 /** 지원 플랫폼의 resolver를 호출하고 선택된 플랫폼을 함께 반환한다. */
 function selectShellLaunchPolicy(
 	platform: NodeJS.Platform,
@@ -59,7 +70,11 @@ export function createShellLaunchPolicyResolver(
 		env: NodeJS.ProcessEnv,
 		workspaceRoot: ValidatedWorkspaceRoot,
 	): Promise<ShellLaunchPolicyResult> {
-		const selected = selectShellLaunchPolicy(platform, env, workspaceRoot);
+		const selected = selectShellLaunchPolicy(
+			platform,
+			buildShellEnv(env),
+			workspaceRoot,
+		);
 		if (!selected) {
 			return {
 				ok: false,
