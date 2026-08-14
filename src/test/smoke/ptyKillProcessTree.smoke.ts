@@ -8,6 +8,52 @@ const TERMINATION_TIMEOUT_MS = 2_000;
 const CLEANUP_TIMEOUT_MS = 1_000;
 const POLL_INTERVAL_MS = 25;
 
+interface SmokeLaunch {
+    readonly executable: string;
+    readonly args: readonly string[];
+}
+
+function createSmokeLaunch(): SmokeLaunch {
+    if (process.platform === 'win32') {
+        const systemRoot = process.env.SystemRoot;
+        if (systemRoot === undefined || systemRoot.length === 0) {
+            throw new Error('Smoke launch unavailable');
+        }
+
+        const executable = `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+        const childCommand = Buffer.from(
+            'while ($true) { Start-Sleep -Milliseconds 250 }',
+            'utf16le',
+        ).toString('base64');
+        const startChildCommand = [
+            `$child = Start-Process -FilePath '${executable.replace(/'/gu, "''")}'`,
+            `-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','${childCommand}'`,
+            '-NoNewWindow',
+            '-PassThru',
+        ].join(' ');
+        const shellCommand = [
+            startChildCommand,
+            `Write-Output \"${CHILD_PID_MARKER}$($child.Id)\"`,
+            'Wait-Process -Id $child.Id',
+        ].join('; ');
+
+        return {
+            executable,
+            args: ['-NoProfile', '-NonInteractive', '-Command', shellCommand],
+        };
+    }
+
+    if (process.platform === 'darwin' || process.platform === 'linux') {
+        const shellCommand = `trap '' HUP; /usr/bin/tail -f /dev/null & child_pid=$!; printf '${CHILD_PID_MARKER}%s\\n' \"$child_pid\"; wait \"$child_pid\"`;
+        return {
+            executable: '/bin/sh',
+            args: ['-c', shellCommand],
+        };
+    }
+
+    throw new Error('Smoke launch unavailable');
+}
+
 function delay(milliseconds: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -67,6 +113,10 @@ async function stopPid(pid: number): Promise<boolean> {
 }
 
 async function stopProcessGroup(groupId: number): Promise<boolean> {
+    if (process.platform === 'win32') {
+        return true;
+    }
+
     if (!isProcessGroupAlive(groupId)) {
         return true;
     }
@@ -88,8 +138,8 @@ async function runSmoke(): Promise<boolean> {
     let cleanupSuccess = false;
 
     try {
-        const shellCommand = `trap '' HUP; /usr/bin/tail -f /dev/null & child_pid=$!; printf '${CHILD_PID_MARKER}%s\\n' "$child_pid"; wait "$child_pid"`;
-        pty = nodePty.spawn('/bin/sh', ['-c', shellCommand], {
+        const launch = createSmokeLaunch();
+        pty = nodePty.spawn(launch.executable, [...launch.args], {
             cols: 80,
             rows: 24,
             cwd: process.cwd(),
