@@ -24,6 +24,8 @@ interface CrispyExtensionModule {
 				cols: number,
 				rows: number,
 			): Promise<unknown>;
+			routeInput(message: unknown): void;
+			routeResize(message: unknown): void;
 		},
 	): Thenable<boolean> | undefined;
 }
@@ -181,37 +183,63 @@ suite('Crispy Extension Host', () => {
 		assert.deepStrictEqual(postedMessages, []);
 	});
 
-	test('검증된 terminal 메시지를 input log 없이 안전한 no-op dispatch로 전달한다', () => {
+	test('검증된 input과 resize를 input log 없이 TerminalHost로 전달한다', () => {
 		const postedMessages: unknown[] = [];
 		const loggedValues: unknown[][] = [];
+		const routedInputs: unknown[] = [];
+		const routedResizes: unknown[] = [];
 		const originalConsoleLog = console.log;
 		console.log = (...values: unknown[]) => {
 			loggedValues.push(values);
 		};
 
 		try {
-			const result = extensionModule.handleWebviewMessage(
-				{
-					postMessage: (message: unknown) => {
-						postedMessages.push(message);
-						return Promise.resolve(true);
-					},
+			const terminalHost = {
+				async startSession() {},
+				routeInput: (message: unknown) => routedInputs.push(message),
+				routeResize: (message: unknown) => routedResizes.push(message),
+			};
+			const input = {
+				type: 'terminal.input',
+				tabId: 'tab:one',
+				sessionId: 'session-1',
+				data: 'authorization code=sensitive-token',
+			};
+			const resize = {
+				type: 'terminal.resize',
+				tabId: 'tab:one',
+				sessionId: 'session-1',
+				cols: 132,
+				rows: 43,
+			};
+			const webview = {
+				postMessage: (message: unknown) => {
+					postedMessages.push(message);
+					return Promise.resolve(true);
 				},
-				{
-					type: 'terminal.input',
-					tabId: 'tab:one',
-					sessionId: 'session-1',
-					data: 'authorization code=sensitive-token',
-				},
+			};
+
+			const inputResult = extensionModule.handleWebviewMessage(
+				webview,
+				input,
+				terminalHost,
+			);
+			const resizeResult = extensionModule.handleWebviewMessage(
+				webview,
+				resize,
+				terminalHost,
 			);
 
-			assert.strictEqual(result, undefined);
+			assert.strictEqual(inputResult, undefined);
+			assert.strictEqual(resizeResult, undefined);
 		} finally {
 			console.log = originalConsoleLog;
 		}
 
 		assert.deepStrictEqual(postedMessages, []);
 		assert.deepStrictEqual(loggedValues, []);
+		assert.strictEqual(routedInputs.length, 1);
+		assert.strictEqual(routedResizes.length, 1);
 	});
 
 	test('검증된 terminal.ready 값만 TerminalHost start 경계로 전달한다', () => {
@@ -220,6 +248,8 @@ suite('Crispy Extension Host', () => {
 			async startSession(tabId: string, cols: number, rows: number) {
 				starts.push({ tabId, cols, rows });
 			},
+			routeInput() {},
+			routeResize() {},
 		};
 
 		const result = extensionModule.handleWebviewMessage(
@@ -248,6 +278,8 @@ suite('Crispy Extension Host', () => {
 			async startSession() {
 				startCalls += 1;
 			},
+			routeInput() {},
+			routeResize() {},
 		};
 
 		const result = extensionModule.handleWebviewMessage(

@@ -360,3 +360,177 @@ suite('TerminalHost start orchestration', () => {
 		});
 	});
 });
+
+suite('TerminalHost input and resize routing', () => {
+	test('소유한 running session에 input 원문과 resize 값을 그대로 전달한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		await host.startSession('tab-routing', 80, 24);
+		const session = host.getActiveSession('tab-routing');
+		assert.ok(session);
+		const inputs = [
+			'  keep surrounding spaces  ',
+			'\r',
+			'\x03',
+			'한글🙂',
+			'\x1b[200~paste\nwithout rewrite\x1b[201~',
+		];
+
+		for (const data of inputs) {
+			host.routeInput({
+				type: 'terminal.input',
+				tabId: 'tab-routing',
+				sessionId: session.sessionId,
+				data,
+			});
+		}
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: 'tab-routing',
+			sessionId: session.sessionId,
+			cols: 132,
+			rows: 43,
+		});
+
+		assert.deepStrictEqual(adapter.handles[0].writes, inputs);
+		assert.deepStrictEqual(adapter.handles[0].resizes, [
+			{ cols: 132, rows: 43 },
+		]);
+	});
+
+	test('wrong ownership, unknown 및 stale session 요청을 PTY에 전달하지 않는다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		await host.startSession('tab-first', 80, 24);
+		await host.startSession('tab-second', 80, 24);
+		const first = host.getActiveSession('tab-first');
+		const second = host.getActiveSession('tab-second');
+		assert.ok(first);
+		assert.ok(second);
+
+		host.routeInput({
+			type: 'terminal.input',
+			tabId: 'tab-first',
+			sessionId: second.sessionId,
+			data: 'wrong-owner',
+		});
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: 'tab-first',
+			sessionId: 'session-unknown',
+			cols: 100,
+			rows: 30,
+		});
+
+		const staleSessionId = first.sessionId;
+		host.removeSession(staleSessionId);
+		await host.startSession('tab-first', 100, 30);
+		const replacementHandle = adapter.handles[2];
+		host.routeInput({
+			type: 'terminal.input',
+			tabId: 'tab-first',
+			sessionId: staleSessionId,
+			data: 'stale-input',
+		});
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: 'tab-first',
+			sessionId: staleSessionId,
+			cols: 140,
+			rows: 50,
+		});
+
+		for (const handle of adapter.handles) {
+			assert.deepStrictEqual(handle.writes, []);
+			assert.deepStrictEqual(handle.resizes, []);
+		}
+		assert.ok(replacementHandle);
+	});
+
+	test('starting 및 종료 lifecycle의 session 요청을 차단한다', async () => {
+		let finishPreparation!: (
+			value: Awaited<ReturnType<PrepareTerminalLaunch>>,
+		) => void;
+		const pendingPrepare: PrepareTerminalLaunch = () => new Promise((resolve) => {
+			finishPreparation = resolve;
+		});
+		const startingAdapter = new FakePtyAdapter();
+		const { host: startingHost } = createHost({
+			ptyAdapter: startingAdapter,
+			prepareLaunch: pendingPrepare,
+		});
+		const pendingStart = startingHost.startSession('tab-starting-route', 80, 24);
+		const starting = startingHost.getActiveSession('tab-starting-route');
+		assert.ok(starting);
+
+		startingHost.routeInput({
+			type: 'terminal.input',
+			tabId: starting.tabId,
+			sessionId: starting.sessionId,
+			data: 'blocked-while-starting',
+		});
+		startingHost.routeResize({
+			type: 'terminal.resize',
+			tabId: starting.tabId,
+			sessionId: starting.sessionId,
+			cols: 120,
+			rows: 40,
+		});
+		assert.strictEqual(startingAdapter.handles.length, 0);
+		finishPreparation({ ok: true, policy: launchPolicy });
+		await pendingStart;
+		assert.deepStrictEqual(startingAdapter.handles[0].writes, []);
+		assert.deepStrictEqual(startingAdapter.handles[0].resizes, []);
+
+		const transitions: Array<{
+			readonly name: string;
+			readonly apply: (session: NonNullable<ReturnType<TerminalHost['getActiveSession']>>) => void;
+		}> = [
+			{ name: 'stopping', apply: (session) => session.markStopping() },
+			{
+				name: 'exited',
+				apply: (session) => {
+					session.markStopping();
+					session.markExited(0, null);
+				},
+			},
+			{ name: 'error', apply: (session) => session.markError('internal_error') },
+			{ name: 'disposed', apply: (session) => session.markDisposed() },
+		];
+
+		for (const transition of transitions) {
+			const adapter = new FakePtyAdapter();
+			const { host } = createHost({
+				ptyAdapter: adapter,
+				prepareLaunch: successfulPrepare,
+			});
+			await host.startSession(`tab-${transition.name}`, 80, 24);
+			const session = host.getActiveSession(`tab-${transition.name}`);
+			assert.ok(session);
+			transition.apply(session);
+
+			host.routeInput({
+				type: 'terminal.input',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				data: `blocked-${transition.name}`,
+			});
+			host.routeResize({
+				type: 'terminal.resize',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				cols: 120,
+				rows: 40,
+			});
+
+			assert.deepStrictEqual(adapter.handles[0].writes, []);
+			assert.deepStrictEqual(adapter.handles[0].resizes, []);
+		}
+	});
+});

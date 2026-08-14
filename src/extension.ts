@@ -15,9 +15,15 @@ import {
 let currentPanel: vscode.WebviewPanel | undefined;
 let lastLayoutState: PanelLayoutState | undefined;
 
-/** 검증된 terminal.ready를 실제 TerminalHost 시작 경계로 전달하는 최소 계약이다. */
-export interface TerminalSessionStarter {
+/** 검증된 terminal 메시지를 실제 TerminalHost 경계로 전달하는 최소 계약이다. */
+export interface TerminalMessageHost {
 	startSession(tabId: string, cols: number, rows: number): Promise<unknown>;
+	routeInput(
+		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
+	): void;
+	routeResize(
+		message: Extract<WebviewToHostMessage, { type: 'terminal.resize' }>,
+	): void;
 }
 
 /**
@@ -107,7 +113,7 @@ export function activate(context: vscode.ExtensionContext) {
 export function handleWebviewMessage(
 	webview: Pick<vscode.Webview, 'postMessage'>,
 	message: unknown,
-	terminalHost?: TerminalSessionStarter,
+	terminalHost?: TerminalMessageHost,
 ): Thenable<boolean> | undefined {
 	const parseResult = parseWebviewToHostMessage(message);
 	if (!parseResult.ok) {
@@ -127,24 +133,36 @@ export function handleWebviewMessage(
 }
 
 /**
- * 구조 검증을 통과한 terminal 메시지의 향후 Host dispatch 경계다.
- * 이번 단계에서는 terminal.ready만 start 경계로 연결하고 나머지 lifecycle 메시지는
- * 후속 input/resize/restart 단계 전까지 실행하지 않는다.
+ * 구조 검증을 통과한 terminal 메시지를 현재 구현된 Host 경계로 전달한다.
+ * ready는 세션 시작으로, input과 resize는 실행 중 PTY routing으로 연결하며
+ * 아직 구현하지 않은 lifecycle 메시지는 실행하지 않는다.
  *
  * @param message 허용된 type과 필드만 포함하는 terminal protocol 메시지
- * @param terminalHost 검증된 ready 값으로 session을 시작할 Host 경계
+ * @param terminalHost 검증된 ready/input/resize를 처리할 Host 경계
  * @returns 메시지 전송은 TerminalHost emitter가 담당하므로 직접 응답하지 않음
  */
 function handleTerminalMessage(
 	message: WebviewToHostMessage,
-	terminalHost: TerminalSessionStarter | undefined,
+	terminalHost: TerminalMessageHost | undefined,
 ): undefined {
-	if (message.type === 'terminal.ready' && terminalHost !== undefined) {
-		void terminalHost.startSession(
-			message.tabId,
-			message.cols,
-			message.rows,
-		).catch(() => undefined);
+	if (terminalHost === undefined) {
+		return undefined;
+	}
+
+	switch (message.type) {
+		case 'terminal.ready':
+			void terminalHost.startSession(
+				message.tabId,
+				message.cols,
+				message.rows,
+			).catch(() => undefined);
+			break;
+		case 'terminal.input':
+			terminalHost.routeInput(message);
+			break;
+		case 'terminal.resize':
+			terminalHost.routeResize(message);
+			break;
 	}
 
 	return undefined;

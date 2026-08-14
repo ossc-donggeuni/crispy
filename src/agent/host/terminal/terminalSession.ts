@@ -258,6 +258,34 @@ export class TerminalSession {
 	}
 
 	/**
+	 * 실행 중인 PTY에 Webview에서 검증된 입력을 그대로 전달한다.
+	 * 문자열을 정리하거나 개행, 제어 문자 또는 Unicode를 변경하지 않는다.
+	 *
+	 * @param data 프로토콜 검증을 통과한 원본 terminal 입력
+	 */
+	writeInput(data: string): void {
+		if (this.currentState.kind !== 'running' || this.activeProcess === undefined) {
+			return;
+		}
+
+		this.activeProcess.write(data);
+	}
+
+	/**
+	 * 실행 중인 PTY 크기를 Webview에서 검증된 열과 행으로 변경한다.
+	 *
+	 * @param cols 프로토콜 검증을 통과한 terminal 열 수
+	 * @param rows 프로토콜 검증을 통과한 terminal 행 수
+	 */
+	resize(cols: number, rows: number): void {
+		if (this.currentState.kind !== 'running' || this.activeProcess === undefined) {
+			return;
+		}
+
+		this.activeProcess.resize(cols, rows);
+	}
+
+	/**
 	 * 시작된 PTY와 유효한 PID를 running 상태에 기록한다.
 	 *
 	 * @param pid Host가 PTY handle에서 읽은 process ID다.

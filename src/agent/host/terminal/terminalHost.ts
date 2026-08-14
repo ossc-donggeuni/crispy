@@ -3,6 +3,7 @@ import type {
 	HostToWebviewMessage,
 	SessionId,
 	TabId,
+	WebviewToHostMessage,
 } from '../../protocol/messages';
 import type { PtyAdapter } from './ptyAdapter';
 import {
@@ -51,11 +52,12 @@ const START_ERROR_MESSAGES = Object.freeze({
 	registration: 'Terminal session could not be created.',
 	preparation: 'Terminal launch policy could not be prepared.',
 	spawn: 'Terminal process could not be started.',
+	operation: 'Terminal process operation failed.',
 });
 
 /**
- * 탭별 현재 세션 저장소와 Host 소유 PTY 시작 경로를 관리한다.
- * 입력, 크기 변경, 출력, 재시작 및 정리 조정은 후속 단계의 책임이다.
+ * 탭별 현재 세션 저장소와 Host 소유 PTY 시작·입력·크기 변경 경로를 관리한다.
+ * 출력, 재시작 및 정리 조정은 후속 단계의 책임이다.
  */
 export class TerminalHost {
 	/** 등록된 모든 세션을 Host 소유 `sessionId`로 조회하는 저장소다. */
@@ -194,6 +196,52 @@ export class TerminalHost {
 	}
 
 	/**
+	 * 검증된 `terminal.input`을 현재 탭이 소유한 실행 중 세션으로 전달한다.
+	 * 소유권이 다르거나 stale 또는 non-running 세션이면 입력을 전달하지 않는다.
+	 *
+	 * @param message 프로토콜 검증을 통과한 terminal 입력 메시지
+	 */
+	routeInput(
+		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
+	): void {
+		const session = this.getOwnedRunningSession(
+			message.tabId,
+			message.sessionId,
+		);
+		if (session === undefined) {
+			return;
+		}
+
+		this.performPtyOperation(
+			session,
+			() => session.writeInput(message.data),
+		);
+	}
+
+	/**
+	 * 검증된 `terminal.resize`를 현재 탭이 소유한 실행 중 세션으로 전달한다.
+	 * 소유권이 다르거나 stale 또는 non-running 세션이면 크기를 변경하지 않는다.
+	 *
+	 * @param message 프로토콜 검증을 통과한 terminal 크기 메시지
+	 */
+	routeResize(
+		message: Extract<WebviewToHostMessage, { type: 'terminal.resize' }>,
+	): void {
+		const session = this.getOwnedRunningSession(
+			message.tabId,
+			message.sessionId,
+		);
+		if (session === undefined) {
+			return;
+		}
+
+		this.performPtyOperation(
+			session,
+			() => session.resize(message.cols, message.rows),
+		);
+	}
+
+	/**
 	 * Host가 새 `sessionId`를 생성하여 탭의 현재 세션을 등록한다.
 	 * Webview가 제공한 `sessionId`를 받을 수 있는 인자는 두지 않는다.
 	 *
@@ -276,6 +324,48 @@ export class TerminalHost {
 			this.activeSessionByTab.delete(session.tabId);
 		}
 		return session;
+	}
+
+	/**
+	 * 탭과 세션의 양방향 소유권 및 실행 중 상태를 모두 만족하는 세션을 찾는다.
+	 *
+	 * @param tabId Webview 소유 탭 식별자
+	 * @param sessionId Host 소유 세션 식별자
+	 * @returns 입력과 크기 변경을 받을 수 있는 세션 또는 `undefined`
+	 */
+	private getOwnedRunningSession(
+		tabId: TabId,
+		sessionId: SessionId,
+	): TerminalSession | undefined {
+		const session = this.sessionsById.get(sessionId);
+		return session !== undefined
+			&& session.tabId === tabId
+			&& this.activeSessionByTab.get(tabId) === sessionId
+			&& session.state.kind === 'running'
+			? session
+			: undefined;
+	}
+
+	/**
+	 * PTY 동작 실패를 원본 예외 노출 없이 안전한 세션 오류로 전환한다.
+	 *
+	 * @param session PTY 동작을 수행할 실행 중 세션
+	 * @param operation 원본 입력이나 실행 계약을 기록·반사하지 않는 PTY 호출
+	 */
+	private performPtyOperation(
+		session: TerminalSession,
+		operation: () => void,
+	): void {
+		try {
+			operation();
+		} catch {
+			this.failSession(
+				session,
+				'internal_error',
+				START_ERROR_MESSAGES.operation,
+				true,
+			);
+		}
 	}
 
 	/**

@@ -104,6 +104,65 @@ suite('TerminalSession state model', () => {
 		assert.strictEqual(adapter.spawnCalls.length, 0);
 	});
 
+	test('running이 아닌 모든 상태에서 input과 resize를 PTY에 전달하지 않는다', () => {
+		const cases: Array<{
+			readonly name: string;
+			readonly prepare: (session: TerminalSession) => void;
+		}> = [
+			{ name: 'idle', prepare: () => undefined },
+			{
+				name: 'starting',
+				prepare: (session) => session.markStarting(),
+			},
+			{
+				name: 'stopping',
+				prepare: (session) => {
+					session.markStarting();
+					session.start(launchPolicy, 80, 24);
+					session.markStopping();
+				},
+			},
+			{
+				name: 'exited',
+				prepare: (session) => {
+					session.markStarting();
+					session.start(launchPolicy, 80, 24);
+					session.markStopping();
+					session.markExited(0, null);
+				},
+			},
+			{
+				name: 'error',
+				prepare: (session) => {
+					session.markStarting();
+					session.start(launchPolicy, 80, 24);
+					session.markError('internal_error');
+				},
+			},
+			{
+				name: 'disposed',
+				prepare: (session) => {
+					session.markStarting();
+					session.start(launchPolicy, 80, 24);
+					session.markDisposed();
+				},
+			},
+		];
+
+		for (const testCase of cases) {
+			const { adapter, session } = createSession();
+			testCase.prepare(session);
+
+			session.writeInput(`sensitive-${testCase.name}`);
+			session.resize(120, 40);
+
+			for (const handle of adapter.handles) {
+				assert.deepStrictEqual(handle.writes, []);
+				assert.deepStrictEqual(handle.resizes, []);
+			}
+		}
+	});
+
 	test('starting, running과 stopping에서 안전한 error 상태로 전이한다', () => {
 		const starting = createSession().session;
 		starting.markStarting();
