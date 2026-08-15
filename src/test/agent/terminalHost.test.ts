@@ -894,3 +894,127 @@ suite('TerminalHost restart orchestration', () => {
 		assert.strictEqual(messages.length, messageCount);
 	});
 });
+
+suite('TerminalHost lifecycle cleanup', () => {
+	test('dispose가 실행 중 session을 disposed로 전이하고 PTY와 구독을 정리한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-dispose-running', 80, 24);
+		const session = host.getActiveSession('tab-dispose-running');
+		assert.ok(session);
+		assert.strictEqual(session.state.kind, 'running');
+		const handle = adapter.handles[0];
+
+		host.dispose();
+
+		assert.deepStrictEqual(session.state, { kind: 'disposed' });
+		assert.strictEqual(handle.killCallCount, 1);
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
+		assert.strictEqual(host.getSession(session.sessionId), undefined);
+		assert.strictEqual(host.getActiveSession('tab-dispose-running'), undefined);
+		assert.strictEqual(
+			host.ownsSession('tab-dispose-running', session.sessionId),
+			false,
+		);
+	});
+
+	test('dispose 이후 input과 resize를 PTY에 전달하지 않는다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-dispose-routing', 80, 24);
+		const session = host.getActiveSession('tab-dispose-routing');
+		assert.ok(session);
+		const handle = adapter.handles[0];
+
+		host.dispose();
+		host.routeInput({
+			type: 'terminal.input',
+			tabId: 'tab-dispose-routing',
+			sessionId: session.sessionId,
+			data: 'input after dispose',
+		});
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: 'tab-dispose-routing',
+			sessionId: session.sessionId,
+			cols: 100,
+			rows: 30,
+		});
+
+		assert.deepStrictEqual(handle.writes, []);
+		assert.deepStrictEqual(handle.resizes, []);
+	});
+
+	test('dispose 이후 남은 PTY output과 exit 메시지를 전달하지 않는다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-dispose-messages', 80, 24);
+		const handle = adapter.handles[0];
+
+		host.dispose();
+		const messageCount = messages.length;
+		handle.emitData('late output');
+		handle.emitExit({ exitCode: 0 });
+		await Promise.resolve();
+
+		assert.strictEqual(messages.length, messageCount);
+	});
+
+	test('PTY kill 실패에도 dispose가 나머지 session 정리를 계속한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-dispose-failing', 80, 24);
+		await host.startSession('tab-dispose-remaining', 80, 24);
+		const failingSession = host.getActiveSession('tab-dispose-failing');
+		const remainingSession = host.getActiveSession('tab-dispose-remaining');
+		assert.ok(failingSession);
+		assert.ok(remainingSession);
+		const failingHandle = adapter.handles[0];
+		const remainingHandle = adapter.handles[1];
+		failingHandle.kill = () => {
+			throw new Error('kill failed');
+		};
+
+		host.dispose();
+
+		assert.deepStrictEqual(failingSession.state, { kind: 'disposed' });
+		assert.deepStrictEqual(remainingSession.state, { kind: 'disposed' });
+		assert.strictEqual(failingHandle.dataListenerCount, 0);
+		assert.strictEqual(failingHandle.exitListenerCount, 0);
+		assert.strictEqual(remainingHandle.killCallCount, 1);
+		assert.strictEqual(remainingHandle.dataListenerCount, 0);
+	});
+
+	test('반복 dispose 호출이 추가 PTY 종료 요청을 만들지 않는다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		await host.startSession('tab-dispose-idempotent', 80, 24);
+		const handle = adapter.handles[0];
+
+		host.dispose();
+		host.dispose();
+
+		assert.strictEqual(handle.killCallCount, 1);
+	});
+});

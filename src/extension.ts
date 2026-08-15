@@ -5,6 +5,10 @@ import {
 } from './agent/protocol';
 import { nodePtyAdapter } from './agent/host/terminal/nodePtyAdapter';
 import { TerminalHost } from './agent/host/terminal/terminalHost';
+import {
+	createTerminalRuntimeCleanup,
+	runCleanupWithTimeout,
+} from './agent/host/terminal/terminalRuntimeCleanup';
 import type { ExtensionToWebviewMessage } from './messages';
 import {
 	getPanelLayoutStateFromMessage,
@@ -12,7 +16,19 @@ import {
 	type PanelLayoutState,
 } from './webview/panel/panelState';
 
-let currentPanel: vscode.WebviewPanel | undefined;
+/**
+ * Panel 하나가 소유하는 Terminal runtime과 Webview 구독의 정리 경계다.
+ * Panel dispose와 Extension deactivate가 같은 경계를 공유한다.
+ */
+interface CanvasRuntime {
+	/** 정리 대상 Panel이며 deactivate에서 직접 dispose한다. */
+	readonly panel: vscode.WebviewPanel;
+
+	/** Terminal runtime과 Webview 구독을 한 번만 정리하는 함수다. */
+	dispose(): Promise<void>;
+}
+
+let currentRuntime: CanvasRuntime | undefined;
 let lastLayoutState: PanelLayoutState | undefined;
 
 /** 검증된 terminal 메시지를 실제 TerminalHost 경계로 전달하는 최소 계약이다. */
@@ -37,9 +53,10 @@ export function activate(context: vscode.ExtensionContext) {
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
 	const openCanvas = (): vscode.WebviewPanel => {
-		if (currentPanel) {
-			currentPanel.reveal();
-			return currentPanel;
+		if (currentRuntime) {
+			/* 기존 Panel을 다시 표시하는 것은 dispose가 아니므로 세션을 그대로 유지한다. */
+			currentRuntime.panel.reveal();
+			return currentRuntime.panel;
 		}
 
 		const webviewRoot = vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview');
@@ -52,7 +69,6 @@ export function activate(context: vscode.ExtensionContext) {
 				localResourceRoots: [webviewRoot],
 			},
 		);
-		currentPanel = panel;
 		const terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
 			emitMessage: (message) => {
@@ -73,15 +89,17 @@ export function activate(context: vscode.ExtensionContext) {
 		 * Webview 메시지 중 레이아웃 상태를 기존 경계에서 먼저 처리하고,
 		 * 나머지 메시지만 Host protocol 수신 경계로 전달한다.
 		 */
-		panel.webview.onDidReceiveMessage((message: unknown) => {
-			const layoutState = getPanelLayoutStateFromMessage(message);
-			if (layoutState) {
-				lastLayoutState = layoutState;
-				return;
-			}
+		const messageSubscription = panel.webview.onDidReceiveMessage(
+			(message: unknown) => {
+				const layoutState = getPanelLayoutStateFromMessage(message);
+				if (layoutState) {
+					lastLayoutState = layoutState;
+					return;
+				}
 
-			handleWebviewMessage(panel.webview, message, terminalHost);
-		});
+				handleWebviewMessage(panel.webview, message, terminalHost);
+			},
+		);
 
 		panel.webview.html = getWebviewHtml(
 			panel.webview,
@@ -90,9 +108,14 @@ export function activate(context: vscode.ExtensionContext) {
 			lastLayoutState,
 		);
 
+		const runtime = createCanvasRuntime(panel, terminalHost, [
+			messageSubscription,
+		]);
+		currentRuntime = runtime;
+
 		panel.onDidDispose(() => {
-			terminalHost.stopMessageDelivery();
-			currentPanel = undefined;
+			releaseCanvasRuntime(runtime);
+			void runtime.dispose();
 		});
 
 		return panel;
@@ -101,6 +124,45 @@ export function activate(context: vscode.ExtensionContext) {
 	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
 
 	context.subscriptions.push(disposable);
+}
+
+/**
+ * Panel이 소유한 TerminalHost와 Webview 구독을 하나의 정리 경계로 묶는다.
+ * 실제 정리 순서와 오류 격리는 Host 공용 cleanup 함수가 담당하며,
+ * 반복 호출 시 첫 정리 Promise를 그대로 반환해 중복 정리를 하지 않는다.
+ *
+ * @param panel 정리 대상 Terminal을 표시하던 Webview Panel
+ * @param terminalHost Panel이 소유한 Terminal session 및 PTY 정리 경계
+ * @param subscriptions Host 정리 뒤 해제할 Webview message listener 구독 목록
+ * @returns Panel dispose와 deactivate가 공유하는 멱등한 정리 경계
+ */
+function createCanvasRuntime(
+	panel: vscode.WebviewPanel,
+	terminalHost: TerminalHost,
+	subscriptions: readonly vscode.Disposable[],
+): CanvasRuntime {
+	const cleanup = createTerminalRuntimeCleanup(terminalHost, subscriptions);
+	let disposal: Promise<void> | undefined;
+
+	return {
+		panel,
+		dispose(): Promise<void> {
+			disposal ??= cleanup();
+			return disposal;
+		},
+	};
+}
+
+/**
+ * 이미 정리되었거나 정리 중인 runtime을 현재 Panel 참조에서 분리한다.
+ * 새 Panel이 등록된 뒤 이전 Panel의 dispose가 도착해도 참조를 지우지 않는다.
+ *
+ * @param runtime 현재 참조에서 분리할 Canvas runtime
+ */
+function releaseCanvasRuntime(runtime: CanvasRuntime): void {
+	if (currentRuntime === runtime) {
+		currentRuntime = undefined;
+	}
 }
 
 /**
@@ -177,12 +239,28 @@ function handleTerminalMessage(
 }
 
 /**
- * 확장이 비활성화될 때 열린 WebviewPanel과 참조를 정리한다.
+ * 확장이 비활성화될 때 열린 Terminal runtime과 WebviewPanel 참조를 정리한다.
+ * Terminal session, PTY, PTY listener와 Webview message listener만 정리 대상이며
+ * PTY 종료가 지연되어도 VS Code 종료를 막지 않도록 상한 시간을 적용한 뒤
+ * 남은 정리는 best-effort로 진행한다.
+ *
+ * @returns Terminal runtime 정리가 끝나거나 상한 시간에 도달하면 이행되는 Promise
  */
-export function deactivate() {
-	currentPanel?.dispose();
-	currentPanel = undefined;
+export async function deactivate(): Promise<void> {
+	const runtime = currentRuntime;
+	currentRuntime = undefined;
 	lastLayoutState = undefined;
+	if (runtime === undefined) {
+		return;
+	}
+
+	await runCleanupWithTimeout(() => runtime.dispose());
+
+	try {
+		runtime.panel.dispose();
+	} catch {
+		/* Panel 정리 실패가 확장 비활성화를 막지 않게 한다. */
+	}
 }
 
 /**

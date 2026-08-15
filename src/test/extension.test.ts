@@ -14,7 +14,7 @@ import * as vscode from 'vscode';
 const COMMAND_ID = 'crispy.openCanvas';
 
 interface CrispyExtensionModule {
-	deactivate(): void;
+	deactivate(): Promise<void>;
 	handleWebviewMessage(
 		webview: Pick<vscode.Webview, 'postMessage'>,
 		message: unknown,
@@ -54,12 +54,12 @@ suite('Crispy Extension Host', () => {
 		extensionModule = require(mainPath) as CrispyExtensionModule;
 	});
 
-	setup(() => {
-		extensionModule.deactivate();
+	setup(async () => {
+		await extensionModule.deactivate();
 	});
 
-	teardown(() => {
-		extensionModule.deactivate();
+	teardown(async () => {
+		await extensionModule.deactivate();
 	});
 
 	test('Extension을 활성화하고 manifest의 Canvas command를 등록한다', async () => {
@@ -128,6 +128,35 @@ suite('Crispy Extension Host', () => {
 
 		const recreatedPanel = await openCanvas();
 		assert.notStrictEqual(recreatedPanel, deactivatedPanel);
+	});
+
+	test('Panel이 hidden 상태가 되어도 dispose하지 않고 같은 Panel을 다시 표시한다', async () => {
+		const panel = await openCanvas();
+		let panelDisposed = false;
+		panel.onDidDispose(() => {
+			panelDisposed = true;
+		});
+
+		const document = await vscode.workspace.openTextDocument({ content: '' });
+		await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+		assert.strictEqual(panel.visible, false);
+
+		const revealedPanel = await openCanvas();
+
+		assert.strictEqual(revealedPanel, panel);
+		assert.strictEqual(panelDisposed, false);
+	});
+
+	test('deactivate가 상한 시간 안에 반환하고 반복 호출에도 실패하지 않는다', async () => {
+		const panel = await openCanvas();
+		const disposed = onceDisposed(panel);
+
+		await extensionModule.deactivate();
+		await disposed;
+		await extensionModule.deactivate();
+
+		const recreatedPanel = await openCanvas();
+		assert.notStrictEqual(recreatedPanel, panel);
 	});
 
 	test('deactivate가 저장된 Layout state를 초기화한다', async () => {

@@ -352,6 +352,25 @@ export class TerminalHost {
 		this.messageDeliveryActive = false;
 	}
 
+	/**
+	 * Panel dispose와 Extension deactivate가 공유하는 Host 전체 정리 경계다.
+	 * 메시지 전송을 먼저 중단한 뒤 등록된 모든 세션을 재시작 흐름과 동일한
+	 * 입력 차단 → 크기 변경 차단 → PTY 종료 → listener 해제 순서로 정리하고
+	 * 마지막으로 세션 및 탭 참조를 제거한다. 반복 호출해도 안전하다.
+	 * 개별 세션 정리 실패는 남은 세션 정리나 호출자에게 전파하지 않는다.
+	 */
+	dispose(): void {
+		this.stopMessageDelivery();
+
+		for (const session of [...this.sessionsById.values()]) {
+			this.disposeSessionProcess(session);
+		}
+
+		this.sessionsById.clear();
+		this.activeSessionByTab.clear();
+		this.lastDimensionsByTab.clear();
+	}
+
 	/** 현재 소유 session에서 온 PTY output만 정확한 identity와 함께 전달한다. */
 	private routeOutput(session: TerminalSession, data: string): void {
 		if (
@@ -480,12 +499,22 @@ export class TerminalHost {
 	}
 
 	/**
-	 * 재시작 전에 이전 세션의 PTY와 구독을 정리하고 최종 상태로 전이한다.
-	 * 정리 실패는 원본 예외를 노출하지 않고 새 세션 시작 흐름을 막지 않는다.
+	 * 재시작 또는 Host 정리 전에 세션의 PTY와 구독을 해제하고 최종 상태로 전이한다.
+	 * 실행 중 세션은 stopping을 거쳐 disposed로 전이하므로 정리 시작 시점부터
+	 * 새 입력과 크기 변경이 PTY에 전달되지 않는다.
+	 * 정리 실패는 원본 예외를 노출하지 않고 새 세션 시작이나 Host 정리 흐름을 막지 않는다.
 	 *
-	 * @param session 새 세션으로 교체하기 전에 정리할 이전 세션
+	 * @param session PTY를 종료하고 최종 상태로 전이할 세션
 	 */
 	private disposeSessionProcess(session: TerminalSession): void {
+		if (session.state.kind === 'running') {
+			try {
+				session.markStopping();
+			} catch {
+				/* 종료 절차 표시 실패도 PTY 정리를 막지 않게 한다. */
+			}
+		}
+
 		try {
 			session.disposeProcess();
 		} catch {
