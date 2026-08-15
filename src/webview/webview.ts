@@ -1,3 +1,4 @@
+import { initializeAgentPanelUi } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { initializeShellTerminal } from '../agent/webview/shellTerminal';
 import type { WebviewToExtensionMessage } from '../messages';
@@ -56,6 +57,27 @@ const shellTerminal = initializeShellTerminal(
 	(message) => vscodeApi.postMessage(message),
 );
 
+/*
+ * Agent UI 뼈대는 아직 Host와 연결되지 않은 mock 상태이며,
+ * 초기화 실패가 Graph, Dock, Layout이나 Terminal로 전파되지 않도록 격리한다.
+ */
+let agentPanelUi: { dispose(): void } | undefined;
+try {
+	agentPanelUi = initializeAgentPanelUi(
+		{
+			topBar: getRequiredElement<HTMLElement>('#agent-top-bar'),
+			tabStrip: getRequiredElement<HTMLElement>('#agent-tab-strip'),
+			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
+		},
+		{
+			/* 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
+			onLayoutChange: () => shellTerminal.scheduleTerminalFit(),
+		},
+	);
+} catch {
+	agentPanelUi = undefined;
+}
+
 // Dock 초기화
 const refreshDock = initializePanelDock(
 	layout,
@@ -78,6 +100,7 @@ initializePanelResize(
 window.addEventListener('unload', () => {
 	graphView.dispose();
 	shellTerminal.dispose();
+	agentPanelUi?.dispose();
 }, { once: true });
 
 /**

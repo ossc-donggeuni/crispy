@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import './graph/graphView.css';
+@import '../agent/UI/agentPanelUi.css';
 
 *,
 *::before,
@@ -77,11 +78,17 @@ body {
 
 #agent-chat-area {
 	position: relative;
+	display: grid;
 	grid-area: chat;
+	grid-template-rows: auto minmax(0, 1fr);
+	grid-template-areas:
+		'header'
+		'terminal';
 }
 
 #terminal-surface {
 	position: relative;
+	grid-area: terminal;
 	width: 100%;
 	height: 100%;
 	min-width: 0;
