@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import {
 	parseWebviewToHostMessage,
+	type ProviderId,
 	type WebviewToHostMessage,
 } from './agent/protocol';
 import { nodePtyAdapter } from './agent/host/terminal/nodePtyAdapter';
@@ -33,8 +34,16 @@ let lastLayoutState: PanelLayoutState | undefined;
 
 /** 검증된 terminal 메시지를 실제 TerminalHost 경계로 전달하는 최소 계약이다. */
 export interface TerminalMessageHost {
-	startSession(tabId: string, cols: number, rows: number): Promise<unknown>;
+	handleTerminalReady(
+		tabId: string,
+		cols: number,
+		rows: number,
+	): Promise<unknown>;
 	restartSession(tabId: string, sessionId: string): Promise<unknown>;
+	createTab(tabId: string): void;
+	switchTab(tabId: string): void;
+	closeTab(tabId: string): void;
+	switchAgent(tabId: string, providerId: ProviderId): Promise<unknown>;
 	routeInput(
 		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
 	): void;
@@ -197,12 +206,13 @@ export function handleWebviewMessage(
 }
 
 /**
- * 구조 검증을 통과한 terminal 메시지를 현재 구현된 Host 경계로 전달한다.
- * ready는 세션 시작으로, restart는 새 세션 재시작으로, input과 resize는 실행 중
- * PTY routing으로 연결하며 아직 구현하지 않은 lifecycle 메시지는 실행하지 않는다.
+ * 구조 검증을 통과한 terminal 및 tab 메시지를 현재 구현된 Host 경계로 전달한다.
+ * ready는 탭 표면 준비로, `agent.switch`는 provider 지정 시작·재시작으로,
+ * restart는 같은 provider 재시작으로, input과 resize는 실행 중 PTY routing으로
+ * 연결하며 아직 구현하지 않은 lifecycle 메시지는 실행하지 않는다.
  *
  * @param message 허용된 type과 필드만 포함하는 terminal protocol 메시지
- * @param terminalHost 검증된 ready/restart/input/resize를 처리할 Host 경계
+ * @param terminalHost 검증된 tab/agent/terminal 메시지를 처리할 Host 경계
  * @returns 메시지 전송은 TerminalHost emitter가 담당하므로 직접 응답하지 않음
  */
 function handleTerminalMessage(
@@ -214,8 +224,23 @@ function handleTerminalMessage(
 	}
 
 	switch (message.type) {
+		case 'tab.create':
+			terminalHost.createTab(message.tabId);
+			break;
+		case 'tab.switch':
+			terminalHost.switchTab(message.tabId);
+			break;
+		case 'tab.close':
+			terminalHost.closeTab(message.tabId);
+			break;
+		case 'agent.switch':
+			void terminalHost.switchAgent(
+				message.tabId,
+				message.providerId,
+			).catch(() => undefined);
+			break;
 		case 'terminal.ready':
-			void terminalHost.startSession(
+			void terminalHost.handleTerminalReady(
 				message.tabId,
 				message.cols,
 				message.rows,
@@ -301,10 +326,7 @@ function getWebviewHtml(
 							<div id="agent-top-bar"></div>
 							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
 						</div>
-						<div id="terminal-surface" data-state="ready">
-							<div id="terminal-mount"></div>
-							<div id="terminal-overlay" aria-live="polite" hidden></div>
-						</div>
+						<div id="agent-terminal-area"></div>
 						<div id="agent-provider-bar"></div>
 						<div id="agent-dialog-host" hidden></div>
 					</section>
