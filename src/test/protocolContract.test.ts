@@ -383,8 +383,17 @@ suite('Host↔Webview protocol completion contract', () => {
 				readonly executable: string;
 				readonly timeoutMs: number;
 			};
+			/* registry는 allowlist의 모든 provider를 빠짐없이 정의해야 한다. */
 			const registry = {
 				codex: {
+					executable: 'host-owned-executable',
+					timeoutMs: 30_000,
+				},
+				claude: {
+					executable: 'host-owned-executable',
+					timeoutMs: 30_000,
+				},
+				antigravity: {
 					executable: 'host-owned-executable',
 					timeoutMs: 30_000,
 				},
