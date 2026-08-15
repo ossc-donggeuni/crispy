@@ -10,6 +10,7 @@ import {
 	type AgentTabModel,
 	type AgentTabModelSnapshot,
 } from './agentTabModel';
+import { initializeAgentProviderBar } from './agentProviderBar';
 import { initializeAgentTabStrip } from './agentTabStrip';
 import { initializeAgentTopBar } from './agentTopBar';
 import {
@@ -17,10 +18,18 @@ import {
 	type AgentUiDependencies,
 } from './agentUiDom';
 
-/** 상단 bar, 탭 strip과 확인 다이얼로그가 사용하는 Agent 영역 안의 컨테이너들이다. */
+/** Agent UI를 구성하는 각 bar와 확인 다이얼로그가 사용하는 컨테이너들이다. */
 export interface AgentPanelUiElements {
+	/** 새 탭과 재시작 버튼을 담는 상단 bar다. */
 	readonly topBar: HTMLElement;
+
+	/** 탭 목록을 담는 strip이다. */
 	readonly tabStrip: HTMLElement;
+
+	/** 활성 탭의 provider 드롭다운을 담는 하단 bar다. */
+	readonly providerBar: HTMLElement;
+
+	/** 탭 닫기 확인 다이얼로그를 표시하는 컨테이너다. */
 	readonly dialogHost: HTMLElement;
 }
 
@@ -58,13 +67,13 @@ export interface AgentPanelUiCallbacks {
 
 /** Agent UI 뼈대를 다루는 최소 제어 경계다. */
 export interface AgentPanelUiController {
-	/** 상단 bar와 탭 strip이 공유하는 탭 상태다. */
+	/** 각 bar와 탭 strip이 공유하는 탭 상태다. */
 	readonly model: AgentTabModel;
 
 	/** 현재 탭 상태 snapshot을 반환한다. */
 	getSnapshot(): AgentTabModelSnapshot;
 
-	/** 상단 bar, 탭 strip과 확인 다이얼로그를 정리한다. */
+	/** 각 bar, 탭 strip과 확인 다이얼로그를 정리한다. */
 	dispose(): void;
 }
 
@@ -83,13 +92,14 @@ const defaultPanelDependencies: AgentPanelUiDependencies = {
 };
 
 /**
- * Agent 영역에 상단 bar와 탭 strip을 얹고 탭 상태와 연결한다.
+ * Agent 영역에 상단 bar, 탭 strip과 하단 provider bar를 얹고 탭 상태와 연결한다.
  *
+ * 탭을 다루는 동작은 위쪽에, 활성 탭의 provider 선택은 아래쪽에 둔다.
  * 이 단계는 UI 뼈대만 다루므로 상태 전이는 Webview 안에서만 일어나고
  * 기존 xterm 영역의 DOM 구조나 Terminal 세션 동작에는 관여하지 않는다.
  * 콜백 실패는 이 경계 안에서 격리하여 Graph, Dock, Layout으로 전파하지 않는다.
  *
- * @param elements 상단 bar, 탭 strip, 확인 다이얼로그가 사용할 컨테이너
+ * @param elements 각 bar와 확인 다이얼로그가 사용할 컨테이너
  * @param callbacks 확정된 UI 동작을 전달받는 콜백
  * @param dependencies DOM 생성과 확인 다이얼로그 생성 의존성
  * @returns 탭 상태와 정리를 노출하는 제어 객체
@@ -129,8 +139,8 @@ export function initializeAgentPanelUi(
 		return snapshot.tabs.find((tab) => tab.id === snapshot.activeTabId);
 	};
 
-	const topBar = initializeAgentTopBar(
-		elements.topBar,
+	const providerBar = initializeAgentProviderBar(
+		elements.providerBar,
 		{
 			onProviderSelect(providerId): void {
 				const activeTab = getActiveTab();
@@ -141,7 +151,13 @@ export function initializeAgentPanelUi(
 				model.assignProvider(activeTab.id, providerId);
 				notify(() => callbacks.onProviderSelected?.(activeTab.id, providerId));
 			},
+		},
+		dependencies,
+	);
 
+	const topBar = initializeAgentTopBar(
+		elements.topBar,
+		{
 			onCreateTab(): void {
 				const tabId = model.createTab();
 				notify(() => callbacks.onTabCreated?.(tabId));
@@ -204,6 +220,7 @@ export function initializeAgentPanelUi(
 	const unsubscribe = model.subscribe((snapshot) => {
 		topBar.render(snapshot);
 		tabStrip.render(snapshot);
+		providerBar.render(snapshot);
 		notify(() => callbacks.onLayoutChange?.());
 	});
 
@@ -225,6 +242,7 @@ export function initializeAgentPanelUi(
 				() => confirmDialog.dispose(),
 				() => topBar.dispose(),
 				() => tabStrip.dispose(),
+				() => providerBar.dispose(),
 			];
 			for (const cleanup of cleanupActions) {
 				try {

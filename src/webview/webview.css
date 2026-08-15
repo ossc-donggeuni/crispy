@@ -80,10 +80,11 @@ body {
 	position: relative;
 	display: grid;
 	grid-area: chat;
-	grid-template-rows: auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr) auto;
 	grid-template-areas:
 		'header'
-		'terminal';
+		'terminal'
+		'provider';
 }
 
 #terminal-surface {
@@ -183,14 +184,12 @@ body {
 	border-top: 1px solid var(--vscode-panel-border);
 }
 
+/* Agent 영역 헤더 줄의 마지막 항목이며 탭 개수와 무관하게 오른쪽 끝에 남는다. */
 #chat-drag-handle {
-	position: absolute;
-	z-index: 4;
-	top: 8px;
-	right: 8px;
 	display: grid;
-	width: 24px;
-	height: 24px;
+	flex: 0 0 auto;
+	width: 22px;
+	height: 22px;
 	padding: 0;
 	place-items: center;
 	color: var(--vscode-foreground);

@@ -67,6 +67,7 @@ try {
 		{
 			topBar: getRequiredElement<HTMLElement>('#agent-top-bar'),
 			tabStrip: getRequiredElement<HTMLElement>('#agent-tab-strip'),
+			providerBar: getRequiredElement<HTMLElement>('#agent-provider-bar'),
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
 		},
 		{

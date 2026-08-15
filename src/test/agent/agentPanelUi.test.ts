@@ -49,6 +49,7 @@ class FakeConfirmDialog implements AgentConfirmDialog {
 interface PanelFixture {
 	readonly topBar: FakeAgentElement;
 	readonly tabStrip: FakeAgentElement;
+	readonly providerBar: FakeAgentElement;
 	readonly dialogHost: FakeAgentElement;
 	readonly dialog: FakeConfirmDialog;
 	readonly documentEvents: FakeDocumentEvents;
@@ -64,6 +65,7 @@ interface PanelFixture {
 function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
 	const topBar = new FakeAgentElement();
 	const tabStrip = new FakeAgentElement();
+	const providerBar = new FakeAgentElement();
 	const dialogHost = new FakeAgentElement();
 	const dialog = new FakeConfirmDialog();
 	const documentEvents = new FakeDocumentEvents();
@@ -76,13 +78,22 @@ function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
 		{
 			topBar: topBar.asHtmlElement(),
 			tabStrip: tabStrip.asHtmlElement(),
+			providerBar: providerBar.asHtmlElement(),
 			dialogHost: dialogHost.asHtmlElement(),
 		},
 		callbacks,
 		dependencies,
 	);
 
-	return { topBar, tabStrip, dialogHost, dialog, documentEvents, controller };
+	return {
+		topBar,
+		tabStrip,
+		providerBar,
+		dialogHost,
+		dialog,
+		documentEvents,
+		controller,
+	};
 }
 
 /**
@@ -104,13 +115,13 @@ function requireElement(
 /**
  * 드롭다운을 열고 provider를 고르는 사용자 동작을 재현한다.
  *
- * @param topBar 상단 bar 컨테이너
+ * @param providerBar 하단 provider bar 컨테이너
  * @param providerId 선택할 provider 식별자
  */
-function selectProvider(topBar: FakeAgentElement, providerId: string): void {
-	requireElement(topBar, 'agent-provider-select').click();
+function selectProvider(providerBar: FakeAgentElement, providerId: string): void {
+	requireElement(providerBar, 'agent-provider-select').click();
 
-	const option = topBar
+	const option = providerBar
 		.findAll('agent-provider-option')
 		.find((element) => element.dataset.providerId === providerId);
 	assert.strictEqual(option !== undefined, true);
@@ -118,13 +129,13 @@ function selectProvider(topBar: FakeAgentElement, providerId: string): void {
 }
 
 /**
- * 상단 bar에 표시된 provider 이름을 읽는다.
+ * 하단 bar에 표시된 provider 이름을 읽는다.
  *
- * @param topBar 상단 bar 컨테이너
+ * @param providerBar 하단 provider bar 컨테이너
  * @returns 드롭다운 버튼에 표시 중인 문구
  */
-function readProviderLabel(topBar: FakeAgentElement): string {
-	return requireElement(topBar, 'agent-provider-value').textContent;
+function readProviderLabel(providerBar: FakeAgentElement): string {
+	return requireElement(providerBar, 'agent-provider-value').textContent;
 }
 
 /**
@@ -140,11 +151,11 @@ function readTabLabels(tabStrip: FakeAgentElement): string[] {
 }
 
 suite('Agent Panel UI', () => {
-	test('상단 bar는 미선택 placeholder와 세 개의 provider option을 제공한다', () => {
+	test('하단 bar는 미선택 placeholder와 세 개의 provider option을 제공한다', () => {
 		const fixture = createFixture();
-		const options = fixture.topBar.findAll('agent-provider-option');
+		const options = fixture.providerBar.findAll('agent-provider-option');
 
-		assert.strictEqual(readProviderLabel(fixture.topBar), UNSELECTED_PROVIDER_LABEL);
+		assert.strictEqual(readProviderLabel(fixture.providerBar), UNSELECTED_PROVIDER_LABEL);
 		assert.deepStrictEqual(
 			options.map((option) => option.dataset.providerId),
 			[...PROVIDER_IDS],
@@ -157,8 +168,8 @@ suite('Agent Panel UI', () => {
 
 	test('드롭다운 목록은 기본으로 닫혀 있고 버튼으로 열고 닫는다', () => {
 		const fixture = createFixture();
-		const trigger = requireElement(fixture.topBar, 'agent-provider-select');
-		const menu = requireElement(fixture.topBar, 'agent-provider-menu');
+		const trigger = requireElement(fixture.providerBar, 'agent-provider-select');
+		const menu = requireElement(fixture.providerBar, 'agent-provider-menu');
 
 		assert.strictEqual(menu.hidden, true);
 		assert.strictEqual(trigger.getAttribute('aria-expanded'), 'false');
@@ -173,9 +184,9 @@ suite('Agent Panel UI', () => {
 
 	test('드롭다운 목록은 바깥 클릭과 Escape로 닫히고 안쪽 클릭은 유지한다', () => {
 		const fixture = createFixture();
-		const trigger = requireElement(fixture.topBar, 'agent-provider-select');
-		const picker = requireElement(fixture.topBar, 'agent-provider-picker');
-		const menu = requireElement(fixture.topBar, 'agent-provider-menu');
+		const trigger = requireElement(fixture.providerBar, 'agent-provider-select');
+		const picker = requireElement(fixture.providerBar, 'agent-provider-picker');
+		const menu = requireElement(fixture.providerBar, 'agent-provider-menu');
 
 		trigger.click();
 		fixture.documentEvents.dispatch('pointerdown', { target: menu });
@@ -193,15 +204,15 @@ suite('Agent Panel UI', () => {
 	test('선택한 provider는 드롭다운 버튼과 option 선택 표시에 반영된다', () => {
 		const fixture = createFixture();
 
-		selectProvider(fixture.topBar, 'claude');
+		selectProvider(fixture.providerBar, 'claude');
 
-		assert.strictEqual(readProviderLabel(fixture.topBar), 'Claude');
+		assert.strictEqual(readProviderLabel(fixture.providerBar), 'Claude');
 		assert.strictEqual(
-			requireElement(fixture.topBar, 'agent-provider-menu').hidden,
+			requireElement(fixture.providerBar, 'agent-provider-menu').hidden,
 			true,
 		);
 
-		const selectedIds = fixture.topBar
+		const selectedIds = fixture.providerBar
 			.findAll('agent-provider-option')
 			.filter((option) => option.getAttribute('aria-selected') === 'true')
 			.map((option) => option.dataset.providerId);
@@ -244,7 +255,7 @@ suite('Agent Panel UI', () => {
 				selections.push({ tabId, providerId }),
 		});
 
-		selectProvider(fixture.topBar, 'claude');
+		selectProvider(fixture.providerBar, 'claude');
 
 		assert.deepStrictEqual(readTabLabels(fixture.tabStrip), ['Claude #1']);
 		assert.strictEqual(selections.length, 1);
@@ -265,7 +276,7 @@ suite('Agent Panel UI', () => {
 				restarts.push({ tabId, providerId }),
 		});
 
-		selectProvider(fixture.topBar, 'codex');
+		selectProvider(fixture.providerBar, 'codex');
 		requireElement(fixture.topBar, 'agent-restart-session').click();
 
 		const tab = fixture.controller.getSnapshot().tabs[0];
@@ -294,9 +305,9 @@ suite('Agent Panel UI', () => {
 			onTabActivated: (tabId) => activated.push(tabId),
 		});
 
-		selectProvider(fixture.topBar, 'codex');
+		selectProvider(fixture.providerBar, 'codex');
 		requireElement(fixture.topBar, 'agent-create-tab').click();
-		selectProvider(fixture.topBar, 'claude');
+		selectProvider(fixture.providerBar, 'claude');
 
 		const [firstTab, secondTab] = fixture.controller.getSnapshot().tabs;
 		assert.deepStrictEqual(readTabLabels(fixture.tabStrip), [
@@ -309,7 +320,7 @@ suite('Agent Panel UI', () => {
 
 		assert.deepStrictEqual(activated, [firstTab.id]);
 		assert.strictEqual(fixture.controller.getSnapshot().activeTabId, firstTab.id);
-		assert.strictEqual(readProviderLabel(fixture.topBar), 'Codex');
+		assert.strictEqual(readProviderLabel(fixture.providerBar), 'Codex');
 
 		const tabElements = fixture.tabStrip.findAll('agent-tab');
 		assert.strictEqual(tabElements[0].dataset.active, 'true');
@@ -321,7 +332,7 @@ suite('Agent Panel UI', () => {
 		const closed: string[] = [];
 		const fixture = createFixture({ onTabClosed: (tabId) => closed.push(tabId) });
 
-		selectProvider(fixture.topBar, 'codex');
+		selectProvider(fixture.providerBar, 'codex');
 		requireElement(fixture.tabStrip, 'agent-tab-close').click();
 		fixture.dialog.answer(false);
 		await flushMicrotasks();
@@ -335,7 +346,7 @@ suite('Agent Panel UI', () => {
 		const closed: string[] = [];
 		const fixture = createFixture({ onTabClosed: (tabId) => closed.push(tabId) });
 
-		selectProvider(fixture.topBar, 'codex');
+		selectProvider(fixture.providerBar, 'codex');
 		requireElement(fixture.topBar, 'agent-create-tab').click();
 		const [firstTab] = fixture.controller.getSnapshot().tabs;
 
@@ -357,10 +368,10 @@ suite('Agent Panel UI', () => {
 
 		assert.deepStrictEqual(readTabLabels(fixture.tabStrip), []);
 		assert.strictEqual(
-			requireElement(fixture.topBar, 'agent-provider-select').disabled,
+			requireElement(fixture.providerBar, 'agent-provider-select').disabled,
 			true,
 		);
-		assert.strictEqual(readProviderLabel(fixture.topBar), UNSELECTED_PROVIDER_LABEL);
+		assert.strictEqual(readProviderLabel(fixture.providerBar), UNSELECTED_PROVIDER_LABEL);
 		assert.strictEqual(
 			requireElement(fixture.topBar, 'agent-restart-session').disabled,
 			true,
@@ -391,13 +402,14 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.controller.getSnapshot().tabs.length, 2);
 	});
 
-	test('dispose는 상단 bar, 탭 strip과 확인 다이얼로그를 함께 정리한다', () => {
+	test('dispose는 각 bar, 탭 strip과 확인 다이얼로그를 함께 정리한다', () => {
 		const fixture = createFixture();
 
 		fixture.controller.dispose();
 
 		assert.strictEqual(fixture.topBar.children.length, 0);
 		assert.strictEqual(fixture.tabStrip.children.length, 0);
+		assert.strictEqual(fixture.providerBar.children.length, 0);
 		assert.strictEqual(fixture.dialog.disposeCount, 1);
 		assert.strictEqual(fixture.documentEvents.countListeners('pointerdown'), 0);
 		assert.strictEqual(fixture.documentEvents.countListeners('keydown'), 0);
