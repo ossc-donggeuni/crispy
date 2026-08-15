@@ -1,4 +1,5 @@
 import { TERMINAL_ERROR_CODES } from './errors';
+import { PROVIDER_IDS } from './providers';
 import {
 	ID_MAX_LENGTH,
 	ID_PATTERN,
@@ -82,6 +83,15 @@ const terminalErrorCodeSchema = stringAllowlistSchema(
 	TERMINAL_ERROR_CODES,
 	'invalid_field',
 );
+/**
+ * Webview가 지정한 provider 식별자가 protocol allowlist에 있는지 검증한다.
+ * allowlist 밖의 값은 별도 code로 구분해 Host가 실행 정책을 찾기 전에 거부한다.
+ */
+const providerIdSchema = stringAllowlistSchema(
+	PROVIDER_IDS,
+	'provider_not_allowed',
+);
+
 /** Terminal 열 수가 protocol 범위 안의 정수인지 검증한다. */
 const colsSchema = integerRangeSchema(TERMINAL_COLS_MIN, TERMINAL_COLS_MAX);
 
@@ -151,6 +161,24 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'terminal.visible': {
 		tabId: idSchema,
 		visible: booleanSchema,
+	},
+	/* tabId는 Webview가 소유하므로 생성 시점에도 Host가 값을 지정하지 않는다. */
+	'tab.create': {
+		tabId: idSchema,
+	},
+	'tab.switch': {
+		tabId: idSchema,
+	},
+	'tab.close': {
+		tabId: idSchema,
+	},
+	/*
+	 * provider 선택과 재시작을 함께 나타내며 실행 파일, 인자와 환경은 포함하지 않는다.
+	 * 실행 계약은 Host가 providerId로 자신의 registry에서 다시 결정한다.
+	 */
+	'agent.switch': {
+		tabId: idSchema,
+		providerId: providerIdSchema,
 	},
 });
 

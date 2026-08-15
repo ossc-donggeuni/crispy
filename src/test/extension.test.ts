@@ -18,17 +18,65 @@ interface CrispyExtensionModule {
 	handleWebviewMessage(
 		webview: Pick<vscode.Webview, 'postMessage'>,
 		message: unknown,
-		terminalHost?: {
-			startSession(
-				tabId: string,
-				cols: number,
-				rows: number,
-			): Promise<unknown>;
-			restartSession(tabId: string, sessionId: string): Promise<unknown>;
-			routeInput(message: unknown): void;
-			routeResize(message: unknown): void;
-		},
+		terminalHost?: TerminalHostStub,
 	): Thenable<boolean> | undefined;
+}
+
+/** handleWebviewMessage가 호출하는 Host 경계를 그대로 만족하는 테스트 대역이다. */
+interface TerminalHostStub {
+	handleTerminalReady(
+		tabId: string,
+		cols: number,
+		rows: number,
+	): Promise<unknown>;
+	restartSession(tabId: string, sessionId: string): Promise<unknown>;
+	createTab(tabId: string): void;
+	switchTab(tabId: string): void;
+	closeTab(tabId: string): void;
+	switchAgent(tabId: string, providerId: string): Promise<unknown>;
+	routeInput(message: unknown): void;
+	routeResize(message: unknown): void;
+}
+
+/** Host 경계 호출을 type과 인자만 남겨 기록한 항목이다. */
+interface TerminalHostCall {
+	readonly method: string;
+	readonly args: readonly unknown[];
+}
+
+/**
+ * 모든 Host 경계 호출을 기록하는 대역을 만든다.
+ *
+ * @returns 대역과 호출 기록을 함께 담은 객체
+ */
+function createTerminalHostStub(): {
+	readonly host: TerminalHostStub;
+	readonly calls: TerminalHostCall[];
+} {
+	const calls: TerminalHostCall[] = [];
+	const record = (method: string, ...args: unknown[]): void => {
+		calls.push({ method, args });
+	};
+
+	return {
+		calls,
+		host: {
+			async handleTerminalReady(tabId, cols, rows) {
+				record('handleTerminalReady', tabId, cols, rows);
+			},
+			async restartSession(tabId, sessionId) {
+				record('restartSession', tabId, sessionId);
+			},
+			createTab: (tabId) => record('createTab', tabId),
+			switchTab: (tabId) => record('switchTab', tabId),
+			closeTab: (tabId) => record('closeTab', tabId),
+			async switchAgent(tabId, providerId) {
+				record('switchAgent', tabId, providerId);
+			},
+			routeInput: (message) => record('routeInput', message),
+			routeResize: (message) => record('routeResize', message),
+		},
+	};
 }
 
 suite('Crispy Extension Host', () => {
@@ -97,9 +145,8 @@ suite('Crispy Extension Host', () => {
 		);
 		assert.doesNotMatch(panel.webview.html, /'unsafe-eval'/);
 		assert.ok(panel.webview.html.includes('<section id="agent-chat-area">'));
-		assert.ok(panel.webview.html.includes('<div id="terminal-surface"'));
-		assert.ok(panel.webview.html.includes('<div id="terminal-mount"></div>'));
-		assert.ok(panel.webview.html.includes('<div id="terminal-overlay"'));
+		/* 탭별 Terminal 표면은 Webview가 탭마다 만들어 이 컨테이너 안에 넣는다. */
+		assert.ok(panel.webview.html.includes('<div id="agent-terminal-area"></div>'));
 	});
 
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {
@@ -237,9 +284,9 @@ suite('Crispy Extension Host', () => {
 		};
 
 		try {
-			const terminalHost = {
-				async startSession() {},
-				async restartSession() {},
+			const stub = createTerminalHostStub();
+			const terminalHost: TerminalHostStub = {
+				...stub.host,
 				routeInput: (message: unknown) => routedInputs.push(message),
 				routeResize: (message: unknown) => routedResizes.push(message),
 			};
@@ -286,16 +333,8 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(routedResizes.length, 1);
 	});
 
-	test('검증된 terminal.ready 값만 TerminalHost start 경계로 전달한다', () => {
-		const starts: Array<{ tabId: string; cols: number; rows: number }> = [];
-		const terminalHost = {
-			async startSession(tabId: string, cols: number, rows: number) {
-				starts.push({ tabId, cols, rows });
-			},
-			async restartSession() {},
-			routeInput() {},
-			routeResize() {},
-		};
+	test('검증된 terminal.ready 값만 TerminalHost ready 경계로 전달한다', () => {
+		const { host, calls } = createTerminalHostStub();
 
 		const result = extensionModule.handleWebviewMessage(
 			{ postMessage: () => Promise.resolve(true) },
@@ -305,27 +344,61 @@ suite('Crispy Extension Host', () => {
 				cols: 132,
 				rows: 43,
 			},
-			terminalHost,
+			host,
 		);
 
 		assert.strictEqual(result, undefined);
-		assert.deepStrictEqual(starts, [{
-			tabId: 'tab-ready-dispatch',
-			cols: 132,
-			rows: 43,
+		assert.deepStrictEqual(calls, [{
+			method: 'handleTerminalReady',
+			args: ['tab-ready-dispatch', 132, 43],
 		}]);
 	});
 
-	test('검증된 terminal.restart의 소유 관계만 TerminalHost restart 경계로 전달한다', () => {
-		const restarts: Array<{ tabId: string; sessionId: string }> = [];
-		const terminalHost = {
-			async startSession() {},
-			async restartSession(tabId: string, sessionId: string) {
-				restarts.push({ tabId, sessionId });
+	test('검증된 tab 및 agent 메시지를 대응하는 Host 경계로 전달한다', () => {
+		const { host, calls } = createTerminalHostStub();
+		const messages = [
+			{ type: 'tab.create', tabId: 'tab-lifecycle' },
+			{ type: 'tab.switch', tabId: 'tab-lifecycle' },
+			{ type: 'agent.switch', tabId: 'tab-lifecycle', providerId: 'codex' },
+			{ type: 'tab.close', tabId: 'tab-lifecycle' },
+		];
+
+		for (const message of messages) {
+			const result = extensionModule.handleWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				message,
+				host,
+			);
+			assert.strictEqual(result, undefined);
+		}
+
+		assert.deepStrictEqual(calls, [
+			{ method: 'createTab', args: ['tab-lifecycle'] },
+			{ method: 'switchTab', args: ['tab-lifecycle'] },
+			{ method: 'switchAgent', args: ['tab-lifecycle', 'codex'] },
+			{ method: 'closeTab', args: ['tab-lifecycle'] },
+		]);
+	});
+
+	test('allowlist 밖 provider의 agent.switch는 Host 경계 전에 거부한다', () => {
+		const { host, calls } = createTerminalHostStub();
+
+		const result = extensionModule.handleWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'agent.switch',
+				tabId: 'tab-unknown-provider',
+				providerId: 'unlisted-provider',
 			},
-			routeInput() {},
-			routeResize() {},
-		};
+			host,
+		);
+
+		assert.strictEqual(result, undefined);
+		assert.deepStrictEqual(calls, []);
+	});
+
+	test('검증된 terminal.restart의 소유 관계만 TerminalHost restart 경계로 전달한다', () => {
+		const { host, calls } = createTerminalHostStub();
 
 		const result = extensionModule.handleWebviewMessage(
 			{ postMessage: () => Promise.resolve(true) },
@@ -334,26 +407,18 @@ suite('Crispy Extension Host', () => {
 				tabId: 'tab-restart-dispatch',
 				sessionId: 'session-restart-dispatch',
 			},
-			terminalHost,
+			host,
 		);
 
 		assert.strictEqual(result, undefined);
-		assert.deepStrictEqual(restarts, [{
-			tabId: 'tab-restart-dispatch',
-			sessionId: 'session-restart-dispatch',
+		assert.deepStrictEqual(calls, [{
+			method: 'restartSession',
+			args: ['tab-restart-dispatch', 'session-restart-dispatch'],
 		}]);
 	});
 
 	test('실행 계약을 포함한 terminal.restart는 restart 경계 전에 거부한다', () => {
-		let restartCalls = 0;
-		const terminalHost = {
-			async startSession() {},
-			async restartSession() {
-				restartCalls += 1;
-			},
-			routeInput() {},
-			routeResize() {},
-		};
+		const { host: terminalHost, calls } = createTerminalHostStub();
 
 		for (const forbidden of [
 			{ executable: '/host/owned/shell' },
@@ -376,19 +441,11 @@ suite('Crispy Extension Host', () => {
 			assert.strictEqual(result, undefined);
 		}
 
-		assert.strictEqual(restartCalls, 0);
+		assert.deepStrictEqual(calls, []);
 	});
 
-	test('실행 계약을 포함한 terminal.ready는 start 경계 전에 거부한다', () => {
-		let startCalls = 0;
-		const terminalHost = {
-			async startSession() {
-				startCalls += 1;
-			},
-			async restartSession() {},
-			routeInput() {},
-			routeResize() {},
-		};
+	test('실행 계약을 포함한 terminal.ready는 ready 경계 전에 거부한다', () => {
+		const { host: terminalHost, calls } = createTerminalHostStub();
 
 		const result = extensionModule.handleWebviewMessage(
 			{ postMessage: () => Promise.resolve(true) },
@@ -404,7 +461,7 @@ suite('Crispy Extension Host', () => {
 		);
 
 		assert.strictEqual(result, undefined);
-		assert.strictEqual(startCalls, 0);
+		assert.deepStrictEqual(calls, []);
 	});
 });
 

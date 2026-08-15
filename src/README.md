@@ -8,6 +8,7 @@ Extension Host는 WebviewPanel의 생명 주기를 담당하며, Webview와 공�
 
 ```text
 src/
+├── agent/
 ├── test/
 ├── webview/
 ├── README.md
@@ -33,6 +34,14 @@ src/
 - Webview에서 Extension Host로 전송하는 `WebviewToExtensionMessage` 정의
 - Extension Host에서 Webview로 전송하는 `ExtensionToWebviewMessage` 정의
 - `webview.ready`와 `extension.ready` 메시지 계약 관리
+
+### `agent/`
+
+> Agent 탭과 Terminal 세션의 프로토콜, 실행 정책과 UI를 담당합니다.
+
+- Host와 Webview가 공유하는 메시지 계약 및 runtime validator
+- 탭별 Terminal 세션 lifecycle과 provider 자동 실행 정책
+- 세부 구조와 동작은 `agent/README.md` 참고
 
 ### `webview/`
 

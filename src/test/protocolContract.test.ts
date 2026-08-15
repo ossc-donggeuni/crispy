@@ -78,6 +78,26 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 		},
 		requiredFields: ['tabId', 'visible'],
 	},
+	{
+		message: { type: 'tab.create', tabId: TAB_ID },
+		requiredFields: ['tabId'],
+	},
+	{
+		message: { type: 'tab.switch', tabId: TAB_ID },
+		requiredFields: ['tabId'],
+	},
+	{
+		message: { type: 'tab.close', tabId: TAB_ID },
+		requiredFields: ['tabId'],
+	},
+	{
+		message: {
+			type: 'agent.switch',
+			tabId: TAB_ID,
+			providerId: PROVIDER_IDS[0],
+		},
+		requiredFields: ['tabId', 'providerId'],
+	},
 ];
 
 const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
@@ -246,6 +266,44 @@ suite('Host↔Webview protocol completion contract', () => {
 				sessionId: SESSION_ID,
 				providerId: PROVIDER_IDS[0],
 			}), 'unexpected_field', 'providerId');
+		});
+
+		test('agent.switch의 allowlist 밖 provider를 provider_not_allowed로 거부한다', () => {
+			for (const providerId of ['gpt', '', 'CODEX']) {
+				assertFailure(parseWebviewToHostMessage({
+					type: 'agent.switch',
+					tabId: TAB_ID,
+					providerId,
+				}), 'provider_not_allowed', 'providerId');
+			}
+
+			assertFailure(parseWebviewToHostMessage({
+				type: 'agent.switch',
+				tabId: TAB_ID,
+				providerId: 42,
+			}), 'invalid_field', 'providerId');
+		});
+
+		test('tab 메시지는 tabId만 받고 Host 실행 계약 지정을 거부한다', () => {
+			for (const type of ['tab.create', 'tab.switch', 'tab.close'] as const) {
+				assertFailure(parseWebviewToHostMessage({
+					type,
+					tabId: TAB_ID,
+					providerId: PROVIDER_IDS[0],
+				}), 'unexpected_field', 'providerId');
+				assertFailure(parseWebviewToHostMessage({
+					type,
+					tabId: TAB_ID,
+					executable: 'webview-owned-executable',
+				}), 'forbidden_field', 'executable');
+			}
+
+			assertFailure(parseWebviewToHostMessage({
+				type: 'agent.switch',
+				tabId: TAB_ID,
+				providerId: PROVIDER_IDS[0],
+				args: ['--webview-owned'],
+			}), 'forbidden_field', 'args');
 		});
 
 		test('restart는 소유 관계만 받고 terminal 크기 재지정을 거부한다', () => {

@@ -5,6 +5,8 @@ import type {
 	TabId,
 	WebviewToHostMessage,
 } from '../../protocol/messages';
+import type { ProviderId } from '../../protocol/providers';
+import { resolveAgentAutoRunInput } from '../agent/agentProviderLaunch';
 import type { PtyAdapter, PtyExitEvent } from './ptyAdapter';
 import {
 	prepareTerminalLaunch,
@@ -56,6 +58,7 @@ const START_ERROR_MESSAGES = Object.freeze({
 	restartUnknown: 'Terminal session could not be found.',
 	restartInProgress: 'Terminal restart is already in progress.',
 	restartUnavailable: 'Terminal session can no longer be restarted.',
+	unknownTab: 'Terminal tab is not registered.',
 });
 
 /** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
@@ -72,6 +75,12 @@ export class TerminalHost {
 	/** 각 Webview 탭을 현재 `sessionId` 하나에 연결하는 소유권 저장소다. */
 	private readonly activeSessionByTab = new Map<TabId, SessionId>();
 
+	/** Webview가 만들어 Host에 등록한, 아직 살아 있는 탭 식별자 집합이다. */
+	private readonly registeredTabs = new Set<TabId>();
+
+	/** 탭별로 마지막에 선택된 provider이며 세션 시작과 재시작에 함께 사용한다. */
+	private readonly providerByTab = new Map<TabId, ProviderId>();
+
 	/** 재시작 PTY를 이전과 같은 크기로 생성하기 위한 탭별 마지막 terminal 크기다. */
 	private readonly lastDimensionsByTab = new Map<
 		TabId,
@@ -87,6 +96,9 @@ export class TerminalHost {
 	/** Host 생명주기 메시지를 Webview 전송 계층으로 넘기는 경계다. */
 	private readonly emitMessage: TerminalHostMessageEmitter;
 
+	/** Webview가 마지막으로 알린 활성 탭이며 등록된 탭만 값이 될 수 있다. */
+	private activeTabId: TabId | undefined;
+
 	/** Webview dispose 뒤 모든 terminal message 전송을 중단하는 gate다. */
 	private messageDeliveryActive = true;
 
@@ -100,6 +112,181 @@ export class TerminalHost {
 		this.ptyAdapter = options.ptyAdapter;
 		this.prepareLaunch = options.prepareLaunch ?? prepareTerminalLaunch;
 		this.emitMessage = options.emitMessage;
+	}
+
+	/**
+	 * 검증된 `tab.create`로 새 탭을 등록한다.
+	 * provider가 아직 정해지지 않았으므로 이 시점에는 `TerminalSession`을 만들지 않으며,
+	 * 이후 `terminal.ready`와 `agent.switch` 요청을 받을 수 있는 탭으로만 표시한다.
+	 * 같은 탭에 대한 반복 요청은 기존 등록과 활성 탭을 그대로 둔다.
+	 *
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 */
+	createTab(tabId: TabId): void {
+		if (this.registeredTabs.has(tabId)) {
+			return;
+		}
+
+		this.registeredTabs.add(tabId);
+		this.activeTabId = tabId;
+	}
+
+	/**
+	 * 검증된 `tab.switch`로 현재 활성 탭을 기록한다.
+	 * 등록되지 않은 탭은 활성 탭으로 받아들이지 않으며 세션 상태는 바꾸지 않는다.
+	 *
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 */
+	switchTab(tabId: TabId): void {
+		if (!this.registeredTabs.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'session_not_found',
+				START_ERROR_MESSAGES.unknownTab,
+				false,
+			);
+			return;
+		}
+
+		this.activeTabId = tabId;
+	}
+
+	/**
+	 * 검증된 `tab.close`로 탭이 소유한 세션을 정리하고 등록을 해제한다.
+	 * 정리는 재시작 흐름과 동일한 입력 차단 → PTY 종료 → listener 해제 순서를 따르며,
+	 * 세션이 없는 탭이나 이미 닫힌 탭에 대해서도 안전하게 반복 호출할 수 있다.
+	 *
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 */
+	closeTab(tabId: TabId): void {
+		const session = this.getActiveSession(tabId);
+		if (session !== undefined) {
+			this.disposeSessionProcess(session);
+			this.removeSession(session.sessionId);
+		}
+
+		this.registeredTabs.delete(tabId);
+		this.providerByTab.delete(tabId);
+		this.lastDimensionsByTab.delete(tabId);
+		this.activeSessionByTab.delete(tabId);
+		if (this.activeTabId === tabId) {
+			this.activeTabId = undefined;
+		}
+	}
+
+	/**
+	 * 검증된 `agent.switch`로 탭의 provider를 정하고 세션을 그 provider로 다시 시작한다.
+	 * provider를 바꾸는 선택과 같은 provider를 유지하는 재시작이 같은 경로를 사용하므로
+	 * 실행 중 세션이 있으면 항상 기존 세션을 정리한 뒤 새 세션을 시작한다.
+	 * Terminal 크기를 아직 모르는 탭은 provider만 기록하고 `terminal.ready`를 기다린다.
+	 *
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 * @param providerId 프로토콜 allowlist를 통과한 provider 식별자
+	 * @returns 정리와 시작 흐름이 끝나면 완료되는 Promise
+	 */
+	async switchAgent(tabId: TabId, providerId: ProviderId): Promise<void> {
+		if (!this.registeredTabs.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'session_not_found',
+				START_ERROR_MESSAGES.unknownTab,
+				false,
+			);
+			return;
+		}
+
+		this.providerByTab.set(tabId, providerId);
+
+		const current = this.getActiveSession(tabId);
+		if (current !== undefined) {
+			this.disposeSessionProcess(current);
+			this.removeSession(current.sessionId);
+		}
+
+		const dimensions = this.lastDimensionsByTab.get(tabId);
+		if (dimensions === undefined) {
+			/* 크기를 알기 전에 시작하면 첫 화면이 잘못된 폭으로 그려지므로 기다린다. */
+			return;
+		}
+
+		await this.startSession(tabId, dimensions.cols, dimensions.rows);
+	}
+
+	/**
+	 * 검증된 `terminal.ready`를 탭 표면 준비 신호로 처리한다.
+	 * provider가 아직 정해지지 않은 탭은 크기만 기록하고 세션을 시작하지 않으므로
+	 * provider 선택과 표면 준비 중 나중에 도착한 쪽이 첫 세션 시작을 유발한다.
+	 *
+	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
+	 * @param cols 프로토콜 검증을 통과한 초기 터미널 열 수
+	 * @param rows 프로토콜 검증을 통과한 초기 터미널 행 수
+	 * @returns 필요한 경우의 시작 흐름까지 끝나면 완료되는 Promise
+	 */
+	async handleTerminalReady(
+		tabId: TabId,
+		cols: number,
+		rows: number,
+	): Promise<void> {
+		if (!this.registeredTabs.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'session_not_found',
+				START_ERROR_MESSAGES.unknownTab,
+				false,
+			);
+			return;
+		}
+
+		this.lastDimensionsByTab.set(tabId, { cols, rows });
+		if (!this.providerByTab.has(tabId)) {
+			return;
+		}
+
+		const current = this.getActiveSession(tabId);
+		if (
+			current !== undefined
+			&& (
+				current.state.kind === 'starting'
+				|| current.state.kind === 'running'
+				|| current.state.kind === 'stopping'
+			)
+		) {
+			return;
+		}
+
+		await this.startSession(tabId, cols, rows);
+	}
+
+	/**
+	 * 탭에 배정된 provider 식별자를 조회한다.
+	 *
+	 * @param tabId 조회할 Webview 소유 탭 식별자
+	 * @returns 배정된 provider 또는 아직 선택되지 않았으면 `undefined`
+	 */
+	getTabProvider(tabId: TabId): ProviderId | undefined {
+		return this.providerByTab.get(tabId);
+	}
+
+	/**
+	 * Webview가 마지막으로 알린 활성 탭을 조회한다.
+	 *
+	 * @returns 현재 활성 탭 식별자 또는 활성 탭이 없으면 `undefined`
+	 */
+	getActiveTabId(): TabId | undefined {
+		return this.activeTabId;
+	}
+
+	/**
+	 * 탭이 Host에 등록되어 있는지 확인한다.
+	 *
+	 * @param tabId 확인할 Webview 소유 탭 식별자
+	 * @returns 아직 닫히지 않은 등록된 탭이면 `true`
+	 */
+	hasTab(tabId: TabId): boolean {
+		return this.registeredTabs.has(tabId);
 	}
 
 	/**
@@ -209,6 +396,31 @@ export class TerminalHost {
 			sessionId: session.sessionId,
 		} as const;
 		this.publish(message);
+		this.runProviderAutoStart(session);
+	}
+
+	/**
+	 * 시작된 Shell 위에서 provider별 CLI 자동 실행 입력을 그대로 전달한다.
+	 * 커맨드는 Host registry에서만 결정되며 Webview가 보낸 값은 사용하지 않는다.
+	 * 자동 실행 대상이 아닌 provider는 기본 Shell 상태를 그대로 유지한다.
+	 *
+	 * @param session 방금 running 상태가 된 탭의 현재 세션
+	 */
+	private runProviderAutoStart(session: TerminalSession): void {
+		const providerId = this.providerByTab.get(session.tabId);
+		if (providerId === undefined || session.state.kind !== 'running') {
+			return;
+		}
+
+		const autoRunInput = resolveAgentAutoRunInput(providerId);
+		if (autoRunInput === undefined) {
+			return;
+		}
+
+		this.performPtyOperation(
+			session,
+			() => session.writeInput(autoRunInput),
+		);
 	}
 
 	/**
@@ -369,6 +581,9 @@ export class TerminalHost {
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.lastDimensionsByTab.clear();
+		this.registeredTabs.clear();
+		this.providerByTab.clear();
+		this.activeTabId = undefined;
 	}
 
 	/** 현재 소유 session에서 온 PTY output만 정확한 identity와 함께 전달한다. */

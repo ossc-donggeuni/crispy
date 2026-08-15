@@ -17,6 +17,9 @@ export class FakeAgentElement {
 	children: FakeAgentElement[] = [];
 	focusCount = 0;
 
+	/** `remove()`가 자신을 떼어낼 수 있도록 유지하는 부모 참조다. */
+	parent: FakeAgentElement | undefined;
+
 	private readonly listeners = new Map<string, Array<() => void>>();
 
 	constructor(readonly tagName: string = 'div') {}
@@ -27,11 +30,31 @@ export class FakeAgentElement {
 	}
 
 	append(...nodes: FakeAgentElement[]): void {
+		for (const node of nodes) {
+			node.parent = this;
+		}
 		this.children.push(...nodes);
 	}
 
 	replaceChildren(...nodes: FakeAgentElement[]): void {
+		for (const child of this.children) {
+			child.parent = undefined;
+		}
+		for (const node of nodes) {
+			node.parent = this;
+		}
 		this.children = [...nodes];
+	}
+
+	/** 부모의 자식 목록에서 자신을 제거한다. */
+	remove(): void {
+		const parent = this.parent;
+		if (parent === undefined) {
+			return;
+		}
+
+		parent.children = parent.children.filter((child) => child !== this);
+		this.parent = undefined;
 	}
 
 	addEventListener(type: string, listener: () => void): void {

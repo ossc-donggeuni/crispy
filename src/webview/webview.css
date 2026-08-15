@@ -87,18 +87,29 @@ body {
 		'provider';
 }
 
-#terminal-surface {
+/* 탭마다 자기 표면을 겹쳐 두고 활성 탭 하나만 표시한다. */
+#agent-terminal-area {
 	position: relative;
 	grid-area: terminal;
-	width: 100%;
-	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.terminal-surface {
+	position: absolute;
+	inset: 0;
 	min-width: 0;
 	min-height: 0;
 	padding: 8px;
 	overflow: hidden;
 }
 
-#terminal-mount {
+.terminal-surface[hidden] {
+	display: none;
+}
+
+.terminal-mount {
 	width: 100%;
 	height: 100%;
 	min-width: 0;
@@ -106,11 +117,11 @@ body {
 	overflow: hidden;
 }
 
-#terminal-mount > .xterm {
+.terminal-mount > .xterm {
 	height: 100%;
 }
 
-#terminal-overlay {
+.terminal-overlay {
 	position: absolute;
 	inset: 0;
 	z-index: 3;
@@ -122,11 +133,11 @@ body {
 	text-align: center;
 }
 
-#terminal-overlay[hidden] {
+.terminal-overlay[hidden] {
 	display: none;
 }
 
-#terminal-surface[data-state='exited'] #terminal-overlay {
+.terminal-surface[data-state='exited'] .terminal-overlay {
 	color: var(--vscode-foreground);
 }
 

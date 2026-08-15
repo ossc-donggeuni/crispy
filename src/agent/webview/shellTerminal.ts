@@ -233,7 +233,8 @@ function createDefaultOverlayView(
 	};
 }
 
-const defaultDependencies: ShellTerminalDependencies = {
+/** 실제 xterm과 브라우저 API를 사용하는 기본 Terminal 의존성이다. */
+export const defaultShellTerminalDependencies: ShellTerminalDependencies = {
 	createTerminal: () => new Terminal({ theme: readVsCodeAnsiTheme() }),
 	createFitAddon: () => new FitAddon(),
 	createTabId: () => `tab-${globalThis.crypto.randomUUID()}`,
@@ -269,10 +270,11 @@ export function initializeShellTerminal(
 	mount: HTMLElement,
 	overlay: HTMLElement,
 	postMessage: PostTerminalMessage,
-	dependencies: ShellTerminalDependencies = defaultDependencies,
+	dependencies: ShellTerminalDependencies = defaultShellTerminalDependencies,
 ): ShellTerminalController {
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
+	let sessionEverStarted = false;
 	let restartSessionId: SessionId | undefined;
 	let restartRequested = false;
 	let overlayVisible = false;
@@ -339,10 +341,13 @@ export function initializeShellTerminal(
 					}
 
 					if (
-						activeSessionId !== undefined
-						&& (lastSentDimensions?.cols !== cols
-							|| lastSentDimensions?.rows !== rows)
+						lastSentDimensions?.cols === cols
+						&& lastSentDimensions?.rows === rows
 					) {
+						return;
+					}
+
+					if (activeSessionId !== undefined) {
 						try {
 							postMessage({
 								type: 'terminal.resize',
@@ -355,6 +360,17 @@ export function initializeShellTerminal(
 						} catch {
 							// Resize 전송 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다.
 						}
+						return;
+					}
+
+					/*
+					 * 아직 첫 세션이 시작되지 않은 탭은 provider 선택 전에 크기가 바뀔 수 있다.
+					 * 이때만 준비 신호를 다시 보내 Host가 최신 크기로 PTY를 시작하게 한다.
+					 * 세션이 한 번이라도 시작된 뒤에는 종료 상태에서 다시 보내지 않으므로
+					 * 사용자가 재시작을 요청하지 않은 세션이 저절로 살아나지 않는다.
+					 */
+					if (!sessionEverStarted) {
+						postReady(cols, rows);
 					}
 					return;
 				}
@@ -481,18 +497,31 @@ export function initializeShellTerminal(
 			switch (message.type) {
 				case 'terminal.started':
 					if (message.tabId === tabId) {
+						const replacedSessionId = activeSessionId;
 						activeSessionId = message.sessionId;
 						restartSessionId = undefined;
 						restartRequested = false;
-						if (overlayVisible) {
-							/* 새 PTY 시작을 확인한 뒤에만 이전 세션 buffer를 정리한다. */
+						/*
+						 * 이전 세션이 있었다면 provider 전환처럼 종료 덮개를 거치지 않은
+						 * 교체일 수 있으므로, 새 PTY 시작을 확인한 뒤 buffer를 정리한다.
+						 */
+						if (
+							overlayVisible
+							|| (
+								replacedSessionId !== undefined
+								&& replacedSessionId !== message.sessionId
+							)
+						) {
 							try {
 								terminal?.reset();
 							} catch {
 								// Buffer 초기화 실패가 새 세션 입출력 연결을 막지 않게 한다.
 							}
+						}
+						if (overlayVisible) {
 							hideOverlay();
 						}
+						sessionEverStarted = true;
 						try {
 							terminal?.focus();
 						} catch {

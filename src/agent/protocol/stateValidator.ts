@@ -53,7 +53,14 @@ export function validateWebviewToHostMessageState(
 		case 'terminal.input':
 		case 'terminal.resize':
 			return validateRunningSessionMessage(message, snapshot);
+		case 'tab.create':
+			/* tabId는 Webview가 소유하므로 등록 요청 자체는 상태와 대조하지 않는다. */
+			return stateValidationSuccess(message);
 		case 'terminal.visible':
+		case 'tab.switch':
+		case 'tab.close':
+		/* provider 지정은 세션 상태와 무관하게 항상 해당 provider로의 재시작을 뜻한다. */
+		case 'agent.switch':
 			return findTab(snapshot, message.tabId) === undefined
 				? stateValidationFailure('unknown_tab', 'tabId')
 				: stateValidationSuccess(message);

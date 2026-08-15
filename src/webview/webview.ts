@@ -1,6 +1,9 @@
-import { initializeAgentPanelUi } from '../agent/UI/agentPanelUi';
+import {
+	initializeAgentPanelUi,
+	type AgentPanelUiController,
+} from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
-import { initializeShellTerminal } from '../agent/webview/shellTerminal';
+import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import type { WebviewToExtensionMessage } from '../messages';
 import { initializeGraphView } from './graph/graphView';
 import { initializePanelDock } from './panel/panelDock';
@@ -44,24 +47,39 @@ const graphArea = getRequiredElement<HTMLElement>('#graph-area');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
-const terminalSurface = getRequiredElement<HTMLElement>('#terminal-surface');
-const terminalMount = getRequiredElement<HTMLElement>('#terminal-mount');
-const terminalOverlay = getRequiredElement<HTMLElement>('#terminal-overlay');
+const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
 const graphView = initializeGraphView(graphArea);
 
-const shellTerminal = initializeShellTerminal(
-	terminalSurface,
-	terminalMount,
-	terminalOverlay,
+/* 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
+const terminalPool = createDefaultAgentTerminalPool(
+	terminalArea,
 	(message) => vscodeApi.postMessage(message),
 );
 
 /*
- * Agent UI 뼈대는 아직 Host와 연결되지 않은 mock 상태이며,
- * 초기화 실패가 Graph, Dock, Layout이나 Terminal로 전파되지 않도록 격리한다.
+ * Agent UI 동작을 Host protocol로 연결하며, 전송 실패가 Graph, Dock, Layout이나
+ * 다른 탭 Terminal로 전파되지 않도록 이 경계 안에서 격리한다.
  */
-let agentPanelUi: { dispose(): void } | undefined;
+const postAgentMessage = (message: WebviewToExtensionMessage): void => {
+	try {
+		vscodeApi.postMessage(message);
+	} catch {
+		// Host 전송 실패가 나머지 Webview 기능으로 전파되지 않게 한다.
+	}
+};
+
+/**
+ * 활성 탭 전환을 Host와 Terminal 표면에 함께 반영한다.
+ *
+ * @param tabId 새로 활성화된 탭 식별자
+ */
+const activateTab = (tabId: string): void => {
+	postAgentMessage({ type: 'tab.switch', tabId });
+	terminalPool.setActiveTab(tabId);
+};
+
+let agentPanelUi: AgentPanelUiController | undefined;
 try {
 	agentPanelUi = initializeAgentPanelUi(
 		{
@@ -71,8 +89,39 @@ try {
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
 		},
 		{
+			onTabCreated(tabId): void {
+				/* provider가 정해지기 전이므로 Host는 탭만 등록하고 세션은 만들지 않는다. */
+				postAgentMessage({ type: 'tab.create', tabId });
+				terminalPool.ensureTab(tabId);
+				terminalPool.setActiveTab(tabId);
+			},
+
+			onTabActivated(tabId): void {
+				activateTab(tabId);
+			},
+
+			onProviderSelected(tabId, providerId): void {
+				postAgentMessage({ type: 'agent.switch', tabId, providerId });
+			},
+
+			onSessionRestartRequested(tabId, providerId): void {
+				/* 같은 provider를 다시 지정하는 것이 곧 해당 provider로의 재시작이다. */
+				postAgentMessage({ type: 'agent.switch', tabId, providerId });
+			},
+
+			onTabClosed(tabId): void {
+				postAgentMessage({ type: 'tab.close', tabId });
+				terminalPool.closeTab(tabId);
+
+				/* 탭 상태가 이미 이웃 탭으로 옮겨졌으므로 표면 표시도 함께 맞춘다. */
+				const nextActiveTabId = agentPanelUi?.getSnapshot().activeTabId;
+				if (nextActiveTabId !== undefined) {
+					activateTab(nextActiveTabId);
+				}
+			},
+
 			/* 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
-			onLayoutChange: () => shellTerminal.scheduleTerminalFit(),
+			onLayoutChange: () => terminalPool.scheduleActiveTerminalFit(),
 		},
 	);
 } catch {
@@ -86,7 +135,7 @@ const refreshDock = initializePanelDock(
 	dockPreview,
 	state,
 	() => savePanelLayoutState(vscodeApi, state),
-	shellTerminal.scheduleTerminalFit,
+	() => terminalPool.scheduleActiveTerminalFit(),
 );
 // Resize 초기화
 initializePanelResize(
@@ -95,12 +144,12 @@ initializePanelResize(
 	state,
 	refreshDock,
 	() => savePanelLayoutState(vscodeApi, state),
-	shellTerminal.scheduleTerminalFit,
+	() => terminalPool.scheduleActiveTerminalFit(),
 );
 
 window.addEventListener('unload', () => {
 	graphView.dispose();
-	shellTerminal.dispose();
+	terminalPool.dispose();
 	agentPanelUi?.dispose();
 }, { once: true });
 
@@ -121,7 +170,7 @@ function handleHostMessage(message: unknown): void {
 			console.log('[Crispy] Extension ready');
 			break;
 		default:
-			shellTerminal.handleHostMessage(parseResult.value);
+			terminalPool.handleHostMessage(parseResult.value);
 	}
 }
 
