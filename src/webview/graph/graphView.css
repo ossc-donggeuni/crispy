@@ -85,7 +85,7 @@
 
 .graph-project-node:active,
 .graph-folder-node:active,
-.graph-file-group-node:active:not(:has(.graph-file-item:active)) {
+.graph-file-group-node:active:not(:has(.graph-file-item:active, .graph-file-control:active)) {
 	background: #28292a;
 	border-color: #d6d6d6;
 }
@@ -381,17 +381,70 @@
 	background-image: url('./assets/file-icons/license.svg');
 }
 
-.graph-file-more {
+.graph-file-controls {
 	display: flex;
 	height: 26px;
 	flex: none;
+	gap: 5px;
 	align-items: center;
-	justify-content: center;
+	justify-content: flex-end;
+}
+
+.graph-file-control {
+	appearance: none;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 0;
 	color: #9a9a9a;
-	background: #282828;
+	border: 0;
 	border-radius: 5px;
+	font-family: inherit;
 	font-size: 11px;
 	font-weight: 400;
+	cursor: pointer;
+}
+
+.graph-file-control:focus-visible {
+	outline: 1px solid #a3a3a3;
+	outline-offset: 1px;
+}
+
+.graph-file-more {
+	display: flex;
+	min-width: 0;
+	flex: 1;
+	align-items: center;
+	justify-content: center;
+	background: #282828;
+}
+
+.graph-file-more:hover {
+	color: #b9b9b9;
+	background: #323232;
+}
+
+.graph-file-collapse {
+	display: flex;
+	width: 26px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	color: #a3a3a3;
+	background: rgba(40, 40, 40, 0.55);
+	opacity: 0.6;
+}
+
+.graph-file-collapse:hover {
+	color: #d0d0d0;
+	background: #323232;
+	opacity: 1;
+}
+
+.graph-file-collapse-icon {
+	display: block;
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
 }
 
 .graph-edge {

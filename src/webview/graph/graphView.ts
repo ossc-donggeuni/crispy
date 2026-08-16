@@ -2,20 +2,24 @@ import {
 	initializeGraphCamera,
 	type GraphCamera,
 } from './graphCamera';
-import { createGraphLayout } from './graphLayout';
+import { createGraphLayout, type GraphLayout } from './graphLayout';
 import { GRAPH_MOCK_PROJECT } from './graphMockData';
 import { initializeGraphNavigator } from './graphNavigator';
-import { initializeGraphRenderer } from './graphRenderer';
+import {
+	initializeGraphRenderer,
+	type GraphRenderer,
+} from './graphRenderer';
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
 	type GraphState,
+	type GraphStateSnapshot,
 	type GraphStateStore,
 } from './graphState';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
-	/** Camera와 사용자 Node 위치를 관리하는 단일 Graph State Store다. */
+	/** Camera, 사용자 Node 위치와 File Group page를 관리하는 단일 Store다. */
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
@@ -24,6 +28,32 @@ export interface GraphView {
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+/**
+ * 현재 Layout 입력인 File Group page reference가 바뀔 때만 다음 Layout을 적용한다.
+ * Layout factory를 분리해 Camera/Drag-only 변경 fast-path를 직접 검증할 수 있다.
+ */
+export function initializeGraphLayoutReflow(
+	state: GraphStateStore,
+	renderer: Pick<GraphRenderer, 'applyLayout'>,
+	createLayout: (state: GraphStateSnapshot) => GraphLayout,
+): () => void {
+	let active = true;
+	let renderedFileGroupPages = state.getState().fileGroupPages;
+	const unsubscribe = state.subscribe((nextState) => {
+		if (!active || nextState.fileGroupPages === renderedFileGroupPages) {
+			return;
+		}
+
+		renderedFileGroupPages = nextState.fileGroupPages;
+		renderer.applyLayout(createLayout(nextState));
+	});
+
+	return () => {
+		active = false;
+		unsubscribe();
+	};
+}
 
 /**
  * Graph가 렌더링될 Viewport, World, Edge/Node/Overlay Layer를 생성하고
@@ -55,16 +85,25 @@ export function initializeGraphView(
 	viewport.append(world, overlayLayer);
 	root.append(viewport);
 	const state = createGraphState(initialState);
+	const initialGraphState = state.getState();
 	const camera = initializeGraphCamera(viewport, world, state);
 	const renderer = initializeGraphRenderer(
 		edgeLayer,
 		nodeLayer,
-		createGraphLayout(GRAPH_MOCK_PROJECT),
+		createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: initialGraphState.fileGroupPages,
+		}),
 		state,
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
-
 	let disposed = false;
+	const unsubscribeLayout = initializeGraphLayoutReflow(
+		state,
+		renderer,
+		(nextState) => createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: nextState.fileGroupPages,
+		}),
+	);
 
 	return {
 		state,
@@ -75,6 +114,7 @@ export function initializeGraphView(
 			}
 
 			disposed = true;
+			unsubscribeLayout();
 			navigator.dispose();
 			renderer.dispose();
 			camera.dispose();

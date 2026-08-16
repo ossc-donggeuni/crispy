@@ -4,6 +4,8 @@ import type { GraphStateStore } from './graphState';
 
 /** Graph Node Drag가 등록한 입력 lifecycle을 관리한다. */
 export interface GraphNodeDrag {
+	/** Reflow 뒤 저장 위치가 없는 Drag가 사용할 최신 Layout 기준점을 갱신한다. */
+	updateDefaultPosition(position: GraphLayoutPosition): void;
 	/** Pointer와 Click Listener 및 진행 중인 Drag 표시 상태를 정리한다. */
 	dispose(): void;
 }
@@ -53,6 +55,7 @@ export function initializeGraphNodeDrag(
 	options: GraphNodeDragOptions = {},
 ): GraphNodeDrag {
 	let session: NodeDragSession | undefined;
+	let currentDefaultPosition = defaultPosition;
 	let suppressNextClick = false;
 	let disposed = false;
 
@@ -89,9 +92,9 @@ export function initializeGraphNodeDrag(
 			pointerId: event.pointerId,
 			startClientX: event.clientX,
 			startClientY: event.clientY,
-			startPosition: savedPosition ?? defaultPosition,
+			startPosition: savedPosition ?? currentDefaultPosition,
 			cameraScale: state.camera.scale,
-			currentPosition: savedPosition ?? defaultPosition,
+			currentPosition: savedPosition ?? currentDefaultPosition,
 			didDrag: false,
 		};
 		node.classList.add('is-dragging');
@@ -198,6 +201,11 @@ export function initializeGraphNodeDrag(
 	node.addEventListener('click', handleClick);
 
 	return {
+		updateDefaultPosition(position): void {
+			if (!disposed) {
+				currentDefaultPosition = position;
+			}
+		},
 		dispose(): void {
 			if (disposed) {
 				return;

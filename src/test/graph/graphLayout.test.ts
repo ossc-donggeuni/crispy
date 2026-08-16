@@ -2,17 +2,18 @@ import * as assert from 'assert';
 import {
 	createFileGroupId,
 	createGraphLayout,
-	GRAPH_FILE_GROUP_MORE_HEIGHT,
+	getFileGroupHeight,
+	GRAPH_FILE_GROUP_CONTROL_HEIGHT,
 	GRAPH_FILE_GROUP_NODE_WIDTH,
 	GRAPH_FILE_GROUP_PADDING,
 	GRAPH_FILE_GROUP_ROW_HEIGHT,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
-	GRAPH_MAX_VISIBLE_FILES,
 	type GraphFileGroupNode,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
 import { isFile, isFolder } from '../../webview/graph/graphModel';
+import { FILE_GROUP_PAGE_SIZE } from '../../webview/graph/graphState';
 
 suite('Graph Model / Layout', () => {
 	test('실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다', () => {
@@ -30,7 +31,7 @@ suite('Graph Model / Layout', () => {
 		assert.ok(appSrc && isFolder(appSrc));
 		assert.ok(appDocs && isFolder(appDocs));
 		assert.ok(app.children.filter(isFile).length > 1);
-		assert.ok(appSrc.children.filter(isFile).length > GRAPH_MAX_VISIBLE_FILES);
+		assert.ok(appSrc.children.filter(isFile).length > FILE_GROUP_PAGE_SIZE);
 		assert.ok(appSrc.children.some(isFolder));
 	});
 
@@ -52,11 +53,134 @@ suite('Graph Model / Layout', () => {
 			appSrcFiles.files.map((file) => file.name),
 			expectedFiles,
 		);
-		assert.deepStrictEqual(
-			appSrcFiles.visibleFiles.map((file) => file.name),
-			expectedFiles.slice(0, GRAPH_MAX_VISIBLE_FILES),
+		assert.strictEqual('visibleFiles' in appSrcFiles, false);
+		assert.strictEqual('hiddenFileCount' in appSrcFiles, false);
+	});
+
+	test('Pagination 확인용 하위 Folder에 17개와 21개 File Group을 만든다', () => {
+		const samples = GRAPH_MOCK_PROJECT.children.find(
+			(entry) => isFolder(entry) && entry.id === 'folder:pagination-samples',
 		);
-		assert.strictEqual(appSrcFiles.hiddenFileCount, 2);
+
+		assert.ok(samples && isFolder(samples));
+		const seventeenFiles = samples.children.find(
+			(entry) => isFolder(entry)
+				&& entry.id === 'folder:pagination-samples/seventeen-files',
+		);
+		const twentyOneFiles = samples.children.find(
+			(entry) => isFolder(entry)
+				&& entry.id === 'folder:pagination-samples/twenty-one-files',
+		);
+
+		assert.ok(seventeenFiles && isFolder(seventeenFiles));
+		assert.ok(twentyOneFiles && isFolder(twentyOneFiles));
+		assert.strictEqual(seventeenFiles.children.filter(isFile).length, 17);
+		assert.strictEqual(twentyOneFiles.children.filter(isFile).length, 21);
+
+		const layout = createGraphLayout(GRAPH_MOCK_PROJECT);
+		assert.strictEqual(
+			getFileGroup(layout.nodes, seventeenFiles.id).files.length,
+			17,
+		);
+		assert.strictEqual(
+			getFileGroup(layout.nodes, twentyOneFiles.id).files.length,
+			21,
+		);
+	});
+
+	test('17개 File Group 높이를 page별 visible File 수에 맞게 계산한다', () => {
+		const parentId = 'folder:pagination-samples/seventeen-files';
+		const fileGroupId = createFileGroupId(parentId);
+		const heights = [1, 2, 3, 4].map((page) => getFileGroup(
+			createGraphLayout(GRAPH_MOCK_PROJECT, {
+				fileGroupPages: { [fileGroupId]: page },
+			}).nodes,
+			parentId,
+		).height);
+
+		assert.deepStrictEqual(heights, [198, 348, 498, 558]);
+		assert.strictEqual(
+			getFileGroup(
+				createGraphLayout(GRAPH_MOCK_PROJECT, {
+					fileGroupPages: { [fileGroupId]: 10 },
+				}).nodes,
+				parentId,
+			).height,
+			558,
+		);
+	});
+
+	test('File 수와 page 상태에 맞는 단일 pagination control 높이를 적용한다', () => {
+		const smallParentId = 'folder:app/docs';
+		const smallFileGroupId = createFileGroupId(smallParentId);
+		const largeParentId = 'folder:pagination-samples/seventeen-files';
+		const largeFileGroupId = createFileGroupId(largeParentId);
+		const smallLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: { [smallFileGroupId]: 2 },
+		});
+		const pageOneLayout = createGraphLayout(GRAPH_MOCK_PROJECT);
+		const pageTwoLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: { [largeFileGroupId]: 2 },
+		});
+		const pageFourLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: { [largeFileGroupId]: 4 },
+		});
+
+		assert.strictEqual(
+			getFileGroup(smallLayout.nodes, smallParentId).height,
+			getFileGroupHeight(2, false),
+		);
+		assert.strictEqual(
+			getFileGroup(pageOneLayout.nodes, largeParentId).height,
+			getFileGroupHeight(5, true),
+		);
+		assert.strictEqual(
+			getFileGroup(pageTwoLayout.nodes, largeParentId).height,
+			getFileGroupHeight(10, true),
+		);
+		assert.strictEqual(
+			getFileGroup(pageFourLayout.nodes, largeParentId).height,
+			getFileGroupHeight(17, true),
+		);
+		assert.strictEqual(
+			getFileGroupHeight(10, true) - getFileGroupHeight(10, false),
+			GRAPH_FILE_GROUP_CONTROL_HEIGHT,
+		);
+	});
+
+	test('File Group 높이 증가를 기존 subtree 계산으로 다음 sibling 위치에 반영한다', () => {
+		const firstParentId = 'folder:pagination-samples/seventeen-files';
+		const firstFileGroupId = createFileGroupId(firstParentId);
+		const secondFolderId = 'folder:pagination-samples/twenty-one-files';
+		const pageOneLayout = createGraphLayout(GRAPH_MOCK_PROJECT);
+		const pageTwoLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: { [firstFileGroupId]: 2 },
+		});
+		const pageOneGroup = getFileGroup(pageOneLayout.nodes, firstParentId);
+		const pageTwoGroup = getFileGroup(pageTwoLayout.nodes, firstParentId);
+		const pageOneSibling = getLayoutNode(pageOneLayout.nodes, secondFolderId);
+		const pageTwoSibling = getLayoutNode(pageTwoLayout.nodes, secondFolderId);
+
+		assert.ok(pageTwoGroup.height > pageOneGroup.height);
+		assert.ok(pageTwoSibling.position.y > pageOneSibling.position.y);
+		assert.strictEqual(
+			pageTwoSibling.position.y - pageOneSibling.position.y,
+			pageTwoGroup.height - pageOneGroup.height,
+		);
+	});
+
+	test('여러 File Group의 page별 높이를 독립적으로 계산한다', () => {
+		const firstParentId = 'folder:pagination-samples/seventeen-files';
+		const secondParentId = 'folder:pagination-samples/twenty-one-files';
+		const layout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: {
+				[createFileGroupId(firstParentId)]: 2,
+				[createFileGroupId(secondParentId)]: 1,
+			},
+		});
+
+		assert.strictEqual(getFileGroup(layout.nodes, firstParentId).height, 348);
+		assert.strictEqual(getFileGroup(layout.nodes, secondParentId).height, 198);
 	});
 
 	test('Project/Folder에서 직접 Child Folder와 File Group으로만 Edge를 만든다', () => {
@@ -71,6 +195,7 @@ suite('Graph Model / Layout', () => {
 		assert.deepStrictEqual(rootTargets, [
 			'folder:app',
 			'folder:src',
+			'folder:pagination-samples',
 			createFileGroupId(GRAPH_MOCK_PROJECT.id),
 		]);
 		assert.deepStrictEqual(appTargets, [
@@ -125,21 +250,31 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(folder.position.x - root.position.x, 262);
 	});
 
-	test('30px File Row와 More 높이를 File Group Layout 높이에 반영한다', () => {
+	test('30px File Row와 pagination control 높이를 File Group Layout 높이에 반영한다', () => {
 		const layout = createGraphLayout(GRAPH_MOCK_PROJECT);
 		const fileGroup = getFileGroup(layout.nodes, 'folder:app/src');
 		const borderSize = 4;
 		const expectedHeight = borderSize
 			+ GRAPH_FILE_GROUP_PADDING * 2
-			+ GRAPH_MAX_VISIBLE_FILES * GRAPH_FILE_GROUP_ROW_HEIGHT
-			+ GRAPH_FILE_GROUP_MORE_HEIGHT;
+			+ FILE_GROUP_PAGE_SIZE * GRAPH_FILE_GROUP_ROW_HEIGHT
+			+ GRAPH_FILE_GROUP_CONTROL_HEIGHT;
 
 		assert.strictEqual(GRAPH_FILE_GROUP_ROW_HEIGHT, 30);
-		assert.strictEqual(fileGroup.hiddenFileCount, 2);
+		assert.strictEqual(fileGroup.files.length, 7);
 		assert.strictEqual(fileGroup.height, expectedHeight);
 		assert.strictEqual(fileGroup.height, 198);
 	});
 });
+
+function getLayoutNode(
+	nodes: ReturnType<typeof createGraphLayout>['nodes'],
+	nodeId: string,
+) {
+	const node = nodes.find((candidate) => candidate.id === nodeId);
+
+	assert.ok(node, `${nodeId} Layout Node가 있어야 한다.`);
+	return node;
+}
 
 function getFileGroup(
 	nodes: ReturnType<typeof createGraphLayout>['nodes'],

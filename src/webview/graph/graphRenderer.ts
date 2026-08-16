@@ -5,19 +5,40 @@ import type {
 	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
+import type { File } from './graphModel';
 import { resolveFileIcon } from './fileIconResolver';
 import {
 	GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE,
 	initializeGraphNodeDrag,
 	type GraphNodeDrag,
 } from './graphNodeDrag';
-import type {
-	GraphStateSnapshot,
-	GraphStateStore,
+import {
+	FILE_GROUP_PAGE_SIZE,
+	getRemainingFileCount,
+	getVisibleFileCount,
+	type GraphStateSnapshot,
+	type GraphStateStore,
 } from './graphState';
+
+interface FileGroupContentRenderer {
+	render(page: number): void;
+	dispose(): void;
+}
+
+type FileRowRenderer = {
+	readonly element: HTMLLIElement;
+	readonly dispose: () => void;
+};
+
+interface FileGroupContentElements {
+	readonly elements: HTMLElement[];
+	readonly cleanups: Array<() => void>;
+}
 
 /** Graph Node/Edge DOM과 interaction lifecycle을 관리한다. */
 export interface GraphRenderer {
+	/** 기존 Node/Edge DOM을 새로운 Layout geometry와 동기화한다. */
+	applyLayout(layout: GraphLayout): void;
 	/** Node/Edge DOM, Drag controller, Listener 및 State 구독을 정리한다. */
 	dispose(): void;
 }
@@ -34,12 +55,14 @@ export interface GraphRendererInteractions {
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const FOLDER_ICON_PATH = 'M2.5 5.25A1.25 1.25 0 0 1 3.75 4h3.4l1.7 2h7.4a1.25 1.25 0 0 1 1.25 1.25v7.5A1.25 1.25 0 0 1 16.25 16H3.75a1.25 1.25 0 0 1-1.25-1.25v-9.5Z';
+const COLLAPSE_CHEVRON_PATH = 'm4.5 10 3.5-3.5 3.5 3.5';
 const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
 
 /**
  * 기존 Edge/Node Layer에 프로젝트 Layout을 렌더링하고 저장 위치와 동기화한다.
  * Camera-only 상태 변경은 건너뛰며, Node 위치 변경 시 해당 Node와 연결 Edge만
- * 갱신한다. Drag 중 임시 위치도 같은 갱신 함수를 사용한다.
+ * 갱신한다. 파일 그룹 page 변경은 해당 그룹 contents에만 반영한다.
+ * Drag 중 임시 위치도 같은 위치 갱신 함수를 사용한다.
  *
  * @param edgeLayer Edge path를 추가할 기존 SVG Layer
  * @param nodeLayer Project Root, Folder, File Group을 추가할 기존 HTML Layer
@@ -56,7 +79,8 @@ export function initializeGraphRenderer(
 	interactions: GraphRendererInteractions = {},
 ): GraphRenderer {
 	const ownerDocument = nodeLayer.ownerDocument;
-	const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
+	let renderedLayout = layout;
+	let nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
 	const nodeElements = new Map<string, HTMLElement>();
 	const edgeElements = new Map<string, SVGPathElement>();
 	const edgesByNodeId = new Map<string, GraphLayoutEdge[]>();
@@ -67,8 +91,9 @@ export function initializeGraphRenderer(
 			initialState.nodePositions[node.id] ?? node.position,
 		]),
 	);
-	const nodeDrags: GraphNodeDrag[] = [];
-	const interactionCleanups: Array<() => void> = [];
+	const nodeDrags = new Map<string, GraphNodeDrag>();
+	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
+	let disposed = false;
 
 	for (const edge of layout.edges) {
 		const path = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
@@ -107,6 +132,7 @@ export function initializeGraphRenderer(
 	const updateNodePosition = (
 		nodeId: string,
 		position: GraphLayoutPosition,
+		pendingEdges?: Map<string, GraphLayoutEdge>,
 	): void => {
 		renderedPositions.set(nodeId, position);
 		const element = nodeElements.get(nodeId);
@@ -116,7 +142,11 @@ export function initializeGraphRenderer(
 		}
 
 		for (const edge of edgesByNodeId.get(nodeId) ?? []) {
-			renderEdge(edge);
+			if (pendingEdges) {
+				pendingEdges.set(edge.id, edge);
+			} else {
+				renderEdge(edge);
+			}
 		}
 	};
 
@@ -124,13 +154,24 @@ export function initializeGraphRenderer(
 		const element = createNodeElement(
 			layoutNode,
 			ownerDocument,
-			interactions,
-			interactionCleanups,
 		);
+
+		if (layoutNode.kind === 'file-group') {
+			const content = initializeFileGroupContent(
+				element,
+				layoutNode,
+				ownerDocument,
+				graphState,
+				interactions,
+			);
+
+			content.render(graphState.getFileGroupPage(layoutNode.id));
+			fileGroupContents.set(layoutNode.id, content);
+		}
 
 		nodeLayer.append(element);
 		nodeElements.set(layoutNode.id, element);
-		nodeDrags.push(initializeGraphNodeDrag(
+		nodeDrags.set(layoutNode.id, initializeGraphNodeDrag(
 			element,
 			layoutNode.id,
 			layoutNode.position,
@@ -160,7 +201,7 @@ export function initializeGraphRenderer(
 	let renderedNodePositions = initialState.nodePositions;
 	/**
 	 * 저장된 Node 위치 객체가 바뀐 경우 실제 좌표가 달라진 Node만 반영한다.
-	 * GraphState의 reference sharing으로 Camera-only 변경은 순회 전에 종료한다.
+	 * GraphState의 reference sharing으로 Camera 및 pagination-only 변경은 순회 전에 종료한다.
 	 */
 	const renderStoredPositions = (state: GraphStateSnapshot): void => {
 		if (state.nodePositions === renderedNodePositions) {
@@ -170,7 +211,7 @@ export function initializeGraphRenderer(
 		const previousPositions = renderedNodePositions;
 		renderedNodePositions = state.nodePositions;
 
-		for (const layoutNode of layout.nodes) {
+		for (const layoutNode of renderedLayout.nodes) {
 			const previous = previousPositions[layoutNode.id] ?? layoutNode.position;
 			const next = state.nodePositions[layoutNode.id] ?? layoutNode.position;
 
@@ -182,10 +223,118 @@ export function initializeGraphRenderer(
 		}
 	};
 
-	const unsubscribeState = graphState.subscribe(renderStoredPositions);
-	let disposed = false;
+	let renderedFileGroupPages = initialState.fileGroupPages;
+	/**
+	 * 파일 그룹 page Map이 바뀐 경우 실제 page 값이 달라진 그룹 contents만 갱신한다.
+	 * Camera와 Node 위치 변경은 snapshot reference fast-path에서 즉시 종료한다.
+	 */
+	const renderFileGroupPages = (state: GraphStateSnapshot): void => {
+		if (state.fileGroupPages === renderedFileGroupPages) {
+			return;
+		}
+
+		const previousPages = renderedFileGroupPages;
+		renderedFileGroupPages = state.fileGroupPages;
+
+		for (const [fileGroupId, content] of fileGroupContents) {
+			const previousPage = previousPages[fileGroupId] ?? 1;
+			const nextPage = state.fileGroupPages[fileGroupId] ?? 1;
+
+			if (previousPage !== nextPage) {
+				content.render(nextPage);
+			}
+		}
+	};
+	const renderState = (state: GraphStateSnapshot): void => {
+		renderStoredPositions(state);
+		renderFileGroupPages(state);
+	};
+	const unsubscribeState = graphState.subscribe(renderState);
 
 	return {
+		applyLayout(nextLayout): void {
+			if (disposed) {
+				return;
+			}
+
+			const previousNodesById = nodesById;
+			const previousEdgesById = new Map(
+				renderedLayout.edges.map((edge) => [edge.id, edge]),
+			);
+			const pendingEdges = new Map<string, GraphLayoutEdge>();
+
+			renderedLayout = nextLayout;
+			nodesById = new Map(nextLayout.nodes.map((node) => [node.id, node]));
+			edgesByNodeId.clear();
+
+			for (const edge of nextLayout.edges) {
+				for (const nodeId of [edge.sourceId, edge.targetId]) {
+					const connectedEdges = edgesByNodeId.get(nodeId) ?? [];
+
+					connectedEdges.push(edge);
+					edgesByNodeId.set(nodeId, connectedEdges);
+				}
+
+				const previousEdge = previousEdgesById.get(edge.id);
+
+				if (
+					!previousEdge
+					|| previousEdge.sourceId !== edge.sourceId
+					|| previousEdge.targetId !== edge.targetId
+				) {
+					pendingEdges.set(edge.id, edge);
+				}
+			}
+
+			const storedPositions = graphState.getState().nodePositions;
+
+			for (const nextNode of nextLayout.nodes) {
+				const previousNode = previousNodesById.get(nextNode.id);
+				const element = nodeElements.get(nextNode.id);
+				const nodeDrag = nodeDrags.get(nextNode.id);
+
+				nodeDrag?.updateDefaultPosition(nextNode.position);
+
+				if (
+					element
+					&& (!previousNode || previousNode.width !== nextNode.width)
+				) {
+					element.style.width = `${nextNode.width}px`;
+				}
+
+				if (
+					element
+					&& (!previousNode || previousNode.height !== nextNode.height)
+				) {
+					element.style.height = `${nextNode.height}px`;
+				}
+
+				if (
+					!previousNode
+					|| previousNode.width !== nextNode.width
+					|| previousNode.height !== nextNode.height
+				) {
+					for (const edge of edgesByNodeId.get(nextNode.id) ?? []) {
+						pendingEdges.set(edge.id, edge);
+					}
+				}
+
+				const targetPosition = storedPositions[nextNode.id] ?? nextNode.position;
+				const currentPosition = renderedPositions.get(nextNode.id);
+
+				if (
+					!currentPosition
+					|| currentPosition.x !== targetPosition.x
+					|| currentPosition.y !== targetPosition.y
+				) {
+					updateNodePosition(nextNode.id, targetPosition, pendingEdges);
+				}
+			}
+
+			for (const edge of pendingEdges.values()) {
+				renderEdge(edge);
+			}
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -194,12 +343,12 @@ export function initializeGraphRenderer(
 			disposed = true;
 			unsubscribeState();
 
-			for (const drag of nodeDrags) {
+			for (const drag of nodeDrags.values()) {
 				drag.dispose();
 			}
 
-			for (const cleanup of interactionCleanups) {
-				cleanup();
+			for (const content of fileGroupContents.values()) {
+				content.dispose();
 			}
 
 			for (const path of edgeElements.values()) {
@@ -217,8 +366,6 @@ export function initializeGraphRenderer(
 function createNodeElement(
 	node: GraphLayoutNode,
 	ownerDocument: Document,
-	interactions: GraphRendererInteractions,
-	interactionCleanups: Array<() => void>,
 ): HTMLElement {
 	const element = ownerDocument.createElement('div');
 
@@ -227,15 +374,7 @@ function createNodeElement(
 	element.style.width = `${node.width}px`;
 	element.style.height = `${node.height}px`;
 
-	if (node.kind === 'file-group') {
-		appendFileGroupContent(
-			element,
-			node,
-			ownerDocument,
-			interactions,
-			interactionCleanups,
-		);
-	} else {
+	if (node.kind !== 'file-group') {
 		const icon = createFolderIcon(ownerDocument);
 		const name = ownerDocument.createElement('span');
 
@@ -271,68 +410,179 @@ function createFolderIcon(ownerDocument: Document): SVGSVGElement {
 	return icon;
 }
 
-/** 표시 대상 File Row와 선택적 More Bar를 File Group Card에 추가한다. */
-function appendFileGroupContent(
+/** Graph State page를 기준으로 한 File Group 내부 DOM과 Listener만 교체한다. */
+function initializeFileGroupContent(
 	element: HTMLElement,
 	node: GraphFileGroupNode,
 	ownerDocument: Document,
+	graphState: GraphStateStore,
 	interactions: GraphRendererInteractions,
-	interactionCleanups: Array<() => void>,
-): void {
-	const list = ownerDocument.createElement('ul');
+): FileGroupContentRenderer {
+	let content: FileGroupContentElements = { elements: [], cleanups: [] };
+	let disposed = false;
+	const clearContent = (): void => {
+		for (const cleanup of content.cleanups) {
+			cleanup();
+		}
 
-	list.className = 'graph-file-list';
+		for (const child of content.elements) {
+			child.remove();
+		}
 
-	for (const file of node.visibleFiles) {
-		const item = ownerDocument.createElement('li');
-		const icon = ownerDocument.createElement('span');
-		const name = ownerDocument.createElement('span');
+		content = { elements: [], cleanups: [] };
+	};
 
-		item.className = 'graph-file-item';
-		item.setAttribute('data-file-id', file.id);
-		item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-		icon.className = 'graph-node-icon graph-file-icon';
-		icon.setAttribute('data-file-icon', resolveFileIcon(file.name));
-		icon.setAttribute('aria-hidden', 'true');
-		name.className = 'graph-file-name';
-		name.textContent = file.name;
-		item.append(icon, name);
-		/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
-		const animateFileClick = (): void => {
-			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
-			void item.offsetWidth;
-			item.classList.add(FILE_CLICK_ANIMATION_CLASS);
-		};
-		const handleFileClick = (event: MouseEvent): void => {
-			event.stopPropagation();
-			animateFileClick();
-			interactions.onFileClick?.(file.id);
-		};
-		const handleFileClickAnimationEnd = (event: AnimationEvent): void => {
-			if (event.target === item) {
-				item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
+	return {
+		render(page): void {
+			if (disposed) {
+				return;
 			}
-		};
 
-		item.addEventListener('click', handleFileClick);
-		item.addEventListener('animationend', handleFileClickAnimationEnd);
-		interactionCleanups.push(() => {
+			clearContent();
+			const visibleCount = getVisibleFileCount(node.files.length, page);
+			const remainingCount = getRemainingFileCount(node.files.length, page);
+			const showCollapse = node.files.length > FILE_GROUP_PAGE_SIZE && page > 1;
+			const list = ownerDocument.createElement('ul');
+			const elements: HTMLElement[] = [list];
+			const cleanups: Array<() => void> = [];
+
+			list.className = 'graph-file-list';
+
+			for (const file of node.files.slice(0, visibleCount)) {
+				const row = createFileRow(file, ownerDocument, interactions);
+
+				list.append(row.element);
+				cleanups.push(row.dispose);
+			}
+
+			element.append(list);
+
+			if (remainingCount > 0 || showCollapse) {
+				const controls = ownerDocument.createElement('div');
+
+				controls.className = 'graph-file-controls';
+				elements.push(controls);
+
+				if (remainingCount > 0) {
+					const more = ownerDocument.createElement('button');
+					const handleMoreClick = (event: MouseEvent): void => {
+						event.stopPropagation();
+						graphState.showMoreFiles(node.id);
+					};
+
+					more.className = 'graph-file-control graph-file-more';
+					more.type = 'button';
+					more.textContent = `+ ${remainingCount}개 더보기`;
+					more.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+					more.addEventListener('click', handleMoreClick);
+					cleanups.push(() => {
+						more.removeEventListener('click', handleMoreClick);
+					});
+					controls.append(more);
+				}
+
+				if (showCollapse) {
+					const collapse = ownerDocument.createElement('button');
+					const handleCollapseClick = (event: MouseEvent): void => {
+						event.stopPropagation();
+						graphState.collapseFileGroup(node.id);
+					};
+
+					collapse.className = 'graph-file-control graph-file-collapse';
+					collapse.type = 'button';
+					collapse.setAttribute('aria-label', '파일 목록 접기');
+					collapse.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+					collapse.append(createCollapseIcon(ownerDocument));
+					collapse.addEventListener('click', handleCollapseClick);
+					cleanups.push(() => {
+						collapse.removeEventListener('click', handleCollapseClick);
+					});
+					controls.append(collapse);
+				}
+
+				element.append(controls);
+			}
+
+			content = { elements, cleanups };
+		},
+		dispose(): void {
+			if (disposed) {
+				return;
+			}
+
+			disposed = true;
+			clearContent();
+		},
+	};
+}
+
+/** File Row DOM과 Click feedback listener lifecycle을 만든다. */
+function createFileRow(
+	file: File,
+	ownerDocument: Document,
+	interactions: GraphRendererInteractions,
+): FileRowRenderer {
+	const item = ownerDocument.createElement('li');
+	const icon = ownerDocument.createElement('span');
+	const name = ownerDocument.createElement('span');
+
+	item.className = 'graph-file-item';
+	item.setAttribute('data-file-id', file.id);
+	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	icon.className = 'graph-node-icon graph-file-icon';
+	icon.setAttribute('data-file-icon', resolveFileIcon(file.name));
+	icon.setAttribute('aria-hidden', 'true');
+	name.className = 'graph-file-name';
+	name.textContent = file.name;
+	item.append(icon, name);
+	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
+	const animateFileClick = (): void => {
+		item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
+		void item.offsetWidth;
+		item.classList.add(FILE_CLICK_ANIMATION_CLASS);
+	};
+	const handleFileClick = (event: MouseEvent): void => {
+		event.stopPropagation();
+		animateFileClick();
+		interactions.onFileClick?.(file.id);
+	};
+	const handleFileClickAnimationEnd = (event: AnimationEvent): void => {
+		if (event.target === item) {
+			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
+		}
+	};
+
+	item.addEventListener('click', handleFileClick);
+	item.addEventListener('animationend', handleFileClickAnimationEnd);
+
+	return {
+		element: item,
+		dispose: () => {
 			item.removeEventListener('click', handleFileClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
-		});
-		list.append(item);
-	}
+		},
+	};
+}
 
-	element.append(list);
+/** 외부 asset 없이 접기 Button에 표시하는 inline 위쪽 Chevron SVG를 만든다. */
+function createCollapseIcon(ownerDocument: Document): SVGSVGElement {
+	const icon = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
+	const path = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
 
-	if (node.hiddenFileCount > 0) {
-		const more = ownerDocument.createElement('div');
+	icon.classList.add('graph-file-collapse-icon');
+	icon.setAttribute('viewBox', '0 0 16 16');
+	icon.setAttribute('fill', 'none');
+	icon.setAttribute('aria-hidden', 'true');
+	icon.setAttribute('focusable', 'false');
+	path.setAttribute('d', COLLAPSE_CHEVRON_PATH);
+	path.setAttribute('stroke', 'currentColor');
+	path.setAttribute('stroke-width', '1.5');
+	path.setAttribute('stroke-linecap', 'round');
+	path.setAttribute('stroke-linejoin', 'round');
+	icon.append(path);
 
-		more.className = 'graph-file-more';
-		more.textContent = `+ ${node.hiddenFileCount}개 더보기`;
-		element.append(more);
-	}
+	return icon;
 }
 
 /** Layout Node 종류에 대응하는 Click callback을 만든다. */
