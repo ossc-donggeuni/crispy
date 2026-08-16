@@ -16,6 +16,7 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(graphView.state.getState(), {
 			camera: { x: 120, y: -45, scale: 1.5 },
 			nodePositions: {},
+			fileGroupPages: {},
 		});
 		assert.deepStrictEqual(graphView.camera.getState(), {
 			x: 120,

@@ -127,6 +127,7 @@ function createDefaultWebviewState(): PersistedWebviewState {
 				scale: INITIAL_GRAPH_STATE.camera.scale,
 			},
 			nodePositions: {},
+			fileGroupPages: {},
 		},
 	};
 }

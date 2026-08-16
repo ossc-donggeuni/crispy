@@ -11,16 +11,18 @@ export interface GraphNodePosition {
 	y: number;
 }
 
-/** Camera와 사용자가 이동한 Node 위치만 포함하는 저장 가능한 Graph 상태다. */
+/** Camera, 사용자가 이동한 Node 위치와 파일 그룹 표시 page를 포함하는 저장 가능한 Graph 상태다. */
 export interface GraphState {
 	camera: GraphCameraState;
 	nodePositions: Record<string, GraphNodePosition>;
+	fileGroupPages?: Record<string, number>;
 }
 
 /** 외부 mutation을 막기 위해 읽기 전용으로 고정한 Graph 상태 snapshot이다. */
 export interface GraphStateSnapshot {
 	readonly camera: Readonly<GraphCameraState>;
 	readonly nodePositions: Readonly<Record<string, Readonly<GraphNodePosition>>>;
+	readonly fileGroupPages: Readonly<Record<string, number>>;
 }
 
 /** Graph 상태가 실제로 변경된 뒤 호출되는 구독 callback이다. */
@@ -30,6 +32,9 @@ export type GraphStateSubscriber = (state: GraphStateSnapshot) => void;
 export interface GraphStateStore {
 	getState(): GraphStateSnapshot;
 	setState(state: GraphState): void;
+	getFileGroupPage(fileGroupId: string): number;
+	showMoreFiles(fileGroupId: string): void;
+	collapseFileGroup(fileGroupId: string): void;
 	subscribe(subscriber: GraphStateSubscriber): () => void;
 }
 
@@ -37,6 +42,8 @@ export interface GraphStateStore {
 export const MIN_CAMERA_SCALE = 0.25;
 /** 허용하는 최대 Camera 배율이다. */
 export const MAX_CAMERA_SCALE = 4;
+/** 파일 그룹에서 한 page마다 표시하는 파일 수다. */
+export const FILE_GROUP_PAGE_SIZE = 5;
 
 /** 새 Graph View에 적용하는 기본 Camera 상태다. */
 export const INITIAL_GRAPH_CAMERA_STATE: Readonly<GraphCameraState> = Object.freeze({
@@ -49,7 +56,18 @@ export const INITIAL_GRAPH_CAMERA_STATE: Readonly<GraphCameraState> = Object.fre
 export const INITIAL_GRAPH_STATE: GraphStateSnapshot = Object.freeze({
 	camera: INITIAL_GRAPH_CAMERA_STATE,
 	nodePositions: Object.freeze({}),
+	fileGroupPages: Object.freeze({}),
 });
+
+/** 파일 총 개수와 page로 실제 표시할 파일 개수를 계산한다. */
+export function getVisibleFileCount(totalFileCount: number, page: number): number {
+	return Math.min(totalFileCount, page * FILE_GROUP_PAGE_SIZE);
+}
+
+/** 파일 총 개수와 page로 아직 표시하지 않은 파일 개수를 계산한다. */
+export function getRemainingFileCount(totalFileCount: number, page: number): number {
+	return Math.max(0, totalFileCount - getVisibleFileCount(totalFileCount, page));
+}
 
 /**
  * 복원 후보에서 유효한 Graph 상태 필드만 복사한다.
@@ -81,8 +99,9 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 	}
 
 	const nodePositions = parseNodePositions(candidate.nodePositions);
+	const fileGroupPages = parseFileGroupPages(candidate.fileGroupPages);
 
-	if (!nodePositions) {
+	if (!nodePositions || !fileGroupPages) {
 		return undefined;
 	}
 
@@ -93,6 +112,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 			scale: camera.scale,
 		},
 		nodePositions,
+		fileGroupPages,
 	};
 }
 
@@ -104,25 +124,52 @@ export function parseGraphState(value: unknown): GraphState | undefined {
  * @returns Graph 상태 조회, 변경 및 구독을 제공하는 Store
  */
 export function createGraphState(
-	initialState: GraphStateSnapshot = INITIAL_GRAPH_STATE,
+	initialState: GraphState = INITIAL_GRAPH_STATE,
 ): GraphStateStore {
 	let state = createSnapshot(initialState);
 	const subscribers = new Set<GraphStateSubscriber>();
+	const setState = (nextState: GraphState): void => {
+		const nextSnapshot = createSnapshot(nextState, state);
+
+		if (isSameState(state, nextSnapshot)) {
+			return;
+		}
+
+		state = nextSnapshot;
+
+		for (const subscriber of [...subscribers]) {
+			subscriber(state);
+		}
+	};
 
 	return {
 		getState: () => state,
-		setState(nextState): void {
-			const nextSnapshot = createSnapshot(nextState, state);
-
-			if (isSameState(state, nextSnapshot)) {
-				return;
-			}
-
-			state = nextSnapshot;
-
-			for (const subscriber of [...subscribers]) {
-				subscriber(state);
-			}
+		setState,
+		getFileGroupPage(fileGroupId): number {
+			return readFileGroupPage(state.fileGroupPages, fileGroupId);
+		},
+		showMoreFiles(fileGroupId): void {
+			setState({
+				camera: state.camera,
+				nodePositions: state.nodePositions,
+				fileGroupPages: {
+					...state.fileGroupPages,
+					[fileGroupId]: readFileGroupPage(
+						state.fileGroupPages,
+						fileGroupId,
+					) + 1,
+				},
+			});
+		},
+		collapseFileGroup(fileGroupId): void {
+			setState({
+				camera: state.camera,
+				nodePositions: state.nodePositions,
+				fileGroupPages: {
+					...state.fileGroupPages,
+					[fileGroupId]: 1,
+				},
+			});
 		},
 		subscribe(subscriber): () => void {
 			subscribers.add(subscriber);
@@ -144,13 +191,20 @@ export function createGraphState(
  * @returns Camera scale이 보정되고 중첩 값까지 고정된 snapshot
  */
 function createSnapshot(
-	state: GraphStateSnapshot,
+	state: GraphState,
 	previousState?: GraphStateSnapshot,
 ): GraphStateSnapshot {
 	const nodePositions = previousState
 		&& areSameNodePositions(previousState.nodePositions, state.nodePositions)
 		? previousState.nodePositions
 		: createNodePositionsSnapshot(state.nodePositions);
+	const sourceFileGroupPages = state.fileGroupPages
+		?? previousState?.fileGroupPages
+		?? INITIAL_GRAPH_STATE.fileGroupPages;
+	const fileGroupPages = previousState
+		&& areSameFileGroupPages(previousState.fileGroupPages, sourceFileGroupPages)
+		? previousState.fileGroupPages
+		: Object.freeze({ ...sourceFileGroupPages });
 
 	return Object.freeze({
 		camera: Object.freeze({
@@ -159,6 +213,7 @@ function createSnapshot(
 			scale: clampCameraScale(state.camera.scale),
 		}),
 		nodePositions,
+		fileGroupPages,
 	});
 }
 
@@ -185,6 +240,10 @@ function isSameState(
 		&& areSameNodePositions(
 			currentState.nodePositions,
 			nextState.nodePositions,
+		)
+		&& areSameFileGroupPages(
+			currentState.fileGroupPages,
+			nextState.fileGroupPages,
 		);
 }
 
@@ -238,6 +297,49 @@ function parseNodePositions(
 }
 
 /**
+ * 파일 그룹 page 복원 후보를 검증하고 복사한다.
+ * 이전 저장 상태에는 이 필드가 없으므로 빈 Map으로 호환 복원한다.
+ */
+function parseFileGroupPages(value: unknown): Record<string, number> | undefined {
+	if (value === undefined) {
+		return {};
+	}
+
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	const entries: Array<[string, number]> = [];
+
+	for (const [id, page] of Object.entries(value)) {
+		if (!id || !isFileGroupPage(page)) {
+			return undefined;
+		}
+
+		entries.push([id, page]);
+	}
+
+	return Object.fromEntries(entries);
+}
+
+/** 파일 그룹 page Map에서 유효한 자체 속성만 읽고 나머지는 기본 page로 처리한다. */
+function readFileGroupPage(
+	fileGroupPages: GraphStateSnapshot['fileGroupPages'],
+	fileGroupId: string,
+): number {
+	const page = fileGroupPages[fileGroupId] as unknown;
+
+	return Object.hasOwn(fileGroupPages, fileGroupId) && isFileGroupPage(page)
+		? page
+		: 1;
+}
+
+/** 값이 1 이상의 정수 page인지 판별한다. */
+function isFileGroupPage(value: unknown): value is number {
+	return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+}
+
+/**
  * 두 Node 위치 Map의 ID와 World 좌표 값이 같은지 판별한다.
  * 같은 객체 참조는 Camera Pan/Zoom 경로에서 순회하지 않고 즉시 반환한다.
  */
@@ -265,4 +367,20 @@ function areSameNodePositions(
 			&& current.x === next.x
 			&& current.y === next.y;
 	});
+}
+
+/** 두 파일 그룹 page Map의 ID와 page 값이 같은지 판별한다. */
+function areSameFileGroupPages(
+	currentPages: GraphStateSnapshot['fileGroupPages'],
+	nextPages: GraphStateSnapshot['fileGroupPages'],
+): boolean {
+	if (currentPages === nextPages) {
+		return true;
+	}
+
+	const currentIds = Object.keys(currentPages);
+	const nextIds = Object.keys(nextPages);
+
+	return currentIds.length === nextIds.length
+		&& currentIds.every((id) => currentPages[id] === nextPages[id]);
 }
