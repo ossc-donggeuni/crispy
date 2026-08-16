@@ -8,6 +8,7 @@ const { nodePtyRuntimeDependency } = require('./runtime-dependencies');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 const supportedTargets = Object.freeze(Object.keys(nodePtyRuntimeDependency.staging.artifactsByTarget));
+const vsceCliPath = require.resolve('@vscode/vsce/vsce');
 
 function fail(reason, expected, actual) {
 	const details = [`[package-vsix] ${reason}`];
@@ -87,14 +88,17 @@ function main() {
 	const outputDirectory = path.join(repositoryRoot, 'artifacts', 'vsix');
 	const outputPath = path.join(outputDirectory, `${packageJson.name}-${packageJson.version}-${target}.vsix`);
 	const childEnvironment = { ...process.env, CRISPY_VSIX_TARGET: target };
-	const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 	fs.mkdirSync(outputDirectory, { recursive: true });
 	fs.rmSync(outputPath, { force: true });
 
-	run(pnpmCommand, [
-		'exec',
-		'vsce',
+	/*
+	 * Windows에서 .cmd shim을 spawnSync로 직접 실행하면 Node 버전에 따라
+	 * EINVAL이 발생할 수 있다. 설치된 VSCE CLI를 현재 Node로 직접 실행해
+	 * shell과 package-manager shim 없이 모든 플랫폼에서 같은 경계를 사용한다.
+	 */
+	run(process.execPath, [
+		vsceCliPath,
 		'package',
 		'--target', target,
 		'--out', outputPath,
