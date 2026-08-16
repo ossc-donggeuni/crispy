@@ -4,13 +4,13 @@ import type {
 	WebviewToExtensionMessage,
 } from './messages';
 import {
-	getPanelLayoutStateFromMessage,
-	serializePanelLayoutState,
-	type PanelLayoutState,
-} from './webview/panel/panelState';
+	parseWebviewState,
+	serializeWebviewState,
+	type PersistedWebviewState,
+} from './webview/webviewState';
 
 let currentPanel: vscode.WebviewPanel | undefined;
-let lastLayoutState: PanelLayoutState | undefined;
+let lastWebviewState: PersistedWebviewState | undefined;
 
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
@@ -47,13 +47,6 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 
 		panel.webview.onDidReceiveMessage((message: unknown) => {
-			// Layout State Message Handler
-			const layoutState = getPanelLayoutStateFromMessage(message);
-			if (layoutState) {
-				lastLayoutState = layoutState;
-				return;
-			}
-
 			handleWebviewMessage(panel.webview, message);
 		});
 
@@ -61,7 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
 			panel.webview,
 			stylesUri,
 			scriptUri,
-			lastLayoutState,
+			lastWebviewState,
 		);
 
 		panel.onDidDispose(() => {
@@ -94,6 +87,15 @@ export function handleWebviewMessage(
 	const webviewMessage = message as WebviewToExtensionMessage;
 
 	switch (webviewMessage.type) {
+		case 'webview.stateChanged': {
+			const state = parseWebviewState(webviewMessage.state);
+
+			if (state) {
+				lastWebviewState = state;
+			}
+
+			return undefined;
+		}
 		case 'webview.ready':
 			console.log('[Crispy] Webview ready');
 
@@ -111,7 +113,7 @@ export function handleWebviewMessage(
 export function deactivate() {
 	currentPanel?.dispose();
 	currentPanel = undefined;
-	lastLayoutState = undefined;
+	lastWebviewState = undefined;
 }
 
 /**
@@ -120,16 +122,16 @@ export function deactivate() {
  * @param webview Content Security Policy에 사용할 Webview 인스턴스
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
- * @param initialLayoutState 새 Panel에 전달할 마지막 Webview Layout 상태
+ * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
 	webview: vscode.Webview,
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
-	initialLayoutState: PanelLayoutState | undefined,
+	initialWebviewState: PersistedWebviewState | undefined,
 ): string {
-	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
+	const serializedWebviewState = serializeWebviewState(initialWebviewState);
 
 	return `<!DOCTYPE html>
 			<html lang="en">
@@ -150,7 +152,7 @@ function getWebviewHtml(
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-layout-state="${serializedLayoutState}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}"></script>
 			</body>
 			</html>`;
 }

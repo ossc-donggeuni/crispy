@@ -4,6 +4,7 @@ import {
 	INITIAL_GRAPH_STATE,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
+	parseGraphState,
 	type GraphStateSnapshot,
 } from '../../webview/graph/graphState';
 
@@ -55,5 +56,35 @@ suite('Graph State', () => {
 
 		state.setState({ camera: { x: 0, y: 0, scale: 100 } });
 		assert.strictEqual(state.getState().camera.scale, MAX_CAMERA_SCALE);
+	});
+
+	test('유효한 Graph 상태를 독립적인 객체로 파싱한다', () => {
+		const value = {
+			camera: { x: 30, y: -20, scale: 1.5, transient: true },
+		};
+
+		const state = parseGraphState(value);
+
+		assert.deepStrictEqual(state, {
+			camera: { x: 30, y: -20, scale: 1.5 },
+		});
+		assert.notStrictEqual(state, value);
+		assert.notStrictEqual(state?.camera, value.camera);
+	});
+
+	test('잘못된 Graph 상태를 거부한다', () => {
+		const invalidStates: unknown[] = [
+			null,
+			{},
+			{ camera: null },
+			{ camera: { x: Number.NaN, y: 0, scale: 1 } },
+			{ camera: { x: 0, y: Number.POSITIVE_INFINITY, scale: 1 } },
+			{ camera: { x: 0, y: 0, scale: MIN_CAMERA_SCALE - 0.01 } },
+			{ camera: { x: 0, y: 0, scale: MAX_CAMERA_SCALE + 0.01 } },
+		];
+
+		for (const invalidState of invalidStates) {
+			assert.strictEqual(parseGraphState(invalidState), undefined);
+		}
 	});
 });

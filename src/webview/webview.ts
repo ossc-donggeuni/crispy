@@ -7,10 +7,11 @@ import { initializeGraphView } from './graph/graphView';
 import { initializePanelDock } from './panel/panelDock';
 import { initializePanelResize } from './panel/panelResize';
 import {
-	restorePanelLayoutState,
-	savePanelLayoutState,
+	restoreWebviewState,
+	saveWebviewState,
+	type PersistedWebviewState,
 	type WebviewStateApi,
-} from './panel/panelState';
+} from './webviewState';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
@@ -34,9 +35,10 @@ function getRequiredElement<T extends HTMLElement>(selector: string): T {
 }
 
 const vscodeApi = acquireVsCodeApi();
-const serializedInitialState = document.currentScript?.getAttribute('data-layout-state')
+const serializedInitialState = document.currentScript?.getAttribute('data-webview-state')
 	?? undefined;
-const state = restorePanelLayoutState(vscodeApi, serializedInitialState);
+const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
+const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
 const graphArea = getRequiredElement<HTMLElement>('#graph-area');
@@ -44,26 +46,46 @@ const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 
-const graphView = initializeGraphView(graphArea);
+const graphView = initializeGraphView(graphArea, initialState.graph);
 
-window.addEventListener('unload', () => graphView.dispose(), { once: true });
+const getCurrentWebviewState = (): PersistedWebviewState => ({
+	panel: panelState,
+	graph: graphView.state.getState(),
+});
+
+const persistWebviewState = () => {
+	const state = getCurrentWebviewState();
+
+	saveWebviewState(vscodeApi, state);
+	vscodeApi.postMessage({
+		type: 'webview.stateChanged',
+		state,
+	});
+};
 
 // Dock 초기화
 const refreshDock = initializePanelDock(
 	layout,
 	dragHandle,
 	dockPreview,
-	state,
-	() => savePanelLayoutState(vscodeApi, state),
+	panelState,
+	persistWebviewState,
 );
 // Resize 초기화
 initializePanelResize(
 	layout,
 	resizeHandle,
-	state,
+	panelState,
 	refreshDock,
-	() => savePanelLayoutState(vscodeApi, state),
+	persistWebviewState,
 );
+
+const unsubscribeGraphState = graphView.state.subscribe(persistWebviewState);
+
+window.addEventListener('unload', () => {
+	unsubscribeGraphState();
+	graphView.dispose();
+}, { once: true });
 
 window.addEventListener('message', (event) => {
 	const message = event.data as ExtensionToWebviewMessage;
