@@ -26,9 +26,8 @@ win32-x64
 | pnpm | 정확히 `11.18.0` | lockfile 기반 dependency 설치 |
 | Git | 현재 저장소 checkout | 소스 및 변경 이력 관리 |
 
-`linux-x64`는 `node-pty`를 source에서 build하므로 Python 3, `make`, C/C++ compiler와
-`readelf`를 제공하는 binutils도 필요하다. macOS ARM64와 Windows x64는 현재 고정된
-`node-pty` package의 target prebuild를 사용한다.
+세 target 모두 고정된 `node-pty` package의 target prebuild를 사용한다. `linux-x64`의
+ABI baseline 검사에는 `readelf`를 제공하는 binutils가 필요하다.
 
 버전을 먼저 확인한다.
 
@@ -52,7 +51,7 @@ npm install --global pnpm@11.18.0
 pnpm install --frozen-lockfile
 ```
 
-이 명령은 root dependency와 `node-pty@1.1.0`을 설치하고 `postinstall`의
+이 명령은 root dependency와 `node-pty@1.2.0-beta.14`를 설치하고 `postinstall`의
 `prepare-node-pty.js`를 실행한다. 지원 환경에서는 별도의 `node-gyp rebuild`나
 `chmod`를 수동으로 실행하지 않는다.
 
@@ -67,8 +66,8 @@ pnpm run compile
 ### 3. Codex CLI 준비
 
 현재 provider 중 **Codex만 CLI를 자동 실행**한다. Crispy가 새 Terminal을 만든 뒤 Shell에
-`codex`를 입력하는 방식이므로, 팀원의 머신에 Codex CLI가 설치되어 있고 VS Code가
-상속한 `PATH`에서 `codex`를 찾을 수 있어야 한다.
+macOS/Linux에서는 `codex`, Windows에서는 `codex.cmd`를 입력하는 방식이므로, 팀원의
+머신에 Codex CLI가 설치되어 있고 VS Code가 상속한 `PATH`에서 이를 찾을 수 있어야 한다.
 
 macOS/Linux에서는 OpenAI 공식 installer를 사용할 수 있다.
 
@@ -190,6 +189,7 @@ pnpm run verify:linux-abi
 | `cross packaging is not supported` | 현재 host와 같은 target을 지정한다 |
 | `workspace_untrusted` 또는 workspace 오류 | trusted single-root local folder를 연다 |
 | `codex: command not found` | 일반 Terminal과 VS Code Extension Host가 같은 `PATH`에서 Codex CLI를 찾는지 확인한다 |
+| Windows에서 `codex.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy는 PowerShell 정책 변경 없이 `codex.cmd`를 사용한다 |
 | `node-pty` load 실패 | 수동 rebuild/chmod 대신 Node 24에서 `pnpm install --frozen-lockfile`을 다시 실행한다 |
 | 테스트용 VS Code 다운로드 실패 | npm registry와 VS Code update server에 접근 가능한지 확인한다 |
 

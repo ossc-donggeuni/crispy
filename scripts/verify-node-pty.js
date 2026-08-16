@@ -272,12 +272,12 @@ function verifyStaticRuntime(target) {
 		);
 		const helperMode = fs.statSync(helperPath).mode & 0o777;
 
-		if (helperMode !== 0o755) {
+		if ((helperMode & 0o111) !== 0o111) {
 			throw verificationError(
 				target,
 				'spawn-helper permission mismatch',
 				helperPath,
-				'0755',
+				'all execute bits set',
 				helperMode.toString(8).padStart(4, '0'),
 			);
 		}

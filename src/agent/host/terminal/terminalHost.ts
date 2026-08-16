@@ -424,23 +424,35 @@ export class TerminalHost {
 
 		this.lastDimensionsByTab.set(tabId, { cols, rows });
 		try {
-			session.start(preparation.policy, cols, rows);
+			await session.start(preparation.policy, cols, rows);
 		} catch {
+			if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+				return;
+			}
 			this.failSession(
 				session,
 				'start_failed',
 				START_ERROR_MESSAGES.spawn,
 				true,
 			);
+		}
+	}
+
+	/** 실제 PID가 준비된 현재 session에만 started와 provider 입력을 한 번 전달한다. */
+	private handleSessionRunning(session: TerminalSession): void {
+		if (
+			!this.lifecycleActive
+			|| !this.isCurrentSession(session)
+			|| session.state.kind !== 'running'
+		) {
 			return;
 		}
 
-		const message = {
+		this.publish({
 			type: 'terminal.started',
-			tabId,
+			tabId: session.tabId,
 			sessionId: session.sessionId,
-		} as const;
-		this.publish(message);
+		});
 		this.runProviderAutoStart(session);
 	}
 
@@ -601,6 +613,7 @@ export class TerminalHost {
 			ptyAdapter: this.ptyAdapter,
 			onOutput: (data) => this.routeOutput(session, data),
 			onExit: (event) => this.routeExit(session, event),
+			onRunning: () => this.handleSessionRunning(session),
 		});
 		this.sessionsById.set(generatedSessionId, session);
 		this.activeSessionByTab.set(tabId, generatedSessionId);

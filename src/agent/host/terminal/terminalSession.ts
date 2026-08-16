@@ -133,6 +133,9 @@ export interface TerminalSessionOptions {
 
 	/** PTY 종료 이벤트를 상위 Host routing 경계로 전달한다. */
 	readonly onExit: (event: PtyExitEvent) => void;
+
+	/** 실제 PID가 준비되어 running 전이가 완료된 시점을 상위 Host에 알린다. */
+	readonly onRunning: () => void;
 }
 
 /** 모든 새 session이 공유하는 변경 불가능한 idle 상태다. */
@@ -212,6 +215,9 @@ export class TerminalSession {
 	/** PTY exit 정보를 Host에 전달하는 callback이다. */
 	private readonly onExit: (event: PtyExitEvent) => void;
 
+	/** running 전이 뒤 started 발행과 provider 자동 실행을 요청하는 callback이다. */
+	private readonly onRunning: () => void;
+
 	/** spawn 성공 뒤 session이 소유하는 PTY handle이다. */
 	private activeProcess: PtyProcessHandle | undefined;
 
@@ -242,6 +248,7 @@ export class TerminalSession {
 		this.ptyAdapter = options.ptyAdapter;
 		this.onOutput = options.onOutput;
 		this.onExit = options.onExit;
+		this.onRunning = options.onRunning;
 	}
 
 	/**
@@ -270,10 +277,12 @@ export class TerminalSession {
 	 * @param policy workspace와 Shell policy가 확정한 Host 내부 실행 계약이다.
 	 * @param cols protocol validator를 통과한 초기 terminal 열 수다.
 	 * @param rows protocol validator를 통과한 초기 terminal 행 수다.
-	 * @throws {TerminalSessionStateError} starting 상태가 아니거나 PID가 유효하지 않은 경우 발생한다.
+	 * spawn 직후 PID가 0인 Windows ConPTY는 실제 PID가 준비될 때까지 starting을 유지한다.
+	 * @throws {TerminalSessionStateError} starting 상태가 아니거나 준비된 PID가 유효하지 않은 경우 발생한다.
 	 * @throws {unknown} 주입된 PTY adapter가 안전한 상위 오류 변환을 위해 보고한 spawn 실패다.
+	 * @returns 실제 PID가 준비되어 running 전이와 callback이 끝나면 이행되는 Promise
 	 */
-	start(policy: ShellLaunchPolicy, cols: number, rows: number): void {
+	start(policy: ShellLaunchPolicy, cols: number, rows: number): Promise<void> {
 		this.assertCanTransitionFrom(['starting']);
 		const process = this.ptyAdapter.spawn({
 			executable: policy.executable,
@@ -284,29 +293,62 @@ export class TerminalSession {
 			rows,
 		});
 
-		this.markRunning(process.pid);
 		this.activeProcess = process;
 
 		try {
 			this.dataListener = process.onData((data) => this.enqueueOutput(data));
 			this.exitListener = process.onExit((event) => this.handleExit(event));
 		} catch (error: unknown) {
+			this.activeProcess = undefined;
 			this.disposePtyListeners();
 			throw error;
 		}
+
+		if (isValidPid(process.pid)) {
+			this.completeStart(process, process.pid);
+			return Promise.resolve();
+		}
+
+		return process.waitForReadyPid().then((pid) => {
+			this.completeStart(process, pid);
+		});
+	}
+
+	/** 준비 완료가 현재 process와 starting 상태에 속할 때만 running으로 승격한다. */
+	private completeStart(process: PtyProcessHandle, pid: number): void {
+		if (this.activeProcess !== process || this.currentState.kind !== 'starting') {
+			return;
+		}
+
+		this.markRunning(pid);
+		try {
+			this.onRunning();
+		} catch {
+			/** 상위 lifecycle 알림 실패가 native listener 정리를 건너뛰지 않게 한다. */
+		}
+		this.scheduleOutputFlush();
 	}
 
 	/** PTY output 조각을 변형 없이 같은 microtask batch에 순서대로 추가한다. */
 	private enqueueOutput(data: string): void {
 		if (
-			this.currentState.kind !== 'running'
+			this.currentState.kind !== 'starting'
+			&& this.currentState.kind !== 'running'
 			&& this.currentState.kind !== 'stopping'
 		) {
 			return;
 		}
 
 		this.pendingOutput.push(data);
-		if (this.outputFlushScheduled) {
+		if (this.currentState.kind === 'starting') {
+			return;
+		}
+		this.scheduleOutputFlush();
+	}
+
+	/** running 발행 뒤에만 pending output flush microtask를 예약한다. */
+	private scheduleOutputFlush(): void {
+		if (this.outputFlushScheduled || this.pendingOutput.length === 0) {
 			return;
 		}
 
@@ -332,6 +374,12 @@ export class TerminalSession {
 
 	/** 마지막 output을 먼저 전달한 뒤 exit routing을 호출하고 listener를 해제한다. */
 	private handleExit(event: PtyExitEvent): void {
+		if (this.currentState.kind === 'starting') {
+			this.pendingOutput = [];
+			this.disposePtyListeners();
+			return;
+		}
+
 		if (
 			this.currentState.kind !== 'running'
 			&& this.currentState.kind !== 'stopping'

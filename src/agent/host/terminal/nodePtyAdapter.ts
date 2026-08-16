@@ -11,6 +11,14 @@ import type {
  */
 export const PTY_SPAWN_ERROR_CODE = 'pty_spawn_failed' as const;
 
+/** Windows ConPTY가 비동기로 실제 PID를 연결할 때까지 기다리는 polling 정책이다. */
+const PID_READY_POLL_INTERVAL_MS = 10;
+const PID_READY_TIMEOUT_MS = 10_000;
+
+function isValidPid(pid: number): boolean {
+	return Number.isSafeInteger(pid) && pid > 1;
+}
+
 /**
  * `node-pty` 모듈 로드 또는 spawn 실패를 안전하게 감싸는 Host 내부 오류다.
  * 원본 exception, executable, args, cwd와 environment를 저장하거나 노출하지 않는다.
@@ -119,6 +127,56 @@ class NodePtyProcessHandle implements PtyProcessHandle {
 	/** 생성된 shell process의 PID를 반환한다. */
 	get pid(): number {
 		return this.process.pid;
+	}
+
+	/**
+	 * POSIX처럼 PID가 즉시 준비된 경우 바로 반환하고, Windows ConPTY처럼 0으로
+	 * 시작하는 경우 실제 PID 또는 exit/timeout 중 먼저 도착한 결과를 사용한다.
+	 */
+	waitForReadyPid(): Promise<number> {
+		const initialPid = this.process.pid;
+		if (isValidPid(initialPid)) {
+			return Promise.resolve(initialPid);
+		}
+
+		return new Promise<number>((resolve, reject) => {
+			const deadline = Date.now() + PID_READY_TIMEOUT_MS;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let settled = false;
+			let exitSubscription: NodePtyDisposable | undefined;
+
+			const finish = (action: () => void): void => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				if (timer !== undefined) {
+					clearTimeout(timer);
+				}
+				exitSubscription?.dispose();
+				action();
+			};
+
+			const inspect = (): void => {
+				const pid = this.process.pid;
+				if (isValidPid(pid)) {
+					finish(() => resolve(pid));
+					return;
+				}
+				if (Date.now() >= deadline) {
+					finish(() => reject(new PtySpawnError()));
+					return;
+				}
+
+				timer = setTimeout(inspect, PID_READY_POLL_INTERVAL_MS);
+				timer.unref?.();
+			};
+
+			exitSubscription = this.process.onExit(() => {
+				finish(() => reject(new PtySpawnError()));
+			});
+			inspect();
+		});
 	}
 
 	/**

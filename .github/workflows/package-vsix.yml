@@ -41,9 +41,9 @@ jobs:
       - name: Install native and Extension Host prerequisites
         run: >-
           dnf install -y
-          alsa-lib atk at-spi2-atk cups-libs gcc gcc-c++ git gtk3 libdrm
-          libX11 libXcomposite libXdamage libXrandr libXScrnSaver make
-          mesa-libgbm nss pango python3 tar gzip which xorg-x11-server-Xvfb
+          alsa-lib atk at-spi2-atk binutils cups-libs git gtk3 libdrm
+          libX11 libXcomposite libXdamage libXrandr libXScrnSaver
+          mesa-libgbm nss pango tar gzip which xorg-x11-server-Xvfb
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

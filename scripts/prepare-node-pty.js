@@ -86,10 +86,11 @@ function prepareMacOsSpawnHelper(packageRoot, artifactPaths) {
 	const helperPath = path.join(packageRoot, helperRelativePath);
 
 	try {
-		fs.chmodSync(helperPath, 0o755);
+		const helperStat = fs.statSync(helperPath);
+		fs.chmodSync(helperPath, helperStat.mode | 0o111);
 	} catch (error) {
 		throw preparationError(
-			'could not set spawn-helper mode to 0755',
+			'could not add spawn-helper execute bits',
 			helperPath,
 			error,
 		);
@@ -109,7 +110,7 @@ function prepareMacOsSpawnHelper(packageRoot, artifactPaths) {
 
 	const helperMode = helperStat.mode & 0o777;
 
-	if (helperMode !== 0o755 || (helperMode & 0o111) === 0) {
+	if ((helperMode & 0o111) !== 0o111) {
 		throw preparationError(
 			`spawn-helper is not executable after chmod (mode=${helperMode.toString(8)})`,
 			helperPath,

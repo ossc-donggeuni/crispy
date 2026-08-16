@@ -29,6 +29,7 @@ function createSession(): {
 		sessionId: 'session-state-test',
 		ptyAdapter: adapter,
 		onOutput: (data) => outputs.push(data),
+		onRunning: () => undefined,
 		onExit: (event) => {
 			exits.push(event);
 			session.markExited(event.exitCode, event.signal ?? null);
@@ -104,6 +105,37 @@ suite('TerminalSession state model', () => {
 		assert.deepStrictEqual(session.state, { kind: 'running', pid: 8101 });
 		assert.strictEqual(adapter.handles[0].dataListenerCount, 1);
 		assert.strictEqual(adapter.handles[0].exitListenerCount, 1);
+	});
+
+	test('Windows delayed PID가 준비될 때까지 starting을 유지한 뒤 running으로 전환한다', async () => {
+		const adapter = new FakePtyAdapter(0);
+		const outputs: string[] = [];
+		let runningCalls = 0;
+		const session = new TerminalSession({
+			tabId: 'tab-delayed-pid',
+			sessionId: 'session-delayed-pid',
+			ptyAdapter: adapter,
+			onOutput: (data) => outputs.push(data),
+			onExit: () => undefined,
+			onRunning: () => {
+				runningCalls += 1;
+			},
+		});
+		session.markStarting();
+
+		const starting = session.start(launchPolicy, 80, 24);
+		const handle = adapter.handles[0];
+		assert.deepStrictEqual(session.state, { kind: 'starting' });
+		handle.emitData('PowerShell prompt');
+		assert.deepStrictEqual(outputs, []);
+
+		handle.setReadyPid(8401);
+		await starting;
+		await Promise.resolve();
+
+		assert.deepStrictEqual(session.state, { kind: 'running', pid: 8401 });
+		assert.strictEqual(runningCalls, 1);
+		assert.deepStrictEqual(outputs, ['PowerShell prompt']);
 	});
 
 	test('같은 tick의 PTY output을 순서대로 단순 concat해 다음 microtask에 전달한다', async () => {

@@ -26,6 +26,12 @@ export interface PtySpawnOptions {
 export interface PtyProcessHandle {
 	readonly pid: number;
 
+	/**
+	 * native PTY가 실제 child PID를 공개할 때까지 기다린다.
+	 * Windows ConPTY는 spawn 직후 PID가 0일 수 있으므로 즉시 PID를 전제하지 않는다.
+	 */
+	waitForReadyPid(): Promise<number>;
+
 	write(data: string): void;
 	resize(cols: number, rows: number): void;
 	kill(): void;
@@ -38,4 +44,3 @@ export interface PtyProcessHandle {
 export interface PtyAdapter {
 	spawn(options: PtySpawnOptions): PtyProcessHandle;
 }
-

@@ -33,8 +33,19 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 
 	private readonly dataListeners = new Set<(data: string) => void>();
 	private readonly exitListeners = new Set<(event: PtyExitEvent) => void>();
+	private readonly readyWaiters = new Set<{
+		readonly resolve: (pid: number) => void;
+		readonly reject: (error: Error) => void;
+	}>();
+	private currentPid: number;
 
-	constructor(readonly pid: number) {}
+	constructor(pid: number) {
+		this.currentPid = pid;
+	}
+
+	get pid(): number {
+		return this.currentPid;
+	}
 
 	get dataListenerCount(): number {
 		return this.dataListeners.size;
@@ -42,6 +53,28 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 
 	get exitListenerCount(): number {
 		return this.exitListeners.size;
+	}
+
+	waitForReadyPid(): Promise<number> {
+		if (Number.isSafeInteger(this.currentPid) && this.currentPid > 1) {
+			return Promise.resolve(this.currentPid);
+		}
+
+		return new Promise<number>((resolve, reject) => {
+			this.readyWaiters.add({ resolve, reject });
+		});
+	}
+
+	setReadyPid(pid: number): void {
+		this.currentPid = pid;
+		if (!Number.isSafeInteger(pid) || pid <= 1) {
+			return;
+		}
+
+		for (const waiter of [...this.readyWaiters]) {
+			this.readyWaiters.delete(waiter);
+			waiter.resolve(pid);
+		}
 	}
 
 	write(data: string): void {
@@ -71,6 +104,10 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 	}
 
 	emitExit(event: PtyExitEvent): void {
+		for (const waiter of [...this.readyWaiters]) {
+			this.readyWaiters.delete(waiter);
+			waiter.reject(new Error('fake PTY exited before readiness'));
+		}
 		for (const listener of [...this.exitListeners]) {
 			listener(event);
 		}
@@ -95,4 +132,3 @@ export class FakePtyAdapter implements PtyAdapter {
 		return handle;
 	}
 }
-

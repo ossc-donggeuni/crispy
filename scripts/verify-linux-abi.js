@@ -3,9 +3,23 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { nodePtyRuntimeDependency } = require('./runtime-dependencies');
 
 const repositoryRoot = path.resolve(__dirname, '..');
-const binaryPath = path.join(repositoryRoot, 'dist', 'node_modules', 'node-pty', 'build', 'Release', 'pty.node');
+const linuxArtifacts = nodePtyRuntimeDependency.staging.artifactsByTarget['linux-x64'];
+const binaryRelativePath = linuxArtifacts.find((artifactPath) => artifactPath.endsWith('/pty.node'));
+
+if (binaryRelativePath === undefined) {
+	throw new Error('[verify-linux-abi] linux-x64 pty.node is missing from the runtime contract.');
+}
+
+const binaryPath = path.join(
+	repositoryRoot,
+	'dist',
+	'node_modules',
+	'node-pty',
+	binaryRelativePath,
+);
 const baselines = Object.freeze({ GLIBC: '2.28', GLIBCXX: '3.4.25' });
 
 function compareVersions(left, right) {

@@ -214,13 +214,14 @@ function normalizeMacOsHelper(target, artifactPaths) {
 	const helperPath = path.join(stagedPackageRoot, helperRelativePath);
 
 	try {
-		fs.chmodSync(helperPath, 0o755);
+		const helperStat = fs.statSync(helperPath);
+		fs.chmodSync(helperPath, helperStat.mode | 0o111);
 	} catch (error) {
 		throw stagingError(
 			target,
 			'could not normalize spawn-helper permission',
 			helperPath,
-			'0755',
+			'existing mode with execute bits',
 			'chmod failed',
 			error,
 		);

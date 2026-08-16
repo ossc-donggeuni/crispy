@@ -35,12 +35,12 @@ const codexAutoRunInput = resolveAgentAutoRunInput('codex');
  *
  * @returns Host, PTY adapter와 발행된 Host 메시지 기록
  */
-function createRoutingHost(): {
+function createRoutingHost(fakePid: number = 4242): {
 	readonly host: TerminalHost;
 	readonly ptyAdapter: FakePtyAdapter;
 	readonly messages: HostToWebviewMessage[];
 } {
-	const ptyAdapter = new FakePtyAdapter();
+	const ptyAdapter = new FakePtyAdapter(fakePid);
 	const messages: HostToWebviewMessage[] = [];
 	const host = new TerminalHost({
 		ptyAdapter,
@@ -98,6 +98,12 @@ function latestHandle(ptyAdapter: FakePtyAdapter): FakePtyProcessHandle {
 }
 
 suite('Agent 탭 provider 선택과 세션 routing', () => {
+	test('Codex 자동 실행은 Windows에서 codex.cmd를 선택해 PowerShell policy를 요구하지 않는다', () => {
+		assert.strictEqual(resolveAgentAutoRunInput('codex', 'win32'), 'codex.cmd\r');
+		assert.strictEqual(resolveAgentAutoRunInput('codex', 'darwin'), 'codex\r');
+		assert.strictEqual(resolveAgentAutoRunInput('codex', 'linux'), 'codex\r');
+	});
+
 	test('탭만 만들면 provider가 없으므로 세션을 시작하지 않는다', async () => {
 		const { host, ptyAdapter, messages } = createRoutingHost();
 
@@ -121,6 +127,32 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		const handle = latestHandle(ptyAdapter);
 		assert.strictEqual(handle.writes.length, 1);
 		assert.strictEqual(handle.writes[0] === codexAutoRunInput, true);
+	});
+
+	test('Windows delayed PID 동안 started와 Codex 입력을 보류한다', async () => {
+		const { host, ptyAdapter, messages } = createRoutingHost(0);
+		host.createTab('tab-delayed-codex');
+		await host.handleTerminalReady('tab-delayed-codex', 80, 24);
+
+		const switching = host.switchAgent('tab-delayed-codex', 'codex');
+		await Promise.resolve();
+		const handle = latestHandle(ptyAdapter);
+		assert.deepStrictEqual(
+			host.getActiveSession('tab-delayed-codex')?.state,
+			{ kind: 'starting' },
+		);
+		assert.strictEqual(messagesOfType(messages, 'terminal.started').length, 0);
+		assert.deepStrictEqual(handle.writes, []);
+
+		handle.setReadyPid(4301);
+		await switching;
+
+		assert.deepStrictEqual(
+			host.getActiveSession('tab-delayed-codex')?.state,
+			{ kind: 'running', pid: 4301 },
+		);
+		assert.strictEqual(messagesOfType(messages, 'terminal.started').length, 1);
+		assert.deepStrictEqual(handle.writes, [codexAutoRunInput]);
 	});
 
 	test('provider 선택이 표면 준비보다 먼저 도착해도 준비 뒤에 시작한다', async () => {

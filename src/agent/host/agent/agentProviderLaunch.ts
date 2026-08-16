@@ -13,6 +13,9 @@ export interface AgentProviderLaunchDefinition {
 	 * 값이 없으면 자동 실행 없이 기본 Shell 상태로 둔다.
 	 */
 	readonly autoRunCommand?: string;
+
+	/** Windows PowerShell execution policy를 우회하지 않고 사용할 `.cmd` shim override다. */
+	readonly windowsAutoRunCommand?: string;
 }
 
 /**
@@ -24,7 +27,10 @@ export interface AgentProviderLaunchDefinition {
  */
 const AGENT_PROVIDER_LAUNCH: ProviderRegistry<AgentProviderLaunchDefinition> =
 	Object.freeze({
-		codex: Object.freeze({ autoRunCommand: 'codex' }),
+		codex: Object.freeze({
+			autoRunCommand: 'codex',
+			windowsAutoRunCommand: 'codex.cmd',
+		}),
 		claude: Object.freeze({}),
 		antigravity: Object.freeze({}),
 	});
@@ -41,11 +47,16 @@ const AUTO_RUN_SUBMIT_KEY = '\r';
  * 반환값은 Host registry에서만 만들어지며 Webview가 보낸 값을 포함하지 않는다.
  *
  * @param providerId protocol validator를 통과한 provider 식별자
+ * @param platform Host가 실행 중인 Node 플랫폼이며 테스트에서만 명시적으로 주입한다.
  * @returns Shell에 그대로 입력할 커맨드 문자열 또는 자동 실행이 없으면 `undefined`
  */
 export function resolveAgentAutoRunInput(
 	providerId: ProviderId,
+	platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-	const command = AGENT_PROVIDER_LAUNCH[providerId].autoRunCommand;
+	const definition = AGENT_PROVIDER_LAUNCH[providerId];
+	const command = platform === 'win32'
+		? definition.windowsAutoRunCommand ?? definition.autoRunCommand
+		: definition.autoRunCommand;
 	return command === undefined ? undefined : `${command}${AUTO_RUN_SUBMIT_KEY}`;
 }

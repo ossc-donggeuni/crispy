@@ -6,14 +6,11 @@ const nodePtyArtifactsByTarget = Object.freeze({
 		'prebuilds/darwin-arm64/spawn-helper',
 	]),
 	'linux-x64': Object.freeze([
-		'build/Release/pty.node',
+		'prebuilds/linux-x64/pty.node',
 	]),
 	'win32-x64': Object.freeze([
 		'prebuilds/win32-x64/conpty.node',
 		'prebuilds/win32-x64/conpty_console_list.node',
-		'prebuilds/win32-x64/pty.node',
-		'prebuilds/win32-x64/winpty-agent.exe',
-		'prebuilds/win32-x64/winpty.dll',
 		'prebuilds/win32-x64/conpty/OpenConsole.exe',
 		'prebuilds/win32-x64/conpty/conpty.dll',
 	]),
@@ -28,7 +25,7 @@ const runtimeDependencies = Object.freeze([
 		moduleName: 'node-pty',
 		providedBy: 'vsix',
 		staging: Object.freeze({
-			version: '1.1.0',
+			version: '1.2.0-beta.14',
 			artifactsByTarget: nodePtyArtifactsByTarget,
 		}),
 	}),
