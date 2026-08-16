@@ -21,6 +21,7 @@ export interface GraphPoint {
 export interface GraphCamera {
 	getState(): GraphCameraState;
 	setState(state: GraphCameraState): void;
+	setScaleAt(scale: number, viewportPoint: GraphPoint): void;
 	viewportToWorld(point: GraphPoint): GraphPoint;
 	worldToViewport(point: GraphPoint): GraphPoint;
 	dispose(): void;
@@ -96,6 +97,24 @@ export function initializeGraphCamera(
 			x: point.x * state.scale + state.x,
 			y: point.y * state.scale + state.y,
 		};
+	};
+
+	/** 지정한 Viewport 지점 아래의 World 좌표를 유지하며 Camera scale을 변경한다. */
+	const setScaleAt = (scale: number, viewportPoint: GraphPoint): void => {
+		const currentCamera = graphState.getState().camera;
+		const nextScale = clampScale(scale);
+
+		if (nextScale === currentCamera.scale) {
+			return;
+		}
+
+		const worldAtPoint = viewportToWorld(viewportPoint);
+
+		setState({
+			x: viewportPoint.x - worldAtPoint.x * nextScale,
+			y: viewportPoint.y - worldAtPoint.y * nextScale,
+			scale: nextScale,
+		});
 	};
 
 	const shouldIgnoreCameraInput = (event: Event): boolean => {
@@ -180,18 +199,13 @@ export function initializeGraphCamera(
 			x: event.clientX - bounds.left,
 			y: event.clientY - bounds.top,
 		};
-		const worldAtCursor = viewportToWorld(cursor);
 		const wheelDelta = normalizeWheelDelta(event, viewport.clientHeight);
 		const currentCamera = graphState.getState().camera;
-		const nextScale = clampScale(
-			currentCamera.scale * Math.exp(-wheelDelta * WHEEL_ZOOM_SENSITIVITY),
-		);
 
-		setState({
-			x: cursor.x - worldAtCursor.x * nextScale,
-			y: cursor.y - worldAtCursor.y * nextScale,
-			scale: nextScale,
-		});
+		setScaleAt(
+			currentCamera.scale * Math.exp(-wheelDelta * WHEEL_ZOOM_SENSITIVITY),
+			cursor,
+		);
 	};
 
 	viewport.addEventListener('pointerdown', handlePointerDown);
@@ -206,6 +220,7 @@ export function initializeGraphCamera(
 	return {
 		getState,
 		setState,
+		setScaleAt,
 		viewportToWorld,
 		worldToViewport,
 		dispose(): void {

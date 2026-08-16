@@ -9,6 +9,7 @@ Graph State를 단일 상태 기준으로 사용하며, World 변환과 Grid 및
 ```text
 src/webview/graph/
 ├── graphCamera.ts
+├── graphNavigator.ts
 ├── graphState.ts
 ├── graphView.css
 ├── graphView.ts
@@ -46,3 +47,12 @@ src/webview/graph/
 - Viewport / World 좌표 상호 변환
 - `data-graph-camera-ignore` 입력 차단 규약 처리
 - `dispose()` 시 Pointer / Wheel Listener와 State 구독 정리
+
+### `graphNavigator.ts`
+
+> Overlay에서 현재 Camera 좌표와 중앙 기준 Zoom Control을 표시합니다.
+
+- 복원된 Graph State 기준으로 좌표와 scale 최초 표시
+- Camera State 변경 구독 및 표시 갱신
+- 기존 Camera Zoom 동작과 입력 차단 규약 재사용
+- `dispose()` 시 Button Listener, State 구독 및 DOM 정리

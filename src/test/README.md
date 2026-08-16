@@ -61,7 +61,16 @@
 
 ## `graph/graphView.test.ts`
 
-- 초기 Graph Camera 상태를 Store와 World transform에 복원한다
+- 초기 Graph Camera 상태를 Store, World transform 및 Overlay Navigator에 복원한다
+
+## `graph/graphNavigator.test.ts`
+
+- 복원된 Camera 좌표와 scale을 최초 표시한다
+- Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다
+- Zoom 버튼이 scale 범위 안에서 Viewport 중앙을 기준으로 동작한다
+- Zoom Control의 Pointer 입력으로 Camera Pan을 시작하지 않는다
+- 복원 후 Zoom 변경을 기존 Webview State 저장 흐름으로 다시 저장한다
+- `dispose()` 시 Button Listener와 State 구독을 정리한다
 
 ## `graph/graphCamera.test.ts`
 
