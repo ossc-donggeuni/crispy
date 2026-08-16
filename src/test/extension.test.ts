@@ -78,6 +78,9 @@ suite('Crispy Extension Host', () => {
 			panel.webview.options.localResourceRoots?.map((uri) => uri.toString()),
 			[vscode.Uri.joinPath(extension.extensionUri, 'dist', 'webview').toString()],
 		);
+		assert.ok(
+			panel.webview.html.includes(`img-src ${panel.webview.cspSource};`),
+		);
 	});
 
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {

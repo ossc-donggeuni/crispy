@@ -8,6 +8,8 @@ Graph State를 단일 상태 기준으로 사용하며, 저장되지 않은 Node
 
 ```text
 src/webview/graph/
+├── assets/file-icons/
+├── fileIconResolver.ts
 ├── graphCamera.ts
 ├── graphLayout.ts
 ├── graphMockData.ts
@@ -37,6 +39,14 @@ src/webview/graph/
 - 중첩 Folder와 Folder별 여러 File 포함
 - 실제 Workspace 및 파일 시스템을 사용하지 않음
 
+### `fileIconResolver.ts`
+
+> File 이름의 확장자를 렌더링 전용 로컬 SVG 아이콘 식별자로 변환합니다.
+
+- 대소문자를 구분하지 않는 확장자 매핑
+- 미지원 확장자와 확장자 없는 File의 공통 `file-unknown` fallback
+- 파일 이름 특수 규칙이나 Graph Model / State / Layout icon 상태를 사용하지 않음
+
 ### `graphLayout.ts`
 
 > Mock Project를 왼쪽에서 오른쪽으로 배치하는 deterministic Tree Layout을 생성합니다.
@@ -55,6 +65,7 @@ src/webview/graph/
 
 - Project Root와 Folder를 같은 Card 계열로 렌더링
 - Webview CSP와 무관하게 표시되는 inline Folder SVG 생성
+- File 이름을 렌더링 시점에 icon 식별값으로 변환하여 로컬 SVG 표시
 - Folder별 File을 최대 5개까지 하나의 File Group에 렌더링
 - 숨겨진 File 수를 `+ N개 더보기` Bar로 표시
 - Folder, File Group 및 File Row Click callback 구분

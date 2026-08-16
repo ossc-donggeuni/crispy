@@ -188,12 +188,109 @@
 }
 
 .graph-file-icon {
-	display: grid;
+	display: block;
 	width: 22px;
 	height: 22px;
 	flex: none;
-	place-items: center;
-	font-size: 14px;
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: contain;
+}
+
+.graph-file-icon[data-file-icon='c'] {
+	background-image: url('./assets/file-icons/c.svg');
+}
+
+.graph-file-icon[data-file-icon='console'] {
+	background-image: url('./assets/file-icons/console.svg');
+}
+
+.graph-file-icon[data-file-icon='cpp'] {
+	background-image: url('./assets/file-icons/cpp.svg');
+}
+
+.graph-file-icon[data-file-icon='css'] {
+	background-image: url('./assets/file-icons/css.svg');
+}
+
+.graph-file-icon[data-file-icon='database'] {
+	background-image: url('./assets/file-icons/database.svg');
+}
+
+.graph-file-icon[data-file-icon='file-unknown'] {
+	background-image: url('./assets/file-icons/file-unknown.svg');
+}
+
+.graph-file-icon[data-file-icon='go'] {
+	background-image: url('./assets/file-icons/go.svg');
+}
+
+.graph-file-icon[data-file-icon='h'] {
+	background-image: url('./assets/file-icons/h.svg');
+}
+
+.graph-file-icon[data-file-icon='html'] {
+	background-image: url('./assets/file-icons/html.svg');
+}
+
+.graph-file-icon[data-file-icon='image'] {
+	background-image: url('./assets/file-icons/image.svg');
+}
+
+.graph-file-icon[data-file-icon='java'] {
+	background-image: url('./assets/file-icons/java.svg');
+}
+
+.graph-file-icon[data-file-icon='javascript'] {
+	background-image: url('./assets/file-icons/javascript.svg');
+}
+
+.graph-file-icon[data-file-icon='json'] {
+	background-image: url('./assets/file-icons/json.svg');
+}
+
+.graph-file-icon[data-file-icon='markdown'] {
+	background-image: url('./assets/file-icons/markdown.svg');
+}
+
+.graph-file-icon[data-file-icon='python'] {
+	background-image: url('./assets/file-icons/python.svg');
+}
+
+.graph-file-icon[data-file-icon='react'] {
+	background-image: url('./assets/file-icons/react.svg');
+}
+
+.graph-file-icon[data-file-icon='react_ts'] {
+	background-image: url('./assets/file-icons/react_ts.svg');
+}
+
+.graph-file-icon[data-file-icon='rust'] {
+	background-image: url('./assets/file-icons/rust.svg');
+}
+
+.graph-file-icon[data-file-icon='sass'] {
+	background-image: url('./assets/file-icons/sass.svg');
+}
+
+.graph-file-icon[data-file-icon='svg'] {
+	background-image: url('./assets/file-icons/svg.svg');
+}
+
+.graph-file-icon[data-file-icon='toml'] {
+	background-image: url('./assets/file-icons/toml.svg');
+}
+
+.graph-file-icon[data-file-icon='typescript'] {
+	background-image: url('./assets/file-icons/typescript.svg');
+}
+
+.graph-file-icon[data-file-icon='xml'] {
+	background-image: url('./assets/file-icons/xml.svg');
+}
+
+.graph-file-icon[data-file-icon='yaml'] {
+	background-image: url('./assets/file-icons/yaml.svg');
 }
 
 .graph-file-more {

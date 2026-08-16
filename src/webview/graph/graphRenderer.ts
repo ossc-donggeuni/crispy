@@ -5,6 +5,7 @@ import type {
 	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
+import { resolveFileIcon } from './fileIconResolver';
 import {
 	GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE,
 	initializeGraphNodeDrag,
@@ -291,8 +292,8 @@ function appendFileGroupContent(
 		item.setAttribute('data-file-id', file.id);
 		item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 		icon.className = 'graph-node-icon graph-file-icon';
+		icon.setAttribute('data-file-icon', resolveFileIcon(file.name));
 		icon.setAttribute('aria-hidden', 'true');
-		icon.textContent = '▣';
 		name.className = 'graph-file-name';
 		name.textContent = file.name;
 		item.append(icon, name);

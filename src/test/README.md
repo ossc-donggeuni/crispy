@@ -75,6 +75,7 @@
 ## `graph/graphRenderer.test.ts`
 
 - Project Root, Folder, File Group과 Edge를 지정된 Layer에 렌더링한다
+- File Row에 확장자별 공통 SVG icon 식별값을 렌더링한다
 - Folder, File Group, File Row Click callback을 구분한다
 - File Row Click 전파를 차단하고 Row 전용 animation lifecycle을 처리한다
 - Threshold를 넘긴 Node Drag 뒤 Click callback을 실행하지 않는다
@@ -86,6 +87,12 @@
 - `pointercancel`과 `lostpointercapture`는 임시 위치를 복원하고 저장하지 않는다
 - Node 입력 차단 규약으로 Node Drag 중 Camera Pan을 시작하지 않는다
 - Node 위치를 기존 Webview State로 저장하고 새 Store/Renderer에서 일부 위치만 복원한다
+
+## `graph/fileIconResolver.test.ts`
+
+- 지원 확장자를 지정된 File icon 식별값으로 변환한다
+- 확장자 대소문자를 구분하지 않는다
+- 미지원 확장자와 확장자가 없는 파일에 공통 fallback을 적용한다
 
 ## `graph/graphView.test.ts`
 

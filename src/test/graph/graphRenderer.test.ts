@@ -54,11 +54,37 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.ok(getText(fileGroup).includes('graphView.ts'));
 		assert.ok(getText(fileGroup).includes('graphRenderer.ts'));
 		assert.ok(!getText(fileGroup).includes('graphNodeDrag.ts'));
+		assert.ok(!getText(fileGroup).includes('▣'));
 		assert.ok(getText(fileGroup).includes('+ 2개 더보기'));
 		assert.strictEqual(
 			fixture.edgeLayer.children.every((edge) => edge.hasClass('graph-edge')),
 			true,
 		);
+		fixture.renderer.dispose();
+	});
+
+	test('File Row에 파일 확장자별 공통 아이콘 식별값을 렌더링한다', () => {
+		const fixture = createRendererFixture();
+		const cases = [
+			['file:app/src/graphRenderer.ts', 'typescript'],
+			['file:README.md', 'markdown'],
+			['file:src/webview/webview.css', 'css'],
+			['file:package.json', 'json'],
+		] as const;
+
+		for (const [fileId, expectedIcon] of cases) {
+			const row = getDescendantByAttribute(
+				fixture.nodeLayer,
+				'data-file-id',
+				fileId,
+			);
+			const icon = getDescendantByClass(row, 'graph-file-icon');
+
+			assert.strictEqual(icon.getAttribute('data-file-icon'), expectedIcon);
+			assert.strictEqual(icon.getAttribute('aria-hidden'), 'true');
+			assert.strictEqual(icon.textContent, '');
+		}
+
 		fixture.renderer.dispose();
 	});
 
@@ -511,6 +537,54 @@ function getDescendantByClass(
 	}
 
 	assert.fail(`${className} 요소가 있어야 한다.`);
+}
+
+function getDescendantByAttribute(
+	element: FakeElement,
+	attributeName: string,
+	attributeValue: string,
+): FakeElement {
+	for (const child of element.children) {
+		if (child.getAttribute(attributeName) === attributeValue) {
+			return child;
+		}
+
+		const descendant = findDescendantByAttribute(
+			child,
+			attributeName,
+			attributeValue,
+		);
+
+		if (descendant) {
+			return descendant;
+		}
+	}
+
+	assert.fail(`${attributeName}="${attributeValue}" 요소가 있어야 한다.`);
+}
+
+function findDescendantByAttribute(
+	element: FakeElement,
+	attributeName: string,
+	attributeValue: string,
+): FakeElement | undefined {
+	for (const child of element.children) {
+		if (child.getAttribute(attributeName) === attributeValue) {
+			return child;
+		}
+
+		const descendant = findDescendantByAttribute(
+			child,
+			attributeName,
+			attributeValue,
+		);
+
+		if (descendant) {
+			return descendant;
+		}
+	}
+
+	return undefined;
 }
 
 function findDescendantByClass(

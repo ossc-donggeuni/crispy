@@ -38,6 +38,10 @@ async function main() {
 		platform: 'node',
 		outdir: 'dist',
 		outbase: 'src',
+		assetNames: '[dir]/[name]',
+		loader: {
+			'.svg': 'copy',
+		},
 		external: ['vscode'],
 		logLevel: 'silent',
 		plugins: [
