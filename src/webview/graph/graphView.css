@@ -49,6 +49,174 @@
 	z-index: 1;
 }
 
+.graph-node {
+	position: absolute;
+	top: 0;
+	left: 0;
+	display: flex;
+	box-sizing: border-box;
+	min-width: 0;
+	color: #fcfcfc;
+	background: #1a1b1c;
+	border: 2px solid #a3a3a3;
+	border-radius: 6px;
+	font-family: Inter, var(--vscode-font-family);
+	font-size: 16px;
+	font-weight: 400;
+	line-height: normal;
+	transform-origin: 0 0;
+	touch-action: none;
+	user-select: none;
+	cursor: grab;
+}
+
+.graph-node.is-dragging {
+	z-index: 1;
+	cursor: grabbing;
+}
+
+.graph-project-node:hover,
+.graph-folder-node:hover,
+.graph-file-group-node:hover {
+	background: #222324;
+	border-color: #c4c4c4;
+	cursor: pointer;
+}
+
+.graph-project-node:active,
+.graph-folder-node:active,
+.graph-file-group-node:active:not(:has(.graph-file-item:active)) {
+	background: #28292a;
+	border-color: #d6d6d6;
+}
+
+.graph-node.is-dragging,
+.graph-node.is-dragging:hover {
+	cursor: grabbing;
+}
+
+.graph-project-node,
+.graph-folder-node {
+	align-items: center;
+	gap: 11px;
+	padding: 0 14px;
+}
+
+.graph-node-icon {
+	flex: none;
+	color: var(--vscode-symbolIcon-fileForeground, var(--vscode-descriptionForeground));
+}
+
+.graph-folder-icon {
+	display: block;
+	width: 20px;
+	height: 20px;
+	flex: none;
+	object-fit: contain;
+}
+
+.graph-folder-name,
+.graph-file-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-file-group-node {
+	flex-direction: column;
+	justify-content: flex-start;
+	padding: 9px;
+}
+
+.graph-file-list {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.graph-file-item {
+	display: flex;
+	min-height: 30px;
+	box-sizing: border-box;
+	gap: 8px;
+	align-items: center;
+	padding: 0 4px;
+	border-radius: 4px;
+}
+
+.graph-file-item:hover {
+	background: #303132;
+	cursor: pointer;
+}
+
+.graph-file-item:active {
+	background: #38393a;
+}
+
+.graph-file-item.is-file-clicking {
+	animation: graph-file-item-click 180ms ease-out;
+}
+
+@keyframes graph-file-item-click {
+	0% {
+		background: #454647;
+		box-shadow: inset 0 0 0 1px rgba(214, 214, 214, 0.45);
+		transform: scale(0.98);
+	}
+
+	55% {
+		background: #38393a;
+		box-shadow: inset 0 0 0 1px rgba(214, 214, 214, 0.2);
+		transform: scale(1);
+	}
+
+	100% {
+		background: transparent;
+		box-shadow: inset 0 0 0 1px transparent;
+		transform: scale(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.graph-file-item.is-file-clicking {
+		animation-duration: 1ms;
+	}
+}
+
+.graph-file-icon {
+	display: grid;
+	width: 22px;
+	height: 22px;
+	flex: none;
+	place-items: center;
+	font-size: 14px;
+}
+
+.graph-file-more {
+	display: flex;
+	height: 26px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	color: #9a9a9a;
+	background: #282828;
+	border-radius: 5px;
+	font-size: 11px;
+	font-weight: 400;
+}
+
+.graph-edge {
+	fill: none;
+	stroke: #a3a3a3;
+	stroke-width: 0.5;
+	stroke-linecap: round;
+	vector-effect: non-scaling-stroke;
+}
+
 .graph-overlay-layer {
 	position: absolute;
 	inset: 0;

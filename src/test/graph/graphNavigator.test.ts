@@ -80,12 +80,14 @@ suite('Graph Navigator', () => {
 
 		fixture.graphState.setState({
 			camera: { x: 1, y: 2, scale: MIN_CAMERA_SCALE },
+			nodePositions: {},
 		});
 		fixture.zoomOutButton.dispatch('click', {} as Event);
 		assert.strictEqual(fixture.camera.getState().scale, MIN_CAMERA_SCALE);
 
 		fixture.graphState.setState({
 			camera: { x: 1, y: 2, scale: MAX_CAMERA_SCALE },
+			nodePositions: {},
 		});
 		fixture.zoomInButton.dispatch('click', {} as Event);
 		assert.strictEqual(fixture.camera.getState().scale, MAX_CAMERA_SCALE);
@@ -111,7 +113,10 @@ suite('Graph Navigator', () => {
 	test('getState에서 복원한 Camera의 Zoom 변경을 기존 Webview State 흐름으로 다시 저장한다', () => {
 		let savedState: PersistedWebviewState | undefined = {
 			panel: { ...DEFAULT_PANEL_LAYOUT_STATE },
-			graph: { camera: { x: 513, y: 324, scale: 1.2 } },
+			graph: {
+				camera: { x: 513, y: 324, scale: 1.2 },
+				nodePositions: {},
+			},
 		};
 		const api: WebviewStateApi = {
 			getState: () => savedState,
@@ -145,7 +150,10 @@ suite('Graph Navigator', () => {
 		fixture.navigator.dispose();
 		assert.strictEqual(fixture.overlay.children.length, 0);
 
-		fixture.graphState.setState({ camera: { x: 50, y: 60, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: 50, y: 60, scale: 2 },
+			nodePositions: {},
+		});
 		assert.strictEqual(fixture.coordinate.textContent, displayedCoordinate);
 
 		fixture.zoomInButton.dispatch('click', {} as Event);
@@ -160,7 +168,10 @@ function createNavigatorFixture(
 	const viewport = ownerDocument.createSizedElement(800, 600);
 	const world = ownerDocument.createElement();
 	const overlay = ownerDocument.createElement();
-	const graphState = createGraphState({ camera: initialCamera });
+	const graphState = createGraphState({
+		camera: initialCamera,
+		nodePositions: {},
+	});
 	const camera = initializeGraphCamera(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),

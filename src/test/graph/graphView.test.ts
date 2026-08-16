@@ -7,11 +7,15 @@ suite('Graph View', () => {
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
-			{ camera: { x: 120, y: -45, scale: 1.5 } },
+			{
+				camera: { x: 120, y: -45, scale: 1.5 },
+				nodePositions: {},
+			},
 		);
 
 		assert.deepStrictEqual(graphView.state.getState(), {
 			camera: { x: 120, y: -45, scale: 1.5 },
+			nodePositions: {},
 		});
 		assert.deepStrictEqual(graphView.camera.getState(), {
 			x: 120,
