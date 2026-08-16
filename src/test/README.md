@@ -91,7 +91,8 @@
 ## `graph/fileIconResolver.test.ts`
 
 - 지원 확장자를 지정된 File icon 식별값으로 변환한다
-- 확장자 대소문자를 구분하지 않는다
+- TypeScript declaration과 특수 파일명 규칙을 일반 확장자보다 우선한다
+- 확장자와 특수 파일명 대소문자를 구분하지 않는다
 - 미지원 확장자와 확장자가 없는 파일에 공통 fallback을 적용한다
 
 ## `graph/graphView.test.ts`

@@ -41,11 +41,12 @@ src/webview/graph/
 
 ### `fileIconResolver.ts`
 
-> File 이름의 확장자를 렌더링 전용 로컬 SVG 아이콘 식별자로 변환합니다.
+> File 이름을 렌더링 전용 로컬 SVG 아이콘 식별자로 변환합니다.
 
-- 대소문자를 구분하지 않는 확장자 매핑
+- 대소문자를 구분하지 않는 특수 파일명, TypeScript declaration 및 확장자 매핑
+- 특수 파일명, declaration suffix, 일반 확장자 순서의 우선순위 적용
 - 미지원 확장자와 확장자 없는 File의 공통 `file-unknown` fallback
-- 파일 이름 특수 규칙이나 Graph Model / State / Layout icon 상태를 사용하지 않음
+- Graph Model / State / Layout에 icon 상태를 저장하지 않음
 
 ### `graphLayout.ts`
 

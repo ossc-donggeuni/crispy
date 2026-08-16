@@ -63,13 +63,13 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('File Row에 파일 확장자별 공통 아이콘 식별값을 렌더링한다', () => {
+	test('File Row에 파일명 규칙과 확장자별 공통 아이콘 식별값을 렌더링한다', () => {
 		const fixture = createRendererFixture();
 		const cases = [
 			['file:app/src/graphRenderer.ts', 'typescript'],
-			['file:README.md', 'markdown'],
+			['file:README.md', 'readme'],
 			['file:src/webview/webview.css', 'css'],
-			['file:package.json', 'json'],
+			['file:package.json', 'npm'],
 		] as const;
 
 		for (const [fileId, expectedIcon] of cases) {

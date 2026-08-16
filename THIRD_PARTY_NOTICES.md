@@ -15,11 +15,16 @@ The following assets are sourced from Material Icon Theme and are distributed
 under the terms of its MIT License. These icon assets are used without
 modification.
 
+- `src/webview/graph/assets/file-icons/astro.svg`
 - `src/webview/graph/assets/file-icons/c.svg`
 - `src/webview/graph/assets/file-icons/console.svg`
 - `src/webview/graph/assets/file-icons/cpp.svg`
+- `src/webview/graph/assets/file-icons/csharp.svg`
 - `src/webview/graph/assets/file-icons/css.svg`
+- `src/webview/graph/assets/file-icons/dart.svg`
 - `src/webview/graph/assets/file-icons/database.svg`
+- `src/webview/graph/assets/file-icons/docker.svg`
+- `src/webview/graph/assets/file-icons/git.svg`
 - `src/webview/graph/assets/file-icons/go.svg`
 - `src/webview/graph/assets/file-icons/h.svg`
 - `src/webview/graph/assets/file-icons/html.svg`
@@ -27,17 +32,34 @@ modification.
 - `src/webview/graph/assets/file-icons/java.svg`
 - `src/webview/graph/assets/file-icons/javascript.svg`
 - `src/webview/graph/assets/file-icons/json.svg`
+- `src/webview/graph/assets/file-icons/kotlin.svg`
+- `src/webview/graph/assets/file-icons/license.svg`
+- `src/webview/graph/assets/file-icons/lua.svg`
 - `src/webview/graph/assets/file-icons/markdown.svg`
+- `src/webview/graph/assets/file-icons/npm.svg`
+- `src/webview/graph/assets/file-icons/pdf.svg`
+- `src/webview/graph/assets/file-icons/php.svg`
+- `src/webview/graph/assets/file-icons/pnpm.svg`
 - `src/webview/graph/assets/file-icons/python.svg`
+- `src/webview/graph/assets/file-icons/r.svg`
 - `src/webview/graph/assets/file-icons/react.svg`
 - `src/webview/graph/assets/file-icons/react_ts.svg`
+- `src/webview/graph/assets/file-icons/readme.svg`
+- `src/webview/graph/assets/file-icons/ruby.svg`
 - `src/webview/graph/assets/file-icons/rust.svg`
 - `src/webview/graph/assets/file-icons/sass.svg`
+- `src/webview/graph/assets/file-icons/svelte.svg`
 - `src/webview/graph/assets/file-icons/svg.svg`
+- `src/webview/graph/assets/file-icons/swift.svg`
+- `src/webview/graph/assets/file-icons/table.svg`
 - `src/webview/graph/assets/file-icons/toml.svg`
+- `src/webview/graph/assets/file-icons/tsconfig.svg`
+- `src/webview/graph/assets/file-icons/typescript-def.svg`
 - `src/webview/graph/assets/file-icons/typescript.svg`
+- `src/webview/graph/assets/file-icons/vue.svg`
 - `src/webview/graph/assets/file-icons/xml.svg`
 - `src/webview/graph/assets/file-icons/yaml.svg`
+- `src/webview/graph/assets/file-icons/yarn.svg`
 
 ### Material Icon Theme MIT License
 

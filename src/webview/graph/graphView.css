@@ -293,6 +293,94 @@
 	background-image: url('./assets/file-icons/yaml.svg');
 }
 
+.graph-file-icon[data-file-icon='vue'] {
+	background-image: url('./assets/file-icons/vue.svg');
+}
+
+.graph-file-icon[data-file-icon='svelte'] {
+	background-image: url('./assets/file-icons/svelte.svg');
+}
+
+.graph-file-icon[data-file-icon='astro'] {
+	background-image: url('./assets/file-icons/astro.svg');
+}
+
+.graph-file-icon[data-file-icon='php'] {
+	background-image: url('./assets/file-icons/php.svg');
+}
+
+.graph-file-icon[data-file-icon='ruby'] {
+	background-image: url('./assets/file-icons/ruby.svg');
+}
+
+.graph-file-icon[data-file-icon='kotlin'] {
+	background-image: url('./assets/file-icons/kotlin.svg');
+}
+
+.graph-file-icon[data-file-icon='swift'] {
+	background-image: url('./assets/file-icons/swift.svg');
+}
+
+.graph-file-icon[data-file-icon='csharp'] {
+	background-image: url('./assets/file-icons/csharp.svg');
+}
+
+.graph-file-icon[data-file-icon='dart'] {
+	background-image: url('./assets/file-icons/dart.svg');
+}
+
+.graph-file-icon[data-file-icon='lua'] {
+	background-image: url('./assets/file-icons/lua.svg');
+}
+
+.graph-file-icon[data-file-icon='r'] {
+	background-image: url('./assets/file-icons/r.svg');
+}
+
+.graph-file-icon[data-file-icon='pdf'] {
+	background-image: url('./assets/file-icons/pdf.svg');
+}
+
+.graph-file-icon[data-file-icon='table'] {
+	background-image: url('./assets/file-icons/table.svg');
+}
+
+.graph-file-icon[data-file-icon='typescript-def'] {
+	background-image: url('./assets/file-icons/typescript-def.svg');
+}
+
+.graph-file-icon[data-file-icon='npm'] {
+	background-image: url('./assets/file-icons/npm.svg');
+}
+
+.graph-file-icon[data-file-icon='pnpm'] {
+	background-image: url('./assets/file-icons/pnpm.svg');
+}
+
+.graph-file-icon[data-file-icon='yarn'] {
+	background-image: url('./assets/file-icons/yarn.svg');
+}
+
+.graph-file-icon[data-file-icon='tsconfig'] {
+	background-image: url('./assets/file-icons/tsconfig.svg');
+}
+
+.graph-file-icon[data-file-icon='git'] {
+	background-image: url('./assets/file-icons/git.svg');
+}
+
+.graph-file-icon[data-file-icon='docker'] {
+	background-image: url('./assets/file-icons/docker.svg');
+}
+
+.graph-file-icon[data-file-icon='readme'] {
+	background-image: url('./assets/file-icons/readme.svg');
+}
+
+.graph-file-icon[data-file-icon='license'] {
+	background-image: url('./assets/file-icons/license.svg');
+}
+
 .graph-file-more {
 	display: flex;
 	height: 26px;
