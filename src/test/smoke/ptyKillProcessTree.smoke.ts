@@ -216,6 +216,17 @@ async function runSmoke(): Promise<boolean> {
             // Cleanup must continue even if listener disposal fails.
         }
 
+		try {
+			/**
+			 * 외부 process-tree 종료 뒤에도 Windows ConPTY worker와 pipe handle은
+			 * node-pty 객체에 남을 수 있다. 측정은 이미 끝났으므로 public kill 경계로
+			 * native handle까지 해제한 뒤 최종 생존 검사를 수행한다.
+			 */
+			pty?.kill();
+		} catch {
+			/** 이미 종료된 PTY의 handle 해제 실패와 process 생존 검사는 분리한다. */
+		}
+
         const childStopped = childPid === undefined ? true : await stopPid(childPid);
         const groupStopped = pty === undefined ? true : await stopProcessGroup(pty.pid);
         const shellStopped = pty === undefined ? true : await stopPid(pty.pid);

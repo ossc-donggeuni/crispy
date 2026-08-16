@@ -321,10 +321,22 @@ async function isolatedRuntimeSmoke(extensionRoot, target) {
 	const nodePty = isolatedRequire('node-pty');
 	const smoke = await runPtySmoke(nodePty, target, extensionRoot);
 
-	console.log(JSON.stringify({
+	return {
 		resolvedModulePath: realResolvedModulePath,
 		...smoke,
-	}));
+	};
+}
+
+/**
+ * 격리 probe의 최종 결과를 pipe에 동기적으로 기록하고 lingering native handle과
+ * 무관하게 일회성 health-check process를 즉시 종료한다.
+ */
+function exitIsolatedRuntime(status, message) {
+	try {
+		fs.writeSync(status === 0 ? process.stdout.fd : process.stderr.fd, `${message}\n`);
+	} finally {
+		process.exit(status);
+	}
 }
 
 function verifyIsolatedRuntime(target) {
@@ -422,10 +434,13 @@ if (process.argv[2] === isolatedSmokeFlag) {
 	const extensionRoot = process.argv[3];
 	const target = process.argv[4];
 
-	isolatedRuntimeSmoke(extensionRoot, target).catch((error) => {
-		console.error(error instanceof Error ? error.stack : String(error));
-		process.exitCode = 1;
-	});
+	isolatedRuntimeSmoke(extensionRoot, target).then(
+		(summary) => exitIsolatedRuntime(0, JSON.stringify(summary)),
+		(error) => exitIsolatedRuntime(
+			1,
+			error instanceof Error ? error.stack : String(error),
+		),
+	);
 } else {
 	try {
 		main();
