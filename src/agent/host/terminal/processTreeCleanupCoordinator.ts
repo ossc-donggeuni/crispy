@@ -58,7 +58,6 @@ export interface ProcessTreeCleanupDependencies {
 	readonly pid: number;
 	readonly ptyTerminationRequester: PtyTerminationRequester;
 	readonly ptyExitProbe: PtyExitProbe;
-	readonly processTreeProbe: ProcessTreeProbe;
 	readonly processTreeController: ProcessTreeController;
 	readonly clock: CleanupClock;
 	readonly poller: CleanupPoller;
@@ -88,54 +87,10 @@ function sanitizeControllerResult(result: CleanupResult): CleanupResult {
 	return { outcome: 'verification_failed' };
 }
 
-function probeFailureResult(
-	probe: ProcessTreeProbeResult,
-): CleanupResult | undefined {
-	switch (probe.state) {
-		case 'permission_denied':
-			return { outcome: 'permission_denied' };
-		case 'platform_unsupported':
-			return { outcome: 'platform_unsupported' };
-		case 'verification_failed':
-			return { outcome: 'verification_failed' };
-		default:
-			return undefined;
-	}
-}
-
-async function inspectSafely(
-	probe: ProcessTreeProbe,
-	pid: number,
-): Promise<ProcessTreeProbeResult> {
-	try {
-		const result = await probe.inspect(pid);
-		switch (result?.state) {
-			case 'alive':
-			case 'terminated':
-			case 'permission_denied':
-			case 'platform_unsupported':
-			case 'verification_failed':
-				return { state: result.state };
-			default:
-				return { state: 'verification_failed' };
-		}
-	} catch {
-		return { state: 'verification_failed' };
-	}
-}
-
-function failureAfterForce(
-	controllerResult: CleanupResult,
+function captureFailureResult(
+	status: 'timeout' | 'permission_denied' | 'platform_unsupported' | 'verification_failed',
 ): CleanupResult {
-	switch (controllerResult.outcome) {
-		case 'permission_denied':
-		case 'platform_unsupported':
-		case 'verification_failed':
-		case 'timeout':
-			return { outcome: controllerResult.outcome };
-		default:
-			return { outcome: 'timeout' };
-	}
+	return { outcome: status };
 }
 
 async function runCleanup(
@@ -145,7 +100,6 @@ async function runCleanup(
 		pid,
 		ptyTerminationRequester,
 		ptyExitProbe,
-		processTreeProbe,
 		processTreeController,
 		clock,
 		poller,
@@ -160,19 +114,20 @@ async function runCleanup(
 		return { outcome: 'verification_failed' };
 	}
 
-	const initialProbe = await inspectSafely(processTreeProbe, pid);
-	if (initialProbe.state === 'terminated') {
-		return { outcome: 'already_terminated' };
+	let capture: Awaited<ReturnType<ProcessTreeController['capture']>>;
+	try {
+		capture = await processTreeController.capture(pid);
+	} catch {
+		return { outcome: 'verification_failed' };
 	}
-	const initialFailure = probeFailureResult(initialProbe);
-	if (initialFailure !== undefined) {
-		return initialFailure;
+	if (capture.status !== 'captured') {
+		return captureFailureResult(capture.status);
 	}
 
 	try {
 		await ptyTerminationRequester.requestExit();
 	} catch {
-		// Process-tree probe와 controller fallback을 계속 수행한다.
+		/** Process-tree probe와 controller fallback을 계속 수행한다. */
 	}
 
 	try {
@@ -182,50 +137,19 @@ async function runCleanup(
 			clock,
 		);
 	} catch {
-		// PTY exit 관찰 실패도 실제 process-tree probe로 재확인한다.
-	}
-
-	const gracefulProbe = await inspectSafely(processTreeProbe, pid);
-	if (gracefulProbe.state === 'terminated') {
-		return { outcome: 'gracefully_terminated' };
-	}
-	const gracefulFailure = probeFailureResult(gracefulProbe);
-	if (gracefulFailure !== undefined) {
-		return gracefulFailure;
-	}
-
-	let controllerResult: CleanupResult;
-	try {
-		controllerResult = sanitizeControllerResult(
-			await processTreeController.terminate(pid),
-		);
-	} catch {
-		controllerResult = { outcome: 'verification_failed' };
+		/** PTY exit 관찰 실패도 실제 process-tree probe로 재확인한다. */
 	}
 
 	try {
-		await poller.waitUntil(
-			async () => {
-				const probe = await inspectSafely(processTreeProbe, pid);
-				return probe.state !== 'alive';
-			},
-			clock.now() + timeouts.forceExitMs,
-			clock,
+		const controllerResult = sanitizeControllerResult(
+			await processTreeController.terminate(capture.snapshot),
 		);
+		return controllerResult.outcome === 'already_terminated'
+			? { outcome: 'gracefully_terminated' }
+			: controllerResult;
 	} catch {
 		return { outcome: 'verification_failed' };
 	}
-
-	const finalProbe = await inspectSafely(processTreeProbe, pid);
-	if (finalProbe.state === 'terminated') {
-		return { outcome: 'force_terminated' };
-	}
-	const finalFailure = probeFailureResult(finalProbe);
-	if (finalFailure !== undefined) {
-		return finalFailure;
-	}
-
-	return failureAfterForce(controllerResult);
 }
 
 /**

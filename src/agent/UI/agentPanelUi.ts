@@ -125,7 +125,7 @@ export function initializeAgentPanelUi(
 		try {
 			invoke();
 		} catch {
-			// 상위 계층 콜백 실패가 나머지 Webview 기능으로 전파되지 않게 한다.
+			/** 상위 계층 콜백 실패가 나머지 Webview 기능으로 전파되지 않게 한다. */
 		}
 	};
 
@@ -164,7 +164,7 @@ export function initializeAgentPanelUi(
 			},
 
 			onRestartActiveTab(): void {
-				/* provider 전환과 달리 현재 provider를 유지한 채 세션만 다시 시작한다. */
+				/** provider 전환과 달리 현재 provider를 유지한 채 세션만 다시 시작한다. */
 				const activeTab = getActiveTab();
 				const providerId = activeTab?.providerId;
 				if (activeTab === undefined || providerId === undefined) {
@@ -198,7 +198,7 @@ export function initializeAgentPanelUi(
 					return;
 				}
 
-				/* 실제 프로세스 실행 여부를 알 수 없으므로 항상 확인을 받는다. */
+				/** 실제 프로세스 실행 여부를 알 수 없으므로 항상 확인을 받는다. */
 				void confirmDialog
 					.confirm(formatTabCloseConfirmMessage(tab.label))
 					.then((confirmed) => {
@@ -210,7 +210,7 @@ export function initializeAgentPanelUi(
 						notify(() => callbacks.onTabClosed?.(tabId));
 					})
 					.catch(() => {
-						// 확인 다이얼로그 실패는 탭을 닫지 않은 상태로 그대로 둔다.
+						/** 확인 다이얼로그 실패는 탭을 닫지 않은 상태로 그대로 둔다. */
 					});
 			},
 		},
@@ -224,7 +224,7 @@ export function initializeAgentPanelUi(
 		notify(() => callbacks.onLayoutChange?.());
 	});
 
-	/* 첫 탭은 provider 미선택 상태로 시작하며 기존 Terminal 영역과 나란히 표시된다. */
+	/** 첫 탭은 provider 미선택 상태로 시작하며 기존 Terminal 영역과 나란히 표시된다. */
 	const initialTabId = model.createTab();
 	notify(() => callbacks.onTabCreated?.(initialTabId));
 
@@ -248,7 +248,7 @@ export function initializeAgentPanelUi(
 				try {
 					cleanup();
 				} catch {
-					// 한 정리 실패가 나머지 Agent UI 정리를 막지 않게 한다.
+					/** 한 정리 실패가 나머지 Agent UI 정리를 막지 않게 한다. */
 				}
 			}
 		},

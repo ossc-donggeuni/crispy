@@ -86,7 +86,7 @@ export function createAgentConfirmDialog(
 			host.replaceChildren();
 			host.removeAttribute('role');
 		} catch {
-			// 다이얼로그 제거 실패가 탭 상태 전이를 막지 않게 한다.
+			/** 다이얼로그 제거 실패가 탭 상태 전이를 막지 않게 한다. */
 		}
 
 		resolve?.(confirmed);
@@ -113,7 +113,7 @@ export function createAgentConfirmDialog(
 					host.hidden = false;
 					acceptButton.focus();
 				} catch {
-					// 표시 실패는 되돌릴 수 없는 동작을 진행시키지 않고 취소로 처리한다.
+					/** 표시 실패는 되돌릴 수 없는 동작을 진행시키지 않고 취소로 처리한다. */
 					settle(false);
 				}
 			});

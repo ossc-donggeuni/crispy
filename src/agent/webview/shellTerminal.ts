@@ -376,12 +376,12 @@ export function initializeShellTerminal(
 							});
 							lastSentDimensions = { cols, rows };
 						} catch {
-							// Resize 전송 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다.
+							/** Resize 전송 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다. */
 						}
 						return;
 					}
 
-					/*
+					/**
 					 * 아직 첫 세션이 시작되지 않은 탭은 provider 선택 전에 크기가 바뀔 수 있다.
 					 * 이때만 준비 신호를 다시 보내 Host가 최신 크기로 PTY를 시작하게 한다.
 					 * 세션이 한 번이라도 시작된 뒤에는 종료 상태에서 다시 보내지 않으므로
@@ -407,7 +407,7 @@ export function initializeShellTerminal(
 			});
 		} catch {
 			fitScheduled = false;
-			// animation frame 예약 실패도 다른 Webview 기능으로 전파하지 않는다.
+			/** animation frame 예약 실패도 다른 Webview 기능으로 전파하지 않는다. */
 		}
 	}
 
@@ -425,7 +425,7 @@ export function initializeShellTerminal(
 			overlayVisible = true;
 			surface.dataset.state = state.kind === 'exited' ? 'exited' : 'error';
 		} catch {
-			// 덮개 렌더링 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다.
+			/** 덮개 렌더링 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다. */
 		}
 	};
 
@@ -434,7 +434,7 @@ export function initializeShellTerminal(
 		try {
 			overlayView?.hide();
 		} catch {
-			// 덮개 제거 실패도 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다.
+			/** 덮개 제거 실패도 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다. */
 		}
 		overlayVisible = false;
 		surface.dataset.state = 'ready';
@@ -463,7 +463,7 @@ export function initializeShellTerminal(
 		try {
 			postMessage({ type: 'terminal.restart', tabId, sessionId });
 		} catch {
-			// 재시작 전송 실패 뒤에도 사용자가 같은 덮개에서 다시 시도할 수 있게 한다.
+			/** 재시작 전송 실패 뒤에도 사용자가 같은 덮개에서 다시 시도할 수 있게 한다. */
 			restartRequested = false;
 		}
 	};
@@ -479,7 +479,7 @@ export function initializeShellTerminal(
 			});
 			lastSentDimensions = { cols, rows };
 		} catch {
-			// Ready 전송 실패가 Graph나 다른 Webview 기능으로 전파되지 않게 한다.
+			/** Ready 전송 실패가 Graph나 다른 Webview 기능으로 전파되지 않게 한다. */
 		}
 	};
 
@@ -499,7 +499,7 @@ export function initializeShellTerminal(
 			try {
 				cleanup();
 			} catch {
-				// 한 정리 실패가 나머지 Terminal 및 Webview 정리를 막지 않게 한다.
+				/** 한 정리 실패가 나머지 Terminal 및 Webview 정리를 막지 않게 한다. */
 			}
 		}
 		terminal = undefined;
@@ -519,7 +519,7 @@ export function initializeShellTerminal(
 						activeSessionId = message.sessionId;
 						restartSessionId = undefined;
 						restartRequested = false;
-						/*
+						/**
 						 * 이전 세션이 있었다면 provider 전환처럼 종료 덮개를 거치지 않은
 						 * 교체일 수 있으므로, 새 PTY 시작을 확인한 뒤 buffer를 정리한다.
 						 */
@@ -533,7 +533,7 @@ export function initializeShellTerminal(
 							try {
 								terminal?.reset();
 							} catch {
-								// Buffer 초기화 실패가 새 세션 입출력 연결을 막지 않게 한다.
+								/** Buffer 초기화 실패가 새 세션 입출력 연결을 막지 않게 한다. */
 							}
 						}
 						if (overlayVisible) {
@@ -543,7 +543,7 @@ export function initializeShellTerminal(
 						try {
 							terminal?.focus();
 						} catch {
-							// Focus 실패는 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다.
+							/** Focus 실패는 이미 시작된 PTY의 입출력 경로에 영향을 주지 않는다. */
 						}
 						scheduleTerminalFit();
 					}
@@ -560,7 +560,7 @@ export function initializeShellTerminal(
 					try {
 						terminal.write(message.data);
 					} catch {
-						// Terminal 렌더링 오류를 다른 Webview 기능으로 전파하지 않는다.
+						/** Terminal 렌더링 오류를 다른 Webview 기능으로 전파하지 않는다. */
 					}
 					break;
 				case 'terminal.exited':
@@ -583,7 +583,7 @@ export function initializeShellTerminal(
 					}
 					break;
 				case 'terminal.error':
-					/* 현재 세션이 없을 때만 Host가 새로 만든 세션의 시작 실패를 받아들인다. */
+					/** 현재 세션이 없을 때만 Host가 새로 만든 세션의 시작 실패를 받아들인다. */
 					if (
 						message.tabId !== tabId
 						|| (
@@ -626,7 +626,7 @@ export function initializeShellTerminal(
 					data,
 				});
 			} catch {
-				// Webview 전송 실패가 xterm 입력 처리나 Graph 기능으로 전파되지 않게 한다.
+				/** Webview 전송 실패가 xterm 입력 처리나 Graph 기능으로 전파되지 않게 한다. */
 			}
 		});
 

@@ -326,7 +326,7 @@ export class TerminalSession {
 		try {
 			this.onOutput(data);
 		} catch {
-			/* Terminal output listener 오류는 session 경계 밖으로 전파하지 않는다. */
+			/** Terminal output listener 오류는 session 경계 밖으로 전파하지 않는다. */
 		}
 	}
 
@@ -343,7 +343,7 @@ export class TerminalSession {
 		try {
 			this.onExit(event);
 		} catch {
-			/* Terminal exit listener 오류는 다른 extension 기능으로 전파하지 않는다. */
+			/** Terminal exit listener 오류는 다른 extension 기능으로 전파하지 않는다. */
 		} finally {
 			this.disposePtyListeners();
 		}
@@ -356,16 +356,33 @@ export class TerminalSession {
 	 */
 	disposeProcess(): void {
 		const process = this.activeProcess;
-		/* activeProcess를 먼저 비워 남은 입력과 크기 변경을 PTY에 전달하지 않는다. */
+		/** activeProcess를 먼저 비워 남은 입력과 크기 변경을 PTY에 전달하지 않는다. */
 		this.activeProcess = undefined;
 		this.pendingOutput = [];
 
 		try {
 			process?.kill();
 		} catch {
-			/* PTY 종료 요청 실패도 listener 정리와 재시작 흐름을 막지 않는다. */
+			/** PTY 종료 요청 실패도 listener 정리와 재시작 흐름을 막지 않는다. */
 		}
 		this.disposePtyListeners();
+	}
+
+	/**
+	 * Panel detach 경로에서 native 종료 호출 없이 입력·resize와 listener 소유권을 해제한다.
+	 * 반환 PID는 이후 비동기 process-tree adapter가 종료할 runtime 소유 root에만 사용한다.
+	 *
+	 * @returns 분리 직전 session이 소유한 유효한 root PID 또는 process가 없으면 undefined
+	 */
+	detachProcess(): number | undefined {
+		const process = this.activeProcess;
+		this.activeProcess = undefined;
+		this.pendingOutput = [];
+		this.disposePtyListeners();
+
+		return process !== undefined && isValidPid(process.pid)
+			? process.pid
+			: undefined;
 	}
 
 	/** PTY data/exit listener 구독을 멱등하게 해제한다. */
@@ -374,7 +391,7 @@ export class TerminalSession {
 			try {
 				listener?.dispose();
 			} catch {
-				/* 개별 listener 해제 실패가 나머지 listener 정리를 막지 않는다. */
+				/** 개별 listener 해제 실패가 나머지 listener 정리를 막지 않는다. */
 			}
 		}
 		this.dataListener = undefined;

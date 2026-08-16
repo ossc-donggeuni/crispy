@@ -7,8 +7,15 @@ export interface TerminalRuntimeSubscription {
  * Panel 하나가 소유한 terminal runtime 전체를 정리하는 최소 계약이다.
  * `TerminalHost`가 이미 제공하는 정리 경계를 그대로 만족하며 테스트에서 fake로 대체할 수 있다.
  */
-export interface DisposableTerminalRuntime {
-	dispose(): void | Promise<void>;
+export interface DetachableTerminalRuntime {
+	detach(): void;
+	terminate(): void | Promise<void>;
+}
+
+/** Panel dispose와 deactivate가 공유하는 동기 분리 및 비동기 종료 경계다. */
+export interface TerminalRuntimeCleanup {
+	detach(): void;
+	terminate(): Promise<void>;
 }
 
 /**
@@ -17,32 +24,51 @@ export interface DisposableTerminalRuntime {
 export const TERMINAL_CLEANUP_TIMEOUT_MS = 3000;
 
 /**
- * Panel dispose와 Extension deactivate가 공유하는 단일 정리 함수를 만든다.
- * terminal runtime 정리를 먼저 수행한 뒤 Webview 구독을 해제하며,
- * 개별 실패를 다른 정리 단계나 호출자에게 전파하지 않는다.
+ * Panel dispose와 Extension deactivate가 공유하는 분리·종료 경계를 만든다.
+ * 동기 detach에서 routing과 Webview 구독을 먼저 해제하고 비동기 terminate는
+ * 별도 멱등 Promise로 실행하며, 개별 실패를 호출자에게 전파하지 않는다.
  *
  * @param terminalRuntime PTY와 session 참조를 정리하는 Host 소유 runtime
- * @param subscriptions runtime 정리 뒤 해제할 Webview message listener 구독 목록
- * @returns 호출 시 정리를 수행하고 실패해도 항상 이행되는 함수
+ * @param subscriptions detach 중 해제할 Webview message listener 구독 목록
+ * @returns 동기 detach와 멱등 비동기 terminate를 제공하는 cleanup 경계
  */
 export function createTerminalRuntimeCleanup(
-	terminalRuntime: DisposableTerminalRuntime,
+	terminalRuntime: DetachableTerminalRuntime,
 	subscriptions: readonly TerminalRuntimeSubscription[],
-): () => Promise<void> {
-	return async (): Promise<void> => {
+): TerminalRuntimeCleanup {
+	let detached = false;
+	let terminationPromise: Promise<void> | undefined;
+
+	const detach = (): void => {
+		if (detached) {
+			return;
+		}
+		detached = true;
+
 		try {
-			await terminalRuntime.dispose();
+			terminalRuntime.detach();
 		} catch {
-			/* PTY 정리 실패가 남은 구독 해제를 막지 않게 한다. */
+			/** routing 분리 실패가 Webview 구독 해제를 막지 않게 한다. */
 		}
 
 		for (const subscription of subscriptions) {
 			try {
 				subscription.dispose();
 			} catch {
-				/* 개별 구독 해제 실패가 나머지 정리를 막지 않게 한다. */
+				/** 개별 구독 해제 실패가 나머지 정리를 막지 않게 한다. */
 			}
 		}
+	};
+
+	return {
+		detach,
+		terminate(): Promise<void> {
+			detach();
+			terminationPromise ??= Promise.resolve()
+				.then(() => terminalRuntime.terminate())
+				.then(() => undefined, () => undefined);
+			return terminationPromise;
+		},
 	};
 }
 
@@ -59,14 +85,14 @@ export async function runCleanupWithTimeout(
 	cleanup: () => void | Promise<void>,
 	timeoutMs: number = TERMINAL_CLEANUP_TIMEOUT_MS,
 ): Promise<void> {
-	const running = (async () => {
-		await cleanup();
-	})().catch(() => undefined);
-
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const deadline = new Promise<void>((resolve) => {
 		timer = setTimeout(resolve, timeoutMs);
 	});
+	/** Deadline timer를 먼저 등록하고 cleanup 호출은 다음 microtask에서 시작한다. */
+	const running = Promise.resolve()
+		.then(() => cleanup())
+		.then(() => undefined, () => undefined);
 
 	try {
 		await Promise.race([running, deadline]);

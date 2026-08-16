@@ -3,7 +3,6 @@ import { createHostProcessTreeController } from '../../agent/host/terminal/proce
 
 const CHILD_PID_MARKER = '__CRISPY_PTY_SMOKE_CHILD_PID__=';
 const STARTUP_TIMEOUT_MS = 2_000;
-const GRACEFUL_EXIT_TIMEOUT_MS = 250;
 const TERMINATION_TIMEOUT_MS = 2_000;
 const CLEANUP_TIMEOUT_MS = 1_000;
 const POLL_INTERVAL_MS = 25;
@@ -12,6 +11,17 @@ interface SmokeLaunch {
     readonly executable: string;
     readonly args: readonly string[];
 }
+
+type SmokeFailureStage =
+	| 'startup'
+	| 'snapshot'
+	| 'snapshot_missing_child'
+	| 'termination_outcome'
+	| 'process_survived'
+	| 'final_cleanup'
+	| 'unexpected';
+
+let failureStage: SmokeFailureStage = 'unexpected';
 
 function createSmokeLaunch(): SmokeLaunch {
     if (process.platform === 'win32') {
@@ -164,30 +174,41 @@ async function runSmoke(): Promise<boolean> {
             STARTUP_TIMEOUT_MS,
         );
         if (!childStarted || childPid === undefined || !isAlive(pty.pid)) {
+            failureStage = 'startup';
             return false;
         }
 
         const shellPid = pty.pid;
         const measuredChildPid = childPid;
-        pty.kill();
-
-        await Promise.all([
-            pollUntil(() => !isAlive(shellPid), GRACEFUL_EXIT_TIMEOUT_MS),
-            pollUntil(() => !isAlive(measuredChildPid), GRACEFUL_EXIT_TIMEOUT_MS),
-        ]);
-
-        const controllerResult = await createHostProcessTreeController({
+        const controller = createHostProcessTreeController({
             timeoutMs: TERMINATION_TIMEOUT_MS,
-        }).terminate(shellPid);
+        });
+        const capture = await controller.capture(shellPid);
+        if (capture.status !== 'captured') {
+            failureStage = 'snapshot';
+            return false;
+        }
+        if (!capture.snapshot.descendants.includes(measuredChildPid)) {
+            failureStage = 'snapshot_missing_child';
+            return false;
+        }
+
+        const controllerResult = await controller.terminate(capture.snapshot);
         const [shellTerminated, childTerminated] = await Promise.all([
             pollUntil(() => !isAlive(shellPid), TERMINATION_TIMEOUT_MS),
             pollUntil(() => !isAlive(measuredChildPid), TERMINATION_TIMEOUT_MS),
         ]);
         measuredSuccess =
             (controllerResult.outcome === 'force_terminated' ||
+                controllerResult.outcome === 'gracefully_terminated' ||
                 controllerResult.outcome === 'already_terminated') &&
             shellTerminated &&
             childTerminated;
+        if (!measuredSuccess) {
+            failureStage = shellTerminated && childTerminated
+                ? 'termination_outcome'
+                : 'process_survived';
+        }
     } finally {
         try {
             dataSubscription?.dispose();
@@ -199,6 +220,9 @@ async function runSmoke(): Promise<boolean> {
         const groupStopped = pty === undefined ? true : await stopProcessGroup(pty.pid);
         const shellStopped = pty === undefined ? true : await stopPid(pty.pid);
         cleanupSuccess = childStopped && groupStopped && shellStopped;
+        if (!cleanupSuccess) {
+            failureStage = 'final_cleanup';
+        }
     }
 
     return measuredSuccess && cleanupSuccess;
@@ -218,7 +242,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    console.error('PTY kill smoke: FAIL');
+	console.error(`PTY kill smoke: FAIL (${failureStage})`);
     process.exitCode = 1;
 }
 

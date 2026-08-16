@@ -127,7 +127,7 @@ export function createAgentTabModel(
 			try {
 				listener(snapshot);
 			} catch {
-				// 구독자 렌더링 실패가 다른 Webview 기능으로 전파되지 않게 한다.
+				/** 구독자 렌더링 실패가 다른 Webview 기능으로 전파되지 않게 한다. */
 			}
 		}
 	};
@@ -189,7 +189,7 @@ export function createAgentTabModel(
 
 			tabs.splice(index, 1);
 			if (activeTabId === tabId) {
-				/* 닫은 위치의 다음 탭을 우선 활성화하고 없으면 이전 탭으로 되돌린다. */
+				/** 닫은 위치의 다음 탭을 우선 활성화하고 없으면 이전 탭으로 되돌린다. */
 				activeTabId = (tabs[index] ?? tabs[index - 1])?.id;
 			}
 			notify();

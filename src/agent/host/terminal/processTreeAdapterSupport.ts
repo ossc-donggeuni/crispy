@@ -2,7 +2,11 @@ import type {
 	CleanupClock,
 	CleanupPoller,
 } from './processTreeCleanupCoordinator';
-import type { CleanupResult } from './processTreeController';
+import type {
+	CleanupResult,
+	ProcessTreeCaptureResult,
+	ProcessTreeSnapshot,
+} from './processTreeController';
 import type {
 	HostCommandResult,
 	HostCommandRunner,
@@ -17,6 +21,7 @@ export interface ProcessTableCommand {
 
 export type ProcessTreeSnapshotResult =
 	| { readonly status: 'completed'; readonly descendants: readonly number[] }
+	| { readonly status: 'timeout' }
 	| { readonly status: 'permission_denied' }
 	| { readonly status: 'platform_unsupported' }
 	| { readonly status: 'verification_failed' };
@@ -52,10 +57,15 @@ export async function readDescendantsDeepestFirst(
 	commandRunner: HostCommandRunner,
 	command: ProcessTableCommand,
 	rootPid: number,
+	timeoutMs: number,
 ): Promise<ProcessTreeSnapshotResult> {
 	let result: HostCommandResult;
 	try {
-		result = await commandRunner.run(command.executable, command.args);
+		result = await commandRunner.run(
+			command.executable,
+			command.args,
+			timeoutMs,
+		);
 	} catch {
 		return { status: 'verification_failed' };
 	}
@@ -111,12 +121,57 @@ export async function readDescendantsDeepestFirst(
 	return { status: 'completed', descendants };
 }
 
-interface PidSetInspection {
+/** Process table adapter 결과를 공개 가능한 snapshot capture 결과로 축약한다. */
+export function toProcessTreeCaptureResult(
+	rootPid: number,
+	result: ProcessTreeSnapshotResult,
+): ProcessTreeCaptureResult {
+	if (result.status === 'completed') {
+		return {
+			status: 'captured',
+			snapshot: Object.freeze({
+				rootPid,
+				descendants: Object.freeze([...result.descendants]),
+			}),
+		};
+	}
+
+	return { status: result.status };
+}
+
+/** Snapshot이 runtime 소유 PID로만 구성된 안전한 값인지 확인한다. */
+export function getValidatedTerminationOrder(
+	snapshot: ProcessTreeSnapshot,
+): readonly number[] | undefined {
+	if (
+		snapshot === null
+		|| typeof snapshot !== 'object'
+		|| !Number.isSafeInteger(snapshot.rootPid)
+		|| snapshot.rootPid <= 1
+		|| !Array.isArray(snapshot.descendants)
+	) {
+		return undefined;
+	}
+
+	const seen = new Set<number>([snapshot.rootPid]);
+	const descendants: number[] = [];
+	for (const pid of snapshot.descendants) {
+		if (!Number.isSafeInteger(pid) || pid <= 1 || seen.has(pid)) {
+			return undefined;
+		}
+		seen.add(pid);
+		descendants.push(pid);
+	}
+
+	return [...descendants, snapshot.rootPid];
+}
+
+export interface PidSetInspection {
 	readonly allTerminated: boolean;
 	readonly failure?: CleanupResult;
 }
 
-async function inspectPidSet(
+export async function inspectPidSet(
 	pids: readonly number[],
 	probe: ProcessIdProbe,
 ): Promise<PidSetInspection> {
@@ -135,6 +190,30 @@ async function inspectPidSet(
 	}
 
 	return { allTerminated: failure === undefined, failure };
+}
+
+/** 현재 살아 있는 PID만 입력 순서를 유지해 반환한다. */
+export async function getAlivePids(
+	pids: readonly number[],
+	probe: ProcessIdProbe,
+): Promise<{
+	readonly pids: readonly number[];
+	readonly failure?: CleanupResult;
+}> {
+	const alive: number[] = [];
+	let failure: CleanupResult | undefined;
+	for (const pid of pids) {
+		const result = await inspectPidSafely(probe, pid);
+		if (result.state === 'alive') {
+			alive.push(pid);
+		} else if (result.state === 'permission_denied') {
+			failure = { outcome: 'permission_denied' };
+		} else if (result.state === 'verification_failed' && failure === undefined) {
+			failure = { outcome: 'verification_failed' };
+		}
+	}
+
+	return { pids: alive, ...(failure === undefined ? {} : { failure }) };
 }
 
 export async function verifyPidsTerminated(

@@ -51,13 +51,13 @@ const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
 const graphView = initializeGraphView(graphArea);
 
-/* 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
+/** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
 	terminalArea,
 	(message) => vscodeApi.postMessage(message),
 );
 
-/*
+/**
  * Agent UI 동작을 Host protocol로 연결하며, 전송 실패가 Graph, Dock, Layout이나
  * 다른 탭 Terminal로 전파되지 않도록 이 경계 안에서 격리한다.
  */
@@ -65,7 +65,7 @@ const postAgentMessage = (message: WebviewToExtensionMessage): void => {
 	try {
 		vscodeApi.postMessage(message);
 	} catch {
-		// Host 전송 실패가 나머지 Webview 기능으로 전파되지 않게 한다.
+		/** Host 전송 실패가 나머지 Webview 기능으로 전파되지 않게 한다. */
 	}
 };
 
@@ -90,7 +90,7 @@ try {
 		},
 		{
 			onTabCreated(tabId): void {
-				/* provider가 정해지기 전이므로 Host는 탭만 등록하고 세션은 만들지 않는다. */
+				/** provider가 정해지기 전이므로 Host는 탭만 등록하고 세션은 만들지 않는다. */
 				postAgentMessage({ type: 'tab.create', tabId });
 				terminalPool.ensureTab(tabId);
 				terminalPool.setActiveTab(tabId);
@@ -105,7 +105,7 @@ try {
 			},
 
 			onSessionRestartRequested(tabId, providerId): void {
-				/* 같은 provider를 다시 지정하는 것이 곧 해당 provider로의 재시작이다. */
+				/** 같은 provider를 다시 지정하는 것이 곧 해당 provider로의 재시작이다. */
 				postAgentMessage({ type: 'agent.switch', tabId, providerId });
 			},
 
@@ -113,14 +113,14 @@ try {
 				postAgentMessage({ type: 'tab.close', tabId });
 				terminalPool.closeTab(tabId);
 
-				/* 탭 상태가 이미 이웃 탭으로 옮겨졌으므로 표면 표시도 함께 맞춘다. */
+				/** 탭 상태가 이미 이웃 탭으로 옮겨졌으므로 표면 표시도 함께 맞춘다. */
 				const nextActiveTabId = agentPanelUi?.getSnapshot().activeTabId;
 				if (nextActiveTabId !== undefined) {
 					activateTab(nextActiveTabId);
 				}
 			},
 
-			/* 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
+			/** 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
 			onLayoutChange: () => terminalPool.scheduleActiveTerminalFit(),
 		},
 	);
@@ -128,7 +128,7 @@ try {
 	agentPanelUi = undefined;
 }
 
-// Dock 초기화
+/** Dock 초기화 */
 const refreshDock = initializePanelDock(
 	layout,
 	dragHandle,
@@ -137,7 +137,7 @@ const refreshDock = initializePanelDock(
 	() => savePanelLayoutState(vscodeApi, state),
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
-// Resize 초기화
+/** Resize 초기화 */
 initializePanelResize(
 	layout,
 	resizeHandle,

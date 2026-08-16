@@ -58,6 +58,7 @@ export function createHostProcessTreeController(
 			clock,
 			poller,
 			timeoutMs,
+			gracefulExitMs: Math.min(500, Math.max(0, timeoutMs / 2)),
 			commands: {
 				processTable: {
 					executable: isDarwin ? '/bin/ps' : '/usr/bin/ps',
@@ -91,6 +92,11 @@ export function createHostProcessTreeController(
 	}
 
 	return {
+		async capture(): Promise<{
+			readonly status: 'platform_unsupported';
+		}> {
+			return { status: 'platform_unsupported' };
+		},
 		async terminate(): Promise<{ readonly outcome: 'platform_unsupported' }> {
 			return { outcome: 'platform_unsupported' };
 		},

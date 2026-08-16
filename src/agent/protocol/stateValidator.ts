@@ -54,12 +54,12 @@ export function validateWebviewToHostMessageState(
 		case 'terminal.resize':
 			return validateRunningSessionMessage(message, snapshot);
 		case 'tab.create':
-			/* tabId는 Webview가 소유하므로 등록 요청 자체는 상태와 대조하지 않는다. */
+			/** tabId는 Webview가 소유하므로 등록 요청 자체는 상태와 대조하지 않는다. */
 			return stateValidationSuccess(message);
 		case 'terminal.visible':
 		case 'tab.switch':
 		case 'tab.close':
-		/* provider 지정은 세션 상태와 무관하게 항상 해당 provider로의 재시작을 뜻한다. */
+		/** provider 지정은 세션 상태와 무관하게 항상 해당 provider로의 재시작을 뜻한다. */
 		case 'agent.switch':
 			return findTab(snapshot, message.tabId) === undefined
 				? stateValidationFailure('unknown_tab', 'tabId')
@@ -77,7 +77,7 @@ function validateTerminalReady<Message extends Extract<
 ): StateValidationResult<Message> {
 	const tab = findTab(snapshot, message.tabId);
 	if (tab === undefined) {
-		/* tabId는 Webview 소유이며 terminal.ready가 Host에 알리는 최초 start다. */
+		/** tabId는 Webview 소유이며 terminal.ready가 Host에 알리는 최초 start다. */
 		return stateValidationSuccess(message);
 	}
 	if (tab.currentSessionId === null) {
@@ -101,7 +101,7 @@ function validateTerminalReady<Message extends Extract<
 	) {
 		return stateValidationFailure('duplicate_start');
 	}
-	/* exited/error session은 ready 재전송 대신 terminal.restart를 사용해야 한다. */
+	/** exited/error session은 ready 재전송 대신 terminal.restart를 사용해야 한다. */
 	return stateValidationFailure('invalid_session_state');
 }
 
@@ -133,7 +133,7 @@ function validateTerminalRestart<Message extends Extract<
 		return stateValidationFailure('invalid_session_state');
 	}
 
-	/* providerId는 요청에서 받지 않고 session에 기록된 값을 manager가 재사용한다. */
+	/** providerId는 요청에서 받지 않고 session에 기록된 값을 manager가 재사용한다. */
 	return stateValidationSuccess(message);
 }
 

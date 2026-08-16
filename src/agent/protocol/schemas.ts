@@ -153,7 +153,7 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		cols: colsSchema,
 		rows: rowsSchema,
 	},
-	/* Webview는 실행 계약도 terminal 크기도 다시 보내지 않고 소유 관계만 지정한다. */
+	/** Webview는 실행 계약도 terminal 크기도 다시 보내지 않고 소유 관계만 지정한다. */
 	'terminal.restart': {
 		tabId: idSchema,
 		sessionId: idSchema,
@@ -162,7 +162,7 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		tabId: idSchema,
 		visible: booleanSchema,
 	},
-	/* tabId는 Webview가 소유하므로 생성 시점에도 Host가 값을 지정하지 않는다. */
+	/** tabId는 Webview가 소유하므로 생성 시점에도 Host가 값을 지정하지 않는다. */
 	'tab.create': {
 		tabId: idSchema,
 	},
@@ -172,7 +172,7 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'tab.close': {
 		tabId: idSchema,
 	},
-	/*
+	/**
 	 * provider 선택과 재시작을 함께 나타내며 실행 파일, 인자와 환경은 포함하지 않는다.
 	 * 실행 계약은 Host가 providerId로 자신의 registry에서 다시 결정한다.
 	 */
@@ -285,7 +285,7 @@ export function parseMessageWithSchemaRegistry<
 		parsedMessage[field] = fieldResult.value;
 	}
 
-	/* 모든 필드가 schema를 통과한 뒤 새 객체에 복사되었으므로 inferred union이다. */
+	/** 모든 필드가 schema를 통과한 뒤 새 객체에 복사되었으므로 inferred union이다. */
 	return validationSuccess(
 		parsedMessage as InferMessageSchemaRegistry<Registry>,
 	);

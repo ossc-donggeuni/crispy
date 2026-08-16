@@ -61,7 +61,7 @@ export function initializeAgentProviderBar(
 	triggerLabel.className = 'agent-provider-value';
 	triggerLabel.textContent = UNSELECTED_PROVIDER_LABEL;
 
-	/* 펼침 방향 표시는 글리프 대신 CSS로 그리므로 문자를 넣지 않는다. */
+	/** 펼침 방향 표시는 글리프 대신 CSS로 그리므로 문자를 넣지 않는다. */
 	const triggerCaret = dependencies.createElement('span');
 	triggerCaret.className = 'agent-provider-caret';
 	triggerCaret.setAttribute('aria-hidden', 'true');
@@ -117,7 +117,7 @@ export function initializeAgentProviderBar(
 		closeMenu();
 	});
 
-	/* 바깥을 눌렀을 때 목록이 남아 터미널을 가리지 않게 한다. */
+	/** 바깥을 눌렀을 때 목록이 남아 터미널을 가리지 않게 한다. */
 	const removeOutsidePointerListener = dependencies.addDocumentListener(
 		'pointerdown',
 		(event) => {

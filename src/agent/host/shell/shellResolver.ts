@@ -42,17 +42,17 @@ const HOST_FORCE_COLOR = '2';
 export function buildShellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	const env = { ...base };
 
-	/* 색을 끄는 상속 설정은 Crispy Terminal 안에서는 적용하지 않는다. */
+	/** 색을 끄는 상속 설정은 Crispy Terminal 안에서는 적용하지 않는다. */
 	delete env.NO_COLOR;
 	if (env.CLICOLOR === '0') {
 		delete env.CLICOLOR;
 	}
 
-	/* 감지 근거를 상속값이 아니라 렌더러 기준으로 통일한다. */
+	/** 감지 근거를 상속값이 아니라 렌더러 기준으로 통일한다. */
 	env.TERM = HOST_TERM;
 	env.FORCE_COLOR = HOST_FORCE_COLOR;
 
-	/*
+	/**
 	 * COLORTERM이 있으면 CLI가 24bit 출력으로 올라가는데, 현재 Terminal에서는 그
 	 * 출력이 색 없이 흰색으로만 그려진다. 실제로 그릴 수 있는 수준만 광고하도록
 	 * 상속값까지 제거한다. 남겨 두면 iTerm처럼 이 값을 설정하는 터미널에서 VS Code를
@@ -60,7 +60,7 @@ export function buildShellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	 */
 	delete env.COLORTERM;
 
-	/*
+	/**
 	 * TERM_PROGRAM은 터미널 앱별 분기(예: Apple_Terminal은 256색, iTerm은 24bit)에
 	 * 쓰이므로 상속되면 위에서 고정한 계약을 다시 흔든다.
 	 */

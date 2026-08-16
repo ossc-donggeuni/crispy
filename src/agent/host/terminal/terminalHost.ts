@@ -13,6 +13,8 @@ import {
 	type PrepareTerminalLaunch,
 } from './prepareTerminalLaunch';
 import { TerminalSession } from './terminalSession';
+import type { ProcessTreeController } from './processTreeController';
+import { createHostProcessTreeController } from './processTreeControllerFactory';
 
 /**
  * `TerminalHost`가 생성한 생명주기 메시지를 Webview 전송 계층에 전달하는 함수다.
@@ -44,6 +46,9 @@ export interface TerminalHostOptions {
 
 	/** 생성된 생명주기 메시지를 Webview 전송 계층으로 넘기는 함수다. */
 	readonly emitMessage: TerminalHostMessageEmitter;
+
+	/** Panel detach 뒤 PID snapshot과 비동기 OS 종료를 담당하는 Host controller다. */
+	readonly processTreeController?: ProcessTreeController;
 }
 
 /**
@@ -96,11 +101,23 @@ export class TerminalHost {
 	/** Host 생명주기 메시지를 Webview 전송 계층으로 넘기는 경계다. */
 	private readonly emitMessage: TerminalHostMessageEmitter;
 
+	/** Panel 종료 경로에서 동기 node-pty kill을 피하는 process-tree controller다. */
+	private readonly processTreeController: ProcessTreeController;
+
 	/** Webview가 마지막으로 알린 활성 탭이며 등록된 탭만 값이 될 수 있다. */
 	private activeTabId: TabId | undefined;
 
 	/** Webview dispose 뒤 모든 terminal message 전송을 중단하는 gate다. */
 	private messageDeliveryActive = true;
+
+	/** Panel runtime에서 분리된 뒤 새 요청과 in-flight spawn을 거부하는 gate다. */
+	private lifecycleActive = true;
+
+	/** detach에서 native 호출 없이 확보한 runtime 소유 root PID 목록이다. */
+	private detachedRootPids: readonly number[] = [];
+
+	/** 반복 terminate 호출이 공유하는 최초 비동기 cleanup Promise다. */
+	private terminationPromise: Promise<void> | undefined;
 
 	/**
 	 * 비어 있는 세션 저장소와 Host 소유 의존성을 초기화한다.
@@ -112,6 +129,8 @@ export class TerminalHost {
 		this.ptyAdapter = options.ptyAdapter;
 		this.prepareLaunch = options.prepareLaunch ?? prepareTerminalLaunch;
 		this.emitMessage = options.emitMessage;
+		this.processTreeController = options.processTreeController
+			?? createHostProcessTreeController();
 	}
 
 	/**
@@ -123,6 +142,9 @@ export class TerminalHost {
 	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
 	 */
 	createTab(tabId: TabId): void {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		if (this.registeredTabs.has(tabId)) {
 			return;
 		}
@@ -138,6 +160,9 @@ export class TerminalHost {
 	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
 	 */
 	switchTab(tabId: TabId): void {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		if (!this.registeredTabs.has(tabId)) {
 			this.failWithoutTransition(
 				tabId,
@@ -160,6 +185,9 @@ export class TerminalHost {
 	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
 	 */
 	closeTab(tabId: TabId): void {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		const session = this.getActiveSession(tabId);
 		if (session !== undefined) {
 			this.disposeSessionProcess(session);
@@ -186,6 +214,9 @@ export class TerminalHost {
 	 * @returns 정리와 시작 흐름이 끝나면 완료되는 Promise
 	 */
 	async switchAgent(tabId: TabId, providerId: ProviderId): Promise<void> {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		if (!this.registeredTabs.has(tabId)) {
 			this.failWithoutTransition(
 				tabId,
@@ -207,7 +238,7 @@ export class TerminalHost {
 
 		const dimensions = this.lastDimensionsByTab.get(tabId);
 		if (dimensions === undefined) {
-			/* 크기를 알기 전에 시작하면 첫 화면이 잘못된 폭으로 그려지므로 기다린다. */
+			/** 크기를 알기 전에 시작하면 첫 화면이 잘못된 폭으로 그려지므로 기다린다. */
 			return;
 		}
 
@@ -229,6 +260,9 @@ export class TerminalHost {
 		cols: number,
 		rows: number,
 	): Promise<void> {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		if (!this.registeredTabs.has(tabId)) {
 			this.failWithoutTransition(
 				tabId,
@@ -304,6 +338,9 @@ export class TerminalHost {
 		cols: number,
 		rows: number,
 	): Promise<void> {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		const current = this.getActiveSession(tabId);
 		if (
 			current !== undefined
@@ -362,12 +399,20 @@ export class TerminalHost {
 		try {
 			preparation = await this.prepareLaunch(tabId, session.sessionId);
 		} catch {
+			if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+				return;
+			}
 			this.failSession(
 				session,
 				'internal_error',
 				START_ERROR_MESSAGES.preparation,
 				true,
 			);
+			return;
+		}
+
+		if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+			/** detach 중 완료된 준비 작업이 session 상태나 native PTY를 변경하지 못하게 한다. */
 			return;
 		}
 
@@ -483,6 +528,9 @@ export class TerminalHost {
 	 * @returns 정리와 재시작 흐름이 끝나면 완료되는 Promise
 	 */
 	async restartSession(tabId: TabId, sessionId: SessionId): Promise<void> {
+		if (!this.lifecycleActive) {
+			return;
+		}
 		const session = this.sessionsById.get(sessionId);
 		if (session === undefined || !this.ownsSession(tabId, sessionId)) {
 			this.failWithoutTransition(
@@ -565,6 +613,77 @@ export class TerminalHost {
 	}
 
 	/**
+	 * Panel과 Webview routing을 native 종료 작업에서 동기적으로 분리한다.
+	 * 이 경로에서는 PTY kill이나 외부 명령을 호출하지 않으며, 최초 호출에서 확보한
+	 * runtime 소유 root PID만 `terminate()`가 이후 비동기 snapshot에 사용한다.
+	 */
+	detach(): void {
+		if (!this.lifecycleActive) {
+			return;
+		}
+
+		this.lifecycleActive = false;
+		this.stopMessageDelivery();
+		const rootPids: number[] = [];
+		for (const session of [...this.sessionsById.values()]) {
+			if (session.state.kind === 'running') {
+				try {
+					session.markStopping();
+				} catch {
+					/** 상태 표시 실패도 동기 routing 분리를 막지 않는다. */
+				}
+			}
+
+			try {
+				const pid = session.detachProcess();
+				if (pid !== undefined) {
+					rootPids.push(pid);
+				}
+			} catch {
+				/** listener 해제 실패도 다른 session 분리를 막지 않는다. */
+			}
+
+			try {
+				session.markDisposed();
+			} catch {
+				/** 최종 상태 표시 실패를 Panel lifecycle 밖으로 전파하지 않는다. */
+			}
+		}
+
+		this.detachedRootPids = Object.freeze([...new Set(rootPids)]);
+		this.sessionsById.clear();
+		this.activeSessionByTab.clear();
+		this.lastDimensionsByTab.clear();
+		this.registeredTabs.clear();
+		this.providerByTab.clear();
+		this.activeTabId = undefined;
+	}
+
+	/**
+	 * detach에서 확보한 root마다 종료 전 snapshot을 얻고 비동기 OS adapter로 정리한다.
+	 * 여러 session 중 하나가 실패해도 나머지를 계속하며 반복 호출은 같은 Promise를 반환한다.
+	 *
+	 * @returns 모든 root 정리가 완료되면 이행되는 최초 cleanup Promise
+	 */
+	terminate(): Promise<void> {
+		this.detach();
+		this.terminationPromise ??= Promise.all(
+			this.detachedRootPids.map(async (rootPid) => {
+				try {
+					const capture = await this.processTreeController.capture(rootPid);
+					if (capture.status !== 'captured') {
+						return;
+					}
+					await this.processTreeController.terminate(capture.snapshot);
+				} catch {
+					/** 원본 process/command 오류를 호출자나 로그로 전파하지 않는다. */
+				}
+			}),
+		).then(() => undefined, () => undefined);
+		return this.terminationPromise;
+	}
+
+	/**
 	 * Panel dispose와 Extension deactivate가 공유하는 Host 전체 정리 경계다.
 	 * 메시지 전송을 먼저 중단한 뒤 등록된 모든 세션을 재시작 흐름과 동일한
 	 * 입력 차단 → 크기 변경 차단 → PTY 종료 → listener 해제 순서로 정리하고
@@ -572,6 +691,10 @@ export class TerminalHost {
 	 * 개별 세션 정리 실패는 남은 세션 정리나 호출자에게 전파하지 않는다.
 	 */
 	dispose(): void {
+		if (!this.lifecycleActive) {
+			return;
+		}
+		this.lifecycleActive = false;
 		this.stopMessageDelivery();
 
 		for (const session of [...this.sessionsById.values()]) {
@@ -726,20 +849,20 @@ export class TerminalHost {
 			try {
 				session.markStopping();
 			} catch {
-				/* 종료 절차 표시 실패도 PTY 정리를 막지 않게 한다. */
+				/** 종료 절차 표시 실패도 PTY 정리를 막지 않게 한다. */
 			}
 		}
 
 		try {
 			session.disposeProcess();
 		} catch {
-			/* PTY 정리 실패가 새 세션 생성을 막지 않게 한다. */
+			/** PTY 정리 실패가 새 세션 생성을 막지 않게 한다. */
 		}
 
 		try {
 			session.markDisposed();
 		} catch {
-			/* 상태 전이 실패도 재시작 흐름 밖으로 전파하지 않는다. */
+			/** 상태 전이 실패도 재시작 흐름 밖으로 전파하지 않는다. */
 		}
 	}
 
@@ -778,7 +901,7 @@ export class TerminalHost {
 		try {
 			this.emitMessage(message);
 		} catch {
-			/* 메시지 전송 생명주기는 PTY 시작 결과와 별도로 관리한다. */
+			/** 메시지 전송 생명주기는 PTY 시작 결과와 별도로 관리한다. */
 		}
 	}
 

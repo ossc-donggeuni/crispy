@@ -89,7 +89,7 @@ export function createAgentTerminalPool(
 		try {
 			action();
 		} catch {
-			// 한 탭의 Terminal 실패가 나머지 탭과 Graph, Dock으로 전파되지 않게 한다.
+			/** 한 탭의 Terminal 실패가 나머지 탭과 Graph, Dock으로 전파되지 않게 한다. */
 		}
 	};
 
@@ -134,7 +134,7 @@ export function createAgentTerminalPool(
 				entry.surface.hidden = entryTabId !== tabId;
 			}
 
-			/* 숨어 있는 동안 바뀐 영역 크기를 표시 직후에 다시 반영한다. */
+			/** 숨어 있는 동안 바뀐 영역 크기를 표시 직후에 다시 반영한다. */
 			isolate(() => entries.get(tabId)?.controller.scheduleTerminalFit());
 		},
 
@@ -204,7 +204,7 @@ export function createDefaultAgentTerminalPool(
 	return createAgentTerminalPool(container, {
 		createElement: (tagName) => document.createElement(tagName),
 		createShellTerminal: (tabId, surface, mount, overlay) =>
-			/*
+			/**
 			 * tabId는 Webview의 탭 상태가 소유하므로 Terminal이 새로 만들지 않고
 			 * 이미 Host에 등록된 값을 그대로 사용하게 한다.
 			 */

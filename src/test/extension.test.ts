@@ -1,5 +1,8 @@
 import * as assert from 'assert';
-import * as path from 'path';
+import type {
+	CrispyExtensionApi,
+	TerminalMessageHost,
+} from '../extension';
 import type { ExtensionToWebviewMessage } from '../messages';
 import {
 	getPanelLayoutStateFromMessage,
@@ -13,17 +16,8 @@ import * as vscode from 'vscode';
 
 const COMMAND_ID = 'crispy.openCanvas';
 
-interface CrispyExtensionModule {
-	deactivate(): Promise<void>;
-	handleWebviewMessage(
-		webview: Pick<vscode.Webview, 'postMessage'>,
-		message: unknown,
-		terminalHost?: TerminalHostStub,
-	): Thenable<boolean> | undefined;
-}
-
 /** handleWebviewMessage가 호출하는 Host 경계를 그대로 만족하는 테스트 대역이다. */
-interface TerminalHostStub {
+interface TerminalHostStub extends TerminalMessageHost {
 	handleTerminalReady(
 		tabId: string,
 		cols: number,
@@ -33,7 +27,10 @@ interface TerminalHostStub {
 	createTab(tabId: string): void;
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
-	switchAgent(tabId: string, providerId: string): Promise<unknown>;
+	switchAgent(
+		tabId: string,
+		providerId: Parameters<TerminalMessageHost['switchAgent']>[1],
+	): Promise<unknown>;
 	routeInput(message: unknown): void;
 	routeResize(message: unknown): void;
 }
@@ -80,8 +77,8 @@ function createTerminalHostStub(): {
 }
 
 suite('Crispy Extension Host', () => {
-	let extension: vscode.Extension<unknown>;
-	let extensionModule: CrispyExtensionModule;
+	let extension: vscode.Extension<CrispyExtensionApi>;
+	let extensionModule: CrispyExtensionApi;
 
 	suiteSetup(async () => {
 		const installedExtension = vscode.extensions.all.find((candidate) =>
@@ -92,14 +89,9 @@ suite('Crispy Extension Host', () => {
 		);
 
 		assert.ok(installedExtension, 'Crispy extension을 Extension Host에서 찾을 수 있어야 한다.');
-		extension = installedExtension;
-		await extension.activate();
-
-		const mainPath = path.resolve(
-			extension.extensionPath,
-			extension.packageJSON.main as string,
-		);
-		extensionModule = require(mainPath) as CrispyExtensionModule;
+		extension = installedExtension as vscode.Extension<CrispyExtensionApi>;
+		extensionModule = await extension.activate();
+		assert.strictEqual(extensionModule, extension.exports);
 	});
 
 	setup(async () => {
@@ -122,6 +114,11 @@ suite('Crispy Extension Host', () => {
 
 		const registeredCommands = await vscode.commands.getCommands(true);
 		assert.ok(registeredCommands.includes(COMMAND_ID));
+	});
+
+	test('activate 반환 API가 VS Code extension exports와 같은 instance다', () => {
+		assert.strictEqual(extensionModule, extension.exports);
+		assert.strictEqual(Object.isFrozen(extensionModule), true);
 	});
 
 	test('Canvas command가 실제 설정으로 WebviewPanel을 최초 생성한다', async () => {
@@ -170,11 +167,13 @@ suite('Crispy Extension Host', () => {
 		const deactivatedPanel = await openCanvas();
 		const disposed = onceDisposed(deactivatedPanel);
 
-		extensionModule.deactivate();
+		const deactivation = extensionModule.deactivate();
 		await disposed;
 
 		const recreatedPanel = await openCanvas();
 		assert.notStrictEqual(recreatedPanel, deactivatedPanel);
+		await deactivation;
+		assert.strictEqual(await openCanvas(), recreatedPanel);
 	});
 
 	test('Panel이 hidden 상태가 되어도 dispose하지 않고 같은 Panel을 다시 표시한다', async () => {
@@ -206,7 +205,7 @@ suite('Crispy Extension Host', () => {
 		assert.notStrictEqual(recreatedPanel, panel);
 	});
 
-	test('deactivate가 저장된 Layout state를 초기화한다', async () => {
+	test('deactivate가 저장된 Layout state를 유지한다', async () => {
 		const changedState: PanelLayoutState = {
 			preferredDock: 'left',
 			sideSize: 480,
@@ -225,13 +224,14 @@ suite('Crispy Extension Host', () => {
 
 		await sendLayoutState(restoredPanel, changedState);
 		const disposed = onceDisposed(restoredPanel);
-		extensionModule.deactivate();
+		const deactivation = extensionModule.deactivate();
 		await disposed;
+		await deactivation;
 
 		const panelAfterDeactivate = await openCanvas();
 		assert.strictEqual(
 			getSerializedInitialLayoutState(panelAfterDeactivate),
-			serializePanelLayoutState(undefined),
+			serializePanelLayoutState(changedState),
 		);
 	});
 

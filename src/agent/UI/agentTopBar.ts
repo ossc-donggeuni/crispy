@@ -83,7 +83,7 @@ export function initializeAgentTopBar(
 				(tab) => tab.id === snapshot.activeTabId,
 			);
 
-			/* 재시작은 이미 provider가 정해진 탭에서만 의미가 있다. */
+			/** 재시작은 이미 provider가 정해진 탭에서만 의미가 있다. */
 			restartButton.disabled = activeTab?.providerId === undefined;
 		},
 

@@ -3,6 +3,7 @@ import type {
 	CleanupClock,
 	CleanupPoller,
 } from '../../agent/host/terminal/processTreeCleanupCoordinator';
+import type { ProcessTreeController } from '../../agent/host/terminal/processTreeController';
 import { createHostProcessTreeController } from '../../agent/host/terminal/processTreeControllerFactory';
 import type {
 	HostCommandResult,
@@ -19,14 +20,19 @@ interface TestCase {
 interface CommandCall {
 	readonly executable: string;
 	readonly args: readonly string[];
+	readonly timeoutMs: number;
 }
 
 class FakeClock implements CleanupClock {
+	current = 100;
+
 	now(): number {
-		return 100;
+		return this.current;
 	}
 
-	async wait(_milliseconds: number): Promise<void> {}
+	async wait(milliseconds: number): Promise<void> {
+		this.current += milliseconds;
+	}
 }
 
 class FakePoller implements CleanupPoller {
@@ -51,25 +57,20 @@ class FakeProcessIdProbe implements ProcessIdProbe {
 
 class FakeCommandRunner implements HostCommandRunner {
 	readonly calls: CommandCall[] = [];
-	readonly handler: (
-		call: CommandCall,
-		index: number,
-	) => HostCommandResult | Promise<HostCommandResult>;
 
 	constructor(
-		handler: (
+		private readonly handler: (
 			call: CommandCall,
 			index: number,
 		) => HostCommandResult | Promise<HostCommandResult>,
-	) {
-		this.handler = handler;
-	}
+	) {}
 
 	async run(
 		executable: string,
 		args: readonly string[],
+		timeoutMs: number,
 	): Promise<HostCommandResult> {
-		const call = { executable, args: [...args] };
+		const call = { executable, args: [...args], timeoutMs };
 		this.calls.push(call);
 		return this.handler(call, this.calls.length - 1);
 	}
@@ -79,15 +80,31 @@ function controller(
 	platform: NodeJS.Platform,
 	commandRunner: HostCommandRunner,
 	processIdProbe: ProcessIdProbe,
-) {
+	clock: CleanupClock = new FakeClock(),
+): ProcessTreeController {
 	return createHostProcessTreeController({
 		readPlatform: () => platform,
 		commandRunner,
 		processIdProbe,
-		clock: new FakeClock(),
+		clock,
 		poller: new FakePoller(),
-		timeoutMs: 10,
+		timeoutMs: 100,
 	});
+}
+
+async function captureAndTerminate(
+	adapter: ProcessTreeController,
+	rootPid: number,
+) {
+	const capture = await adapter.capture(rootPid);
+	assert.strictEqual(capture.status, 'captured');
+	if (capture.status !== 'captured') {
+		throw new Error('capture failed');
+	}
+	return {
+		capture,
+		result: await adapter.terminate(capture.snapshot),
+	};
 }
 
 const processTable = [
@@ -99,7 +116,7 @@ const processTable = [
 
 const cases: readonly TestCase[] = [
 	{
-		name: 'macOS adapter는 descendant deepest-first 뒤 root를 종료하고 재확인한다',
+		name: 'macOS adapter는 snapshot 뒤 TERM을 deepest-first로 보내고 전체 PID를 확인한다',
 		run: async () => {
 			const probe = new FakeProcessIdProbe();
 			for (const pid of [4101, 4102, 4103, 4104]) {
@@ -109,136 +126,162 @@ const cases: readonly TestCase[] = [
 				if (index === 0) {
 					return { status: 'completed', stdout: processTable };
 				}
-				const targetPid = Number(call.args.at(-1));
-				probe.states.set(targetPid, { state: 'terminated' });
+				probe.states.set(Number(call.args.at(-1)), { state: 'terminated' });
 				return { status: 'completed', stdout: '' };
 			});
 
-			const result = await controller('darwin', runner, probe).terminate(4101);
+			const { capture, result } = await captureAndTerminate(
+				controller('darwin', runner, probe),
+				4101,
+			);
 
-			assert.deepStrictEqual(result, { outcome: 'force_terminated' });
+			assert.deepStrictEqual(capture.snapshot, {
+				rootPid: 4101,
+				descendants: [4103, 4102, 4104],
+			});
+			assert.deepStrictEqual(result, { outcome: 'gracefully_terminated' });
 			assert.deepStrictEqual(
 				runner.calls.slice(1).map((call) => call.args),
 				[
-					['-KILL', '4103'],
-					['-KILL', '4102'],
-					['-KILL', '4104'],
-					['-KILL', '4101'],
+					['-TERM', '4103'],
+					['-TERM', '4102'],
+					['-TERM', '4104'],
+					['-TERM', '4101'],
 				],
 			);
 		},
 	},
 	{
-		name: 'Linux dispatch는 POSIX 명령 계약을 선택한다',
-		run: async () => {
-			const probe = new FakeProcessIdProbe();
-			probe.states.set(4101, { state: 'alive' });
-			const runner = new FakeCommandRunner((call, index) => {
-				if (index === 0) {
-					return { status: 'completed', stdout: '4101 1' };
-				}
-				probe.states.set(4101, { state: 'terminated' });
-				return { status: 'completed', stdout: '' };
-			});
-
-			const result = await controller('linux', runner, probe).terminate(4101);
-
-			assert.deepStrictEqual(result, { outcome: 'force_terminated' });
-			assert.strictEqual(runner.calls.length, 2);
-			assert.deepStrictEqual(runner.calls[0].args, ['-axo', 'pid=,ppid=']);
-			assert.deepStrictEqual(runner.calls[1].args, ['-KILL', '4101']);
-		},
-	},
-	{
-		name: 'Windows dispatch는 OS tree 종료 기능 뒤 캡처 PID를 재확인한다',
+		name: 'POSIX graceful 뒤 남은 descendant와 root를 KILL하고 전체를 재검증한다',
 		run: async () => {
 			const probe = new FakeProcessIdProbe();
 			for (const pid of [4101, 4102, 4103, 4104]) {
 				probe.states.set(pid, { state: 'alive' });
 			}
-			const runner = new FakeCommandRunner((_call, index) => {
+			const runner = new FakeCommandRunner((call, index) => {
 				if (index === 0) {
 					return { status: 'completed', stdout: processTable };
 				}
-				for (const pid of [4101, 4102, 4103, 4104]) {
-					probe.states.set(pid, { state: 'terminated' });
+				if (call.args[0] === '-KILL') {
+					probe.states.set(Number(call.args.at(-1)), { state: 'terminated' });
 				}
 				return { status: 'completed', stdout: '' };
 			});
 
-			const result = await controller('win32', runner, probe).terminate(4101);
+			const { result } = await captureAndTerminate(
+				controller('linux', runner, probe),
+				4101,
+			);
 
 			assert.deepStrictEqual(result, { outcome: 'force_terminated' });
-			assert.strictEqual(runner.calls.length, 2);
-			assert.deepStrictEqual(runner.calls[1].args, [
-				'/PID',
-				'4101',
-				'/T',
-				'/F',
-			]);
+			assert.deepStrictEqual(
+				runner.calls.filter((call) => call.args[0] === '-KILL')
+					.map((call) => call.args.at(-1)),
+				['4103', '4102', '4104', '4101'],
+			);
 		},
 	},
 	{
-		name: '잘못된 PID와 이미 종료된 PID에는 명령을 실행하지 않는다',
+		name: 'Windows는 root taskkill 실패 뒤에도 캡처 descendant를 개별 종료한다',
 		run: async () => {
 			const probe = new FakeProcessIdProbe();
-			const runner = new FakeCommandRunner(() => ({
-				status: 'completed',
-				stdout: '',
-			}));
+			for (const pid of [4101, 4102, 4103, 4104]) {
+				probe.states.set(pid, { state: 'alive' });
+			}
+			const runner = new FakeCommandRunner((call, index) => {
+				if (index === 0) {
+					return { status: 'completed', stdout: processTable };
+				}
+				const targetPid = Number(call.args[1]);
+				if (index === 1) {
+					/* Root-first race를 재현해 root만 사라지고 descendant는 남긴다. */
+					probe.states.set(4101, { state: 'terminated' });
+					return { status: 'failed' };
+				}
+				probe.states.set(targetPid, { state: 'terminated' });
+				return { status: 'completed', stdout: '' };
+			});
+
+			const { result } = await captureAndTerminate(
+				controller('win32', runner, probe),
+				4101,
+			);
+
+			assert.deepStrictEqual(result, { outcome: 'force_terminated' });
+			assert.deepStrictEqual(runner.calls[1].args, [
+				'/PID', '4101', '/T', '/F',
+			]);
+			assert.deepStrictEqual(
+				runner.calls.slice(2).map((call) => call.args[1]),
+				['4103', '4102', '4104'],
+			);
+		},
+	},
+	{
+		name: 'root만 종료되고 descendant가 남으면 success로 처리하지 않는다',
+		run: async () => {
+			const probe = new FakeProcessIdProbe();
+			probe.states.set(4101, { state: 'terminated' });
+			probe.states.set(4102, { state: 'alive' });
+			const runner = new FakeCommandRunner((_call, index) => ({
+				status: index === 0 ? 'completed' : 'timeout',
+				...(index === 0 ? { stdout: '4101 1\n4102 4101' } : {}),
+			}) as HostCommandResult);
+			const adapter = controller('win32', runner, probe);
+			const capture = await adapter.capture(4101);
+			assert.strictEqual(capture.status, 'captured');
+			if (capture.status !== 'captured') {
+				return;
+			}
+
+			const result = await adapter.terminate(capture.snapshot);
+
+			assert.notStrictEqual(result.outcome, 'already_terminated');
+			assert.notStrictEqual(result.outcome, 'gracefully_terminated');
+			assert.notStrictEqual(result.outcome, 'force_terminated');
+		},
+	},
+	{
+		name: '잘못된 PID와 command timeout은 명령 추가 실행 없이 allowlist 결과가 된다',
+		run: async () => {
+			const probe = new FakeProcessIdProbe();
+			const runner = new FakeCommandRunner(() => ({ status: 'timeout' }));
 			const adapter = controller('darwin', runner, probe);
 
-			assert.deepStrictEqual(await adapter.terminate(1), {
-				outcome: 'verification_failed',
+			assert.deepStrictEqual(await adapter.capture(1), {
+				status: 'verification_failed',
 			});
-			assert.deepStrictEqual(await adapter.terminate(4101), {
-				outcome: 'already_terminated',
+			assert.deepStrictEqual(await adapter.capture(4101), {
+				status: 'timeout',
 			});
-			assert.deepStrictEqual(runner.calls, []);
+			assert.strictEqual(runner.calls.length, 1);
+			assert.ok(runner.calls[0].timeoutMs > 0);
 		},
 	},
 	{
-		name: '종료 뒤 PID가 남아 있으면 timeout을 반환한다',
+		name: '모든 외부 명령 timeout은 하나의 controller deadline 이하로 제한된다',
 		run: async () => {
+			const clock = new FakeClock();
 			const probe = new FakeProcessIdProbe();
 			probe.states.set(4101, { state: 'alive' });
-			const runner = new FakeCommandRunner((_call, index) => ({
-				status: 'completed',
-				stdout: index === 0 ? '4101 1' : '',
-			}));
-
-			const result = await controller('darwin', runner, probe).terminate(4101);
-
-			assert.deepStrictEqual(result, { outcome: 'timeout' });
-		},
-	},
-	{
-		name: '권한 실패와 runner exception을 안전한 결과로 축약한다',
-		run: async () => {
-			const probe = new FakeProcessIdProbe();
-			probe.states.set(4101, { state: 'alive' });
-			const permissionRunner = new FakeCommandRunner(() => ({
-				status: 'permission_denied',
-			}));
-			const secret = 'raw runner exception should not leak';
-			const throwingRunner = new FakeCommandRunner(() => {
-				throw new Error(secret);
+			const runner = new FakeCommandRunner((call, index) => {
+				if (index === 0) {
+					clock.current += 40;
+					return { status: 'completed', stdout: '4101 1' };
+				}
+				return { status: 'timeout' };
 			});
+			const adapter = controller('darwin', runner, probe, clock);
 
-			const permission = await controller(
-				'darwin',
-				permissionRunner,
-				probe,
-			).terminate(4101);
-			const failed = await controller(
-				'darwin',
-				throwingRunner,
-				probe,
-			).terminate(4101);
+			const capture = await adapter.capture(4101);
+			assert.strictEqual(capture.status, 'captured');
+			if (capture.status !== 'captured') {
+				return;
+			}
+			await adapter.terminate(capture.snapshot);
 
-			assert.deepStrictEqual(permission, { outcome: 'permission_denied' });
-			assert.deepStrictEqual(failed, { outcome: 'verification_failed' });
-			assert.strictEqual(JSON.stringify(failed).includes(secret), false);
+			assert.strictEqual(runner.calls[0].timeoutMs, 100);
+			assert.ok(runner.calls.slice(1).every((call) => call.timeoutMs <= 60));
 		},
 	},
 	{
@@ -246,13 +289,17 @@ const cases: readonly TestCase[] = [
 		run: async () => {
 			const probe = new FakeProcessIdProbe();
 			const runner = new FakeCommandRunner(() => ({
-				status: 'completed',
-				stdout: '',
+				status: 'completed', stdout: '',
 			}));
+			const adapter = controller('aix', runner, probe);
 
-			const result = await controller('aix', runner, probe).terminate(4101);
-
-			assert.deepStrictEqual(result, { outcome: 'platform_unsupported' });
+			assert.deepStrictEqual(await adapter.capture(4101), {
+				status: 'platform_unsupported',
+			});
+			assert.deepStrictEqual(await adapter.terminate({
+				rootPid: 4101,
+				descendants: [],
+			}), { outcome: 'platform_unsupported' });
 			assert.deepStrictEqual(runner.calls, []);
 		},
 	},

@@ -25,8 +25,11 @@ interface CanvasRuntime {
 	/** 정리 대상 Panel이며 deactivate에서 직접 dispose한다. */
 	readonly panel: vscode.WebviewPanel;
 
-	/** Terminal runtime과 Webview 구독을 한 번만 정리하는 함수다. */
-	dispose(): Promise<void>;
+	/** Routing과 Webview 구독을 native 종료 없이 즉시 분리한다. */
+	detach(): void;
+
+	/** 분리 시 캡처한 session을 비동기 OS adapter로 한 번만 종료한다. */
+	terminate(): Promise<void>;
 }
 
 let currentRuntime: CanvasRuntime | undefined;
@@ -52,18 +55,28 @@ export interface TerminalMessageHost {
 	): void;
 }
 
+/** VS Code가 실제 활성화한 extension module instance에서 제공하는 공개 API다. */
+export interface CrispyExtensionApi {
+	deactivate(): Promise<void>;
+	handleWebviewMessage(
+		webview: Pick<vscode.Webview, 'postMessage'>,
+		message: unknown,
+		terminalHost?: TerminalMessageHost,
+	): Thenable<boolean> | undefined;
+}
+
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
  *
  * @param context 확장의 구독 항목과 설치 경로를 제공하는 VS Code 확장 컨텍스트
  */
-export function activate(context: vscode.ExtensionContext) {
+export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
 	const openCanvas = (): vscode.WebviewPanel => {
 		if (currentRuntime) {
-			/* 기존 Panel을 다시 표시하는 것은 dispose가 아니므로 세션을 그대로 유지한다. */
+			/** 기존 Panel을 다시 표시하는 것은 dispose가 아니므로 세션을 그대로 유지한다. */
 			currentRuntime.panel.reveal();
 			return currentRuntime.panel;
 		}
@@ -124,7 +137,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 		panel.onDidDispose(() => {
 			releaseCanvasRuntime(runtime);
-			void runtime.dispose();
+			runtime.detach();
+			void runtime.terminate().catch(() => undefined);
 		});
 
 		return panel;
@@ -133,6 +147,11 @@ export function activate(context: vscode.ExtensionContext) {
 	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
 
 	context.subscriptions.push(disposable);
+
+	return Object.freeze({
+		deactivate,
+		handleWebviewMessage,
+	});
 }
 
 /**
@@ -151,14 +170,11 @@ function createCanvasRuntime(
 	subscriptions: readonly vscode.Disposable[],
 ): CanvasRuntime {
 	const cleanup = createTerminalRuntimeCleanup(terminalHost, subscriptions);
-	let disposal: Promise<void> | undefined;
 
 	return {
 		panel,
-		dispose(): Promise<void> {
-			disposal ??= cleanup();
-			return disposal;
-		},
+		detach: cleanup.detach,
+		terminate: cleanup.terminate,
 	};
 }
 
@@ -274,18 +290,19 @@ function handleTerminalMessage(
 export async function deactivate(): Promise<void> {
 	const runtime = currentRuntime;
 	currentRuntime = undefined;
-	lastLayoutState = undefined;
 	if (runtime === undefined) {
 		return;
 	}
 
-	await runCleanupWithTimeout(() => runtime.dispose());
+	runtime.detach();
 
 	try {
 		runtime.panel.dispose();
 	} catch {
-		/* Panel 정리 실패가 확장 비활성화를 막지 않게 한다. */
+		/** Panel 정리 실패가 확장 비활성화를 막지 않게 한다. */
 	}
+
+	await runCleanupWithTimeout(() => runtime.terminate());
 }
 
 /**
@@ -305,8 +322,8 @@ function getWebviewHtml(
 ): string {
 	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
 
-	// xterm DOM renderer가 ANSI 팔레트용 <style>을 생성하므로 element만 inline을 허용한다.
-	// script-src와 style attribute fallback은 Webview source로 계속 제한한다.
+	/** xterm DOM renderer가 ANSI 팔레트용 <style>을 생성하므로 element만 inline을 허용한다. */
+	/** script-src와 style attribute fallback은 Webview source로 계속 제한한다. */
 	return `<!DOCTYPE html>
 			<html lang="en">
 			<head>

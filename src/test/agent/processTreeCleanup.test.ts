@@ -1,15 +1,15 @@
 import * as assert from 'assert';
 import type {
 	CleanupResult,
+	ProcessTreeCaptureResult,
 	ProcessTreeController,
+	ProcessTreeSnapshot,
 } from '../../agent/host/terminal/processTreeController';
 import {
 	createProcessTreeCleanupCoordinator,
 	type CleanupClock,
 	type CleanupPoller,
 	type ProcessTreeCleanupDependencies,
-	type ProcessTreeProbe,
-	type ProcessTreeProbeResult,
 	type PtyExitProbe,
 	type PtyTerminationRequester,
 } from '../../agent/host/terminal/processTreeCleanupCoordinator';
@@ -25,9 +25,13 @@ type Equal<Left, Right> =
 		: false;
 type Assert<Condition extends true> = Condition;
 
-type ControllerAcceptsOnlyPid = Assert<Equal<
+type ControllerCapturesPid = Assert<Equal<
+	Parameters<ProcessTreeController['capture']>,
+	[rootPid: number]
+>>;
+type ControllerTerminatesSnapshot = Assert<Equal<
 	Parameters<ProcessTreeController['terminate']>,
-	[pid: number]
+	[snapshot: ProcessTreeSnapshot]
 >>;
 type CleanupResultIsExactUnion = Assert<Equal<
 	CleanupResult,
@@ -47,64 +51,31 @@ interface TestCase {
 
 class FakeClock implements CleanupClock {
 	current = 100;
-	readonly waits: number[] = [];
-
 	now(): number {
 		return this.current;
 	}
-
 	async wait(milliseconds: number): Promise<void> {
-		this.waits.push(milliseconds);
 		this.current += milliseconds;
 	}
 }
 
 class FakePoller implements CleanupPoller {
-	readonly deadlines: number[] = [];
-
 	async waitUntil(
 		condition: () => boolean | Promise<boolean>,
-		deadline: number,
+		_deadline: number,
 		_clock: CleanupClock,
 	): Promise<boolean> {
-		this.deadlines.push(deadline);
 		return condition();
 	}
 }
 
-class FakeProcessTreeProbe implements ProcessTreeProbe {
-	readonly calls: string[];
-	private readonly results: ProcessTreeProbeResult[];
-	private lastResult: ProcessTreeProbeResult;
-
-	constructor(calls: string[], results: ProcessTreeProbeResult[]) {
-		this.calls = calls;
-		this.results = [...results];
-		this.lastResult = results.at(-1) ?? { state: 'verification_failed' };
-	}
-
-	async inspect(pid: number): Promise<ProcessTreeProbeResult> {
-		this.calls.push(`probe:${pid}`);
-		this.lastResult = this.results.shift() ?? this.lastResult;
-		return this.lastResult;
-	}
-}
-
 class FakePty implements PtyTerminationRequester, PtyExitProbe {
-	readonly calls: string[];
-	readonly exitOnRequest: boolean;
 	exited = false;
-
-	constructor(calls: string[], exitOnRequest: boolean) {
-		this.calls = calls;
-		this.exitOnRequest = exitOnRequest;
-	}
-
+	constructor(private readonly calls: string[]) {}
 	requestExit(): void {
 		this.calls.push('pty.requestExit');
-		this.exited = this.exitOnRequest;
+		this.exited = true;
 	}
-
 	hasExited(): boolean {
 		this.calls.push('pty.hasExited');
 		return this.exited;
@@ -112,18 +83,25 @@ class FakePty implements PtyTerminationRequester, PtyExitProbe {
 }
 
 class FakeController implements ProcessTreeController {
-	readonly calls: string[];
-	private readonly result: CleanupResult;
-	private readonly error?: unknown;
+	readonly snapshot: ProcessTreeSnapshot = Object.freeze({
+		rootPid: 4101,
+		descendants: Object.freeze([4103, 4102]),
+	});
 
-	constructor(calls: string[], result: CleanupResult, error?: unknown) {
-		this.calls = calls;
-		this.result = result;
-		this.error = error;
+	constructor(
+		private readonly calls: string[],
+		private readonly result: CleanupResult = { outcome: 'force_terminated' },
+		private readonly captureResult?: ProcessTreeCaptureResult,
+		private readonly error?: unknown,
+	) {}
+
+	async capture(rootPid: number): Promise<ProcessTreeCaptureResult> {
+		this.calls.push(`capture:${rootPid}`);
+		return this.captureResult ?? { status: 'captured', snapshot: this.snapshot };
 	}
 
-	async terminate(pid: number): Promise<CleanupResult> {
-		this.calls.push(`controller:${pid}`);
+	async terminate(snapshot: ProcessTreeSnapshot): Promise<CleanupResult> {
+		this.calls.push(`terminate:${snapshot.rootPid}:${snapshot.descendants.join(',')}`);
 		if (this.error !== undefined) {
 			throw this.error;
 		}
@@ -131,34 +109,25 @@ class FakeController implements ProcessTreeController {
 	}
 }
 
-function dependencies(
-	probeResults: ProcessTreeProbeResult[],
-	options: {
-		readonly exitOnRequest?: boolean;
-		readonly controllerResult?: CleanupResult;
-		readonly controllerError?: unknown;
-	} = {},
-): ProcessTreeCleanupDependencies & {
-	readonly calls: string[];
-	readonly clock: FakeClock;
-	readonly poller: FakePoller;
-} {
+function dependencies(options: {
+	readonly controllerResult?: CleanupResult;
+	readonly captureResult?: ProcessTreeCaptureResult;
+	readonly controllerError?: unknown;
+} = {}): ProcessTreeCleanupDependencies & { readonly calls: string[] } {
 	const calls: string[] = [];
-	const pty = new FakePty(calls, options.exitOnRequest ?? false);
-	const clock = new FakeClock();
-	const poller = new FakePoller();
+	const pty = new FakePty(calls);
 	return {
 		pid: 4101,
 		ptyTerminationRequester: pty,
 		ptyExitProbe: pty,
-		processTreeProbe: new FakeProcessTreeProbe(calls, probeResults),
 		processTreeController: new FakeController(
 			calls,
-			options.controllerResult ?? { outcome: 'force_terminated' },
+			options.controllerResult,
+			options.captureResult,
 			options.controllerError,
 		),
-		clock,
-		poller,
+		clock: new FakeClock(),
+		poller: new FakePoller(),
 		timeouts: { gracefulExitMs: 10, forceExitMs: 20 },
 		calls,
 	};
@@ -166,86 +135,49 @@ function dependencies(
 
 const cases: readonly TestCase[] = [
 	{
-		name: '정상 종료 요청만으로 종료된 process tree를 확인한다',
+		name: '어떤 PTY 종료 요청보다 먼저 descendant snapshot을 확보한다',
 		run: async () => {
-			const deps = dependencies(
-				[{ state: 'alive' }, { state: 'terminated' }],
-				{ exitOnRequest: true },
-			);
-
-			const result = await createProcessTreeCleanupCoordinator(deps).cleanup();
-
-			assert.deepStrictEqual(result, { outcome: 'gracefully_terminated' });
-			assert.deepStrictEqual(deps.calls, [
-				'probe:4101',
-				'pty.requestExit',
-				'pty.hasExited',
-				'probe:4101',
-			]);
-			assert.deepStrictEqual(deps.poller.deadlines, [110]);
-		},
-	},
-	{
-		name: '이미 종료된 PID에는 종료 요청을 보내지 않는다',
-		run: async () => {
-			const deps = dependencies([{ state: 'terminated' }]);
-
-			const result = await createProcessTreeCleanupCoordinator(deps).cleanup();
-
-			assert.deepStrictEqual(result, { outcome: 'already_terminated' });
-			assert.deepStrictEqual(deps.calls, ['probe:4101']);
-		},
-	},
-	{
-		name: 'graceful timeout 뒤 강제 cleanup의 실제 종료를 확인한다',
-		run: async () => {
-			const deps = dependencies([
-				{ state: 'alive' },
-				{ state: 'alive' },
-				{ state: 'terminated' },
-			]);
+			const deps = dependencies();
 
 			const result = await createProcessTreeCleanupCoordinator(deps).cleanup();
 
 			assert.deepStrictEqual(result, { outcome: 'force_terminated' });
 			assert.deepStrictEqual(deps.calls, [
-				'probe:4101',
+				'capture:4101',
 				'pty.requestExit',
 				'pty.hasExited',
-				'probe:4101',
-				'controller:4101',
-				'probe:4101',
-				'probe:4101',
+				'terminate:4101:4103,4102',
 			]);
-			assert.deepStrictEqual(deps.poller.deadlines, [110, 120]);
 		},
 	},
 	{
-		name: '강제 cleanup 뒤에도 process tree가 생존하면 timeout이다',
+		name: 'snapshot 전체가 graceful 요청으로 종료됐을 때만 graceful success다',
 		run: async () => {
-			const deps = dependencies([
-				{ state: 'alive' },
-				{ state: 'alive' },
-				{ state: 'alive' },
-			]);
+			const deps = dependencies({
+				controllerResult: { outcome: 'already_terminated' },
+			});
+
+			const result = await createProcessTreeCleanupCoordinator(deps).cleanup();
+
+			assert.deepStrictEqual(result, { outcome: 'gracefully_terminated' });
+		},
+	},
+	{
+		name: 'snapshot timeout이면 PTY와 종료 명령을 호출하지 않는다',
+		run: async () => {
+			const deps = dependencies({ captureResult: { status: 'timeout' } });
 
 			const result = await createProcessTreeCleanupCoordinator(deps).cleanup();
 
 			assert.deepStrictEqual(result, { outcome: 'timeout' });
+			assert.deepStrictEqual(deps.calls, ['capture:4101']);
 		},
 	},
 	{
-		name: 'controller 오류를 원문 없는 verification 실패로 변환한다',
+		name: 'controller 오류는 원문 없는 verification 실패로 변환한다',
 		run: async () => {
 			const secret = 'raw controller exception should not leak';
-			const deps = dependencies(
-				[
-					{ state: 'alive' },
-					{ state: 'alive' },
-					{ state: 'alive' },
-				],
-				{ controllerError: new Error(secret) },
-			);
+			const deps = dependencies({ controllerError: new Error(secret) });
 
 			const result = await createProcessTreeCleanupCoordinator(deps).cleanup();
 
@@ -254,29 +186,22 @@ const cases: readonly TestCase[] = [
 		},
 	},
 	{
-		name: '중복 cleanup은 같은 Promise를 재사용하고 두 번째 종료를 막는다',
+		name: '중복 cleanup은 같은 Promise와 snapshot을 재사용한다',
 		run: async () => {
-			const deps = dependencies([
-				{ state: 'alive' },
-				{ state: 'alive' },
-				{ state: 'terminated' },
-			]);
+			const deps = dependencies();
 			const coordinator = createProcessTreeCleanupCoordinator(deps);
 
 			const first = coordinator.cleanup();
 			const duplicate = coordinator.cleanup();
 			assert.strictEqual(duplicate, first);
-			const firstResult = await first;
-			const completedDuplicate = await coordinator.cleanup();
+			await Promise.all([first, duplicate]);
 
-			assert.deepStrictEqual(firstResult, { outcome: 'force_terminated' });
-			assert.deepStrictEqual(completedDuplicate, firstResult);
 			assert.strictEqual(
-				deps.calls.filter((call) => call === 'pty.requestExit').length,
+				deps.calls.filter((call) => call === 'capture:4101').length,
 				1,
 			);
 			assert.strictEqual(
-				deps.calls.filter((call) => call === 'controller:4101').length,
+				deps.calls.filter((call) => call.startsWith('terminate:')).length,
 				1,
 			);
 		},
