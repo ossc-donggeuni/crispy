@@ -64,9 +64,9 @@ suite('Host Shell resolver integration', () => {
 
 		assert.strictEqual(result.NO_COLOR, undefined);
 		assert.strictEqual(result.CLICOLOR, undefined);
-		assert.strictEqual(result.FORCE_COLOR, '3');
+		assert.strictEqual(result.FORCE_COLOR, '2');
 		assert.strictEqual(result.TERM, 'xterm-256color');
-		assert.strictEqual(result.COLORTERM, 'truecolor');
+		assert.strictEqual(result.COLORTERM, undefined);
 		assert.strictEqual(base.NO_COLOR, '1');
 		assert.strictEqual(base.CLICOLOR, '0');
 		assert.strictEqual(base.FORCE_COLOR, '0');
@@ -84,9 +84,21 @@ suite('Host Shell resolver integration', () => {
 			const result = buildShellEnv({ ...inherited, NO_COLOR: '' });
 
 			assert.strictEqual(result.TERM, 'xterm-256color');
-			assert.strictEqual(result.COLORTERM, 'truecolor');
-			assert.strictEqual(result.FORCE_COLOR, '3');
+			assert.strictEqual(result.COLORTERM, undefined);
+			assert.strictEqual(result.FORCE_COLOR, '2');
 			assert.strictEqual(result.NO_COLOR, undefined);
+		}
+	});
+
+	test('24bit로 올라가게 만드는 COLORTERM은 상속값도 남기지 않는다', () => {
+		/* 현재 Terminal은 24bit 출력을 색 없이 그리므로 256색까지만 광고한다. */
+		for (const colorterm of ['truecolor', '24bit', '']) {
+			const base: NodeJS.ProcessEnv = { COLORTERM: colorterm };
+			const result = buildShellEnv(base);
+
+			assert.strictEqual(result.COLORTERM, undefined);
+			assert.strictEqual(result.FORCE_COLOR, '2');
+			assert.strictEqual(base.COLORTERM, colorterm);
 		}
 	});
 
@@ -128,9 +140,9 @@ suite('Host Shell resolver integration', () => {
 				assert.strictEqual(result.policy.executable, '/host/selected/shell');
 				assert.strictEqual(result.policy.cwd, posixWorkspaceRoot.fsPath);
 				assert.strictEqual(result.policy.env.NO_COLOR, undefined);
-				assert.strictEqual(result.policy.env.FORCE_COLOR, '3');
+				assert.strictEqual(result.policy.env.FORCE_COLOR, '2');
 				assert.strictEqual(result.policy.env.TERM, 'xterm-256color');
-				assert.strictEqual(result.policy.env.COLORTERM, 'truecolor');
+				assert.strictEqual(result.policy.env.COLORTERM, undefined);
 			}
 			assert.deepStrictEqual(filesystem.statCalls, ['/host/selected/shell']);
 			assert.deepStrictEqual(

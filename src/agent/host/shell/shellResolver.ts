@@ -21,14 +21,11 @@ export type ShellLaunchPolicyResolver = (
 /** Crispy Terminal을 그리는 xterm.js가 해석하는 terminal 형식이다. */
 const HOST_TERM = 'xterm-256color';
 
-/** xterm.js가 24bit 색을 그리므로 CLI에도 같은 수준을 고정으로 알린다. */
-const HOST_COLORTERM = 'truecolor';
-
 /**
- * Node 기반 CLI가 색 단계를 낮추지 않도록 `COLORTERM`과 같은 수준을 요구한다.
- * `supports-color` 규약에서 3은 24bit를 뜻한다.
+ * Node 기반 CLI가 색 단계를 낮추지 않도록 요구하는 하한이다.
+ * `supports-color` 규약에서 2는 256색을 뜻하며, 이는 `TERM`이 광고하는 수준과 같다.
  */
-const HOST_FORCE_COLOR = '3';
+const HOST_FORCE_COLOR = '2';
 
 /**
  * PTY가 협상할 색상 계약을 Host가 고정한 값으로 다시 쓴다.
@@ -53,8 +50,15 @@ export function buildShellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 	/* 감지 근거를 상속값이 아니라 렌더러 기준으로 통일한다. */
 	env.TERM = HOST_TERM;
-	env.COLORTERM = HOST_COLORTERM;
 	env.FORCE_COLOR = HOST_FORCE_COLOR;
+
+	/*
+	 * COLORTERM이 있으면 CLI가 24bit 출력으로 올라가는데, 현재 Terminal에서는 그
+	 * 출력이 색 없이 흰색으로만 그려진다. 실제로 그릴 수 있는 수준만 광고하도록
+	 * 상속값까지 제거한다. 남겨 두면 iTerm처럼 이 값을 설정하는 터미널에서 VS Code를
+	 * 띄웠을 때 다시 24bit로 올라간다.
+	 */
+	delete env.COLORTERM;
 
 	/*
 	 * TERM_PROGRAM은 터미널 앱별 분기(예: Apple_Terminal은 256색, iTerm은 24bit)에
