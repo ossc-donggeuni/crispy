@@ -63,13 +63,104 @@ function parseArguments(argv) {
 	return { target, vsixPath: path.resolve(values.get('--vsix') ?? defaultPath) };
 }
 
+/** Windows archive의 code.cmd가 가리키는 versioned CLI script를 안전하게 해석한다. */
+function resolveWindowsCliEntry(vscodeExecutablePath, codeCommandText) {
+	const installRoot = path.win32.dirname(vscodeExecutablePath);
+	const commandDirectory = path.win32.join(installRoot, 'bin');
+	const references = [...codeCommandText.matchAll(/"%~dp0([^"]+)"/giu)]
+		.map((match) => match[1]);
+	const scriptReferences = references.filter(
+		(reference) => /\.(?:c|m)?js$/iu.test(reference),
+	);
+
+	if (scriptReferences.length !== 1) {
+		throw smokeError(
+			'VS Code code.cmd has an ambiguous CLI script entry',
+			'exactly one quoted JavaScript entry',
+			`${scriptReferences.length} entries`,
+		);
+	}
+
+	const cliPath = path.win32.resolve(commandDirectory, scriptReferences[0]);
+	const relativePath = path.win32.relative(installRoot, cliPath);
+	if (
+		relativePath === ''
+		|| relativePath === '..'
+		|| relativePath.startsWith(`..${path.win32.sep}`)
+		|| path.win32.isAbsolute(relativePath)
+	) {
+		throw smokeError(
+			'VS Code CLI entry escaped the downloaded installation',
+			'path inside VS Code installation',
+			'outside installation',
+		);
+	}
+
+	return cliPath;
+}
+
+/**
+ * Windows에서는 code.cmd와 shell을 거치지 않고 Code.exe를 Node mode로 실행한다.
+ * spawnSync가 각 인자를 직접 전달하므로 공백·비ASCII 경로가 shell parsing을 받지 않는다.
+ */
+function resolveCliInvocation(
+	vscodeExecutablePath,
+	platform = process.platform,
+	environment = process.env,
+	windowsCodeCommandText,
+) {
+	if (platform === 'win32') {
+		const codeCommandPath = path.win32.join(
+			path.win32.dirname(vscodeExecutablePath),
+			'bin',
+			'code.cmd',
+		);
+		let codeCommand = windowsCodeCommandText;
+		if (codeCommand === undefined) {
+			try {
+				codeCommand = fs.readFileSync(codeCommandPath, 'utf8');
+			} catch (error) {
+				throw smokeError(
+					'VS Code code.cmd could not be read',
+					'readable downloaded CLI launcher',
+					'unreadable or missing',
+					error,
+				);
+			}
+		}
+		const cliPath = resolveWindowsCliEntry(vscodeExecutablePath, codeCommand);
+		if (windowsCodeCommandText === undefined && !fs.existsSync(cliPath)) {
+			throw smokeError(
+				'VS Code CLI entry does not exist',
+				'existing CLI entry from code.cmd',
+				'missing',
+			);
+		}
+		const cliEnvironment = { ...environment, ELECTRON_RUN_AS_NODE: '1' };
+		delete cliEnvironment.VSCODE_DEV;
+		return {
+			command: vscodeExecutablePath,
+			baseArgs: [cliPath],
+			environment: cliEnvironment,
+		};
+	}
+
+	const [command, ...baseArgs] = resolveCliArgsFromVSCodeExecutablePath(
+		vscodeExecutablePath,
+		{ reuseMachineInstall: true },
+	);
+	return { command, baseArgs, environment: { ...environment } };
+}
+
 function runCli(vscodeExecutablePath, args) {
-	const [command, ...baseArgs] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
-	const result = spawnSync(command, [...baseArgs, ...args], {
+	const invocation = resolveCliInvocation(vscodeExecutablePath);
+	const result = spawnSync(invocation.command, [...invocation.baseArgs, ...args], {
 		cwd: repositoryRoot,
 		encoding: 'utf8',
 		stdio: ['ignore', 'pipe', 'pipe'],
-		shell: process.platform === 'win32',
+		env: invocation.environment,
+		shell: false,
+		windowsHide: true,
 	});
 
 	if (result.error !== undefined) {
@@ -131,7 +222,11 @@ async function main() {
 	}
 }
 
-main().catch((error) => {
-	console.error(error instanceof Error ? error.stack : String(error));
-	process.exitCode = 1;
-});
+if (require.main === module) {
+	main().catch((error) => {
+		console.error(error instanceof Error ? error.stack : String(error));
+		process.exitCode = 1;
+	});
+}
+
+module.exports = Object.freeze({ resolveCliInvocation, resolveWindowsCliEntry });

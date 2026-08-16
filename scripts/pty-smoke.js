@@ -40,11 +40,14 @@ function runPtySmoke(nodePty, target, smokeCwd) {
 	return new Promise((resolve, reject) => {
 		const isWindowsTarget = target.startsWith('win32-');
 		const nonce = `${process.pid}-${Date.now().toString(36)}`;
+		const readyMarker = `crispy-ready-${nonce}`;
 		const firstMarker = `crispy-initial-${nonce}`;
 		const resizedMarker = `crispy-resized-${nonce}`;
+		const readyNeedle = `CRISPY_READY:${readyMarker}`;
 		const initialNeedle = `CRISPY_INITIAL:${firstMarker}`;
 		const resizedNeedle = `CRISPY_RESIZED:${resizedMarker}`;
 		let output = '';
+		let initialWriteRequested = false;
 		let resizeRequested = false;
 		let settled = false;
 		let terminal;
@@ -77,11 +80,13 @@ function runPtySmoke(nodePty, target, smokeCwd) {
 		try {
 			if (isWindowsTarget) {
 				/*
-				 * /c의 유한한 명령 안에서 두 번의 입력을 기다린다. 첫 출력 뒤
-				 * resize하고 두 번째 입력을 보내므로 interactive cmd.exe를 남기지
-				 * 않으면서 write, output, resize와 정상 종료를 모두 검증한다.
+				 * beta.14는 첫 output data가 도착할 때까지 write/resize를 defer한다.
+				 * 따라서 입력을 기다리기 전에 readiness marker를 먼저 출력하여
+				 * ConPTY 연결을 깨운다. 그 뒤 두 번의 입력을 받는 유한한 /c 명령으로
+				 * write, output, resize와 정상 종료를 검증한다.
 				 */
 				const shellCommand = [
+					`@echo ${readyNeedle}`,
 					'@set /p CRISPY_VALUE=',
 					'@echo CRISPY_INITIAL:!CRISPY_VALUE!',
 					'@set /p CRISPY_VALUE=',
@@ -123,6 +128,24 @@ function runPtySmoke(nodePty, target, smokeCwd) {
 
 			dataListener = terminal.onData((data) => {
 				output += data;
+
+				if (
+					isWindowsTarget
+					&& !initialWriteRequested
+					&& output.includes(readyNeedle)
+				) {
+					initialWriteRequested = true;
+					if (!Number.isSafeInteger(terminal.pid) || terminal.pid <= 1) {
+						finish(new Error('PTY produced readiness output without a valid process identifier'));
+						return;
+					}
+					try {
+						terminal.write(`${firstMarker}\r`);
+					} catch (error) {
+						finish(error);
+						return;
+					}
+				}
 
 				if (!resizeRequested && output.includes(initialNeedle)) {
 					resizeRequested = true;
@@ -166,9 +189,7 @@ function runPtySmoke(nodePty, target, smokeCwd) {
 				});
 			});
 
-			if (isWindowsTarget) {
-				terminal.write(`${firstMarker}\r`);
-			} else {
+			if (!isWindowsTarget) {
 				terminal.write(`${firstMarker}\n`);
 			}
 		} catch (error) {

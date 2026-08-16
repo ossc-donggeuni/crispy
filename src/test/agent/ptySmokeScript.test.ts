@@ -10,6 +10,7 @@ interface FakePtyExitEvent {
 }
 
 interface FakePty {
+	readonly pid: number;
 	readonly killCalls: number;
 	readonly resizeCalls: ReadonlyArray<{ readonly cols: number; readonly rows: number }>;
 	readonly disposedListeners: number;
@@ -37,12 +38,21 @@ interface PtySmokeModule {
 const { runPtySmoke } = require('../../../scripts/pty-smoke') as PtySmokeModule;
 
 class SuccessfulWindowsPty implements FakePty {
+	readonly pid = 9102;
 	readonly resizeCalls: Array<{ cols: number; rows: number }> = [];
 	killCalls = 0;
 	disposedListeners = 0;
+	writeCalls = 0;
 
+	private readonly readyMarker: string;
 	private dataListener: ((data: string) => void) | undefined;
 	private exitListener: ((event: FakePtyExitEvent) => void) | undefined;
+
+	constructor(shellCommand: string) {
+		const readyMarker = shellCommand.match(/CRISPY_READY:(crispy-ready-[^ &]+)/u)?.[1];
+		assert.notStrictEqual(readyMarker, undefined);
+		this.readyMarker = readyMarker as string;
+	}
 
 	onData(listener: (data: string) => void): FakeDisposable {
 		this.dataListener = listener;
@@ -51,10 +61,14 @@ class SuccessfulWindowsPty implements FakePty {
 
 	onExit(listener: (event: FakePtyExitEvent) => void): FakeDisposable {
 		this.exitListener = listener;
+		queueMicrotask(() => {
+			this.dataListener?.(`CRISPY_READY:${this.readyMarker}\r\n`);
+		});
 		return this.createDisposable();
 	}
 
 	write(data: string): void {
+		this.writeCalls += 1;
 		const initialMarker = data.match(/crispy-initial-[^\r]+/u)?.[0];
 		if (initialMarker !== undefined) {
 			this.dataListener?.(`CRISPY_INITIAL:${initialMarker}\r\n`);
@@ -91,7 +105,7 @@ class SuccessfulWindowsPty implements FakePty {
 
 suite('node-pty packaging smoke helper', () => {
 	test('Windows 성공 경로도 listener와 PTY native handle을 정리한다', async () => {
-		const terminal = new SuccessfulWindowsPty();
+		let terminal: SuccessfulWindowsPty | undefined;
 		let spawnCall: {
 			readonly executable: string;
 			readonly args: readonly string[];
@@ -100,6 +114,7 @@ suite('node-pty packaging smoke helper', () => {
 			{
 				spawn: (executable, args) => {
 					spawnCall = { executable, args: [...args] };
+					terminal = new SuccessfulWindowsPty(args[5]);
 					return terminal;
 				},
 			},
@@ -116,8 +131,10 @@ suite('node-pty packaging smoke helper', () => {
 			'/c',
 		]);
 		assert.ok(spawnCall?.args[5].includes('@set /p CRISPY_VALUE='));
-		assert.deepStrictEqual(terminal.resizeCalls, [{ cols: 100, rows: 30 }]);
-		assert.strictEqual(terminal.disposedListeners, 2);
-		assert.strictEqual(terminal.killCalls, 1);
+		assert.ok(spawnCall?.args[5].includes('@echo CRISPY_READY:'));
+		assert.deepStrictEqual(terminal?.resizeCalls, [{ cols: 100, rows: 30 }]);
+		assert.strictEqual(terminal?.writeCalls, 2);
+		assert.strictEqual(terminal?.disposedListeners, 2);
+		assert.strictEqual(terminal?.killCalls, 1);
 	});
 });
