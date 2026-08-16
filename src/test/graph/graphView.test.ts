@@ -22,6 +22,16 @@ suite('Graph View', () => {
 			root.children[0]?.children[0]?.style.transform,
 			'translate(120px, -45px) scale(1.5)',
 		);
+		const overlayLayer = root.children[0]?.children[1];
+		assert.strictEqual(overlayLayer?.className, 'graph-overlay-layer');
+		assert.strictEqual(
+			overlayLayer?.children[0]?.children[0]?.textContent,
+			'(120, -45)',
+		);
+		assert.strictEqual(
+			overlayLayer?.children[0]?.children[1]?.children[1]?.textContent,
+			'150%',
+		);
 
 		graphView.dispose();
 		assert.strictEqual(root.children.length, 0);
@@ -60,6 +70,8 @@ class FakeElement {
 		},
 	};
 	className = '';
+	textContent = '';
+	type = '';
 	clientWidth = 1000;
 	clientHeight = 800;
 	private readonly classNames = new Set<string>();

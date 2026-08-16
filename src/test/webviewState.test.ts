@@ -1,6 +1,9 @@
 import * as assert from 'assert';
 import type { WebviewToExtensionMessage } from '../messages';
-import { INITIAL_GRAPH_STATE } from '../webview/graph/graphState';
+import {
+	createGraphState,
+	INITIAL_GRAPH_STATE,
+} from '../webview/graph/graphState';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
@@ -109,6 +112,46 @@ suite('Webview State', () => {
 		assert.notStrictEqual(savedState?.panel, state.panel);
 		assert.notStrictEqual(savedState?.graph, state.graph);
 		assert.notStrictEqual(savedState?.graph.camera, state.graph.camera);
+	});
+
+	test('저장한 Camera를 getState 결과로 제공해 새 Graph State 초기화에 복원한다', () => {
+		let savedState: PersistedWebviewState | undefined;
+		const api: WebviewStateApi = {
+			getState: () => savedState,
+			setState: (state) => {
+				savedState = state;
+			},
+		};
+		const initialState = restoreWebviewState(api);
+		const graphState = createGraphState(initialState.graph);
+		const unsubscribe = graphState.subscribe((graph) => {
+			saveWebviewState(api, {
+				panel: initialState.panel,
+				graph,
+			});
+		});
+
+		graphState.setState({
+			camera: { x: 513, y: 324, scale: 1.2 },
+		});
+
+		assert.deepStrictEqual(api.getState(), {
+			panel: DEFAULT_PANEL_LAYOUT_STATE,
+			graph: {
+				camera: { x: 513, y: 324, scale: 1.2 },
+			},
+		});
+		unsubscribe();
+
+		const restoredState = restoreWebviewState(api);
+		const reinitializedGraphState = createGraphState(restoredState.graph);
+
+		assert.notStrictEqual(reinitializedGraphState, graphState);
+		assert.deepStrictEqual(reinitializedGraphState.getState().camera, {
+			x: 513,
+			y: 324,
+			scale: 1.2,
+		});
 	});
 });
 

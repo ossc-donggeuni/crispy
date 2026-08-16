@@ -2,6 +2,7 @@ import {
 	initializeGraphCamera,
 	type GraphCamera,
 } from './graphCamera';
+import { initializeGraphNavigator } from './graphNavigator';
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
@@ -47,6 +48,7 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const camera = initializeGraphCamera(viewport, world, state);
+	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
 
 	let disposed = false;
 
@@ -59,6 +61,7 @@ export function initializeGraphView(
 			}
 
 			disposed = true;
+			navigator.dispose();
 			camera.dispose();
 			viewport.remove();
 		},
