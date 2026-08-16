@@ -1,4 +1,7 @@
 const esbuild = require("esbuild");
+const {
+	extensionHostRuntimeExternals,
+} = require('./scripts/runtime-dependencies');
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -36,7 +39,7 @@ async function main() {
 			sourcesContent: false,
 			platform: 'node',
 			outfile: 'dist/extension.js',
-			external: ['vscode', 'node-pty'],
+			external: extensionHostRuntimeExternals,
 			logLevel: 'silent',
 			plugins: [
 				/* add to the end of plugins array */
