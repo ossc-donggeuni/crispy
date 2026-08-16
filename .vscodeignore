@@ -1,7 +1,17 @@
 .vscode/**
 .vscode-test/**
+.claude/**
+.github/**
 out/**
 node_modules/**
+!dist/node_modules/node-pty/**
+artifacts/**
+.pnpm-store/**
+scripts/**
+NODE_PTY_DISTRIBUTION_SPEC.md
+TROUBLESHOOTING.md
+pnpm-lock.yaml
+pnpm-workspace.yaml
 src/**
 .gitignore
 .yarnrc

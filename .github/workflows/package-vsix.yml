@@ -1,0 +1,91 @@
+name: Package platform VSIX
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  darwin-arm64:
+    name: darwin-arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.18.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Package and inspect VSIX
+        run: pnpm run package:vsix -- --target darwin-arm64
+      - name: Smoke installed VSIX
+        run: pnpm run smoke:installed-vsix -- --target darwin-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crispy-darwin-arm64-vsix
+          path: artifacts/vsix/crispy-*-darwin-arm64.vsix
+          if-no-files-found: error
+
+  linux-x64:
+    name: linux-x64
+    runs-on: ubuntu-24.04
+    container: almalinux:8
+    steps:
+      - name: Install native and Extension Host prerequisites
+        run: >-
+          dnf install -y
+          alsa-lib atk at-spi2-atk cups-libs gcc gcc-c++ git gtk3 libdrm
+          libX11 libXcomposite libXdamage libXrandr libXScrnSaver make
+          mesa-libgbm nss pango python3 tar gzip which xorg-x11-server-Xvfb
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.18.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Package and inspect VSIX
+        run: pnpm run package:vsix -- --target linux-x64
+      - name: Verify Linux ABI baseline
+        run: pnpm run verify:linux-abi
+      - name: Start virtual display
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 >/tmp/crispy-xvfb.log 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+      - name: Smoke installed VSIX
+        run: pnpm run smoke:installed-vsix -- --target linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crispy-linux-x64-vsix
+          path: artifacts/vsix/crispy-*-linux-x64.vsix
+          if-no-files-found: error
+
+  win32-x64:
+    name: win32-x64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.18.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Package and inspect VSIX
+        run: pnpm run package:vsix -- --target win32-x64
+      - name: Smoke installed VSIX
+        run: pnpm run smoke:installed-vsix -- --target win32-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crispy-win32-x64-vsix
+          path: artifacts/vsix/crispy-*-win32-x64.vsix
+          if-no-files-found: error

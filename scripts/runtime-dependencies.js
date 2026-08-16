@@ -5,10 +5,6 @@ const nodePtyArtifactsByTarget = Object.freeze({
 		'prebuilds/darwin-arm64/pty.node',
 		'prebuilds/darwin-arm64/spawn-helper',
 	]),
-	'darwin-x64': Object.freeze([
-		'prebuilds/darwin-x64/pty.node',
-		'prebuilds/darwin-x64/spawn-helper',
-	]),
 	'linux-x64': Object.freeze([
 		'build/Release/pty.node',
 	]),
