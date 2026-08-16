@@ -53,44 +53,64 @@ function filesystemError(code: string): NodeJS.ErrnoException {
 }
 
 suite('Host Shell resolver integration', () => {
-	test('PTY env에서 NO_COLOR를 제거하고 FORCE_COLOR와 기본 TERM을 설정한다', () => {
+	test('PTY env에서 색상을 끄는 설정을 제거하고 색상 계약을 고정한다', () => {
 		const base: NodeJS.ProcessEnv = {
 			SHELL: '/host/selected/shell',
 			NO_COLOR: '1',
+			CLICOLOR: '0',
 			FORCE_COLOR: '0',
 		};
 		const result = buildShellEnv(base);
 
 		assert.strictEqual(result.NO_COLOR, undefined);
-		assert.strictEqual(result.FORCE_COLOR, '1');
+		assert.strictEqual(result.CLICOLOR, undefined);
+		assert.strictEqual(result.FORCE_COLOR, '3');
 		assert.strictEqual(result.TERM, 'xterm-256color');
+		assert.strictEqual(result.COLORTERM, 'truecolor');
 		assert.strictEqual(base.NO_COLOR, '1');
+		assert.strictEqual(base.CLICOLOR, '0');
 		assert.strictEqual(base.FORCE_COLOR, '0');
 		assert.strictEqual(base.TERM, undefined);
 	});
 
-	test('PTY env의 기존 TERM은 보존한다', () => {
-		const result = buildShellEnv({
-			TERM: 'screen-256color',
-			NO_COLOR: '',
-		});
+	test('실행 환경에서 상속한 TERM과 COLORTERM을 렌더러 기준으로 덮어쓴다', () => {
+		/* VS Code를 어디서 띄웠는지가 색 단계를 바꾸지 않아야 한다. */
+		for (const inherited of [
+			{ TERM: 'screen', COLORTERM: undefined },
+			{ TERM: 'xterm', COLORTERM: undefined },
+			{ TERM: 'screen-256color', COLORTERM: '24bit' },
+			{ TERM: 'dumb', COLORTERM: undefined },
+		]) {
+			const result = buildShellEnv({ ...inherited, NO_COLOR: '' });
 
-		assert.strictEqual(result.TERM, 'screen-256color');
-		assert.strictEqual(result.NO_COLOR, undefined);
-		assert.strictEqual(result.FORCE_COLOR, '1');
+			assert.strictEqual(result.TERM, 'xterm-256color');
+			assert.strictEqual(result.COLORTERM, 'truecolor');
+			assert.strictEqual(result.FORCE_COLOR, '3');
+			assert.strictEqual(result.NO_COLOR, undefined);
+		}
 	});
 
-	test('색상을 비활성화하는 TERM=dumb는 xterm-256color로 교정한다', () => {
+	test('터미널 앱별 분기 근거가 되는 TERM_PROGRAM을 상속하지 않는다', () => {
 		const base: NodeJS.ProcessEnv = {
-			TERM: 'dumb',
-			NO_COLOR: '1',
+			TERM_PROGRAM: 'Apple_Terminal',
+			TERM_PROGRAM_VERSION: '455',
 		};
 		const result = buildShellEnv(base);
 
-		assert.strictEqual(result.TERM, 'xterm-256color');
-		assert.strictEqual(result.NO_COLOR, undefined);
-		assert.strictEqual(result.FORCE_COLOR, '1');
-		assert.strictEqual(base.TERM, 'dumb');
+		assert.strictEqual(result.TERM_PROGRAM, undefined);
+		assert.strictEqual(result.TERM_PROGRAM_VERSION, undefined);
+		assert.strictEqual(base.TERM_PROGRAM, 'Apple_Terminal');
+	});
+
+	test('색상과 무관한 환경 변수는 그대로 전달한다', () => {
+		const result = buildShellEnv({
+			SHELL: '/host/selected/shell',
+			CLICOLOR: '1',
+			PATH: '/usr/bin',
+		});
+
+		assert.strictEqual(result.CLICOLOR, '1');
+		assert.strictEqual(result.PATH, '/usr/bin');
 	});
 
 	for (const platform of ['darwin', 'linux'] as const) {
@@ -108,8 +128,9 @@ suite('Host Shell resolver integration', () => {
 				assert.strictEqual(result.policy.executable, '/host/selected/shell');
 				assert.strictEqual(result.policy.cwd, posixWorkspaceRoot.fsPath);
 				assert.strictEqual(result.policy.env.NO_COLOR, undefined);
-				assert.strictEqual(result.policy.env.FORCE_COLOR, '1');
+				assert.strictEqual(result.policy.env.FORCE_COLOR, '3');
 				assert.strictEqual(result.policy.env.TERM, 'xterm-256color');
+				assert.strictEqual(result.policy.env.COLORTERM, 'truecolor');
 			}
 			assert.deepStrictEqual(filesystem.statCalls, ['/host/selected/shell']);
 			assert.deepStrictEqual(

@@ -41,7 +41,7 @@ suite('Shell Terminal Webview', () => {
 		};
 
 		const theme = withWebviewComputedStyle(
-			(name) => cssValues[name] ?? '',
+			{ body: (name) => cssValues[name] ?? '' },
 			readVsCodeAnsiTheme,
 		);
 
@@ -72,13 +72,45 @@ suite('Shell Terminal Webview', () => {
 
 	test('VS Code theme 조회 실패 시 xterm 기본 theme로 fallback한다', () => {
 		const theme = withWebviewComputedStyle(
-			() => {
-				throw new Error('computed style unavailable');
+			{
+				body: () => {
+					throw new Error('computed style unavailable');
+				},
 			},
 			readVsCodeAnsiTheme,
 		);
 
 		assert.deepStrictEqual(theme, {});
+	});
+
+	test('테마 변수를 documentElement에 주입한 경우에도 읽는다', () => {
+		/* VS Code 버전에 따라 주입 대상이 달라도 같은 팔레트를 얻어야 한다. */
+		const theme = withWebviewComputedStyle(
+			{
+				body: () => '',
+				documentElement: (name) =>
+					name === '--vscode-terminal-ansiRed' ? '#aa0000' : '',
+			},
+			readVsCodeAnsiTheme,
+		);
+
+		assert.strictEqual(theme.red, '#aa0000');
+	});
+
+	test('body에 주입된 값을 documentElement 값보다 우선한다', () => {
+		const theme = withWebviewComputedStyle(
+			{
+				body: (name) =>
+					name === '--vscode-terminal-ansiRed' ? '#aa0000' : '',
+				documentElement: (name) =>
+					name === '--vscode-terminal-ansiRed' ? '#0000aa' : '#00aa00',
+			},
+			readVsCodeAnsiTheme,
+		);
+
+		assert.strictEqual(theme.red, '#aa0000');
+		/* body가 비워 둔 값은 documentElement에서 이어서 찾는다. */
+		assert.strictEqual(theme.green, '#00aa00');
 	});
 
 	test('Terminal, FitAddon, load, open, fit 순서로 xterm을 mount한다', () => {
@@ -1084,9 +1116,14 @@ class FakeAnimationFrames {
 }
 
 function withWebviewComputedStyle<T>(
-	getPropertyValue: (name: string) => string,
+	sources: {
+		readonly body?: (name: string) => string;
+		readonly documentElement?: (name: string) => string;
+	},
 	action: () => T,
 ): T {
+	const body = sources.body === undefined ? undefined : {};
+	const documentElement = sources.documentElement === undefined ? undefined : {};
 	const documentDescriptor = Object.getOwnPropertyDescriptor(
 		globalThis,
 		'document',
@@ -1098,11 +1135,15 @@ function withWebviewComputedStyle<T>(
 
 	Object.defineProperty(globalThis, 'document', {
 		configurable: true,
-		value: { documentElement: {} },
+		value: { body, documentElement },
 	});
 	Object.defineProperty(globalThis, 'getComputedStyle', {
 		configurable: true,
-		value: () => ({ getPropertyValue }),
+		value: (element: unknown) => ({
+			getPropertyValue: element === body
+				? sources.body ?? (() => '')
+				: sources.documentElement ?? (() => ''),
+		}),
 	});
 
 	try {

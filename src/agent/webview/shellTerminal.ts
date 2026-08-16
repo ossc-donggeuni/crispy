@@ -126,12 +126,30 @@ export interface ShellTerminalController {
 	dispose(): void;
 }
 
-/** VS Code가 Webview에 주입한 Terminal 색상을 xterm theme 속성에 연결한다. */
+/**
+ * VS Code가 Webview에 주입한 Terminal 색상을 xterm theme 속성에 연결한다.
+ *
+ * 테마 변수는 VS Code 버전에 따라 `body` 또는 `documentElement`에 주입된다.
+ * CSS 변수는 아래로만 상속되므로 한쪽만 조회하면 값을 전부 놓치고 xterm 기본
+ * 팔레트로 조용히 떨어질 수 있어, 두 요소를 순서대로 조회한다.
+ *
+ * @returns 찾은 색상만 채운 xterm theme이며 조회에 실패하면 빈 theme이다.
+ */
 export function readVsCodeAnsiTheme(): ITheme {
 	try {
-		const css = getComputedStyle(document.documentElement);
-		const value = (name: string): string | undefined =>
-			css.getPropertyValue(name).trim() || undefined;
+		const sources = [document.body, document.documentElement]
+			.filter((element): element is HTMLElement => Boolean(element))
+			.map((element) => getComputedStyle(element));
+		const value = (name: string): string | undefined => {
+			for (const source of sources) {
+				const resolved = source.getPropertyValue(name).trim();
+				if (resolved.length > 0) {
+					return resolved;
+				}
+			}
+
+			return undefined;
+		};
 
 		return {
 			background: value('--vscode-terminal-background'),

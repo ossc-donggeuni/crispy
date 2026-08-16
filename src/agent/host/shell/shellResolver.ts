@@ -18,14 +18,51 @@ export type ShellLaunchPolicyResolver = (
 	workspaceRoot: ValidatedWorkspaceRoot,
 ) => Promise<ShellLaunchPolicyResult>;
 
-/** 인터랙티브 PTY가 색상 출력을 협상하도록 Host 환경 snapshot을 보정한다. */
+/** Crispy Terminal을 그리는 xterm.js가 해석하는 terminal 형식이다. */
+const HOST_TERM = 'xterm-256color';
+
+/** xterm.js가 24bit 색을 그리므로 CLI에도 같은 수준을 고정으로 알린다. */
+const HOST_COLORTERM = 'truecolor';
+
+/**
+ * Node 기반 CLI가 색 단계를 낮추지 않도록 `COLORTERM`과 같은 수준을 요구한다.
+ * `supports-color` 규약에서 3은 24bit를 뜻한다.
+ */
+const HOST_FORCE_COLOR = '3';
+
+/**
+ * PTY가 협상할 색상 계약을 Host가 고정한 값으로 다시 쓴다.
+ *
+ * 색 지원 단계를 감지하는 CLI는 `TERM`, `COLORTERM`, `TERM_PROGRAM`을 근거로 삼는데,
+ * 이 값들은 VS Code를 어떻게 실행했는지에 따라 달라진다. 예를 들어 Dock에서 띄우면
+ * `TERM`이 아예 없고, tmux 안에서 띄우면 `screen`이 상속되며, `COLORTERM`은
+ * 터미널 앱마다 다르다. 상속값을 그대로 두면 같은 저장소가 기여자 환경에 따라 다른
+ * 색으로 렌더링되므로, 실제 렌더러인 xterm.js를 기준으로 값을 확정한다.
+ *
+ * @param base Extension Host가 읽은 환경 변수 snapshot이다.
+ * @returns 원본을 변경하지 않고 색상 계약만 고정한 새 환경이다.
+ */
 export function buildShellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	const env = { ...base };
+
+	/* 색을 끄는 상속 설정은 Crispy Terminal 안에서는 적용하지 않는다. */
 	delete env.NO_COLOR;
-	env.FORCE_COLOR = '1';
-	if (env.TERM === undefined || env.TERM === 'dumb') {
-		env.TERM = 'xterm-256color';
+	if (env.CLICOLOR === '0') {
+		delete env.CLICOLOR;
 	}
+
+	/* 감지 근거를 상속값이 아니라 렌더러 기준으로 통일한다. */
+	env.TERM = HOST_TERM;
+	env.COLORTERM = HOST_COLORTERM;
+	env.FORCE_COLOR = HOST_FORCE_COLOR;
+
+	/*
+	 * TERM_PROGRAM은 터미널 앱별 분기(예: Apple_Terminal은 256색, iTerm은 24bit)에
+	 * 쓰이므로 상속되면 위에서 고정한 계약을 다시 흔든다.
+	 */
+	delete env.TERM_PROGRAM;
+	delete env.TERM_PROGRAM_VERSION;
+
 	return env;
 }
 
