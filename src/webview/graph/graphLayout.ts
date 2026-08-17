@@ -37,17 +37,30 @@ export interface GraphFolderNode extends GraphLayoutNodeBase {
 	readonly kind: 'folder';
 }
 
+/** File Group child 또는 독립 Graph Node로 사용하는 File Layout 단위다. */
+export interface GraphFileNode {
+	readonly kind: 'file';
+	readonly id: string;
+	readonly name: string;
+}
+
+/** Singleton File을 독립적인 World 위치에 배치한 Graph Node다. */
+export interface GraphStandaloneFileNode extends GraphLayoutNodeBase {
+	readonly kind: 'file';
+}
+
 /** 같은 Parent에 직접 포함된 File을 하나로 묶은 Layout Node다. */
 export interface GraphFileGroupNode extends GraphLayoutNodeBase {
 	readonly kind: 'file-group';
 	readonly parentId: string;
-	readonly files: readonly File[];
+	readonly children: readonly GraphFileNode[];
 }
 
-/** Renderer가 처리하는 Project Root, Folder, File Group Node의 합집합이다. */
+/** Renderer가 처리하는 Project, Folder, Standalone File, File Group Node다. */
 export type GraphLayoutNode =
 	| GraphProjectNode
 	| GraphFolderNode
+	| GraphStandaloneFileNode
 	| GraphFileGroupNode;
 
 /** Parent와 직접 Child 사이를 연결하는 방향성 Edge다. */
@@ -73,6 +86,10 @@ export interface GraphLayoutOptions {
 export const GRAPH_FOLDER_NODE_WIDTH = 200;
 /** Project Root 및 Folder Node의 고정 높이다. */
 export const GRAPH_FOLDER_NODE_HEIGHT = 42;
+/** Standalone File Node의 고정 폭이다. */
+export const GRAPH_FILE_NODE_WIDTH = 200;
+/** Standalone File Node의 고정 높이다. */
+export const GRAPH_FILE_NODE_HEIGHT = 42;
 /** File Group Node의 고정 폭이다. */
 export const GRAPH_FILE_GROUP_NODE_WIDTH = 200;
 /** File Group 내부 File Row 한 줄의 높이다. */
@@ -100,7 +117,7 @@ interface LayoutTreeNode {
 	readonly width: number;
 	readonly height: number;
 	readonly parentId?: string;
-	readonly files?: readonly File[];
+	readonly fileChildren?: readonly GraphFileNode[];
 	readonly children: readonly LayoutTreeNode[];
 }
 
@@ -131,18 +148,14 @@ export function createGraphLayout(
 				`Graph Root \"${root.id}\"가 참조하는 Node \"${root.nodeId}\"를 찾을 수 없습니다.`,
 			);
 		}
-		if (rootNode.kind === 'file') {
-			throw new Error(
-				`File Root \"${root.nodeId}\"의 Layout은 아직 지원하지 않습니다.`,
+		const tree = rootNode.kind === 'file'
+			? createFileTree(rootNode, 0)
+			: createContainerTree(
+				rootNode,
+				0,
+				options.fileGroupPages ?? {},
+				options.openedFolders ?? {},
 			);
-		}
-
-		const tree = createContainerTree(
-			rootNode,
-			0,
-			options.fileGroupPages ?? {},
-			options.openedFolders ?? {},
-		);
 		const subtreeHeight = placeTree(tree, rootTop, nodes, edges);
 
 		rootTop += subtreeHeight + GRAPH_LAYOUT_ROOT_GAP;
@@ -179,8 +192,8 @@ function createContainerTree(
 			openedFolders,
 		));
 	const files = visibleChildren.filter(isFile);
-	const fileGroup = files.length > 0
-		? createFileGroupTree(container, files, depth + 1, fileGroupPages)
+	const fileNodes = files.length > 0
+		? createFileLayoutTrees(container, files, depth + 1, fileGroupPages)
 		: [];
 
 	return {
@@ -190,17 +203,23 @@ function createContainerTree(
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
-		children: [...folderChildren, ...fileGroup],
+		children: [...folderChildren, ...fileNodes],
 	};
 }
 
-/** Parent에 직접 속한 File을 하나의 leaf File Group Tree Node로 만든다. */
-function createFileGroupTree(
+/** Singleton은 독립 File로, 여러 File은 File child를 가진 Group으로 만든다. */
+function createFileLayoutTrees(
 	parent: ProjectContainer,
 	files: readonly File[],
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
 ): readonly LayoutTreeNode[] {
+	const singleton = files[0];
+
+	if (files.length === 1 && singleton) {
+		return [createFileTree(singleton, depth)];
+	}
+
 	const id = createFileGroupId(parent.id);
 	const page = fileGroupPages[id] ?? 1;
 	const visibleFileCount = getVisibleFileCount(files.length, page);
@@ -216,9 +235,31 @@ function createFileGroupTree(
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
 		parentId: parent.id,
-		files,
+		fileChildren: files.map(toGraphFileNode),
 		children: [],
 	}];
+}
+
+/** File을 child가 없는 독립 Layout Tree Node로 만든다. */
+function createFileTree(file: File, depth: number): LayoutTreeNode {
+	return {
+		id: file.id,
+		name: file.name,
+		kind: 'file',
+		depth,
+		width: GRAPH_FILE_NODE_WIDTH,
+		height: GRAPH_FILE_NODE_HEIGHT,
+		children: [],
+	};
+}
+
+/** Project File을 Group이 소유하는 최소 File Layout child로 변환한다. */
+function toGraphFileNode(file: File): GraphFileNode {
+	return {
+		kind: 'file',
+		id: file.id,
+		name: file.name,
+	};
 }
 
 /** 표시 Row와 선택적 단일 control 영역을 포함한 File Group 높이를 계산한다. */
@@ -302,14 +343,16 @@ function toGraphLayoutNode(
 	};
 
 	if (tree.kind === 'file-group') {
-		const files = tree.files ?? [];
-
 		return {
 			...base,
 			kind: 'file-group',
 			parentId: tree.parentId ?? '',
-			files,
+			children: tree.fileChildren ?? [],
 		};
+	}
+
+	if (tree.kind === 'file') {
+		return { ...base, kind: 'file' };
 	}
 
 	if (tree.kind === 'folder') {

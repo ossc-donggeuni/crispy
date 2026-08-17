@@ -79,6 +79,7 @@
 
 .graph-project-node:hover,
 .graph-folder-node:hover,
+.graph-file-node:hover,
 .graph-file-group-node:hover {
 	--graph-node-outline-color: #c4c4c4;
 
@@ -88,6 +89,7 @@
 
 .graph-project-node:active,
 .graph-folder-node:active,
+.graph-file-node:active,
 .graph-file-group-node:active:not(:has(.graph-file-item:active, .graph-file-control:active)) {
 	--graph-node-outline-color: #d6d6d6;
 
@@ -100,7 +102,8 @@
 }
 
 .graph-project-node,
-.graph-folder-node {
+.graph-folder-node,
+.graph-file-node {
 	align-items: center;
 	gap: 11px;
 	padding: 0 14px;

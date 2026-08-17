@@ -54,13 +54,14 @@ src/webview/graph/
 - 첫 Root는 기존 단일 Project 시작 위치를 유지하고 후속 Root는 subtree 높이와 고정 간격으로 배치
 - 저장 위치가 없는 여러 Root도 완전히 겹치지 않는 결정적 기본 위치 적용
 - Depth가 증가할수록 X가 증가하고 같은 Depth는 같은 Column 사용
-- 각 Parent의 Child Folder와 직접 File을 묶은 File Group 생성
+- 직접 File 하나는 Standalone File Node, 둘 이상은 File child를 가진 File Group 생성
+- File Root를 edge 없는 depth 0 Standalone File Node로 배치
 - Parent와 직접 Child 사이의 Edge만 생성
 - Subtree 높이를 기준으로 Sibling을 세로 배치
-- Folder와 File Group에 동일한 `200px` 폭 적용
+- Folder, Standalone File과 File Group에 동일한 `200px` 폭 적용
 - File Group page에 따라 5개 단위로 표시 Row 수 계산
 - 표시 Row와 선택적 단일 pagination control을 File Group 높이에 반영
-- `openedFolders`에 포함된 Folder의 children만 Layout에 포함
+- `openedFolders`에 포함된 Project/Folder의 children만 Layout에 포함
 - Project/Folder Root 여부와 무관하게 `openedFolders` 상태로 children 포함 여부 결정
 - 동일 입력에 동일한 Node 순서, 위치 및 Edge 반환
 
@@ -95,7 +96,7 @@ src/webview/graph/
 
 ### `graphNodeDrag.ts`
 
-> Project Root, Folder 및 File Group Card의 자유 이동을 관리합니다.
+> Project Root, Folder, Standalone File 및 File Group Card의 자유 이동을 관리합니다.
 
 - 별도 Handle 없이 Node 자체에서 Pointer Drag 시작
 - Pointer Capture와 Click / Drag threshold 처리
@@ -105,19 +106,20 @@ src/webview/graph/
 - `pointercancel`과 `lostpointercapture` 시 임시 위치 복원
 - Layout Reflow 뒤 저장 위치가 없는 Node의 Drag 기준점을 새 기본 위치로 갱신
 - File Row의 `data-graph-node-drag-ignore` 입력 차단 규약 처리
+- Standalone File은 File ID로 일반 Graph Node Drag와 위치 저장 경로 사용
 
 ### `graphRenderer.ts`
 
 > Layout을 기존 Edge / Node Layer에 렌더링하고 표시 위치 및 interaction을 관리합니다.
 
-- Project Root와 Folder를 같은 Card 계열로 렌더링
+- Project Root, Folder, Standalone File과 File Group을 공통 Graph Node 경로로 렌더링
 - 열린 상태에 따라 `folder-open.svg`와 `folder-closed.svg`를 기존 DOM에 적용
 - Project/Folder icon과 `aria-expanded`를 `openedFolders`에 맞춰 갱신
 - File 이름을 렌더링 시점에 icon 식별값으로 변환하여 로컬 SVG 표시
-- Folder별 File을 현재 page 범위까지 하나의 File Group에 렌더링
+- Singleton File은 독립 Node로, 둘 이상의 File child는 현재 page 범위까지 Group Row로 렌더링
 - File을 5개 단위로 추가하는 `+ N개 더보기` Button과 최초 page로 복원하는 접기 Button 표시
 - Page가 바뀐 File Group의 contents와 Listener만 교체
-- Folder, File Group 및 File Row Click callback 구분
+- Folder, Standalone File, File Group 및 File Row Click callback 구분
 - File Row Click 전파를 차단하고 해당 Row에만 Click animation 적용
 - Parent 오른쪽 중앙과 Child 왼쪽 중앙을 Cubic Bezier Edge로 연결
 - Camera-only State 변경 시 Node / Edge 위치 갱신 생략

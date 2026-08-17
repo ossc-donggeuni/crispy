@@ -1,11 +1,11 @@
 import type {
+	GraphFileNode,
 	GraphFileGroupNode,
 	GraphLayout,
 	GraphLayoutEdge,
 	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
-import type { File } from './graphModel';
 import { resolveFileIcon } from './fileIconResolver';
 import {
 	GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE,
@@ -49,7 +49,7 @@ export interface GraphRendererInteractions {
 	onFolderClick?: (folderId: string) => void;
 	/** File Group이 Click됐을 때 소유 Project 또는 Folder ID를 전달한다. */
 	onFileGroupClick?: (folderId: string) => void;
-	/** File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
+	/** Standalone File 또는 File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
 	onFileClick?: (fileId: string) => void;
 }
 
@@ -66,7 +66,7 @@ const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
  * Drag 중 임시 위치도 같은 위치 갱신 함수를 사용한다.
  *
  * @param edgeLayer Edge path를 추가할 기존 SVG Layer
- * @param nodeLayer Project Root, Folder, File Group을 추가할 기존 HTML Layer
+ * @param nodeLayer Project, Folder, Standalone File, File Group을 추가할 HTML Layer
  * @param layout 결정적인 기본 Node 위치와 Parent-Child Edge
  * @param graphState 저장 위치 조회 및 변경 구독에 사용하는 Store
  * @param interactions Node 종류별 선택적 Click callback
@@ -168,7 +168,7 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 
-		if (layoutNode.kind !== 'file-group') {
+		if (layoutNode.kind === 'project' || layoutNode.kind === 'folder') {
 			updateContainerOpenedState(
 				element,
 				graphState.isFolderOpened(layoutNode.id),
@@ -292,7 +292,7 @@ export function initializeGraphRenderer(
 		renderedOpenedFolders = state.openedFolders;
 
 		for (const layoutNode of renderedLayout.nodes) {
-			if (layoutNode.kind === 'file-group') {
+			if (layoutNode.kind !== 'project' && layoutNode.kind !== 'folder') {
 				continue;
 			}
 
@@ -458,7 +458,10 @@ function createNodeElement(
 	element.style.width = `${node.width}px`;
 	element.style.height = `${node.height}px`;
 
-	if (node.kind !== 'file-group') {
+	if (node.kind === 'file') {
+		element.setAttribute('data-file-id', node.id);
+		appendFileContent(element, node, ownerDocument);
+	} else if (node.kind !== 'file-group') {
 		const icon = createFolderIcon(ownerDocument);
 		const name = ownerDocument.createElement('span');
 
@@ -469,6 +472,23 @@ function createNodeElement(
 	}
 
 	return element;
+}
+
+/** Standalone File과 File Group Row가 공유하는 icon/name content를 추가한다. */
+function appendFileContent(
+	element: HTMLElement,
+	file: GraphFileNode,
+	ownerDocument: Document,
+): void {
+	const icon = ownerDocument.createElement('span');
+	const name = ownerDocument.createElement('span');
+
+	icon.className = 'graph-node-icon graph-file-icon';
+	icon.setAttribute('data-file-icon', resolveFileIcon(file.name));
+	icon.setAttribute('aria-hidden', 'true');
+	name.className = 'graph-file-name';
+	name.textContent = file.name;
+	element.append(icon, name);
 }
 
 /**
@@ -527,16 +547,16 @@ function initializeFileGroupContent(
 			}
 
 			clearContent();
-			const visibleCount = getVisibleFileCount(node.files.length, page);
-			const remainingCount = getRemainingFileCount(node.files.length, page);
-			const showCollapse = node.files.length > FILE_GROUP_PAGE_SIZE && page > 1;
+			const visibleCount = getVisibleFileCount(node.children.length, page);
+			const remainingCount = getRemainingFileCount(node.children.length, page);
+			const showCollapse = node.children.length > FILE_GROUP_PAGE_SIZE && page > 1;
 			const list = ownerDocument.createElement('ul');
 			const elements: HTMLElement[] = [list];
 			const cleanups: Array<() => void> = [];
 
 			list.className = 'graph-file-list';
 
-			for (const file of node.files.slice(0, visibleCount)) {
+			for (const file of node.children.slice(0, visibleCount)) {
 				const row = createFileRow(file, ownerDocument, interactions);
 
 				list.append(row.element);
@@ -606,23 +626,16 @@ function initializeFileGroupContent(
 
 /** File Row DOM과 Click feedback listener lifecycle을 만든다. */
 function createFileRow(
-	file: File,
+	file: GraphFileNode,
 	ownerDocument: Document,
 	interactions: GraphRendererInteractions,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
-	const icon = ownerDocument.createElement('span');
-	const name = ownerDocument.createElement('span');
 
 	item.className = 'graph-file-item';
 	item.setAttribute('data-file-id', file.id);
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-	icon.className = 'graph-node-icon graph-file-icon';
-	icon.setAttribute('data-file-icon', resolveFileIcon(file.name));
-	icon.setAttribute('aria-hidden', 'true');
-	name.className = 'graph-file-name';
-	name.textContent = file.name;
-	item.append(icon, name);
+	appendFileContent(item, file, ownerDocument);
 	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
 	const animateFileClick = (): void => {
 		item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
@@ -681,6 +694,11 @@ function createNodeClickHandler(
 	if (node.kind === 'file-group') {
 		return interactions.onFileGroupClick
 			? () => interactions.onFileGroupClick?.(node.parentId)
+			: undefined;
+	}
+	if (node.kind === 'file') {
+		return interactions.onFileClick
+			? () => interactions.onFileClick?.(node.id)
 			: undefined;
 	}
 

@@ -7,6 +7,8 @@ import {
 	GRAPH_FILE_GROUP_NODE_WIDTH,
 	GRAPH_FILE_GROUP_PADDING,
 	GRAPH_FILE_GROUP_ROW_HEIGHT,
+	GRAPH_FILE_NODE_HEIGHT,
+	GRAPH_FILE_NODE_WIDTH,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphFileGroupNode,
@@ -112,6 +114,50 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(graph.rootNodes[file.id]?.kind, 'file');
 	});
 
+	test('File Root를 edge 없는 Standalone File Node로 배치한다', () => {
+		const file = SECOND_PROJECT.children.find(isFile);
+
+		assert.ok(file);
+		const layout = createBaseGraphLayout(createSingleRootGraph(file));
+
+		assert.strictEqual(layout.nodes.length, 1);
+		assert.strictEqual(layout.edges.length, 0);
+		assert.deepStrictEqual(layout.nodes[0], {
+			kind: 'file',
+			id: file.id,
+			name: file.name,
+			depth: 0,
+			position: { x: 48, y: 48 },
+			width: GRAPH_FILE_NODE_WIDTH,
+			height: GRAPH_FILE_NODE_HEIGHT,
+		});
+	});
+
+	test('Folder의 File이 하나이면 File ID 기반 Standalone Node와 edge를 만든다', () => {
+		const layout = createBaseGraphLayout(
+			createSingleRootGraph(SECOND_PROJECT),
+			{
+				openedFolders: {
+					[SECOND_PROJECT.id]: true,
+					'folder:secondary/src': true,
+				},
+			},
+		);
+		const fileId = 'file:secondary/src/index.ts';
+		const fileNode = layout.nodes.find((node) => node.id === fileId);
+
+		assert.ok(fileNode && fileNode.kind === 'file');
+		assert.strictEqual(
+			layout.nodes.some(
+				(node) => node.id === createFileGroupId('folder:secondary/src'),
+			),
+			false,
+		);
+		assert.ok(layout.edges.some((edge) => (
+			edge.sourceId === 'folder:secondary/src' && edge.targetId === fileId
+		)));
+	});
+
 	test('기존 Project 하나를 roots.length === 1인 Graph Layout으로 생성한다', () => {
 		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
 		const layout = createBaseGraphLayout(graph, {
@@ -168,8 +214,16 @@ suite('Graph Model / Layout', () => {
 		assert.ok(primaryNodeIds.has('folder:app'));
 		assert.ok(secondaryNodeIds.has(SECOND_PROJECT.id));
 		assert.ok(secondaryNodeIds.has('folder:secondary/src'));
-		assert.ok(secondaryNodeIds.has(createFileGroupId(SECOND_PROJECT.id)));
-		assert.ok(secondaryNodeIds.has(createFileGroupId('folder:secondary/src')));
+		assert.ok(secondaryNodeIds.has('file:secondary/package.json'));
+		assert.ok(secondaryNodeIds.has('file:secondary/src/index.ts'));
+		assert.strictEqual(
+			secondaryNodeIds.has(createFileGroupId(SECOND_PROJECT.id)),
+			false,
+		);
+		assert.strictEqual(
+			secondaryNodeIds.has(createFileGroupId('folder:secondary/src')),
+			false,
+		);
 		assert.strictEqual(
 			layout.edges.every((edge) => (
 				(primaryNodeIds.has(edge.sourceId) && primaryNodeIds.has(edge.targetId))
@@ -357,8 +411,18 @@ suite('Graph Model / Layout', () => {
 
 		assert.strictEqual(appSrcFiles.id, createFileGroupId('folder:app/src'));
 		assert.deepStrictEqual(
-			appSrcFiles.files.map((file) => file.name),
+			appSrcFiles.children.map((file) => file.name),
 			expectedFiles,
+		);
+		assert.strictEqual(
+			appSrcFiles.children.every((file) => file.kind === 'file'),
+			true,
+		);
+		assert.strictEqual(
+			layout.nodes.some(
+				(node) => appSrcFiles.children.some((file) => file.id === node.id),
+			),
+			false,
 		);
 		assert.strictEqual('visibleFiles' in appSrcFiles, false);
 		assert.strictEqual('hiddenFileCount' in appSrcFiles, false);
@@ -386,11 +450,11 @@ suite('Graph Model / Layout', () => {
 
 		const layout = createGraphLayout(GRAPH_MOCK_PROJECT);
 		assert.strictEqual(
-			getFileGroup(layout.nodes, seventeenFiles.id).files.length,
+			getFileGroup(layout.nodes, seventeenFiles.id).children.length,
 			17,
 		);
 		assert.strictEqual(
-			getFileGroup(layout.nodes, twentyOneFiles.id).files.length,
+			getFileGroup(layout.nodes, twentyOneFiles.id).children.length,
 			21,
 		);
 	});
@@ -567,7 +631,7 @@ suite('Graph Model / Layout', () => {
 			+ GRAPH_FILE_GROUP_CONTROL_HEIGHT;
 
 		assert.strictEqual(GRAPH_FILE_GROUP_ROW_HEIGHT, 30);
-		assert.strictEqual(fileGroup.files.length, 7);
+		assert.strictEqual(fileGroup.children.length, 7);
 		assert.strictEqual(fileGroup.height, expectedHeight);
 		assert.strictEqual(fileGroup.height, 198);
 	});

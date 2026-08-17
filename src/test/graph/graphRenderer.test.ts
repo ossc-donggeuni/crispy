@@ -14,6 +14,7 @@ import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
 import {
 	createSingleRootGraph,
 	isFolder,
+	type GraphRootNode,
 	type Project,
 } from '../../webview/graph/graphModel';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
@@ -34,6 +35,110 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Renderer / Node Drag', () => {
+	test('File Root를 저장 위치와 File interaction을 쓰는 Standalone Node로 렌더링한다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:standalone/graphRenderer.ts',
+			name: 'graphRenderer.ts',
+		};
+		const savedPosition = { x: 640, y: 280 };
+		const fileClicks: string[] = [];
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [file.id]: savedPosition },
+		}, {
+			onFileClick: (fileId) => fileClicks.push(fileId),
+		}, file);
+		const node = fixture.getNode(file.id);
+		const icon = getDescendantByClass(node, 'graph-file-icon');
+
+		assert.strictEqual(fixture.layout.nodes.length, 1);
+		assert.strictEqual(fixture.layout.edges.length, 0);
+		assert.strictEqual(node.hasClass('graph-file-node'), true);
+		assert.strictEqual(node.style.transform, 'translate(640px, 280px)');
+		assert.strictEqual(node.getAttribute('data-file-id'), file.id);
+		assert.strictEqual(node.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), false);
+		assert.strictEqual(icon.getAttribute('data-file-icon'), 'typescript');
+		assert.ok(getText(node).includes(file.name));
+		assert.strictEqual(findDescendantByClass(node, 'graph-file-item'), undefined);
+
+		node.dispatch('click', createClickEvent(node));
+		assert.deepStrictEqual(fileClicks, [file.id]);
+		assert.deepStrictEqual(fixture.graphState.getState().openedFolders, {});
+		fixture.renderer.dispose();
+	});
+
+	test('Folder의 Singleton File은 독립 Node, 두 File은 기존 Group Row로 렌더링한다', () => {
+		const singletonProject = createPaginationProject([1]);
+		const singletonFileId = 'file:pagination-0/file-1.ts';
+		const singleton = createRendererFixture(
+			1,
+			undefined,
+			{},
+			singletonProject,
+		);
+		const fileNode = singleton.getNode(singletonFileId);
+
+		assert.strictEqual(fileNode.hasClass('graph-file-node'), true);
+		assert.strictEqual(
+			singleton.nodeLayer.children.some(
+				(node) => node.getAttribute('data-graph-node-id')
+					=== createFileGroupId('folder:pagination-0'),
+			),
+			false,
+		);
+		assert.ok(singleton.layout.edges.some((edge) => (
+			edge.sourceId === 'folder:pagination-0'
+				&& edge.targetId === singletonFileId
+		)));
+		singleton.renderer.dispose();
+
+		const grouped = createRendererFixture(1, undefined, {}, createPaginationProject([2]));
+		const fileGroup = grouped.getNode(createFileGroupId('folder:pagination-0'));
+
+		assert.strictEqual(fileGroup.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 2);
+		assert.strictEqual(
+			grouped.nodeLayer.children.some(
+				(node) => node.getAttribute('data-graph-node-id') === singletonFileId,
+			),
+			false,
+		);
+		grouped.renderer.dispose();
+	});
+
+	test('Standalone File은 File ID로 기존 Graph Node Drag lifecycle을 사용한다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:standalone/index.ts',
+			name: 'index.ts',
+		};
+		const fixture = createRendererFixture(2, undefined, {}, file);
+		const layoutNode = getLayoutNode(fixture.layout, file.id);
+		const node = fixture.getNode(file.id);
+
+		node.dispatch('pointerdown', createPointerEvent(node, 100, 80));
+		assert.strictEqual(node.hasPointerCapture(1), true);
+		assert.strictEqual(node.hasClass('is-dragging'), true);
+		node.dispatch('pointermove', createPointerEvent(node, 140, 60));
+		assert.strictEqual(
+			node.style.transform,
+			`translate(${layoutNode.position.x + 20}px, ${layoutNode.position.y - 10}px)`,
+		);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+
+		node.dispatch('pointerup', createPointerEvent(node, 140, 60));
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {
+			[file.id]: {
+				x: layoutNode.position.x + 20,
+				y: layoutNode.position.y - 10,
+			},
+		});
+		assert.strictEqual(node.hasPointerCapture(1), false);
+		assert.strictEqual(node.hasClass('is-dragging'), false);
+		fixture.renderer.dispose();
+	});
+
 	test('Project Root, Folder, File Group과 Edge를 지정된 Layer에 렌더링한다', () => {
 		const fixture = createRendererFixture();
 		const root = fixture.getNode(GRAPH_MOCK_PROJECT.id);
@@ -881,16 +986,16 @@ function createRendererFixture(
 		nodePositions: {},
 	},
 	interactions: GraphRendererInteractions = {},
-	project: Project = GRAPH_MOCK_PROJECT,
+	rootNode: GraphRootNode = GRAPH_MOCK_PROJECT,
 ) {
 	const document = new FakeDocument();
 	const edgeLayer = document.createElementNS('', 'svg');
 	const nodeLayer = document.createElement('div');
 	const graphState = createGraphState({
 		...initialState,
-		openedFolders: initialState.openedFolders ?? openAllFolders(project),
+		openedFolders: initialState.openedFolders ?? openAllContainers(rootNode),
 	});
-	const layout = createGraphLayout(createSingleRootGraph(project), {
+	const layout = createGraphLayout(createSingleRootGraph(rootNode), {
 		fileGroupPages: graphState.getState().fileGroupPages,
 		openedFolders: graphState.getState().openedFolders,
 	});
@@ -964,21 +1069,24 @@ function getLayoutNode(layout: GraphLayout, nodeId: string): GraphLayoutNode {
 	return node;
 }
 
-/** Renderer 단위 테스트의 기존 전체 Tree fixture를 명시적으로 연다. */
-function openAllFolders(project: Project): Record<string, true> {
-	const openedFolders: Record<string, true> = { [project.id]: true };
-	const visit = (entries: Project['children']): void => {
-		for (const entry of entries) {
-			if (!isFolder(entry)) {
-				continue;
-			}
+/** Renderer 단위 테스트의 기존 Container Tree fixture를 명시적으로 연다. */
+function openAllContainers(rootNode: GraphRootNode): Record<string, true> {
+	const openedFolders: Record<string, true> = {};
+	const visit = (node: GraphRootNode): void => {
+		if (node.kind === 'file') {
+			return;
+		}
 
-			openedFolders[entry.id] = true;
-			visit(entry.children);
+		openedFolders[node.id] = true;
+
+		for (const entry of node.children) {
+			if (isFolder(entry)) {
+				visit(entry);
+			}
 		}
 	};
 
-	visit(project.children);
+	visit(rootNode);
 	return openedFolders;
 }
 
