@@ -1,4 +1,9 @@
-import type { File, Project } from './graphModel';
+import {
+	createSingleRootGraph,
+	type File,
+	type Graph,
+	type Project,
+} from './graphModel';
 
 /** Pagination UI를 눈으로 확인할 수 있는 안정적인 순번 File 목록을 만든다. */
 function createPaginationMockFiles(folderPath: string, count: number): File[] {
@@ -112,3 +117,9 @@ export const GRAPH_MOCK_PROJECT: Project = {
 		{ kind: 'file', id: 'file:tsconfig.json', name: 'tsconfig.json' },
 	],
 };
+
+/** 기존 단일 Workspace를 Root 하나인 Multi-Root Graph로 표현한다. */
+export const GRAPH_MOCK: Graph = createSingleRootGraph(
+	GRAPH_MOCK_PROJECT,
+	'root:workspace:crispy',
+);

@@ -3,7 +3,8 @@ import {
 	type GraphCamera,
 } from './graphCamera';
 import { createGraphLayout, type GraphLayout } from './graphLayout';
-import { GRAPH_MOCK_PROJECT } from './graphMockData';
+import { GRAPH_MOCK } from './graphMockData';
+import type { Graph } from './graphModel';
 import { initializeGraphNavigator } from './graphNavigator';
 import {
 	initializeGraphRenderer,
@@ -70,11 +71,13 @@ export function initializeGraphLayoutReflow(
  *
  * @param root Graph View를 마운트할 요소
  * @param initialState 복원할 초기 Graph 상태
+ * @param graph 렌더링할 Root 목록과 Project Tree
  * @returns State와 Camera 및 전체 lifecycle을 제공하는 Graph View
  */
 export function initializeGraphView(
 	root: HTMLElement,
 	initialState: GraphState = INITIAL_GRAPH_STATE,
+	graph: Graph = GRAPH_MOCK,
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
 	const viewport = ownerDocument.createElement('div');
@@ -95,18 +98,19 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
+	const rootNodeIds = new Set(graph.roots.map((graphRoot) => graphRoot.nodeId));
 	const camera = initializeGraphCamera(viewport, world, state);
 	const renderer = initializeGraphRenderer(
 		edgeLayer,
 		nodeLayer,
-		createGraphLayout(GRAPH_MOCK_PROJECT, {
+		createGraphLayout(graph, {
 			fileGroupPages: initialGraphState.fileGroupPages,
 			openedFolders: initialGraphState.openedFolders,
 		}),
 		state,
 		{
 			onFolderClick: (folderId) => {
-				if (folderId !== GRAPH_MOCK_PROJECT.id) {
+				if (!rootNodeIds.has(folderId)) {
 					state.toggleFolder(folderId);
 				}
 			},
@@ -117,7 +121,7 @@ export function initializeGraphView(
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
 		renderer,
-		(nextState) => createGraphLayout(GRAPH_MOCK_PROJECT, {
+		(nextState) => createGraphLayout(graph, {
 			fileGroupPages: nextState.fileGroupPages,
 			openedFolders: nextState.openedFolders,
 		}),

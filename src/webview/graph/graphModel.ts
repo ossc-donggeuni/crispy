@@ -4,6 +4,29 @@ interface ProjectItemBase {
 	readonly name: string;
 }
 
+/** Graph World에서 독립적으로 배치되는 Root를 Node ID로 식별한다. */
+export interface GraphRoot {
+	readonly id: string;
+	readonly nodeId: string;
+}
+
+/** 여러 Root와 각 Root가 참조하는 Project Tree를 함께 제공하는 Graph 입력이다. */
+export interface Graph {
+	readonly roots: readonly GraphRoot[];
+	readonly rootNodes: Readonly<Record<string, Project>>;
+}
+
+/** 기존 Project 하나를 Root 하나인 Graph 입력으로 변환한다. */
+export function createSingleRootGraph(
+	rootNode: Project,
+	rootId = `root:${rootNode.id}`,
+): Graph {
+	return {
+		roots: [{ id: rootId, nodeId: rootNode.id }],
+		rootNodes: { [rootNode.id]: rootNode },
+	};
+}
+
 /** Graph의 최상위 Project Root와 직접 포함 항목을 나타낸다. */
 export interface Project extends ProjectItemBase {
 	readonly kind: 'project';

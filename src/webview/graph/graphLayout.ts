@@ -2,7 +2,7 @@ import {
 	isFile,
 	isFolder,
 	type File,
-	type Project,
+	type Graph,
 	type ProjectContainer,
 } from './graphModel';
 import {
@@ -89,6 +89,7 @@ const GRAPH_LAYOUT_COLUMN_GAP = 62;
 const GRAPH_LAYOUT_ROW_GAP = 6;
 const GRAPH_LAYOUT_COLUMN_WIDTH = GRAPH_FILE_GROUP_NODE_WIDTH;
 const GRAPH_NODE_BORDER_SIZE = 4;
+const GRAPH_LAYOUT_ROOT_GAP = 96;
 
 /** Layout 계산 단계에서 사용하는 재귀 Tree Node다. */
 interface LayoutTreeNode {
@@ -104,27 +105,43 @@ interface LayoutTreeNode {
 }
 
 /**
- * 프로젝트 계층을 왼쪽에서 오른쪽으로 배치할 Node와 직접 관계 Edge로 변환한다.
+ * 여러 Graph Root의 프로젝트 계층을 하나의 World에 배치할 Node와 Edge로 변환한다.
  * 같은 입력은 항상 같은 위치와 Edge 순서를 생성한다.
  *
- * @param project Layout을 생성할 Project Root
+ * Root 하나인 Graph는 기존 단일 Project와 동일한 기본 위치를 사용한다.
+ * 후속 Root는 앞 Root의 subtree 아래에 결정적인 간격으로 배치한다.
+ *
+ * @param graph Layout을 생성할 Root 목록과 Project Tree
  * @param options File Group pagination과 열린 Folder snapshot
  * @returns 기본 World 위치가 계산된 Node와 직접 Parent-Child Edge
  */
 export function createGraphLayout(
-	project: Project,
+	graph: Graph,
 	options: GraphLayoutOptions = {},
 ): GraphLayout {
-	const tree = createContainerTree(
-		project,
-		0,
-		options.fileGroupPages ?? {},
-		options.openedFolders ?? {},
-	);
 	const nodes: GraphLayoutNode[] = [];
 	const edges: GraphLayoutEdge[] = [];
+	let rootTop = GRAPH_LAYOUT_START_Y;
 
-	placeTree(tree, GRAPH_LAYOUT_START_Y, nodes, edges);
+	for (const root of graph.roots) {
+		const rootNode = graph.rootNodes[root.nodeId];
+
+		if (!rootNode) {
+			throw new Error(
+				`Graph Root \"${root.id}\"가 참조하는 Node \"${root.nodeId}\"를 찾을 수 없습니다.`,
+			);
+		}
+
+		const tree = createContainerTree(
+			rootNode,
+			0,
+			options.fileGroupPages ?? {},
+			options.openedFolders ?? {},
+		);
+		const subtreeHeight = placeTree(tree, rootTop, nodes, edges);
+
+		rootTop += subtreeHeight + GRAPH_LAYOUT_ROOT_GAP;
+	}
 
 	return { nodes, edges };
 }

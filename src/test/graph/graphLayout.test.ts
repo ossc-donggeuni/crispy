@@ -14,20 +14,46 @@ import {
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
 import {
+	createSingleRootGraph,
 	isFile,
 	isFolder,
+	type Graph,
 	type Project,
 } from '../../webview/graph/graphModel';
 import { FILE_GROUP_PAGE_SIZE } from '../../webview/graph/graphState';
 
 const ALL_OPENED_FOLDERS = openAllFolders(GRAPH_MOCK_PROJECT);
+const SECOND_PROJECT: Project = {
+	kind: 'project',
+	id: 'project:secondary',
+	name: 'secondary',
+	children: [
+		{
+			kind: 'folder',
+			id: 'folder:secondary/src',
+			name: 'src',
+			children: [
+				{
+					kind: 'file',
+					id: 'file:secondary/src/index.ts',
+					name: 'index.ts',
+				},
+			],
+		},
+		{
+			kind: 'file',
+			id: 'file:secondary/package.json',
+			name: 'package.json',
+		},
+	],
+};
 
 /** 기존 전체 Layout 검증에서는 모든 Folder를 명시적으로 연다. */
 function createGraphLayout(
 	project: Project,
 	options: GraphLayoutOptions = {},
 ): ReturnType<typeof createBaseGraphLayout> {
-	return createBaseGraphLayout(project, {
+	return createBaseGraphLayout(createSingleRootGraph(project), {
 		openedFolders: ALL_OPENED_FOLDERS,
 		...options,
 	});
@@ -63,6 +89,88 @@ function openAllFolders(project: Project): Record<string, true> {
 }
 
 suite('Graph Model / Layout', () => {
+	test('기존 Project 하나를 roots.length === 1인 Graph Layout으로 생성한다', () => {
+		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
+		const layout = createBaseGraphLayout(graph);
+		const projectRoots = layout.nodes.filter((node) => node.kind === 'project');
+
+		assert.strictEqual(graph.roots.length, 1);
+		assert.deepStrictEqual(graph.roots[0], {
+			id: `root:${GRAPH_MOCK_PROJECT.id}`,
+			nodeId: GRAPH_MOCK_PROJECT.id,
+		});
+		assert.strictEqual(projectRoots.length, 1);
+		assert.strictEqual(projectRoots[0]?.id, GRAPH_MOCK_PROJECT.id);
+		assert.ok(layout.edges.some(
+			(edge) => edge.sourceId === GRAPH_MOCK_PROJECT.id,
+		));
+	});
+
+	test('여러 Root와 각 하위 구조를 독립적으로 하나의 World에 배치한다', () => {
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:primary', nodeId: GRAPH_MOCK_PROJECT.id },
+				{ id: 'root:secondary', nodeId: SECOND_PROJECT.id },
+			],
+			rootNodes: {
+				[GRAPH_MOCK_PROJECT.id]: GRAPH_MOCK_PROJECT,
+				[SECOND_PROJECT.id]: SECOND_PROJECT,
+			},
+		};
+		const layout = createBaseGraphLayout(graph, {
+			openedFolders: {
+				...ALL_OPENED_FOLDERS,
+				'folder:secondary/src': true,
+			},
+		});
+		const primaryNodeIds = new Set(
+			layout.nodes
+				.filter((node) => !node.id.includes('secondary'))
+				.map((node) => node.id),
+		);
+		const secondaryNodeIds = new Set(
+			layout.nodes
+				.filter((node) => node.id.includes('secondary'))
+				.map((node) => node.id),
+		);
+		const primaryNodes = layout.nodes.filter((node) => primaryNodeIds.has(node.id));
+		const secondaryNodes = layout.nodes.filter(
+			(node) => secondaryNodeIds.has(node.id),
+		);
+
+		assert.ok(primaryNodeIds.has(GRAPH_MOCK_PROJECT.id));
+		assert.ok(primaryNodeIds.has('folder:app'));
+		assert.ok(secondaryNodeIds.has(SECOND_PROJECT.id));
+		assert.ok(secondaryNodeIds.has('folder:secondary/src'));
+		assert.ok(secondaryNodeIds.has(createFileGroupId(SECOND_PROJECT.id)));
+		assert.ok(secondaryNodeIds.has(createFileGroupId('folder:secondary/src')));
+		assert.strictEqual(
+			layout.edges.every((edge) => (
+				(primaryNodeIds.has(edge.sourceId) && primaryNodeIds.has(edge.targetId))
+				|| (secondaryNodeIds.has(edge.sourceId) && secondaryNodeIds.has(edge.targetId))
+			)),
+			true,
+		);
+
+		const primaryBottom = Math.max(
+			...primaryNodes.map((node) => node.position.y + node.height),
+		);
+		const secondaryTop = Math.min(
+			...secondaryNodes.map((node) => node.position.y),
+		);
+
+		assert.ok(secondaryTop > primaryBottom);
+		assert.deepStrictEqual(
+			createBaseGraphLayout(graph, {
+				openedFolders: {
+					...ALL_OPENED_FOLDERS,
+					'folder:secondary/src': true,
+				},
+			}),
+			layout,
+		);
+	});
+
 	test('실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다', () => {
 		const app = GRAPH_MOCK_PROJECT.children.find(
 			(entry) => isFolder(entry) && entry.id === 'folder:app',
@@ -83,8 +191,9 @@ suite('Graph Model / Layout', () => {
 	});
 
 	test('기본 상태는 모든 Folder를 닫고 Project Root는 항상 연다', () => {
-		const defaultLayout = createBaseGraphLayout(GRAPH_MOCK_PROJECT);
-		const rootStateLayout = createBaseGraphLayout(GRAPH_MOCK_PROJECT, {
+		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
+		const defaultLayout = createBaseGraphLayout(graph);
+		const rootStateLayout = createBaseGraphLayout(graph, {
 			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
 		});
 		const nodeIds = new Set(defaultLayout.nodes.map((node) => node.id));
@@ -100,9 +209,12 @@ suite('Graph Model / Layout', () => {
 
 	test('열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다', () => {
 		const folderId = 'folder:app';
-		const layout = createBaseGraphLayout(GRAPH_MOCK_PROJECT, {
-			openedFolders: { [folderId]: true },
-		});
+		const layout = createBaseGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+			{
+				openedFolders: { [folderId]: true },
+			},
+		);
 		const nodeIds = new Set(layout.nodes.map((node) => node.id));
 		const excludedDescendantIds = [
 			'folder:app/src/components',

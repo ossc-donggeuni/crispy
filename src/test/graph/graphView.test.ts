@@ -4,6 +4,11 @@ import {
 	createGraphLayout,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
+import {
+	createSingleRootGraph,
+	type Graph,
+	type Project,
+} from '../../webview/graph/graphModel';
 import { createGraphState } from '../../webview/graph/graphState';
 import {
 	initializeGraphLayoutReflow,
@@ -11,6 +16,86 @@ import {
 } from '../../webview/graph/graphView';
 
 suite('Graph View', () => {
+	test('여러 Root의 저장 위치를 독립적으로 같은 Graph World에 렌더링한다', () => {
+		const secondaryProject: Project = {
+			kind: 'project',
+			id: 'project:secondary',
+			name: 'secondary',
+			children: [{
+				kind: 'file',
+				id: 'file:secondary/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:primary', nodeId: GRAPH_MOCK_PROJECT.id },
+				{ id: 'root:secondary', nodeId: secondaryProject.id },
+			],
+			rootNodes: {
+				[GRAPH_MOCK_PROJECT.id]: GRAPH_MOCK_PROJECT,
+				[secondaryProject.id]: secondaryProject,
+			},
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const primaryPosition = { x: 320, y: 180 };
+		const secondaryPosition = { x: 760, y: 420 };
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {
+				[GRAPH_MOCK_PROJECT.id]: primaryPosition,
+				[secondaryProject.id]: secondaryPosition,
+			},
+		}, graph);
+		const primaryRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+		const secondaryRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondaryProject.id,
+		);
+
+		assert.strictEqual(
+			primaryRoot.style.transform,
+			'translate(320px, 180px)',
+		);
+		assert.strictEqual(
+			secondaryRoot.style.transform,
+			'translate(760px, 420px)',
+		);
+
+		const nextPrimaryPosition = { x: 540, y: 260 };
+		const currentState = graphView.state.getState();
+
+		graphView.state.setState({
+			camera: { ...currentState.camera },
+			nodePositions: {
+				...currentState.nodePositions,
+				[GRAPH_MOCK_PROJECT.id]: nextPrimaryPosition,
+			},
+			fileGroupPages: { ...currentState.fileGroupPages },
+			openedFolders: { ...currentState.openedFolders },
+		});
+
+		assert.strictEqual(
+			primaryRoot.style.transform,
+			'translate(540px, 260px)',
+		);
+		assert.strictEqual(
+			secondaryRoot.style.transform,
+			'translate(760px, 420px)',
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[secondaryProject.id],
+			secondaryPosition,
+		);
+		graphView.dispose();
+	});
+
 	test('초기 Graph Camera 상태를 Store와 World transform에 복원한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -246,7 +331,7 @@ suite('Graph View', () => {
 			},
 			(snapshot) => {
 				createLayoutCalls += 1;
-				return createGraphLayout(GRAPH_MOCK_PROJECT, {
+				return createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 					fileGroupPages: snapshot.fileGroupPages,
 					openedFolders: snapshot.openedFolders,
 				});

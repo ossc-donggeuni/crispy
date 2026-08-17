@@ -11,7 +11,11 @@ import {
 	type GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
-import { isFolder, type Project } from '../../webview/graph/graphModel';
+import {
+	createSingleRootGraph,
+	isFolder,
+	type Project,
+} from '../../webview/graph/graphModel';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import {
 	initializeGraphRenderer,
@@ -390,7 +394,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const removedEdge = fixture.getEdge(removedEdgeId);
 		const retainedNode = fixture.getNode(retainedNodeId);
 		const retainedEdge = fixture.getEdge(retainedEdgeId);
-		const collapsedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+		const collapsedLayout = createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
 			openedFolders: {},
 		});
@@ -421,7 +425,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.deepStrictEqual(folderClicks, []);
 		assert.deepStrictEqual(fileClicks, []);
 
-		const restoredLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+		const restoredLayout = createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
 			openedFolders: fixture.graphState.getState().openedFolders,
 		});
@@ -475,14 +479,14 @@ suite('Graph Renderer / Node Drag', () => {
 			15,
 		);
 
-		fixture.renderer.applyLayout(createGraphLayout(project, {
+		fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
 			openedFolders: {},
 		}));
 
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
 
-		fixture.renderer.applyLayout(createGraphLayout(project, {
+		fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
 			openedFolders: { [folderId]: true },
 		}));
@@ -515,7 +519,7 @@ suite('Graph Renderer / Node Drag', () => {
 			},
 		}, project);
 		const openLayout = fixture.layout;
-		const collapsedLayout = createGraphLayout(project, {
+		const collapsedLayout = createGraphLayout(createSingleRootGraph(project), {
 			openedFolders: {},
 		});
 		let activeFileGroup = fixture.getNode(fileGroupId);
@@ -613,7 +617,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const fileGroup = fixture.getNode(fileGroupId);
 		const edge = fixture.getConnectedEdge(fileGroupId);
 		const initialEdgePath = edge.getAttribute('d');
-		const nextLayout = createGraphLayout(project, {
+		const nextLayout = createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: { [fileGroupId]: 2 },
 			openedFolders: fixture.graphState.getState().openedFolders,
 		});
@@ -880,7 +884,7 @@ function createRendererFixture(
 		...initialState,
 		openedFolders: initialState.openedFolders ?? openAllFolders(project),
 	});
-	const layout = createGraphLayout(project, {
+	const layout = createGraphLayout(createSingleRootGraph(project), {
 		fileGroupPages: graphState.getState().fileGroupPages,
 		openedFolders: graphState.getState().openedFolders,
 	});
