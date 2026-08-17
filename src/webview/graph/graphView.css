@@ -132,6 +132,7 @@
 	-webkit-mask-image: url('./assets/file-icons/folder-open.svg');
 }
 
+.graph-project-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon,
 .graph-folder-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon {
 	mask-image: url('./assets/file-icons/folder-closed.svg');
 	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
