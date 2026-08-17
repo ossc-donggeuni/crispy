@@ -57,6 +57,8 @@ src/webview/graph/
 - Folder와 File Group에 동일한 `200px` 폭 적용
 - File Group page에 따라 5개 단위로 표시 Row 수 계산
 - 표시 Row와 선택적 단일 pagination control을 File Group 높이에 반영
+- `openedFolders`에 포함된 Folder의 children만 Layout에 포함
+- Project Root는 `openedFolders`와 무관하게 항상 열린 상태로 처리
 - 동일 입력에 동일한 Node 순서, 위치 및 Edge 반환
 
 ### `graphMockData.ts`
@@ -103,7 +105,8 @@ src/webview/graph/
 > Layout을 기존 Edge / Node Layer에 렌더링하고 표시 위치 및 interaction을 관리합니다.
 
 - Project Root와 Folder를 같은 Card 계열로 렌더링
-- Webview CSP와 무관하게 표시되는 inline Folder SVG 생성
+- 열린 상태에 따라 `folder-open.svg`와 `folder-closed.svg`를 기존 DOM에 적용
+- Folder icon과 `aria-expanded`를 `openedFolders`에 맞춰 갱신
 - File 이름을 렌더링 시점에 icon 식별값으로 변환하여 로컬 SVG 표시
 - Folder별 File을 현재 page 범위까지 하나의 File Group에 렌더링
 - File을 5개 단위로 추가하는 `+ N개 더보기` Button과 최초 page로 복원하는 접기 Button 표시
@@ -119,19 +122,21 @@ src/webview/graph/
 
 ### `graphState.ts`
 
-> Camera, 사용자가 이동한 Node 위치와 File Group page를 포함한 Graph 전체 상태를 관리합니다.
+> Camera, 사용자가 이동한 Node 위치, File Group page와 열린 Folder를 포함한 Graph 전체 상태를 관리합니다.
 
-- 기본 Camera 상태와 빈 Node 위치 및 File Group page 적용
+- 기본 Camera 상태와 빈 Node 위치, File Group page 및 `openedFolders` 적용
+- 빈 `openedFolders`를 모든 Folder가 닫힌 초기 상태로 해석
 - 외부에서 직접 변경할 수 없는 State snapshot 제공
 - Graph State 조회 및 변경
+- `isFolderOpened()` 조회와 `toggleFolder()` 기반 sparse opened 상태 관리
 - File Group별 page 조회, 5개 단위 더보기 및 최초 page로 접기
 - Page별 표시 File 수와 남은 File 수 계산
 - State 변경 구독 및 구독 해제
 - 이동한 Node의 World 좌표만 `nodePositions`에 저장
 - 복원 후보의 Graph 상태 검증 및 독립 객체 복사
-- `nodePositions` 또는 `fileGroupPages`가 없는 기존 저장 상태를 빈 값으로 호환 파싱
+- `nodePositions`, `fileGroupPages` 또는 `openedFolders`가 없는 상태를 빈 값으로 파싱
 - 동일한 `nodePositions` 객체의 reference fast-path 비교
-- Node 위치 및 File Group page 값 비교와 snapshot 참조 재사용
+- Node 위치, File Group page 및 opened Folder 값 비교와 snapshot 참조 재사용
 - Camera `scale` 최소값과 최대값 적용
 
 ### `graphView.ts`
@@ -140,8 +145,8 @@ src/webview/graph/
 
 - Viewport, World, Edge / Node / Overlay Layer 생성
 - 전달받은 초기 `GraphState`로 새 Store 초기화
-- 복원된 File Group page를 반영해 고정 Mock Project의 Layout과 Renderer 초기화
-- `fileGroupPages` reference 변경 시 Layout을 다시 계산하고 Renderer에 적용
+- 복원된 File Group page와 opened Folder를 반영해 Layout과 Renderer 초기화
+- `fileGroupPages` 또는 `openedFolders` reference 변경 시 Layout Reflow 적용
 - Camera 및 Node 위치만 바뀌면 Layout Reflow 생략
 - 초기 Camera 상태를 World transform과 Grid에 적용
 - Overlay Navigator 초기화

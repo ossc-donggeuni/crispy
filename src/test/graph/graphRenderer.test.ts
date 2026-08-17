@@ -11,7 +11,7 @@ import {
 	type GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
-import type { Project } from '../../webview/graph/graphModel';
+import { isFolder, type Project } from '../../webview/graph/graphModel';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import {
 	initializeGraphRenderer,
@@ -41,17 +41,21 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(root.hasClass('graph-project-node'), true);
 		assert.strictEqual(folder.hasClass('graph-folder-node'), true);
 		assert.strictEqual(fileGroup.hasClass('graph-file-group-node'), true);
-		const folderIcons = fixture.nodeLayer.children
-			.filter((node) => !node.hasClass('graph-file-group-node'))
-			.map((node) => getDescendantByClass(node, 'graph-folder-icon'));
-		const folderIconPaths = folderIcons.map(
-			(icon) => icon.children[0]?.getAttribute('d'),
+		const containerNodes = fixture.nodeLayer.children
+			.filter((node) => !node.hasClass('graph-file-group-node'));
+		const folderIcons = containerNodes.map(
+			(node) => getDescendantByClass(node, 'graph-folder-icon'),
 		);
 
-		assert.ok(folderIcons.every((icon) => icon.tagName === 'svg'));
-		assert.ok(folderIcons.every((icon) => icon.getAttribute('src') === null));
-		assert.ok(folderIconPaths[0]);
-		assert.ok(folderIconPaths.every((path) => path === folderIconPaths[0]));
+		assert.ok(folderIcons.every((icon) => icon.tagName === 'span'));
+		assert.ok(folderIcons.every(
+			(icon) => icon.getAttribute('aria-hidden') === 'true',
+		));
+		assert.ok(containerNodes.every(
+			(node) => node.getAttribute('data-folder-icon') === 'folder-open.svg',
+		));
+		assert.strictEqual(root.getAttribute('aria-expanded'), null);
+		assert.strictEqual(folder.getAttribute('aria-expanded'), 'true');
 		assert.ok(!getText(root).includes('📁'));
 		assert.ok(getText(root).includes('crispy/'));
 		assert.ok(getText(folder).includes('src/'));
@@ -388,7 +392,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const retainedEdge = fixture.getEdge(retainedEdgeId);
 		const collapsedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			collapsedFolders: { 'folder:app': true },
+			openedFolders: {},
 		});
 
 		fixture.renderer.applyLayout(collapsedLayout);
@@ -419,6 +423,7 @@ suite('Graph Renderer / Node Drag', () => {
 
 		const restoredLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
+			openedFolders: fixture.graphState.getState().openedFolders,
 		});
 
 		fixture.renderer.applyLayout(restoredLayout);
@@ -472,13 +477,14 @@ suite('Graph Renderer / Node Drag', () => {
 
 		fixture.renderer.applyLayout(createGraphLayout(project, {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			collapsedFolders: { [folderId]: true },
+			openedFolders: {},
 		}));
 
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
 
 		fixture.renderer.applyLayout(createGraphLayout(project, {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
+			openedFolders: { [folderId]: true },
 		}));
 
 		const restoredFileGroup = fixture.getNode(fileGroupId);
@@ -510,7 +516,7 @@ suite('Graph Renderer / Node Drag', () => {
 		}, project);
 		const openLayout = fixture.layout;
 		const collapsedLayout = createGraphLayout(project, {
-			collapsedFolders: { [folderId]: true },
+			openedFolders: {},
 		});
 		let activeFileGroup = fixture.getNode(fileGroupId);
 		let activeFileRow = getDescendantByClass(activeFileGroup, 'graph-file-item');
@@ -609,6 +615,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const initialEdgePath = edge.getAttribute('d');
 		const nextLayout = createGraphLayout(project, {
 			fileGroupPages: { [fileGroupId]: 2 },
+			openedFolders: fixture.graphState.getState().openedFolders,
 		});
 
 		fixture.renderer.applyLayout(nextLayout);
@@ -647,8 +654,8 @@ suite('Graph Renderer / Node Drag', () => {
 	});
 
 	test('Reflow 뒤 최초 Drag는 갱신된 Layout 기본 위치를 기준으로 시작한다', () => {
-		const fixture = createRendererFixture();
 		const nodeId = 'folder:app';
+		const fixture = createRendererFixture();
 		const node = fixture.getNode(nodeId);
 		const initialNode = getLayoutNode(fixture.layout, nodeId);
 		const edge = fixture.getConnectedEdge(nodeId);
@@ -869,9 +876,13 @@ function createRendererFixture(
 	const document = new FakeDocument();
 	const edgeLayer = document.createElementNS('', 'svg');
 	const nodeLayer = document.createElement('div');
-	const graphState = createGraphState(initialState);
+	const graphState = createGraphState({
+		...initialState,
+		openedFolders: initialState.openedFolders ?? openAllFolders(project),
+	});
 	const layout = createGraphLayout(project, {
 		fileGroupPages: graphState.getState().fileGroupPages,
+		openedFolders: graphState.getState().openedFolders,
 	});
 	const renderer = initializeGraphRenderer(
 		edgeLayer.asSvgElement(),
@@ -941,6 +952,24 @@ function getLayoutNode(layout: GraphLayout, nodeId: string): GraphLayoutNode {
 
 	assert.ok(node);
 	return node;
+}
+
+/** Renderer 단위 테스트의 기존 전체 Tree fixture를 명시적으로 연다. */
+function openAllFolders(project: Project): Record<string, true> {
+	const openedFolders: Record<string, true> = {};
+	const visit = (entries: Project['children']): void => {
+		for (const entry of entries) {
+			if (!isFolder(entry)) {
+				continue;
+			}
+
+			openedFolders[entry.id] = true;
+			visit(entry.children);
+		}
+	};
+
+	visit(project.children);
+	return openedFolders;
 }
 
 function replaceLayoutNode(

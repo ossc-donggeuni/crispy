@@ -33,8 +33,8 @@ suite('Webview State', () => {
 			INITIAL_GRAPH_STATE.fileGroupPages,
 		);
 		assert.notStrictEqual(
-			state.graph.collapsedFolders,
-			INITIAL_GRAPH_STATE.collapsedFolders,
+			state.graph.openedFolders,
+			INITIAL_GRAPH_STATE.openedFolders,
 		);
 	});
 
@@ -61,8 +61,8 @@ suite('Webview State', () => {
 			savedState.graph.fileGroupPages,
 		);
 		assert.notStrictEqual(
-			state.graph.collapsedFolders,
-			savedState.graph.collapsedFolders,
+			state.graph.openedFolders,
+			savedState.graph.openedFolders,
 		);
 	});
 
@@ -86,8 +86,8 @@ suite('Webview State', () => {
 			initialState.graph.fileGroupPages,
 		);
 		assert.notStrictEqual(
-			state.graph.collapsedFolders,
-			initialState.graph.collapsedFolders,
+			state.graph.openedFolders,
+			initialState.graph.openedFolders,
 		);
 	});
 
@@ -103,10 +103,10 @@ suite('Webview State', () => {
 		const restored = restoreWebviewState(createStateApi(previousState));
 
 		assert.deepStrictEqual(restored.graph.fileGroupPages, {});
-		assert.deepStrictEqual(restored.graph.collapsedFolders, {});
+		assert.deepStrictEqual(restored.graph.openedFolders, {});
 		assert.strictEqual(createGraphState(restored.graph).getFileGroupPage('missing'), 1);
 		assert.strictEqual(
-			createGraphState(restored.graph).isFolderCollapsed('folder:missing'),
+			createGraphState(restored.graph).isFolderOpened('folder:missing'),
 			false,
 		);
 	});
@@ -175,8 +175,8 @@ suite('Webview State', () => {
 			state.graph.fileGroupPages,
 		);
 		assert.notStrictEqual(
-			savedState?.graph.collapsedFolders,
-			state.graph.collapsedFolders,
+			savedState?.graph.openedFolders,
+			state.graph.openedFolders,
 		);
 	});
 
@@ -217,7 +217,7 @@ suite('Webview State', () => {
 					'folder:app/src:files': { x: 1040, y: 360 },
 				},
 				fileGroupPages: { 'folder:app/src:files': 3 },
-				collapsedFolders: { 'folder:app': true },
+				openedFolders: { 'folder:app': true },
 			},
 		});
 		unsubscribe();
@@ -240,18 +240,18 @@ suite('Webview State', () => {
 			3,
 		);
 		assert.strictEqual(
-			reinitializedGraphState.isFolderCollapsed('folder:app'),
+			reinitializedGraphState.isFolderOpened('folder:app'),
 			true,
 		);
 	});
 
-	test('serialize 후 restore해도 파일 그룹 page와 Folder 접힘 상태를 유지한다', () => {
+	test('serialize 후 restore해도 파일 그룹 page와 열린 Folder 상태를 유지한다', () => {
 		const state = createWebviewState('right', 10, -20, 1.25);
 		state.graph.fileGroupPages = {
 			'folder:src:files': 4,
 			'folder:test:files': 2,
 		};
-		state.graph.collapsedFolders = {
+		state.graph.openedFolders = {
 			'folder:src': true,
 			'folder:test': true,
 		};
@@ -265,11 +265,12 @@ suite('Webview State', () => {
 			'folder:src:files': 4,
 			'folder:test:files': 2,
 		});
-		assert.deepStrictEqual(restored.graph.collapsedFolders, {
+		assert.deepStrictEqual(restored.graph.openedFolders, {
 			'folder:src': true,
 			'folder:test': true,
 		});
 	});
+
 });
 
 suite('Webview State Wiring', () => {
@@ -279,7 +280,7 @@ suite('Webview State Wiring', () => {
 			camera: { x: 120, y: -60, scale: 2 },
 			nodePositions: { 'folder:src': { x: 800, y: 240 } },
 			fileGroupPages: {},
-			collapsedFolders: { 'folder:src': true as const },
+			openedFolders: { 'folder:src': true as const },
 		};
 		const savedStates: PersistedWebviewState[] = [];
 		const postedMessages: WebviewToExtensionMessage[] = [];
@@ -287,7 +288,7 @@ suite('Webview State Wiring', () => {
 			camera: initialState.graph.camera,
 			nodePositions: initialState.graph.nodePositions,
 			fileGroupPages: initialState.graph.fileGroupPages ?? {},
-			collapsedFolders: initialState.graph.collapsedFolders ?? {},
+			openedFolders: initialState.graph.openedFolders ?? {},
 		};
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
 		let panelState: PanelLayoutState | undefined;
@@ -317,7 +318,7 @@ suite('Webview State Wiring', () => {
 				camera: { ...graphState.camera },
 				nodePositions: { ...graphState.nodePositions },
 				fileGroupPages: { ...graphState.fileGroupPages },
-				collapsedFolders: { ...graphState.collapsedFolders },
+				openedFolders: { ...graphState.openedFolders },
 			};
 
 			return {
@@ -330,14 +331,14 @@ suite('Webview State Wiring', () => {
 						fileGroupPages: {
 							...(state.fileGroupPages ?? currentGraphState.fileGroupPages),
 						},
-						collapsedFolders: {
-							...(state.collapsedFolders
-								?? currentGraphState.collapsedFolders),
+						openedFolders: {
+							...(state.openedFolders
+								?? currentGraphState.openedFolders),
 						},
 					};
 					},
-					isFolderCollapsed: (folderId) => (
-						currentGraphState.collapsedFolders[folderId] === true
+					isFolderOpened: (folderId) => (
+						currentGraphState.openedFolders[folderId] === true
 					),
 					toggleFolder: () => undefined,
 					getFileGroupPage: (fileGroupId) => (
@@ -536,7 +537,7 @@ function createWebviewState(
 			camera: { x, y, scale },
 			nodePositions: {},
 			fileGroupPages: {},
-			collapsedFolders: {},
+			openedFolders: {},
 		},
 	};
 }

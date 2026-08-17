@@ -11,12 +11,12 @@ export interface GraphNodePosition {
 	y: number;
 }
 
-/** Camera, Node 위치, 파일 그룹 page와 Folder 접힘 상태를 포함하는 저장 가능한 Graph 상태다. */
+/** Camera, Node 위치, 파일 그룹 page와 열린 Folder 상태를 포함하는 저장 가능한 Graph 상태다. */
 export interface GraphState {
 	camera: GraphCameraState;
 	nodePositions: Record<string, GraphNodePosition>;
 	fileGroupPages?: Record<string, number>;
-	collapsedFolders?: Record<string, true>;
+	openedFolders?: Record<string, true>;
 }
 
 /** 외부 mutation을 막기 위해 읽기 전용으로 고정한 Graph 상태 snapshot이다. */
@@ -24,7 +24,7 @@ export interface GraphStateSnapshot {
 	readonly camera: Readonly<GraphCameraState>;
 	readonly nodePositions: Readonly<Record<string, Readonly<GraphNodePosition>>>;
 	readonly fileGroupPages: Readonly<Record<string, number>>;
-	readonly collapsedFolders: Readonly<Record<string, true>>;
+	readonly openedFolders: Readonly<Record<string, true>>;
 }
 
 /** Graph 상태가 실제로 변경된 뒤 호출되는 구독 callback이다. */
@@ -34,7 +34,7 @@ export type GraphStateSubscriber = (state: GraphStateSnapshot) => void;
 export interface GraphStateStore {
 	getState(): GraphStateSnapshot;
 	setState(state: GraphState): void;
-	isFolderCollapsed(folderId: string): boolean;
+	isFolderOpened(folderId: string): boolean;
 	toggleFolder(folderId: string): void;
 	getFileGroupPage(fileGroupId: string): number;
 	showMoreFiles(fileGroupId: string): void;
@@ -61,7 +61,7 @@ export const INITIAL_GRAPH_STATE: GraphStateSnapshot = Object.freeze({
 	camera: INITIAL_GRAPH_CAMERA_STATE,
 	nodePositions: Object.freeze({}),
 	fileGroupPages: Object.freeze({}),
-	collapsedFolders: Object.freeze({}),
+	openedFolders: Object.freeze({}),
 });
 
 /** 파일 총 개수와 page로 실제 표시할 파일 개수를 계산한다. */
@@ -105,9 +105,9 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 
 	const nodePositions = parseNodePositions(candidate.nodePositions);
 	const fileGroupPages = parseFileGroupPages(candidate.fileGroupPages);
-	const collapsedFolders = parseCollapsedFolders(candidate.collapsedFolders);
+	const openedFolders = parseOpenedFolders(candidate.openedFolders);
 
-	if (!nodePositions || !fileGroupPages || !collapsedFolders) {
+	if (!nodePositions || !fileGroupPages || !openedFolders) {
 		return undefined;
 	}
 
@@ -119,7 +119,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 		},
 		nodePositions,
 		fileGroupPages,
-		collapsedFolders,
+		openedFolders,
 	};
 }
 
@@ -152,24 +152,24 @@ export function createGraphState(
 	return {
 		getState: () => state,
 		setState,
-		isFolderCollapsed(folderId): boolean {
-			return Object.hasOwn(state.collapsedFolders, folderId)
-				&& state.collapsedFolders[folderId] === true;
+		isFolderOpened(folderId): boolean {
+			return Object.hasOwn(state.openedFolders, folderId)
+				&& state.openedFolders[folderId] === true;
 		},
 		toggleFolder(folderId): void {
-			const collapsedFolders = { ...state.collapsedFolders };
+			const openedFolders = { ...state.openedFolders };
 
-			if (Object.hasOwn(collapsedFolders, folderId)) {
-				delete collapsedFolders[folderId];
+			if (Object.hasOwn(openedFolders, folderId)) {
+				delete openedFolders[folderId];
 			} else {
-				collapsedFolders[folderId] = true;
+				openedFolders[folderId] = true;
 			}
 
 			setState({
 				camera: state.camera,
 				nodePositions: state.nodePositions,
 				fileGroupPages: state.fileGroupPages,
-				collapsedFolders,
+				openedFolders,
 			});
 		},
 		getFileGroupPage(fileGroupId): number {
@@ -179,7 +179,7 @@ export function createGraphState(
 			setState({
 				camera: state.camera,
 				nodePositions: state.nodePositions,
-				collapsedFolders: state.collapsedFolders,
+				openedFolders: state.openedFolders,
 				fileGroupPages: {
 					...state.fileGroupPages,
 					[fileGroupId]: readFileGroupPage(
@@ -193,7 +193,7 @@ export function createGraphState(
 			setState({
 				camera: state.camera,
 				nodePositions: state.nodePositions,
-				collapsedFolders: state.collapsedFolders,
+				openedFolders: state.openedFolders,
 				fileGroupPages: {
 					...state.fileGroupPages,
 					[fileGroupId]: 1,
@@ -234,16 +234,16 @@ function createSnapshot(
 		&& areSameFileGroupPages(previousState.fileGroupPages, sourceFileGroupPages)
 		? previousState.fileGroupPages
 		: Object.freeze({ ...sourceFileGroupPages });
-	const sourceCollapsedFolders = state.collapsedFolders
-		?? previousState?.collapsedFolders
-		?? INITIAL_GRAPH_STATE.collapsedFolders;
-	const collapsedFolders = previousState
-		&& areSameCollapsedFolders(
-			previousState.collapsedFolders,
-			sourceCollapsedFolders,
+	const sourceOpenedFolders = state.openedFolders
+		?? previousState?.openedFolders
+		?? INITIAL_GRAPH_STATE.openedFolders;
+	const openedFolders = previousState
+		&& areSameOpenedFolders(
+			previousState.openedFolders,
+			sourceOpenedFolders,
 		)
-		? previousState.collapsedFolders
-		: Object.freeze({ ...sourceCollapsedFolders });
+		? previousState.openedFolders
+		: Object.freeze({ ...sourceOpenedFolders });
 
 	return Object.freeze({
 		camera: Object.freeze({
@@ -253,7 +253,7 @@ function createSnapshot(
 		}),
 		nodePositions,
 		fileGroupPages,
-		collapsedFolders,
+		openedFolders,
 	});
 }
 
@@ -285,9 +285,9 @@ function isSameState(
 			currentState.fileGroupPages,
 			nextState.fileGroupPages,
 		)
-		&& areSameCollapsedFolders(
-			currentState.collapsedFolders,
-			nextState.collapsedFolders,
+		&& areSameOpenedFolders(
+			currentState.openedFolders,
+			nextState.openedFolders,
 		);
 }
 
@@ -367,10 +367,10 @@ function parseFileGroupPages(value: unknown): Record<string, number> | undefined
 }
 
 /**
- * Folder 접힘 상태 복원 후보를 sparse Map으로 검증하고 복사한다.
- * 이전 저장 상태에는 이 필드가 없으므로 모든 Folder가 열린 빈 Map으로 복원한다.
+ * 열린 Folder 상태 복원 후보를 sparse Map으로 검증하고 복사한다.
+ * 필드가 없으면 모든 Folder가 닫힌 빈 Map으로 복원한다.
  */
-function parseCollapsedFolders(value: unknown): Record<string, true> | undefined {
+function parseOpenedFolders(value: unknown): Record<string, true> | undefined {
 	if (value === undefined) {
 		return {};
 	}
@@ -381,8 +381,8 @@ function parseCollapsedFolders(value: unknown): Record<string, true> | undefined
 
 	const entries: Array<[string, true]> = [];
 
-	for (const [id, collapsed] of Object.entries(value)) {
-		if (!id || collapsed !== true) {
+	for (const [id, opened] of Object.entries(value)) {
+		if (!id || opened !== true) {
 			return undefined;
 		}
 
@@ -455,10 +455,10 @@ function areSameFileGroupPages(
 		&& currentIds.every((id) => currentPages[id] === nextPages[id]);
 }
 
-/** 두 Folder 접힘 Map에 같은 ID가 저장되어 있는지 판별한다. */
-function areSameCollapsedFolders(
-	currentFolders: GraphStateSnapshot['collapsedFolders'],
-	nextFolders: GraphStateSnapshot['collapsedFolders'],
+/** 두 열린 Folder Map에 같은 ID가 저장되어 있는지 판별한다. */
+function areSameOpenedFolders(
+	currentFolders: GraphStateSnapshot['openedFolders'],
+	nextFolders: GraphStateSnapshot['openedFolders'],
 ): boolean {
 	if (currentFolders === nextFolders) {
 		return true;

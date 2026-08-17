@@ -21,7 +21,7 @@
 - 잘못된 `getState()` 대신 유효한 HTML 초기 상태를 사용한다
 - 저장 시 Panel과 Graph를 함께 독립적인 snapshot으로 `setState()`에 전달한다
 - Graph snapshot을 저장하고 새 Store로 Round Trip한다
-- serialize 후 restore해도 File Group page와 Folder 접힘 상태를 유지한다
+- serialize 후 restore해도 File Group page와 열린 Folder 상태를 유지한다
 - Graph와 Panel 변경을 전체 Webview snapshot 저장 및 Host 메시지로 연결한다
 
 ## `panel/panelState.test.ts`
@@ -55,10 +55,10 @@
 
 ## `graph/graphState.test.ts`
 
-- 기존 Camera 기본값으로 초기화한다
+- 기본 Camera와 빈 opened Folder 상태로 초기화한다
 - 외부 객체와 분리된 immutable snapshot을 관리한다
-- Folder toggle 시 sparse 상태에 ID를 추가하고 다시 toggle하면 제거한다
-- 여러 Folder의 접힘 상태를 독립적으로 관리한다
+- Folder를 열면 sparse 상태에 ID를 추가하고 닫으면 제거한다
+- 여러 Folder의 열린 상태를 독립적으로 관리한다
 - 저장되지 않은 File Group의 기본 page는 1이다
 - `showMoreFiles()`는 해당 File Group의 page만 증가시키고 그룹별 상태를 독립 관리한다
 - `collapseFileGroup()`은 현재 page와 관계없이 해당 File Group을 page 1로 복원한다
@@ -67,19 +67,20 @@
 - 변경된 상태를 subscriber에 전달하고 unsubscribe 이후 호출하지 않는다
 - 동일한 Node 위치 객체는 reference fast-path로 snapshot 참조를 재사용한다
 - 다른 객체라도 Node 위치 값이 같으면 기존 snapshot 참조를 재사용한다
+- opened Folder 값이 같으면 기존 snapshot 참조를 재사용한다
 - Camera scale을 최소 및 최대 범위로 제한한다
 - 유효한 Graph 상태를 독립적인 객체로 파싱한다
-- 기존 저장 상태를 빈 Node 위치, File Group page와 Folder 상태로 호환 파싱한다
+- 필드가 없는 기존 상태를 빈 Node 위치, page와 opened 상태로 파싱한다
 - 잘못된 Graph 상태를 거부한다
 
 ## `graph/graphLayout.test.ts`
 
 - 실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다
-- 열린 Folder와 Project Root collapse 입력은 기존 Layout을 유지한다
-- 접힌 Folder는 유지하고 직계·재귀 하위 Node와 Edge를 제외한다
-- Folder collapse 후 sibling을 남은 구조 기준으로 재배치한다
-- collapsed 상태를 제거하면 기존 전체 Layout을 다시 생성한다
-- 여러 Folder의 subtree를 독립적으로 제외한다
+- 기본 상태는 모든 Folder를 닫고 Project Root는 항상 연다
+- 열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다
+- Folder를 닫으면 sibling을 남은 구조 기준으로 재배치한다
+- opened 상태를 제거하면 닫히고 다시 추가하면 전체 Layout을 복원한다
+- 여러 Folder의 opened 상태를 독립적으로 제거한다
 - 각 Container의 직접 File을 하나의 안정적인 File Group으로 만든다
 - Pagination 확인용 하위 Folder에 17개와 21개 File Group을 만든다
 - 17개 File Group 높이를 page별 visible File 수에 맞게 계산한다
@@ -128,9 +129,10 @@
 ## `graph/graphView.test.ts`
 
 - 초기 Graph Camera 상태를 Store와 World transform에 복원한다
+- 초기 Folder는 닫혀 있고 클릭으로 subtree와 icon 상태를 열고 닫는다
 - 복원된 File Group page를 최초 Layout 높이와 Renderer contents에 반영한다
 - 더보기와 접기가 File Group size, sibling 위치와 Edge를 함께 Reflow한다
-- Layout invalidation은 `fileGroupPages` reference 변경에서만 Reflow한다
+- Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛴다
 
 ## `graph/graphNavigator.test.ts`
 

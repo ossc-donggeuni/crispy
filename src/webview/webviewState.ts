@@ -128,7 +128,7 @@ function createDefaultWebviewState(): PersistedWebviewState {
 			},
 			nodePositions: {},
 			fileGroupPages: {},
-			collapsedFolders: {},
+			openedFolders: {},
 		},
 	};
 }

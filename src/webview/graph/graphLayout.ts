@@ -63,10 +63,10 @@ export interface GraphLayout {
 	readonly edges: readonly GraphLayoutEdge[];
 }
 
-/** 순수 Layout 계산에 필요한 pagination 및 Folder collapse snapshot이다. */
+/** 순수 Layout 계산에 필요한 pagination 및 열린 Folder snapshot이다. */
 export interface GraphLayoutOptions {
 	readonly fileGroupPages?: Readonly<Record<string, number>>;
-	readonly collapsedFolders?: Readonly<Record<string, true>>;
+	readonly openedFolders?: Readonly<Record<string, true>>;
 }
 
 /** Project Root 및 Folder Node의 고정 폭이다. */
@@ -108,7 +108,7 @@ interface LayoutTreeNode {
  * 같은 입력은 항상 같은 위치와 Edge 순서를 생성한다.
  *
  * @param project Layout을 생성할 Project Root
- * @param options File Group pagination과 Folder collapse snapshot
+ * @param options File Group pagination과 열린 Folder snapshot
  * @returns 기본 World 위치가 계산된 Node와 직접 Parent-Child Edge
  */
 export function createGraphLayout(
@@ -119,7 +119,7 @@ export function createGraphLayout(
 		project,
 		0,
 		options.fileGroupPages ?? {},
-		options.collapsedFolders ?? {},
+		options.openedFolders ?? {},
 	);
 	const nodes: GraphLayoutNode[] = [];
 	const edges: GraphLayoutEdge[] = [];
@@ -144,19 +144,21 @@ function createContainerTree(
 	container: ProjectContainer,
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
-	collapsedFolders: Readonly<Record<string, true>>,
+	openedFolders: Readonly<Record<string, true>>,
 ): LayoutTreeNode {
-	const isCollapsed = container.kind === 'folder'
-		&& Object.hasOwn(collapsedFolders, container.id)
-		&& collapsedFolders[container.id] === true;
-	const visibleChildren = isCollapsed ? [] : container.children;
+	const isOpened = container.kind === 'project'
+		|| (
+			Object.hasOwn(openedFolders, container.id)
+			&& openedFolders[container.id] === true
+		);
+	const visibleChildren = isOpened ? container.children : [];
 	const folderChildren = visibleChildren
 		.filter(isFolder)
 		.map((folder) => createContainerTree(
 			folder,
 			depth + 1,
 			fileGroupPages,
-			collapsedFolders,
+			openedFolders,
 		));
 	const files = visibleChildren.filter(isFile);
 	const fileGroup = files.length > 0
