@@ -95,13 +95,18 @@ export function initializeGraphRenderer(
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
 	let disposed = false;
 
-	for (const edge of layout.edges) {
+	/** 새 Edge path를 생성해 Layer와 ID Map에 등록한다. */
+	const addEdge = (edge: GraphLayoutEdge): void => {
 		const path = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
 
 		path.classList.add('graph-edge');
 		path.setAttribute('data-graph-edge-id', edge.id);
 		edgeLayer.append(path);
 		edgeElements.set(edge.id, path);
+	};
+
+	/** Edge를 양 끝 Node의 연결 목록에 등록한다. */
+	const indexEdge = (edge: GraphLayoutEdge): void => {
 
 		for (const nodeId of [edge.sourceId, edge.targetId]) {
 			const connectedEdges = edgesByNodeId.get(nodeId) ?? [];
@@ -109,6 +114,11 @@ export function initializeGraphRenderer(
 			connectedEdges.push(edge);
 			edgesByNodeId.set(nodeId, connectedEdges);
 		}
+	};
+
+	for (const edge of layout.edges) {
+		addEdge(edge);
+		indexEdge(edge);
 	}
 
 	/** 현재 Renderer 위치 Map으로 지정한 Edge의 Bezier path를 다시 계산한다. */
@@ -150,7 +160,8 @@ export function initializeGraphRenderer(
 		}
 	};
 
-	for (const layoutNode of layout.nodes) {
+	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
+	const addNode = (layoutNode: GraphLayoutNode): void => {
 		const element = createNodeElement(
 			layoutNode,
 			ownerDocument,
@@ -171,6 +182,11 @@ export function initializeGraphRenderer(
 
 		nodeLayer.append(element);
 		nodeElements.set(layoutNode.id, element);
+		const position = graphState.getState().nodePositions[layoutNode.id]
+			?? layoutNode.position;
+
+		renderedPositions.set(layoutNode.id, position);
+		element.style.transform = `translate(${position.x}px, ${position.y}px)`;
 		nodeDrags.set(layoutNode.id, initializeGraphNodeDrag(
 			element,
 			layoutNode.id,
@@ -183,15 +199,27 @@ export function initializeGraphRenderer(
 				},
 			},
 		));
-	}
+	};
+
+	/** 제거할 Node의 interaction과 content를 정리한 뒤 DOM과 Map에서 제외한다. */
+	const removeNode = (nodeId: string): void => {
+		nodeDrags.get(nodeId)?.dispose();
+		nodeDrags.delete(nodeId);
+		fileGroupContents.get(nodeId)?.dispose();
+		fileGroupContents.delete(nodeId);
+		nodeElements.get(nodeId)?.remove();
+		nodeElements.delete(nodeId);
+		renderedPositions.delete(nodeId);
+	};
+
+	/** 제거할 Edge path를 DOM과 ID Map에서 제외한다. */
+	const removeEdge = (edgeId: string): void => {
+		edgeElements.get(edgeId)?.remove();
+		edgeElements.delete(edgeId);
+	};
 
 	for (const layoutNode of layout.nodes) {
-		const position = renderedPositions.get(layoutNode.id) ?? layoutNode.position;
-		const element = nodeElements.get(layoutNode.id);
-
-		if (element) {
-			element.style.transform = `translate(${position.x}px, ${position.y}px)`;
-		}
+		addNode(layoutNode);
 	}
 
 	for (const edge of layout.edges) {
@@ -261,19 +289,45 @@ export function initializeGraphRenderer(
 			const previousEdgesById = new Map(
 				renderedLayout.edges.map((edge) => [edge.id, edge]),
 			);
+			const nextNodesById = new Map(
+				nextLayout.nodes.map((node) => [node.id, node]),
+			);
+			const nextEdgesById = new Map(
+				nextLayout.edges.map((edge) => [edge.id, edge]),
+			);
 			const pendingEdges = new Map<string, GraphLayoutEdge>();
 
+			for (const nodeId of previousNodesById.keys()) {
+				if (!nextNodesById.has(nodeId)) {
+					removeNode(nodeId);
+				}
+			}
+
+			for (const edgeId of previousEdgesById.keys()) {
+				if (!nextEdgesById.has(edgeId)) {
+					removeEdge(edgeId);
+				}
+			}
+
 			renderedLayout = nextLayout;
-			nodesById = new Map(nextLayout.nodes.map((node) => [node.id, node]));
+			nodesById = nextNodesById;
+
+			for (const nextNode of nextLayout.nodes) {
+				if (!previousNodesById.has(nextNode.id)) {
+					addNode(nextNode);
+				}
+			}
+
+			for (const nextEdge of nextLayout.edges) {
+				if (!previousEdgesById.has(nextEdge.id)) {
+					addEdge(nextEdge);
+				}
+			}
+
 			edgesByNodeId.clear();
 
 			for (const edge of nextLayout.edges) {
-				for (const nodeId of [edge.sourceId, edge.targetId]) {
-					const connectedEdges = edgesByNodeId.get(nodeId) ?? [];
-
-					connectedEdges.push(edge);
-					edgesByNodeId.set(nodeId, connectedEdges);
-				}
+				indexEdge(edge);
 
 				const previousEdge = previousEdgesById.get(edge.id);
 
@@ -343,21 +397,15 @@ export function initializeGraphRenderer(
 			disposed = true;
 			unsubscribeState();
 
-			for (const drag of nodeDrags.values()) {
-				drag.dispose();
+			for (const nodeId of [...nodeElements.keys()]) {
+				removeNode(nodeId);
 			}
 
-			for (const content of fileGroupContents.values()) {
-				content.dispose();
+			for (const edgeId of [...edgeElements.keys()]) {
+				removeEdge(edgeId);
 			}
 
-			for (const path of edgeElements.values()) {
-				path.remove();
-			}
-
-			for (const element of nodeElements.values()) {
-				element.remove();
-			}
+			edgesByNodeId.clear();
 		},
 	};
 }

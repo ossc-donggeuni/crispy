@@ -360,6 +360,209 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
+	test('applyLayout은 Node와 Edge를 제거·추가하고 유지 DOM을 재사용한다', () => {
+		const removedFolderId = 'folder:app/src';
+		const removedFileGroupId = createFileGroupId(removedFolderId);
+		const removedEdgeId = `folder:app->${removedFolderId}`;
+		const retainedNodeId = 'folder:app';
+		const retainedEdgeId = `${GRAPH_MOCK_PROJECT.id}->${retainedNodeId}`;
+		const savedPosition = { x: 820, y: 260 };
+		const folderClicks: string[] = [];
+		const fileClicks: string[] = [];
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [removedFolderId]: savedPosition },
+			fileGroupPages: { [removedFileGroupId]: 2 },
+		}, {
+			onFolderClick: (folderId) => folderClicks.push(folderId),
+			onFileClick: (fileId) => fileClicks.push(fileId),
+		});
+		const removedFolder = fixture.getNode(removedFolderId);
+		const removedFileGroup = fixture.getNode(removedFileGroupId);
+		const removedFileRow = getDescendantByClass(
+			removedFileGroup,
+			'graph-file-item',
+		);
+		const removedEdge = fixture.getEdge(removedEdgeId);
+		const retainedNode = fixture.getNode(retainedNodeId);
+		const retainedEdge = fixture.getEdge(retainedEdgeId);
+		const collapsedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: fixture.graphState.getState().fileGroupPages,
+			collapsedFolders: { 'folder:app': true },
+		});
+
+		fixture.renderer.applyLayout(collapsedLayout);
+
+		assert.strictEqual(fixture.nodeLayer.children.length, collapsedLayout.nodes.length);
+		assert.strictEqual(fixture.edgeLayer.children.length, collapsedLayout.edges.length);
+		assert.strictEqual(fixture.nodeLayer.children.includes(removedFolder), false);
+		assert.strictEqual(
+			fixture.nodeLayer.children.includes(removedFileGroup),
+			false,
+		);
+		assert.strictEqual(fixture.edgeLayer.children.includes(removedEdge), false);
+		assert.strictEqual(removedFolder.getEventListenerCount(), 0);
+		assert.strictEqual(removedFileRow.getEventListenerCount(), 0);
+		assert.strictEqual(fixture.getNode(retainedNodeId), retainedNode);
+		assert.strictEqual(fixture.getEdge(retainedEdgeId), retainedEdge);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {
+			[removedFolderId]: savedPosition,
+		});
+		assert.deepStrictEqual(fixture.graphState.getState().fileGroupPages, {
+			[removedFileGroupId]: 2,
+		});
+
+		removedFolder.dispatch('click', createClickEvent(removedFolder));
+		removedFileRow.dispatch('click', createClickEvent(removedFileRow));
+		assert.deepStrictEqual(folderClicks, []);
+		assert.deepStrictEqual(fileClicks, []);
+
+		const restoredLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: fixture.graphState.getState().fileGroupPages,
+		});
+
+		fixture.renderer.applyLayout(restoredLayout);
+
+		const restoredFolder = fixture.getNode(removedFolderId);
+		const restoredFileGroup = fixture.getNode(removedFileGroupId);
+		const restoredFileRow = getDescendantByClass(
+			restoredFileGroup,
+			'graph-file-item',
+		);
+		const restoredEdge = fixture.getEdge(removedEdgeId);
+
+		assert.strictEqual(fixture.nodeLayer.children.length, restoredLayout.nodes.length);
+		assert.strictEqual(fixture.edgeLayer.children.length, restoredLayout.edges.length);
+		assert.notStrictEqual(restoredFolder, removedFolder);
+		assert.notStrictEqual(restoredFileGroup, removedFileGroup);
+		assert.notStrictEqual(restoredEdge, removedEdge);
+		assert.strictEqual(fixture.getNode(retainedNodeId), retainedNode);
+		assert.strictEqual(fixture.getEdge(retainedEdgeId), retainedEdge);
+		assert.strictEqual(
+			restoredFolder.style.transform,
+			`translate(${savedPosition.x}px, ${savedPosition.y}px)`,
+		);
+		assert.ok(restoredEdge.getAttribute('d'));
+		assert.strictEqual(restoredFolder.getEventListenerCount(), 6);
+		assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+
+		restoredFolder.dispatch('click', createClickEvent(restoredFolder));
+		restoredFileRow.dispatch('click', createClickEvent(restoredFileRow));
+		assert.deepStrictEqual(folderClicks, [removedFolderId]);
+		assert.deepStrictEqual(fileClicks, ['file:app/src/graphView.ts']);
+		fixture.renderer.dispose();
+	});
+
+	test('재추가된 File Group은 저장된 page만큼 File Row를 복원한다', () => {
+		const project = createPaginationProject([17]);
+		const folderId = 'folder:pagination-0';
+		const fileGroupId = createFileGroupId(folderId);
+		const fixture = createRendererFixture(1, undefined, {}, project);
+
+		fixture.graphState.showMoreFiles(fileGroupId);
+		fixture.graphState.showMoreFiles(fileGroupId);
+		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
+		assert.strictEqual(
+			getDescendantsByClass(
+				fixture.getNode(fileGroupId),
+				'graph-file-item',
+			).length,
+			15,
+		);
+
+		fixture.renderer.applyLayout(createGraphLayout(project, {
+			fileGroupPages: fixture.graphState.getState().fileGroupPages,
+			collapsedFolders: { [folderId]: true },
+		}));
+
+		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
+
+		fixture.renderer.applyLayout(createGraphLayout(project, {
+			fileGroupPages: fixture.graphState.getState().fileGroupPages,
+		}));
+
+		const restoredFileGroup = fixture.getNode(fileGroupId);
+
+		assert.strictEqual(
+			getDescendantsByClass(restoredFileGroup, 'graph-file-item').length,
+			15,
+		);
+		assert.strictEqual(
+			getDescendantByClass(restoredFileGroup, 'graph-file-more').textContent,
+			'+ 2개 더보기',
+		);
+		fixture.renderer.dispose();
+	});
+
+	test('반복 reconciliation과 dispose가 listener를 중복 생성·정리하지 않는다', () => {
+		const project = createPaginationProject([2]);
+		const folderId = 'folder:pagination-0';
+		const fileGroupId = createFileGroupId(folderId);
+		let fileGroupClicks = 0;
+		let fileClicks = 0;
+		const fixture = createRendererFixture(1, undefined, {
+			onFileGroupClick: () => {
+				fileGroupClicks += 1;
+			},
+			onFileClick: () => {
+				fileClicks += 1;
+			},
+		}, project);
+		const openLayout = fixture.layout;
+		const collapsedLayout = createGraphLayout(project, {
+			collapsedFolders: { [folderId]: true },
+		});
+		let activeFileGroup = fixture.getNode(fileGroupId);
+		let activeFileRow = getDescendantByClass(activeFileGroup, 'graph-file-item');
+
+		for (let cycle = 1; cycle <= 3; cycle += 1) {
+			fixture.renderer.applyLayout(collapsedLayout);
+			assert.strictEqual(activeFileGroup.getEventListenerCount(), 0);
+			assert.strictEqual(activeFileRow.getEventListenerCount(), 0);
+
+			fixture.renderer.applyLayout(openLayout);
+			const restoredFileGroup = fixture.getNode(fileGroupId);
+			const restoredFileRow = getDescendantByClass(
+				restoredFileGroup,
+				'graph-file-item',
+			);
+
+			assert.notStrictEqual(restoredFileGroup, activeFileGroup);
+			assert.strictEqual(restoredFileGroup.getEventListenerCount(), 6);
+			assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+
+			fixture.renderer.applyLayout(openLayout);
+			assert.strictEqual(fixture.getNode(fileGroupId), restoredFileGroup);
+			assert.strictEqual(restoredFileGroup.getEventListenerCount(), 6);
+			assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+
+			restoredFileGroup.dispatch(
+				'click',
+				createClickEvent(restoredFileGroup),
+			);
+			restoredFileRow.dispatch('click', createClickEvent(restoredFileRow));
+			assert.strictEqual(fileGroupClicks, cycle);
+			assert.strictEqual(fileClicks, cycle);
+			activeFileGroup = restoredFileGroup;
+			activeFileRow = restoredFileRow;
+		}
+
+		fixture.renderer.dispose();
+		fixture.renderer.dispose();
+		assert.strictEqual(activeFileGroup.getEventListenerCount(), 0);
+		assert.strictEqual(activeFileRow.getEventListenerCount(), 0);
+		assert.strictEqual(fixture.nodeLayer.children.length, 0);
+		assert.strictEqual(fixture.edgeLayer.children.length, 0);
+
+		activeFileGroup.dispatch('click', createClickEvent(activeFileGroup));
+		activeFileRow.dispatch('click', createClickEvent(activeFileRow));
+		fixture.renderer.applyLayout(openLayout);
+		assert.strictEqual(fileGroupClicks, 3);
+		assert.strictEqual(fileClicks, 3);
+		assert.strictEqual(fixture.nodeLayer.children.length, 0);
+		assert.strictEqual(fixture.edgeLayer.children.length, 0);
+	});
+
 	test('applyLayout은 동일 Node DOM의 size와 기본 위치 및 Edge geometry를 갱신한다', () => {
 		const fixture = createRendererFixture();
 		const nodeId = 'folder:app';
@@ -685,17 +888,21 @@ function createRendererFixture(
 		assert.ok(node, `${nodeId} Node가 렌더링되어야 한다.`);
 		return node;
 	};
+	const getEdge = (edgeId: string): FakeElement => {
+		const edge = edgeLayer.children.find(
+			(child) => child.getAttribute('data-graph-edge-id') === edgeId,
+		);
+
+		assert.ok(edge, `${edgeId} Edge가 렌더링되어야 한다.`);
+		return edge;
+	};
 	const getConnectedEdge = (nodeId: string): FakeElement => {
 		const edge = layout.edges.find(
 			(candidate) => candidate.sourceId === nodeId || candidate.targetId === nodeId,
 		);
 
 		assert.ok(edge, `${nodeId}에 연결된 Edge가 있어야 한다.`);
-		const element = edgeLayer.children.find(
-			(child) => child.getAttribute('data-graph-edge-id') === edge.id,
-		);
-		assert.ok(element);
-		return element;
+		return getEdge(edge.id);
 	};
 
 	return {
@@ -706,6 +913,7 @@ function createRendererFixture(
 		graphState,
 		renderer,
 		getNode,
+		getEdge,
 		getConnectedEdge,
 	};
 }
@@ -1048,6 +1256,13 @@ class FakeElement {
 
 	removeEventListener(type: string, listener: GraphEventListener): void {
 		this.listeners.get(type)?.delete(listener);
+	}
+
+	getEventListenerCount(): number {
+		return [...this.listeners.values()].reduce(
+			(count, listeners) => count + listeners.size,
+			0,
+		);
 	}
 
 	dispatch(type: string, event: Event): void {

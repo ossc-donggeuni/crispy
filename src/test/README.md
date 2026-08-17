@@ -104,6 +104,9 @@
 - File Row Pointer 입력은 File Group Drag와 Camera Pan을 시작하지 않는다
 - Folder, File Group, File Row 위 Wheel은 Cursor 기준 Camera Zoom을 수행한다
 - Camera-only 변경은 Edge를 다시 계산하지 않고 Node 위치 변경만 반영한다
+- `applyLayout()`은 Node와 Edge를 제거·추가하고 유지 DOM을 재사용한다
+- 재추가된 File Group은 저장된 page만큼 File Row를 복원한다
+- 반복 reconciliation과 `dispose()`가 listener를 중복 생성·정리하지 않는다
 - `applyLayout()`은 동일 Node DOM의 size와 기본 위치 및 Edge geometry를 갱신한다
 - `applyLayout()`은 저장된 위치를 유지하면서 File Group height와 Edge를 갱신한다
 - `applyLayout()`은 Node 위치가 같아도 height가 바뀐 Edge endpoint를 갱신한다
