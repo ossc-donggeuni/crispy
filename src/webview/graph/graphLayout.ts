@@ -63,9 +63,10 @@ export interface GraphLayout {
 	readonly edges: readonly GraphLayoutEdge[];
 }
 
-/** 순수 Layout 계산에 필요한 File Group pagination snapshot이다. */
+/** 순수 Layout 계산에 필요한 pagination 및 Folder collapse snapshot이다. */
 export interface GraphLayoutOptions {
 	readonly fileGroupPages?: Readonly<Record<string, number>>;
+	readonly collapsedFolders?: Readonly<Record<string, true>>;
 }
 
 /** Project Root 및 Folder Node의 고정 폭이다. */
@@ -107,14 +108,19 @@ interface LayoutTreeNode {
  * 같은 입력은 항상 같은 위치와 Edge 순서를 생성한다.
  *
  * @param project Layout을 생성할 Project Root
- * @param options File Group 높이에 반영할 pagination snapshot
+ * @param options File Group pagination과 Folder collapse snapshot
  * @returns 기본 World 위치가 계산된 Node와 직접 Parent-Child Edge
  */
 export function createGraphLayout(
 	project: Project,
 	options: GraphLayoutOptions = {},
 ): GraphLayout {
-	const tree = createContainerTree(project, 0, options.fileGroupPages ?? {});
+	const tree = createContainerTree(
+		project,
+		0,
+		options.fileGroupPages ?? {},
+		options.collapsedFolders ?? {},
+	);
 	const nodes: GraphLayoutNode[] = [];
 	const edges: GraphLayoutEdge[] = [];
 
@@ -138,11 +144,21 @@ function createContainerTree(
 	container: ProjectContainer,
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
+	collapsedFolders: Readonly<Record<string, true>>,
 ): LayoutTreeNode {
-	const folderChildren = container.children
+	const isCollapsed = container.kind === 'folder'
+		&& Object.hasOwn(collapsedFolders, container.id)
+		&& collapsedFolders[container.id] === true;
+	const visibleChildren = isCollapsed ? [] : container.children;
+	const folderChildren = visibleChildren
 		.filter(isFolder)
-		.map((folder) => createContainerTree(folder, depth + 1, fileGroupPages));
-	const files = container.children.filter(isFile);
+		.map((folder) => createContainerTree(
+			folder,
+			depth + 1,
+			fileGroupPages,
+			collapsedFolders,
+		));
+	const files = visibleChildren.filter(isFile);
 	const fileGroup = files.length > 0
 		? createFileGroupTree(container, files, depth + 1, fileGroupPages)
 		: [];

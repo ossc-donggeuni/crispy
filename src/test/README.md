@@ -75,6 +75,11 @@
 ## `graph/graphLayout.test.ts`
 
 - 실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다
+- 열린 Folder와 Project Root collapse 입력은 기존 Layout을 유지한다
+- 접힌 Folder는 유지하고 직계·재귀 하위 Node와 Edge를 제외한다
+- Folder collapse 후 sibling을 남은 구조 기준으로 재배치한다
+- collapsed 상태를 제거하면 기존 전체 Layout을 다시 생성한다
+- 여러 Folder의 subtree를 독립적으로 제외한다
 - 각 Container의 직접 File을 하나의 안정적인 File Group으로 만든다
 - Pagination 확인용 하위 Folder에 17개와 21개 File Group을 만든다
 - 17개 File Group 높이를 page별 visible File 수에 맞게 계산한다
