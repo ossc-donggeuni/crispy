@@ -7,8 +7,7 @@ import {
 	GRAPH_FILE_GROUP_NODE_WIDTH,
 	GRAPH_FILE_GROUP_PADDING,
 	GRAPH_FILE_GROUP_ROW_HEIGHT,
-	GRAPH_FILE_NODE_HEIGHT,
-	GRAPH_FILE_NODE_WIDTH,
+	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphFileGroupNode,
@@ -114,7 +113,7 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(graph.rootNodes[file.id]?.kind, 'file');
 	});
 
-	test('File Root를 edge 없는 Standalone File Node로 배치한다', () => {
+	test('File Root를 edge 없는 standalone File Group으로 배치한다', () => {
 		const file = SECOND_PROJECT.children.find(isFile);
 
 		assert.ok(file);
@@ -123,17 +122,23 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(layout.nodes.length, 1);
 		assert.strictEqual(layout.edges.length, 0);
 		assert.deepStrictEqual(layout.nodes[0], {
-			kind: 'file',
+			kind: 'file-group',
 			id: file.id,
 			name: file.name,
 			depth: 0,
 			position: { x: 48, y: 48 },
-			width: GRAPH_FILE_NODE_WIDTH,
-			height: GRAPH_FILE_NODE_HEIGHT,
+			width: GRAPH_FILE_GROUP_NODE_WIDTH,
+			height: GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
+			children: [{
+				kind: 'file',
+				id: file.id,
+				name: file.name,
+			}],
+			presentation: 'standalone',
 		});
 	});
 
-	test('Folder의 File이 하나이면 File ID 기반 Standalone Node와 edge를 만든다', () => {
+	test('Folder의 File이 하나이면 File ID 기반 standalone File Group과 edge를 만든다', () => {
 		const layout = createBaseGraphLayout(
 			createSingleRootGraph(SECOND_PROJECT),
 			{
@@ -146,7 +151,14 @@ suite('Graph Model / Layout', () => {
 		const fileId = 'file:secondary/src/index.ts';
 		const fileNode = layout.nodes.find((node) => node.id === fileId);
 
-		assert.ok(fileNode && fileNode.kind === 'file');
+		assert.ok(fileNode && fileNode.kind === 'file-group');
+		assert.strictEqual(fileNode.presentation, 'standalone');
+		assert.strictEqual(fileNode.parentId, 'folder:secondary/src');
+		assert.deepStrictEqual(fileNode.children, [{
+			kind: 'file',
+			id: fileId,
+			name: 'index.ts',
+		}]);
 		assert.strictEqual(
 			layout.nodes.some(
 				(node) => node.id === createFileGroupId('folder:secondary/src'),
@@ -410,6 +422,7 @@ suite('Graph Model / Layout', () => {
 		];
 
 		assert.strictEqual(appSrcFiles.id, createFileGroupId('folder:app/src'));
+		assert.strictEqual(appSrcFiles.presentation, 'grouped');
 		assert.deepStrictEqual(
 			appSrcFiles.children.map((file) => file.name),
 			expectedFiles,
@@ -657,5 +670,6 @@ function getFileGroup(
 	);
 
 	assert.ok(node, `${parentId}의 File Group이 있어야 한다.`);
+	assert.strictEqual(node.presentation, 'grouped');
 	return node;
 }

@@ -37,30 +37,28 @@ export interface GraphFolderNode extends GraphLayoutNodeBase {
 	readonly kind: 'folder';
 }
 
-/** File Group child 또는 독립 Graph Node로 사용하는 File Layout 단위다. */
+/** File Group child로 사용하는 File Layout 단위다. */
 export interface GraphFileNode {
 	readonly kind: 'file';
 	readonly id: string;
 	readonly name: string;
 }
 
-/** Singleton File을 독립적인 World 위치에 배치한 Graph Node다. */
-export interface GraphStandaloneFileNode extends GraphLayoutNodeBase {
-	readonly kind: 'file';
-}
+/** File Group Card의 표시 방식을 나타낸다. */
+export type GraphFileGroupPresentation = 'grouped' | 'standalone';
 
 /** 같은 Parent에 직접 포함된 File을 하나로 묶은 Layout Node다. */
 export interface GraphFileGroupNode extends GraphLayoutNodeBase {
 	readonly kind: 'file-group';
-	readonly parentId: string;
+	readonly parentId?: string;
 	readonly children: readonly GraphFileNode[];
+	readonly presentation: GraphFileGroupPresentation;
 }
 
-/** Renderer가 처리하는 Project, Folder, Standalone File, File Group Node다. */
+/** Renderer가 처리하는 Project, Folder, File Group Node다. */
 export type GraphLayoutNode =
 	| GraphProjectNode
 	| GraphFolderNode
-	| GraphStandaloneFileNode
 	| GraphFileGroupNode;
 
 /** Parent와 직접 Child 사이를 연결하는 방향성 Edge다. */
@@ -86,12 +84,10 @@ export interface GraphLayoutOptions {
 export const GRAPH_FOLDER_NODE_WIDTH = 200;
 /** Project Root 및 Folder Node의 고정 높이다. */
 export const GRAPH_FOLDER_NODE_HEIGHT = 42;
-/** Standalone File Node의 고정 폭이다. */
-export const GRAPH_FILE_NODE_WIDTH = 200;
-/** Standalone File Node의 고정 높이다. */
-export const GRAPH_FILE_NODE_HEIGHT = 42;
 /** File Group Node의 고정 폭이다. */
 export const GRAPH_FILE_GROUP_NODE_WIDTH = 200;
+/** Standalone presentation File Group의 고정 높이다. */
+export const GRAPH_FILE_GROUP_STANDALONE_HEIGHT = 42;
 /** File Group 내부 File Row 한 줄의 높이다. */
 export const GRAPH_FILE_GROUP_ROW_HEIGHT = 30;
 /** File Group Border 안쪽의 상하좌우 여백이다. */
@@ -118,6 +114,7 @@ interface LayoutTreeNode {
 	readonly height: number;
 	readonly parentId?: string;
 	readonly fileChildren?: readonly GraphFileNode[];
+	readonly fileGroupPresentation?: GraphFileGroupPresentation;
 	readonly children: readonly LayoutTreeNode[];
 }
 
@@ -149,7 +146,7 @@ export function createGraphLayout(
 			);
 		}
 		const tree = rootNode.kind === 'file'
-			? createFileTree(rootNode, 0)
+			? createStandaloneFileGroupTree(rootNode, 0)
 			: createContainerTree(
 				rootNode,
 				0,
@@ -207,7 +204,7 @@ function createContainerTree(
 	};
 }
 
-/** Singleton은 독립 File로, 여러 File은 File child를 가진 Group으로 만든다. */
+/** File 수에 따라 standalone/grouped presentation의 File Group을 만든다. */
 function createFileLayoutTrees(
 	parent: ProjectContainer,
 	files: readonly File[],
@@ -217,7 +214,7 @@ function createFileLayoutTrees(
 	const singleton = files[0];
 
 	if (files.length === 1 && singleton) {
-		return [createFileTree(singleton, depth)];
+		return [createStandaloneFileGroupTree(singleton, depth, parent.id)];
 	}
 
 	const id = createFileGroupId(parent.id);
@@ -236,19 +233,27 @@ function createFileLayoutTrees(
 		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
 		parentId: parent.id,
 		fileChildren: files.map(toGraphFileNode),
+		fileGroupPresentation: 'grouped',
 		children: [],
 	}];
 }
 
-/** File을 child가 없는 독립 Layout Tree Node로 만든다. */
-function createFileTree(file: File, depth: number): LayoutTreeNode {
+/** File 하나를 File ID 기반 standalone presentation Group으로 만든다. */
+function createStandaloneFileGroupTree(
+	file: File,
+	depth: number,
+	parentId?: string,
+): LayoutTreeNode {
 	return {
 		id: file.id,
 		name: file.name,
-		kind: 'file',
+		kind: 'file-group',
 		depth,
-		width: GRAPH_FILE_NODE_WIDTH,
-		height: GRAPH_FILE_NODE_HEIGHT,
+		width: GRAPH_FILE_GROUP_NODE_WIDTH,
+		height: GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
+		parentId,
+		fileChildren: [toGraphFileNode(file)],
+		fileGroupPresentation: 'standalone',
 		children: [],
 	};
 }
@@ -346,13 +351,10 @@ function toGraphLayoutNode(
 		return {
 			...base,
 			kind: 'file-group',
-			parentId: tree.parentId ?? '',
+			...(tree.parentId === undefined ? {} : { parentId: tree.parentId }),
 			children: tree.fileChildren ?? [],
+			presentation: tree.fileGroupPresentation ?? 'grouped',
 		};
-	}
-
-	if (tree.kind === 'file') {
-		return { ...base, kind: 'file' };
 	}
 
 	if (tree.kind === 'folder') {

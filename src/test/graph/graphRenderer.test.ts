@@ -35,7 +35,7 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Renderer / Node Drag', () => {
-	test('File Root를 저장 위치와 File interaction을 쓰는 Standalone Node로 렌더링한다', () => {
+	test('File Root를 저장 위치와 File interaction을 쓰는 standalone File Group으로 렌더링한다', () => {
 		const file = {
 			kind: 'file' as const,
 			id: 'file:standalone/graphRenderer.ts',
@@ -49,12 +49,22 @@ suite('Graph Renderer / Node Drag', () => {
 		}, {
 			onFileClick: (fileId) => fileClicks.push(fileId),
 		}, file);
+		const layoutNode = getLayoutNode(fixture.layout, file.id);
 		const node = fixture.getNode(file.id);
 		const icon = getDescendantByClass(node, 'graph-file-icon');
 
 		assert.strictEqual(fixture.layout.nodes.length, 1);
 		assert.strictEqual(fixture.layout.edges.length, 0);
-		assert.strictEqual(node.hasClass('graph-file-node'), true);
+		assert.strictEqual(layoutNode.kind, 'file-group');
+		assert.ok(layoutNode.kind === 'file-group');
+		assert.strictEqual(layoutNode.presentation, 'standalone');
+		assert.strictEqual(layoutNode.children[0]?.id, file.id);
+		assert.strictEqual(node.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(node.hasClass('graph-file-node'), false);
+		assert.strictEqual(
+			node.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
 		assert.strictEqual(node.style.transform, 'translate(640px, 280px)');
 		assert.strictEqual(node.getAttribute('data-file-id'), file.id);
 		assert.strictEqual(node.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), false);
@@ -68,7 +78,7 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('Folder의 Singleton File은 독립 Node, 두 File은 기존 Group Row로 렌더링한다', () => {
+	test('Folder의 Singleton은 standalone Group, 두 File은 grouped Row로 렌더링한다', () => {
 		const singletonProject = createPaginationProject([1]);
 		const singletonFileId = 'file:pagination-0/file-1.ts';
 		const singleton = createRendererFixture(
@@ -79,7 +89,12 @@ suite('Graph Renderer / Node Drag', () => {
 		);
 		const fileNode = singleton.getNode(singletonFileId);
 
-		assert.strictEqual(fileNode.hasClass('graph-file-node'), true);
+		assert.strictEqual(fileNode.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(
+			fileNode.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.strictEqual(findDescendantByClass(fileNode, 'graph-file-item'), undefined);
 		assert.strictEqual(
 			singleton.nodeLayer.children.some(
 				(node) => node.getAttribute('data-graph-node-id')
@@ -97,6 +112,10 @@ suite('Graph Renderer / Node Drag', () => {
 		const fileGroup = grouped.getNode(createFileGroupId('folder:pagination-0'));
 
 		assert.strictEqual(fileGroup.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(
+			fileGroup.getAttribute('data-file-group-presentation'),
+			'grouped',
+		);
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 2);
 		assert.strictEqual(
 			grouped.nodeLayer.children.some(
@@ -107,7 +126,7 @@ suite('Graph Renderer / Node Drag', () => {
 		grouped.renderer.dispose();
 	});
 
-	test('Standalone File은 File ID로 기존 Graph Node Drag lifecycle을 사용한다', () => {
+	test('standalone File Group은 File ID로 기존 Graph Node Drag lifecycle을 사용한다', () => {
 		const file = {
 			kind: 'file' as const,
 			id: 'file:standalone/index.ts',

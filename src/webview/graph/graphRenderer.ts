@@ -47,9 +47,9 @@ export interface GraphRenderer {
 export interface GraphRendererInteractions {
 	/** Project Root 또는 Folder가 Click됐을 때 안정적인 Container ID를 전달한다. */
 	onFolderClick?: (folderId: string) => void;
-	/** File Group이 Click됐을 때 소유 Project 또는 Folder ID를 전달한다. */
+	/** Grouped File Group이 Click됐을 때 소유 Project 또는 Folder ID를 전달한다. */
 	onFileGroupClick?: (folderId: string) => void;
-	/** Standalone File 또는 File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
+	/** Standalone presentation 또는 File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
 	onFileClick?: (fileId: string) => void;
 }
 
@@ -66,7 +66,7 @@ const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
  * Drag 중 임시 위치도 같은 위치 갱신 함수를 사용한다.
  *
  * @param edgeLayer Edge path를 추가할 기존 SVG Layer
- * @param nodeLayer Project, Folder, Standalone File, File Group을 추가할 HTML Layer
+ * @param nodeLayer Project, Folder, File Group을 추가할 HTML Layer
  * @param layout 결정적인 기본 Node 위치와 Parent-Child Edge
  * @param graphState 저장 위치 조회 및 변경 구독에 사용하는 Store
  * @param interactions Node 종류별 선택적 Click callback
@@ -175,7 +175,10 @@ export function initializeGraphRenderer(
 			);
 		}
 
-		if (layoutNode.kind === 'file-group') {
+		if (
+			layoutNode.kind === 'file-group'
+			&& layoutNode.presentation === 'grouped'
+		) {
 			const content = initializeFileGroupContent(
 				element,
 				layoutNode,
@@ -458,10 +461,18 @@ function createNodeElement(
 	element.style.width = `${node.width}px`;
 	element.style.height = `${node.height}px`;
 
-	if (node.kind === 'file') {
-		element.setAttribute('data-file-id', node.id);
-		appendFileContent(element, node, ownerDocument);
-	} else if (node.kind !== 'file-group') {
+	if (node.kind === 'file-group') {
+		element.setAttribute('data-file-group-presentation', node.presentation);
+
+		if (node.presentation === 'standalone') {
+			const file = node.children[0];
+
+			if (file) {
+				element.setAttribute('data-file-id', file.id);
+				appendFileContent(element, file, ownerDocument);
+			}
+		}
+	} else {
 		const icon = createFolderIcon(ownerDocument);
 		const name = ownerDocument.createElement('span');
 
@@ -474,7 +485,7 @@ function createNodeElement(
 	return element;
 }
 
-/** Standalone File과 File Group Row가 공유하는 icon/name content를 추가한다. */
+/** Standalone presentation과 grouped File Row가 공유하는 icon/name content를 추가한다. */
 function appendFileContent(
 	element: HTMLElement,
 	file: GraphFileNode,
@@ -518,7 +529,7 @@ function updateContainerOpenedState(
 	element.setAttribute('aria-expanded', String(isOpened));
 }
 
-/** Graph State page를 기준으로 한 File Group 내부 DOM과 Listener만 교체한다. */
+/** Graph State page를 기준으로 grouped File Group 내부 DOM과 Listener만 교체한다. */
 function initializeFileGroupContent(
 	element: HTMLElement,
 	node: GraphFileGroupNode,
@@ -692,13 +703,18 @@ function createNodeClickHandler(
 	interactions: GraphRendererInteractions,
 ): (() => void) | undefined {
 	if (node.kind === 'file-group') {
-		return interactions.onFileGroupClick
-			? () => interactions.onFileGroupClick?.(node.parentId)
-			: undefined;
-	}
-	if (node.kind === 'file') {
-		return interactions.onFileClick
-			? () => interactions.onFileClick?.(node.id)
+		if (node.presentation === 'standalone') {
+			const file = node.children[0];
+
+			return file && interactions.onFileClick
+				? () => interactions.onFileClick?.(file.id)
+				: undefined;
+		}
+
+		const parentId = node.parentId;
+
+		return parentId && interactions.onFileGroupClick
+			? () => interactions.onFileGroupClick?.(parentId)
 			: undefined;
 	}
 
