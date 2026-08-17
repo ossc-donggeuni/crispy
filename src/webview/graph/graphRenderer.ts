@@ -6,12 +6,14 @@ import type {
 	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
+import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from './graphCamera';
 import {
 	initializeGraphDetachDrag,
 	type GraphDetachDrag,
 	type GraphDetachDropRequest,
 } from './graphDetachDrag';
 import { resolveFileIcon } from './fileIconResolver';
+import type { GraphRootContext } from './graphModel';
 import {
 	GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE,
 	initializeGraphNodeDrag,
@@ -24,6 +26,7 @@ import {
 	type GraphStateSnapshot,
 	type GraphStateStore,
 } from './graphState';
+import { fitRelativePath } from './graphRootContext';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
@@ -38,6 +41,12 @@ type FileRowRenderer = {
 interface FileGroupContentElements {
 	readonly elements: HTMLElement[];
 	readonly cleanups: Array<() => void>;
+}
+
+interface RootContextLabelRenderer {
+	readonly element: HTMLElement;
+	render(context: GraphRootContext, rootNodeWidth: number): void;
+	dispose(): void;
 }
 
 /** Graph Node/Edge DOM과 interaction lifecycle을 관리한다. */
@@ -68,6 +77,7 @@ const FOLDER_CLOSED_ICON = 'folder-closed.svg';
 const COLLAPSE_CHEVRON_PATH = 'm4.5 10 3.5-3.5 3.5 3.5';
 const DETACH_ARROW_PATH = 'M4 12 12 4 M7 4h5v5';
 const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
+const ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER = 1.5;
 
 /**
  * 기존 Edge/Node Layer에 프로젝트 Layout을 렌더링하고 저장 위치와 동기화한다.
@@ -105,6 +115,7 @@ export function initializeGraphRenderer(
 	const nodeDrags = new Map<string, GraphNodeDrag>();
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
+	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
 	const rootNodeIds = interactions.rootNodeIds ?? new Set<string>();
 	let disposed = false;
 
@@ -173,6 +184,29 @@ export function initializeGraphRenderer(
 		}
 	};
 
+	/** 해당 Layout Root의 선택적 Context Label을 추가, 갱신 또는 제거한다. */
+	const syncRootContextLabel = (
+		layoutNode: GraphLayoutNode,
+		element: HTMLElement,
+		context: GraphRootContext | undefined,
+	): void => {
+		const current = rootContextLabels.get(layoutNode.id);
+
+		if (!context) {
+			current?.dispose();
+			rootContextLabels.delete(layoutNode.id);
+			return;
+		}
+
+		const label = current ?? initializeRootContextLabel(element, ownerDocument);
+
+		if (!current) {
+			rootContextLabels.set(layoutNode.id, label);
+		}
+
+		label.render(context, getRenderedNodeWidth(element, layoutNode.width));
+	};
+
 	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
 	const addNode = (layoutNode: GraphLayoutNode): void => {
 		const element = createNodeElement(
@@ -219,6 +253,11 @@ export function initializeGraphRenderer(
 
 		nodeLayer.append(element);
 		nodeElements.set(layoutNode.id, element);
+		syncRootContextLabel(
+			layoutNode,
+			element,
+			renderedLayout.rootContexts[layoutNode.id],
+		);
 		const position = graphState.getState().nodePositions[layoutNode.id]
 			?? layoutNode.position;
 
@@ -246,6 +285,8 @@ export function initializeGraphRenderer(
 		nodeDetachDrags.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
 		fileGroupContents.delete(nodeId);
+		rootContextLabels.get(nodeId)?.dispose();
+		rootContextLabels.delete(nodeId);
 		nodeElements.get(nodeId)?.remove();
 		nodeElements.delete(nodeId);
 		renderedPositions.delete(nodeId);
@@ -430,6 +471,14 @@ export function initializeGraphRenderer(
 					element.style.height = `${nextNode.height}px`;
 				}
 
+				if (element) {
+					syncRootContextLabel(
+						nextNode,
+						element,
+						nextLayout.rootContexts[nextNode.id],
+					);
+				}
+
 				if (
 					!previousNode
 					|| previousNode.width !== nextNode.width
@@ -474,6 +523,90 @@ export function initializeGraphRenderer(
 
 			edgesByNodeId.clear();
 		},
+	};
+}
+
+/** Root 카드에 Layout 비참여 absolute Context Label과 입력 차단 정책을 추가한다. */
+function initializeRootContextLabel(
+	rootNode: HTMLElement,
+	ownerDocument: Document,
+): RootContextLabelRenderer {
+	const label = ownerDocument.createElement('span');
+	const blockGraphInteraction = (event: Event): void => {
+		event.preventDefault();
+		event.stopPropagation();
+	};
+
+	label.className = 'graph-root-context-label';
+	label.setAttribute('data-graph-root-context-label', '');
+	label.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	label.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	label.style.left = '0px';
+	label.addEventListener('pointerdown', blockGraphInteraction);
+	label.addEventListener('click', blockGraphInteraction);
+	rootNode.append(label);
+
+	return {
+		element: label,
+		render(context, rootNodeWidth): void {
+			const maxWidth = Math.max(
+				0,
+				rootNodeWidth * ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER,
+			);
+
+			label.style.maxWidth = 'none';
+			const measureText = createContextLabelTextMeasurer(label, ownerDocument);
+			label.textContent = fitRelativePath(
+				context.relativePath,
+				maxWidth,
+				measureText,
+			);
+			label.style.maxWidth = `${maxWidth}px`;
+		},
+		dispose(): void {
+			label.removeEventListener('pointerdown', blockGraphInteraction);
+			label.removeEventListener('click', blockGraphInteraction);
+			label.remove();
+		},
+	};
+}
+
+/** Transform과 무관한 실제 CSS box 폭을 우선하고 Layout 폭을 안전한 fallback으로 쓴다. */
+function getRenderedNodeWidth(element: HTMLElement, fallbackWidth: number): number {
+	return element.offsetWidth > 0 ? element.offsetWidth : fallbackWidth;
+}
+
+/** 현재 Label의 computed font를 쓰는 Canvas 실측 함수를 만든다. */
+function createContextLabelTextMeasurer(
+	label: HTMLElement,
+	ownerDocument: Document,
+): (text: string) => number {
+	const canvas = ownerDocument.createElement('canvas') as HTMLCanvasElement;
+	const getContext = canvas.getContext;
+
+	if (typeof getContext === 'function') {
+		const context = getContext.call(canvas, '2d') as CanvasRenderingContext2D | null;
+
+		if (context) {
+			const computedStyle = ownerDocument.defaultView?.getComputedStyle(label);
+
+			if (computedStyle) {
+				context.font = [
+					computedStyle.fontStyle,
+					computedStyle.fontWeight,
+					computedStyle.fontSize,
+					computedStyle.fontFamily,
+				].join(' ');
+			}
+
+			return (text) => context.measureText(text).width;
+		}
+	}
+
+	/** DOM test doubles나 Canvas 미지원 환경에서는 같은 Label의 실제 box를 잰다. */
+	return (text) => {
+		label.textContent = text;
+		return label.getBoundingClientRect().width;
 	};
 }
 

@@ -99,6 +99,25 @@
 	cursor: grabbing;
 }
 
+.graph-root-context-label {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	left: 0;
+	display: block;
+	width: max-content;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-family: Inter, var(--vscode-font-family);
+	font-size: 12px;
+	font-weight: 400;
+	line-height: 16px;
+	text-align: left;
+	white-space: nowrap;
+	touch-action: none;
+	user-select: none;
+	cursor: default;
+}
+
 .graph-project-node,
 .graph-folder-node,
 .graph-file-group-node[data-file-group-presentation='standalone'] {

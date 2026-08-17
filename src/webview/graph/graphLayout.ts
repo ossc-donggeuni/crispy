@@ -3,6 +3,7 @@ import {
 	isFolder,
 	type File,
 	type Graph,
+	type GraphRootContext,
 	type ProjectContainer,
 } from './graphModel';
 import {
@@ -72,6 +73,8 @@ export interface GraphLayoutEdge {
 export interface GraphLayout {
 	readonly nodes: readonly GraphLayoutNode[];
 	readonly edges: readonly GraphLayoutEdge[];
+	/** Context가 있는 Graph Root Node ID만 포함하는 Renderer 전달 Map이다. */
+	readonly rootContexts: Readonly<Record<string, GraphRootContext>>;
 }
 
 /** 순수 Layout 계산에 필요한 pagination 및 열린 Folder snapshot이다. */
@@ -135,6 +138,7 @@ export function createGraphLayout(
 ): GraphLayout {
 	const nodes: GraphLayoutNode[] = [];
 	const edges: GraphLayoutEdge[] = [];
+	const rootContexts: Record<string, GraphRootContext> = {};
 	let rootTop = GRAPH_LAYOUT_START_Y;
 
 	for (const root of graph.roots) {
@@ -145,6 +149,11 @@ export function createGraphLayout(
 				`Graph Root \"${root.id}\"가 참조하는 Node \"${root.nodeId}\"를 찾을 수 없습니다.`,
 			);
 		}
+
+		if (root.context) {
+			rootContexts[root.nodeId] = root.context;
+		}
+
 		const tree = rootNode.kind === 'file'
 			? createStandaloneFileGroupTree(rootNode, 0)
 			: createContainerTree(
@@ -158,7 +167,7 @@ export function createGraphLayout(
 		rootTop += subtreeHeight + GRAPH_LAYOUT_ROOT_GAP;
 	}
 
-	return { nodes, edges };
+	return { nodes, edges, rootContexts };
 }
 
 /**

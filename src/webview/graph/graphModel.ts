@@ -4,10 +4,16 @@ interface ProjectItemBase {
 	readonly name: string;
 }
 
+/** 원래 Graph Root를 기준으로 한 선택적 표시 Context다. */
+export interface GraphRootContext {
+	readonly relativePath: string;
+}
+
 /** Graph World에서 독립적으로 배치되는 Root를 Node ID로 식별한다. */
 export interface GraphRoot {
 	readonly id: string;
 	readonly nodeId: string;
+	readonly context?: GraphRootContext;
 }
 
 /** 여러 Root와 각 Root가 참조하는 Node를 함께 제공하는 Graph 입력이다. */

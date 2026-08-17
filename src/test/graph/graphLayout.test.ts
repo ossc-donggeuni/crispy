@@ -113,6 +113,41 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(graph.rootNodes[file.id]?.kind, 'file');
 	});
 
+	test('Context가 있는 Root만 Layout rootContexts로 전달하고 일반 Node는 확장하지 않는다', () => {
+		const folder = SECOND_PROJECT.children[0];
+		const file = SECOND_PROJECT.children[1];
+
+		assert.ok(folder && file);
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:project', nodeId: SECOND_PROJECT.id },
+				{
+					id: 'root:folder',
+					nodeId: folder.id,
+					context: { relativePath: 'packages/demo/src' },
+				},
+				{
+					id: 'root:file',
+					nodeId: file.id,
+					context: { relativePath: 'src/package.json' },
+				},
+			],
+			rootNodes: {
+				[SECOND_PROJECT.id]: SECOND_PROJECT,
+				[folder.id]: folder,
+				[file.id]: file,
+			},
+		};
+		const layout = createBaseGraphLayout(graph);
+
+		assert.deepStrictEqual(layout.rootContexts, {
+			[folder.id]: { relativePath: 'packages/demo/src' },
+			[file.id]: { relativePath: 'src/package.json' },
+		});
+		assert.strictEqual(layout.rootContexts[SECOND_PROJECT.id], undefined);
+		assert.ok(layout.nodes.every((node) => !('context' in node)));
+	});
+
 	test('File Root를 edge 없는 standalone File Group으로 배치한다', () => {
 		const file = SECOND_PROJECT.children.find(isFile);
 

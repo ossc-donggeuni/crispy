@@ -14,6 +14,7 @@ import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
 import {
 	createSingleRootGraph,
 	isFolder,
+	type GraphRootContext,
 	type GraphRootNode,
 	type Project,
 } from '../../webview/graph/graphModel';
@@ -35,6 +36,170 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Renderer / Node Drag', () => {
+	test('Context가 있는 Folder/File Root에만 좌측 정렬 Label을 렌더링한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:context-root',
+			name: 'context-root',
+			children: [{
+				kind: 'file' as const,
+				id: 'file:context-root/child.ts',
+				name: 'child.ts',
+			}],
+		};
+		const folderContext = { relativePath: 'packages/demo/src/context-root' };
+		const folderFixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			folder,
+			folderContext,
+		);
+		const folderRoot = folderFixture.getNode(folder.id);
+		const folderLabel = getDescendantByClass(
+			folderRoot,
+			'graph-root-context-label',
+		);
+		const child = folderFixture.getNode(folder.children[0].id);
+
+		assert.strictEqual(folderLabel.textContent, folderContext.relativePath);
+		assert.strictEqual(folderLabel.style.left, '0px');
+		assert.strictEqual(folderLabel.style.maxWidth, '300px');
+		assert.strictEqual(
+			findDescendantByClass(child, 'graph-root-context-label'),
+			undefined,
+		);
+		folderFixture.renderer.dispose();
+
+		const file = {
+			kind: 'file' as const,
+			id: 'file:context-root.ts',
+			name: 'context-root.ts',
+		};
+		const fileContext = { relativePath: 'src/webview/graph/context-root.ts' };
+		const fileClicks: string[] = [];
+		const fileFixture = createRendererFixture(
+			1,
+			undefined,
+			{ onFileClick: (fileId) => fileClicks.push(fileId) },
+			file,
+			fileContext,
+		);
+		const fileLabel = getDescendantByClass(
+			fileFixture.getNode(file.id),
+			'graph-root-context-label',
+		);
+
+		assert.strictEqual(fileLabel.textContent, fileContext.relativePath);
+		fileLabel.dispatch('click', createClickEvent(fileLabel));
+		assert.deepStrictEqual(fileClicks, []);
+		fileFixture.renderer.dispose();
+
+		const noContext = createRendererFixture(1, undefined, {}, folder);
+
+		assert.strictEqual(
+			findDescendantByClass(
+				noContext.getNode(folder.id),
+				'graph-root-context-label',
+			),
+			undefined,
+		);
+		noContext.renderer.dispose();
+	});
+
+	test('Root Label은 Node 이동을 함께 따르며 Graph interaction을 시작하지 않는다', () => {
+		const folderClicks: string[] = [];
+		const detachDrops: string[] = [];
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{
+				onFolderClick: (folderId) => folderClicks.push(folderId),
+				onDetachDrop: (request) => detachDrops.push(request.nodeId),
+			},
+			GRAPH_MOCK_PROJECT,
+			{ relativePath: 'src/webview/graph' },
+		);
+		const root = fixture.getNode(GRAPH_MOCK_PROJECT.id);
+		const label = getDescendantByClass(root, 'graph-root-context-label');
+		const pointerDown = createPointerEvent(label, 10, 10);
+
+		label.dispatch('pointerdown', pointerDown);
+		label.dispatch('pointermove', createPointerEvent(label, 50, 40));
+		label.dispatch('pointerup', createPointerEvent(label, 50, 40));
+		label.dispatch('click', createClickEvent(label));
+		assert.strictEqual(pointerDown.defaultPrevented, true);
+		assert.strictEqual(pointerDown.propagationStopped, true);
+		assert.deepStrictEqual(folderClicks, []);
+		assert.deepStrictEqual(detachDrops, []);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+		assert.strictEqual(root.hasClass('is-dragging'), false);
+
+		const viewport = fixture.document.createSizedElement(1000, 800);
+		const world = fixture.document.createElement('div');
+		const camera = initializeGraphCamera(
+			viewport.asHtmlElement(),
+			world.asHtmlElement(),
+			fixture.graphState,
+		);
+
+		viewport.dispatch('pointerdown', createPointerEvent(label, 10, 10, 2));
+		viewport.dispatch('pointermove', createPointerEvent(label, 60, 50, 2));
+		assert.deepStrictEqual(camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(viewport.hasClass('is-panning'), false);
+
+		const movedPosition = { x: 420, y: 260 };
+		const state = fixture.graphState.getState();
+
+		fixture.graphState.setState({
+			...state,
+			nodePositions: {
+				...state.nodePositions,
+				[GRAPH_MOCK_PROJECT.id]: movedPosition,
+			},
+		});
+		assert.strictEqual(root.style.transform, 'translate(420px, 260px)');
+		assert.strictEqual(
+			getDescendantByClass(root, 'graph-root-context-label'),
+			label,
+		);
+
+		camera.dispose();
+		fixture.renderer.dispose();
+	});
+
+	test('applyLayout은 기존 Root DOM에서 Context Label을 추가, 갱신, 제거한다', () => {
+		const fixture = createRendererFixture();
+		const root = fixture.getNode(GRAPH_MOCK_PROJECT.id);
+		const firstContext = { relativePath: 'src/first' };
+		const secondContext = { relativePath: 'src/second' };
+
+		fixture.renderer.applyLayout({
+			...fixture.layout,
+			rootContexts: { [GRAPH_MOCK_PROJECT.id]: firstContext },
+		});
+		const label = getDescendantByClass(root, 'graph-root-context-label');
+
+		assert.strictEqual(label.textContent, firstContext.relativePath);
+		fixture.renderer.applyLayout({
+			...fixture.layout,
+			rootContexts: { [GRAPH_MOCK_PROJECT.id]: secondContext },
+		});
+		assert.strictEqual(
+			getDescendantByClass(root, 'graph-root-context-label'),
+			label,
+		);
+		assert.strictEqual(label.textContent, secondContext.relativePath);
+
+		fixture.renderer.applyLayout({ ...fixture.layout, rootContexts: {} });
+		assert.strictEqual(
+			findDescendantByClass(root, 'graph-root-context-label'),
+			undefined,
+		);
+		assert.strictEqual(label.getEventListenerCount(), 0);
+		fixture.renderer.dispose();
+	});
+
 	test('File Root를 저장 위치와 File interaction을 쓰는 standalone File Group으로 렌더링한다', () => {
 		const file = {
 			kind: 'file' as const,
@@ -1282,6 +1447,7 @@ function createRendererFixture(
 	},
 	interactions: GraphRendererInteractions = {},
 	rootNode: GraphRootNode = GRAPH_MOCK_PROJECT,
+	rootContext?: GraphRootContext,
 ) {
 	const document = new FakeDocument();
 	const edgeLayer = document.createElementNS('', 'svg');
@@ -1290,7 +1456,14 @@ function createRendererFixture(
 		...initialState,
 		openedFolders: initialState.openedFolders ?? openAllContainers(rootNode),
 	});
-	const layout = createGraphLayout(createSingleRootGraph(rootNode), {
+	const singleRootGraph = createSingleRootGraph(rootNode);
+	const graph = rootContext
+		? {
+			...singleRootGraph,
+			roots: singleRootGraph.roots.map((root) => ({ ...root, context: rootContext })),
+		}
+		: singleRootGraph;
+	const layout = createGraphLayout(graph, {
 		fileGroupPages: graphState.getState().fileGroupPages,
 		openedFolders: graphState.getState().openedFolders,
 	});
@@ -1395,6 +1568,7 @@ function replaceLayoutNode(
 	return {
 		nodes: layout.nodes.map((node) => node.id === nextNode.id ? nextNode : node),
 		edges: layout.edges,
+		rootContexts: layout.rootContexts,
 	};
 }
 
