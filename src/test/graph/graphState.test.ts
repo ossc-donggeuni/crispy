@@ -19,6 +19,7 @@ suite('Graph State', () => {
 			camera: { x: 0, y: 0, scale: 1 },
 			nodePositions: {},
 			fileGroupPages: {},
+			collapsedFolders: {},
 		});
 		assert.deepStrictEqual(state.getState(), INITIAL_GRAPH_STATE);
 	});
@@ -29,12 +30,14 @@ suite('Graph State', () => {
 			camera: { x: 30, y: -20, scale: 1.5 },
 			nodePositions: { 'folder:src': { x: 120, y: 80 } },
 			fileGroupPages: { 'folder:src:files': 2 },
+			collapsedFolders: { 'folder:src': true } as Record<string, true>,
 		};
 
 		state.setState(nextState);
 		nextState.camera.x = 999;
 		nextState.nodePositions['folder:src'].x = 999;
 		nextState.fileGroupPages['folder:src:files'] = 999;
+		nextState.collapsedFolders['folder:test'] = true;
 
 		const snapshot = state.getState();
 		assert.deepStrictEqual(snapshot.camera, { x: 30, y: -20, scale: 1.5 });
@@ -44,11 +47,57 @@ suite('Graph State', () => {
 		assert.deepStrictEqual(snapshot.fileGroupPages, {
 			'folder:src:files': 2,
 		});
+		assert.deepStrictEqual(snapshot.collapsedFolders, {
+			'folder:src': true,
+		});
 		assert.strictEqual(Object.isFrozen(snapshot), true);
 		assert.strictEqual(Object.isFrozen(snapshot.camera), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions['folder:src']), true);
 		assert.strictEqual(Object.isFrozen(snapshot.fileGroupPages), true);
+		assert.strictEqual(Object.isFrozen(snapshot.collapsedFolders), true);
+	});
+
+	test('Folder toggle 시 sparse 상태에 ID를 추가하고 다시 toggle하면 제거한다', () => {
+		const state = createGraphState();
+		const initialSnapshot = state.getState();
+		const receivedStates: GraphStateSnapshot[] = [];
+		state.subscribe((snapshot) => receivedStates.push(snapshot));
+
+		assert.strictEqual(state.isFolderCollapsed('folder:src'), false);
+		assert.strictEqual(state.isFolderCollapsed('toString'), false);
+
+		state.toggleFolder('folder:src');
+
+		assert.strictEqual(state.isFolderCollapsed('folder:src'), true);
+		assert.deepStrictEqual(state.getState().collapsedFolders, {
+			'folder:src': true,
+		});
+		assert.deepStrictEqual(state.getState().camera, initialSnapshot.camera);
+		assert.strictEqual(state.getState().nodePositions, initialSnapshot.nodePositions);
+		assert.strictEqual(state.getState().fileGroupPages, initialSnapshot.fileGroupPages);
+		assert.strictEqual(receivedStates.length, 1);
+		assert.strictEqual(receivedStates[0], state.getState());
+
+		state.toggleFolder('folder:src');
+
+		assert.strictEqual(state.isFolderCollapsed('folder:src'), false);
+		assert.deepStrictEqual(state.getState().collapsedFolders, {});
+		assert.strictEqual(receivedStates.length, 2);
+	});
+
+	test('여러 Folder의 접힘 상태를 독립적으로 관리한다', () => {
+		const state = createGraphState();
+
+		state.toggleFolder('folder:src');
+		state.toggleFolder('folder:test');
+		state.toggleFolder('folder:src');
+
+		assert.strictEqual(state.isFolderCollapsed('folder:src'), false);
+		assert.strictEqual(state.isFolderCollapsed('folder:test'), true);
+		assert.deepStrictEqual(state.getState().collapsedFolders, {
+			'folder:test': true,
+		});
 	});
 
 	test('저장되지 않은 파일 그룹의 기본 page는 1이다', () => {
@@ -183,6 +232,7 @@ suite('Graph State', () => {
 				'folder:src': { x: 400, y: 120, transient: true },
 			},
 			fileGroupPages: { 'folder:src:files': 3 },
+			collapsedFolders: { 'folder:src': true },
 		};
 
 		const state = parseGraphState(value);
@@ -191,6 +241,7 @@ suite('Graph State', () => {
 			camera: { x: 30, y: -20, scale: 1.5 },
 			nodePositions: { 'folder:src': { x: 400, y: 120 } },
 			fileGroupPages: { 'folder:src:files': 3 },
+			collapsedFolders: { 'folder:src': true },
 		});
 		assert.notStrictEqual(state, value);
 		assert.notStrictEqual(state?.camera, value.camera);
@@ -199,15 +250,17 @@ suite('Graph State', () => {
 			value.nodePositions['folder:src'],
 		);
 		assert.notStrictEqual(state?.fileGroupPages, value.fileGroupPages);
+		assert.notStrictEqual(state?.collapsedFolders, value.collapsedFolders);
 	});
 
-	test('기존 저장 상태를 빈 Node 위치와 파일 그룹 page로 호환 파싱한다', () => {
+	test('기존 저장 상태를 빈 Node 위치, 파일 그룹 page와 Folder 상태로 호환 파싱한다', () => {
 		assert.deepStrictEqual(
 			parseGraphState({ camera: { x: 1, y: 2, scale: 1 } }),
 			{
 				camera: { x: 1, y: 2, scale: 1 },
 				nodePositions: {},
 				fileGroupPages: {},
+				collapsedFolders: {},
 			},
 		);
 	});
@@ -240,6 +293,21 @@ suite('Graph State', () => {
 				camera: { x: 0, y: 0, scale: 1 },
 				nodePositions: {},
 				fileGroupPages: { 'folder:src:files': 1.5 },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				collapsedFolders: [],
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				collapsedFolders: { 'folder:src': false },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				collapsedFolders: { '': true },
 			},
 		];
 

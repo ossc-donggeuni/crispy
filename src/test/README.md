@@ -16,12 +16,12 @@
 - 저장 상태가 없으면 Panel 및 Graph 기본 상태를 새 snapshot으로 복원한다
 - `getState()`의 전체 Webview 상태를 외부 객체와 분리해 우선 복원한다
 - `getState()`가 없으면 HTML의 `data-webview-state`를 복원한다
-- 이전 저장 상태에 `fileGroupPages`가 없어도 빈 상태로 호환 복원한다
+- 이전 저장 상태에 부가 Graph 필드가 없어도 빈 상태로 호환 복원한다
 - 잘못된 저장 상태와 HTML 상태는 안전하게 기본값으로 처리한다
 - 잘못된 `getState()` 대신 유효한 HTML 초기 상태를 사용한다
 - 저장 시 Panel과 Graph를 함께 독립적인 snapshot으로 `setState()`에 전달한다
-- Camera, Node 위치와 File Group page를 새 Store용 상태로 Round Trip한다
-- serialize 후 restore해도 File Group page를 유지한다
+- Graph snapshot을 저장하고 새 Store로 Round Trip한다
+- serialize 후 restore해도 File Group page와 Folder 접힘 상태를 유지한다
 - Graph와 Panel 변경을 전체 Webview snapshot 저장 및 Host 메시지로 연결한다
 
 ## `panel/panelState.test.ts`
@@ -57,6 +57,8 @@
 
 - 기존 Camera 기본값으로 초기화한다
 - 외부 객체와 분리된 immutable snapshot을 관리한다
+- Folder toggle 시 sparse 상태에 ID를 추가하고 다시 toggle하면 제거한다
+- 여러 Folder의 접힘 상태를 독립적으로 관리한다
 - 저장되지 않은 File Group의 기본 page는 1이다
 - `showMoreFiles()`는 해당 File Group의 page만 증가시키고 그룹별 상태를 독립 관리한다
 - `collapseFileGroup()`은 현재 page와 관계없이 해당 File Group을 page 1로 복원한다
@@ -67,7 +69,7 @@
 - 다른 객체라도 Node 위치 값이 같으면 기존 snapshot 참조를 재사용한다
 - Camera scale을 최소 및 최대 범위로 제한한다
 - 유효한 Graph 상태를 독립적인 객체로 파싱한다
-- 기존 저장 상태를 빈 Node 위치와 File Group page로 호환 파싱한다
+- 기존 저장 상태를 빈 Node 위치, File Group page와 Folder 상태로 호환 파싱한다
 - 잘못된 Graph 상태를 거부한다
 
 ## `graph/graphLayout.test.ts`

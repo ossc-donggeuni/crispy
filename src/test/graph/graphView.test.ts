@@ -26,6 +26,7 @@ suite('Graph View', () => {
 			camera: { x: 120, y: -45, scale: 1.5 },
 			nodePositions: {},
 			fileGroupPages: {},
+			collapsedFolders: {},
 		});
 		assert.deepStrictEqual(graphView.camera.getState(), {
 			x: 120,
@@ -172,6 +173,7 @@ suite('Graph View', () => {
 			camera: { x: 80, y: -30, scale: 1.5 },
 			nodePositions: { 'folder:app': { x: 700, y: 250 } },
 		});
+		state.toggleFolder('folder:app');
 		assert.strictEqual(createLayoutCalls, 0);
 		assert.strictEqual(applyLayoutCalls, 0);
 
