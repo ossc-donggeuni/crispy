@@ -131,6 +131,11 @@ export function createGraphLayout(
 				`Graph Root \"${root.id}\"가 참조하는 Node \"${root.nodeId}\"를 찾을 수 없습니다.`,
 			);
 		}
+		if (rootNode.kind === 'file') {
+			throw new Error(
+				`File Root \"${root.nodeId}\"의 Layout은 아직 지원하지 않습니다.`,
+			);
+		}
 
 		const tree = createContainerTree(
 			rootNode,
@@ -163,11 +168,7 @@ function createContainerTree(
 	fileGroupPages: Readonly<Record<string, number>>,
 	openedFolders: Readonly<Record<string, true>>,
 ): LayoutTreeNode {
-	const isOpened = container.kind === 'project'
-		|| (
-			Object.hasOwn(openedFolders, container.id)
-			&& openedFolders[container.id] === true
-		);
+	const isOpened = openedFolders[container.id] === true;
 	const visibleChildren = isOpened ? container.children : [];
 	const folderChildren = visibleChildren
 		.filter(isFolder)

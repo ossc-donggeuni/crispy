@@ -2,7 +2,7 @@
 
 하나의 VS Code Webview 안에서 여러 Project Root의 Tree Graph를 렌더링하고 Camera 상태와 Pan / Zoom 및 Node 이동 동작을 관리한다.
 
-Graph는 `GraphRoot[]`와 Root Node Map을 입력으로 사용한다. 기존 단일 Workspace도 Root가 하나인 같은 구조로 처리한다. Graph State를 단일 상태 기준으로 사용하며, 저장되지 않은 Node에는 deterministic Layout의 기본 World 좌표를 적용한다. File Group page가 바뀌면 표시 Row 수에 맞춰 Layout을 다시 계산한다. 실제 Workspace나 파일 시스템은 조회하지 않는다.
+Graph는 `GraphRoot[]`와 Project/Folder/File을 허용하는 Root Node Map을 입력으로 사용한다. 기존 단일 Workspace도 Root가 하나인 같은 구조로 처리한다. Root 여부는 독립 배치만 결정하고, children 포함 여부는 `openedFolders`가 별도로 결정한다. Graph State를 단일 상태 기준으로 사용하며, 저장되지 않은 Node에는 deterministic Layout의 기본 World 좌표를 적용한다. File Group page가 바뀌면 표시 Row 수에 맞춰 Layout을 다시 계산한다. 실제 Workspace나 파일 시스템은 조회하지 않는다.
 
 ## 구조
 
@@ -61,7 +61,7 @@ src/webview/graph/
 - File Group page에 따라 5개 단위로 표시 Row 수 계산
 - 표시 Row와 선택적 단일 pagination control을 File Group 높이에 반영
 - `openedFolders`에 포함된 Folder의 children만 Layout에 포함
-- Project Root는 `openedFolders`와 무관하게 항상 열린 상태로 처리
+- Project/Folder Root 여부와 무관하게 `openedFolders` 상태로 children 포함 여부 결정
 - 동일 입력에 동일한 Node 순서, 위치 및 Edge 반환
 
 ### `graphMockData.ts`
@@ -78,7 +78,7 @@ src/webview/graph/
 > Multi-Root Graph와 Project 구조를 표현하는 최소 데이터 모델을 정의합니다.
 
 - `id`, `nodeId`를 가진 source-agnostic `GraphRoot` 정의
-- `GraphRoot[]`와 Root Node Map으로 여러 Project Tree 관리
+- `GraphRoot[]`와 Project/Folder/File 공통 Root Node Map 관리
 - 기존 Project를 Root 하나인 Graph로 변환하는 호환 factory 제공
 - 안정적인 고유 ID를 가진 Project / Folder / File 정의
 - Folder 안에 중첩 Folder와 File을 함께 구성
@@ -112,7 +112,7 @@ src/webview/graph/
 
 - Project Root와 Folder를 같은 Card 계열로 렌더링
 - 열린 상태에 따라 `folder-open.svg`와 `folder-closed.svg`를 기존 DOM에 적용
-- Folder icon과 `aria-expanded`를 `openedFolders`에 맞춰 갱신
+- Project/Folder icon과 `aria-expanded`를 `openedFolders`에 맞춰 갱신
 - File 이름을 렌더링 시점에 icon 식별값으로 변환하여 로컬 SVG 표시
 - Folder별 File을 현재 page 범위까지 하나의 File Group에 렌더링
 - File을 5개 단위로 추가하는 `+ N개 더보기` Button과 최초 page로 복원하는 접기 Button 표시
@@ -151,7 +151,7 @@ src/webview/graph/
 
 - Viewport, World, Edge / Node / Overlay Layer 생성
 - 전달된 Multi-Root Graph를 하나의 Layout / Renderer 경로로 처리
-- Root Node ID 집합을 기준으로 모든 Graph Root의 항상 열린 동작 유지
+- Root도 일반 Container와 같은 Open/Close interaction 및 Reflow 경로 사용
 - 전달받은 초기 `GraphState`로 새 Store 초기화
 - 복원된 File Group page와 opened Folder를 반영해 Layout과 Renderer 초기화
 - `fileGroupPages` 또는 `openedFolders` reference 변경 시 Layout Reflow 적용

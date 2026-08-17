@@ -10,15 +10,18 @@ export interface GraphRoot {
 	readonly nodeId: string;
 }
 
-/** 여러 Root와 각 Root가 참조하는 Project Tree를 함께 제공하는 Graph 입력이다. */
+/** 여러 Root와 각 Root가 참조하는 Node를 함께 제공하는 Graph 입력이다. */
 export interface Graph {
 	readonly roots: readonly GraphRoot[];
-	readonly rootNodes: Readonly<Record<string, Project>>;
+	readonly rootNodes: Readonly<Record<string, GraphRootNode>>;
 }
 
-/** 기존 Project 하나를 Root 하나인 Graph 입력으로 변환한다. */
+/** Project, Folder 또는 File로 참조할 수 있는 Graph Root Node다. */
+export type GraphRootNode = Project | ProjectEntry;
+
+/** 기존 Node 하나를 Root 하나인 Graph 입력으로 변환한다. */
 export function createSingleRootGraph(
-	rootNode: Project,
+	rootNode: GraphRootNode,
 	rootId = `root:${rootNode.id}`,
 ): Graph {
 	return {

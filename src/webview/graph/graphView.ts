@@ -98,7 +98,6 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
-	const rootNodeIds = new Set(graph.roots.map((graphRoot) => graphRoot.nodeId));
 	const camera = initializeGraphCamera(viewport, world, state);
 	const renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -110,9 +109,7 @@ export function initializeGraphView(
 		state,
 		{
 			onFolderClick: (folderId) => {
-				if (!rootNodeIds.has(folderId)) {
-					state.toggleFolder(folderId);
-				}
+				state.toggleFolder(folderId);
 			},
 		},
 	);

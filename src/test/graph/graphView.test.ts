@@ -137,11 +137,12 @@ suite('Graph View', () => {
 		assert.strictEqual(root.children.length, 0);
 	});
 
-	test('초기 Folder는 닫혀 있고 클릭으로 subtree와 icon 상태를 열고 닫는다', () => {
+	test('Project Root와 Folder가 같은 Open/Close interaction으로 subtree를 제어한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const folderId = 'folder:app';
 		const childId = 'folder:app/src';
+		const rootEdgeId = `${GRAPH_MOCK_PROJECT.id}->${folderId}`;
 		const edgeId = `${folderId}->${childId}`;
 		const graphView = initializeGraphView(root.asHtmlElement());
 		const project = getDescendantByAttribute(
@@ -149,6 +150,29 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			GRAPH_MOCK_PROJECT.id,
 		);
+
+		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-closed.svg');
+		assert.strictEqual(project.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-node-id', folderId),
+			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-edge-id', rootEdgeId),
+			undefined,
+		);
+
+		project.dispatch('click', createClickEvent(project));
+
+		assert.deepStrictEqual(graphView.state.getState().openedFolders, {
+			[GRAPH_MOCK_PROJECT.id]: true,
+		});
+		assert.strictEqual(
+			getDescendantByAttribute(root, 'data-graph-node-id', GRAPH_MOCK_PROJECT.id),
+			project,
+		);
+		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-open.svg');
+		assert.strictEqual(project.getAttribute('aria-expanded'), 'true');
 		const folder = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -158,20 +182,12 @@ suite('Graph View', () => {
 
 		assert.strictEqual(folder.getAttribute('data-folder-icon'), 'folder-closed.svg');
 		assert.strictEqual(folder.getAttribute('aria-expanded'), 'false');
-		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-open.svg');
-		assert.strictEqual(project.getAttribute('aria-expanded'), null);
-		assert.strictEqual(
-			findDescendantByAttribute(root, 'data-graph-node-id', childId),
-			undefined,
-		);
-		assert.strictEqual(
-			findDescendantByAttribute(root, 'data-graph-edge-id', edgeId),
-			undefined,
-		);
+		assert.ok(findDescendantByAttribute(root, 'data-graph-edge-id', rootEdgeId));
 
 		folder.dispatch('click', createClickEvent(folder));
 
 		assert.deepStrictEqual(graphView.state.getState().openedFolders, {
+			[GRAPH_MOCK_PROJECT.id]: true,
 			[folderId]: true,
 		});
 		assert.strictEqual(
@@ -192,7 +208,9 @@ suite('Graph View', () => {
 
 		folder.dispatch('click', createClickEvent(folder));
 
-		assert.deepStrictEqual(graphView.state.getState().openedFolders, {});
+		assert.deepStrictEqual(graphView.state.getState().openedFolders, {
+			[GRAPH_MOCK_PROJECT.id]: true,
+		});
 		assert.strictEqual(
 			getDescendantByAttribute(root, 'data-graph-node-id', folderId),
 			folder,
@@ -210,6 +228,16 @@ suite('Graph View', () => {
 
 		project.dispatch('click', createClickEvent(project));
 		assert.deepStrictEqual(graphView.state.getState().openedFolders, {});
+		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-closed.svg');
+		assert.strictEqual(project.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-node-id', folderId),
+			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-edge-id', rootEdgeId),
+			undefined,
+		);
 		graphView.dispose();
 	});
 
@@ -224,6 +252,7 @@ suite('Graph View', () => {
 			nodePositions: {},
 			fileGroupPages: { [fileGroupId]: 2 },
 			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
 				'folder:pagination-samples': true,
 				'folder:pagination-samples/seventeen-files': true,
 			},
@@ -256,6 +285,7 @@ suite('Graph View', () => {
 			camera: { x: 0, y: 0, scale: 1 },
 			nodePositions: {},
 			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
 				'folder:pagination-samples': true,
 				[parentId]: true,
 			},

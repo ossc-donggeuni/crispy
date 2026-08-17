@@ -72,7 +72,7 @@ function closeFolders(...folderIds: string[]): Record<string, true> {
 
 /** Layout 단위 테스트의 전체 Tree를 열기 위한 test-only sparse Map을 만든다. */
 function openAllFolders(project: Project): Record<string, true> {
-	const openedFolders: Record<string, true> = {};
+	const openedFolders: Record<string, true> = { [project.id]: true };
 	const visit = (entries: Project['children']): void => {
 		for (const entry of entries) {
 			if (!isFolder(entry)) {
@@ -89,9 +89,34 @@ function openAllFolders(project: Project): Record<string, true> {
 }
 
 suite('Graph Model / Layout', () => {
+	test('Graph Root 모델이 Project, Folder, File Node를 모두 표현한다', () => {
+		const folder = SECOND_PROJECT.children[0];
+		const file = SECOND_PROJECT.children[1];
+
+		assert.ok(folder && file);
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:project', nodeId: SECOND_PROJECT.id },
+				{ id: 'root:folder', nodeId: folder.id },
+				{ id: 'root:file', nodeId: file.id },
+			],
+			rootNodes: {
+				[SECOND_PROJECT.id]: SECOND_PROJECT,
+				[folder.id]: folder,
+				[file.id]: file,
+			},
+		};
+
+		assert.strictEqual(graph.rootNodes[SECOND_PROJECT.id]?.kind, 'project');
+		assert.strictEqual(graph.rootNodes[folder.id]?.kind, 'folder');
+		assert.strictEqual(graph.rootNodes[file.id]?.kind, 'file');
+	});
+
 	test('기존 Project 하나를 roots.length === 1인 Graph Layout으로 생성한다', () => {
 		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
-		const layout = createBaseGraphLayout(graph);
+		const layout = createBaseGraphLayout(graph, {
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		});
 		const projectRoots = layout.nodes.filter((node) => node.kind === 'project');
 
 		assert.strictEqual(graph.roots.length, 1);
@@ -120,6 +145,7 @@ suite('Graph Model / Layout', () => {
 		const layout = createBaseGraphLayout(graph, {
 			openedFolders: {
 				...ALL_OPENED_FOLDERS,
+				[SECOND_PROJECT.id]: true,
 				'folder:secondary/src': true,
 			},
 		});
@@ -164,6 +190,7 @@ suite('Graph Model / Layout', () => {
 			createBaseGraphLayout(graph, {
 				openedFolders: {
 					...ALL_OPENED_FOLDERS,
+					[SECOND_PROJECT.id]: true,
 					'folder:secondary/src': true,
 				},
 			}),
@@ -190,21 +217,22 @@ suite('Graph Model / Layout', () => {
 		assert.ok(appSrc.children.some(isFolder));
 	});
 
-	test('기본 상태는 모든 Folder를 닫고 Project Root는 항상 연다', () => {
+	test('Project Root가 Open 상태가 아니면 children을 제외한 닫힌 Layout을 만든다', () => {
 		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
-		const defaultLayout = createBaseGraphLayout(graph);
-		const rootStateLayout = createBaseGraphLayout(graph, {
+		const closedLayout = createBaseGraphLayout(graph);
+		const openedLayout = createBaseGraphLayout(graph, {
 			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
 		});
-		const nodeIds = new Set(defaultLayout.nodes.map((node) => node.id));
+		const closedNodeIds = new Set(closedLayout.nodes.map((node) => node.id));
+		const openedNodeIds = new Set(openedLayout.nodes.map((node) => node.id));
 
-		assert.ok(nodeIds.has(GRAPH_MOCK_PROJECT.id));
-		assert.ok(nodeIds.has('folder:app'));
-		assert.ok(nodeIds.has('folder:src'));
-		assert.ok(nodeIds.has('folder:pagination-samples'));
-		assert.ok(nodeIds.has(createFileGroupId(GRAPH_MOCK_PROJECT.id)));
-		assert.strictEqual(nodeIds.has('folder:app/src'), false);
-		assert.deepStrictEqual(rootStateLayout, defaultLayout);
+		assert.deepStrictEqual([...closedNodeIds], [GRAPH_MOCK_PROJECT.id]);
+		assert.deepStrictEqual(closedLayout.edges, []);
+		assert.ok(openedNodeIds.has('folder:app'));
+		assert.ok(openedNodeIds.has('folder:src'));
+		assert.ok(openedNodeIds.has('folder:pagination-samples'));
+		assert.ok(openedNodeIds.has(createFileGroupId(GRAPH_MOCK_PROJECT.id)));
+		assert.strictEqual(openedNodeIds.has('folder:app/src'), false);
 	});
 
 	test('열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다', () => {
@@ -212,7 +240,10 @@ suite('Graph Model / Layout', () => {
 		const layout = createBaseGraphLayout(
 			createSingleRootGraph(GRAPH_MOCK_PROJECT),
 			{
-				openedFolders: { [folderId]: true },
+				openedFolders: {
+					[GRAPH_MOCK_PROJECT.id]: true,
+					[folderId]: true,
+				},
 			},
 		);
 		const nodeIds = new Set(layout.nodes.map((node) => node.id));

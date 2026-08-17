@@ -58,7 +58,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.ok(containerNodes.every(
 			(node) => node.getAttribute('data-folder-icon') === 'folder-open.svg',
 		));
-		assert.strictEqual(root.getAttribute('aria-expanded'), null);
+		assert.strictEqual(root.getAttribute('aria-expanded'), 'true');
 		assert.strictEqual(folder.getAttribute('aria-expanded'), 'true');
 		assert.ok(!getText(root).includes('📁'));
 		assert.ok(getText(root).includes('crispy/'));
@@ -396,7 +396,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const retainedEdge = fixture.getEdge(retainedEdgeId);
 		const collapsedLayout = createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			openedFolders: {},
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
 		});
 
 		fixture.renderer.applyLayout(collapsedLayout);
@@ -481,14 +481,17 @@ suite('Graph Renderer / Node Drag', () => {
 
 		fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			openedFolders: {},
+			openedFolders: { [project.id]: true },
 		}));
 
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
 
 		fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			openedFolders: { [folderId]: true },
+			openedFolders: {
+				[project.id]: true,
+				[folderId]: true,
+			},
 		}));
 
 		const restoredFileGroup = fixture.getNode(fileGroupId);
@@ -820,7 +823,10 @@ suite('Graph Renderer / Node Drag', () => {
 			},
 		};
 		const firstState = restoreWebviewState(api);
-		const first = createRendererFixture(1, firstState.graph);
+		const first = createRendererFixture(1, {
+			...firstState.graph,
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		});
 		const movedId = 'folder:app';
 		const untouchedId = 'folder:src';
 		const movedLayout = getLayoutNode(first.layout, movedId);
@@ -960,7 +966,7 @@ function getLayoutNode(layout: GraphLayout, nodeId: string): GraphLayoutNode {
 
 /** Renderer 단위 테스트의 기존 전체 Tree fixture를 명시적으로 연다. */
 function openAllFolders(project: Project): Record<string, true> {
-	const openedFolders: Record<string, true> = {};
+	const openedFolders: Record<string, true> = { [project.id]: true };
 	const visit = (entries: Project['children']): void => {
 		for (const entry of entries) {
 			if (!isFolder(entry)) {

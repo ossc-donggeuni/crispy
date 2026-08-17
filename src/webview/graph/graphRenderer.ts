@@ -168,8 +168,8 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 
-		if (layoutNode.kind === 'folder') {
-			updateFolderOpenedState(
+		if (layoutNode.kind !== 'file-group') {
+			updateContainerOpenedState(
 				element,
 				graphState.isFolderOpened(layoutNode.id),
 			);
@@ -282,8 +282,8 @@ export function initializeGraphRenderer(
 		}
 	};
 	let renderedOpenedFolders = initialState.openedFolders;
-	/** 열린 Folder Map의 실제 값이 바뀐 기존 Folder DOM만 갱신한다. */
-	const renderFolderOpenedState = (state: GraphStateSnapshot): void => {
+	/** 열린 Container Map의 실제 값이 바뀐 기존 Project/Folder DOM만 갱신한다. */
+	const renderContainerOpenedState = (state: GraphStateSnapshot): void => {
 		if (state.openedFolders === renderedOpenedFolders) {
 			return;
 		}
@@ -292,7 +292,7 @@ export function initializeGraphRenderer(
 		renderedOpenedFolders = state.openedFolders;
 
 		for (const layoutNode of renderedLayout.nodes) {
-			if (layoutNode.kind !== 'folder') {
+			if (layoutNode.kind === 'file-group') {
 				continue;
 			}
 
@@ -303,7 +303,7 @@ export function initializeGraphRenderer(
 				const element = nodeElements.get(layoutNode.id);
 
 				if (element) {
-					updateFolderOpenedState(element, isOpened);
+					updateContainerOpenedState(element, isOpened);
 				}
 			}
 		}
@@ -311,7 +311,7 @@ export function initializeGraphRenderer(
 	const renderState = (state: GraphStateSnapshot): void => {
 		renderStoredPositions(state);
 		renderFileGroupPages(state);
-		renderFolderOpenedState(state);
+		renderContainerOpenedState(state);
 	};
 	const unsubscribeState = graphState.subscribe(renderState);
 
@@ -486,8 +486,8 @@ function createFolderIcon(ownerDocument: Document): HTMLElement {
 	return icon;
 }
 
-/** 기존 Folder DOM에서 icon asset 선택과 접근성 상태만 갱신한다. */
-function updateFolderOpenedState(
+/** 기존 Project/Folder DOM에서 icon asset 선택과 접근성 상태만 갱신한다. */
+function updateContainerOpenedState(
 	element: HTMLElement,
 	isOpened: boolean,
 ): void {
