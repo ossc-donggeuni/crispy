@@ -50,6 +50,8 @@
 }
 
 .graph-node {
+	--graph-node-outline-color: #a3a3a3;
+
 	position: absolute;
 	top: 0;
 	left: 0;
@@ -58,7 +60,7 @@
 	min-width: 0;
 	color: #fcfcfc;
 	background: #1a1b1c;
-	border: 2px solid #a3a3a3;
+	border: 2px solid var(--graph-node-outline-color);
 	border-radius: 6px;
 	font-family: Inter, var(--vscode-font-family);
 	font-size: 16px;
@@ -78,16 +80,18 @@
 .graph-project-node:hover,
 .graph-folder-node:hover,
 .graph-file-group-node:hover {
+	--graph-node-outline-color: #c4c4c4;
+
 	background: #222324;
-	border-color: #c4c4c4;
 	cursor: pointer;
 }
 
 .graph-project-node:active,
 .graph-folder-node:active,
 .graph-file-group-node:active:not(:has(.graph-file-item:active, .graph-file-control:active)) {
+	--graph-node-outline-color: #d6d6d6;
+
 	background: #28292a;
-	border-color: #d6d6d6;
 }
 
 .graph-node.is-dragging,
@@ -112,7 +116,24 @@
 	width: 20px;
 	height: 20px;
 	flex: none;
-	object-fit: contain;
+	background-color: var(--graph-node-outline-color);
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-project-node[data-folder-icon='folder-open.svg'] .graph-folder-icon,
+.graph-folder-node[data-folder-icon='folder-open.svg'] .graph-folder-icon {
+	mask-image: url('./assets/file-icons/folder-open.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-open.svg');
+}
+
+.graph-folder-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon {
+	mask-image: url('./assets/file-icons/folder-closed.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
 }
 
 .graph-folder-name,

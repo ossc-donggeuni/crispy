@@ -26,6 +26,7 @@ suite('Graph View', () => {
 			camera: { x: 120, y: -45, scale: 1.5 },
 			nodePositions: {},
 			fileGroupPages: {},
+			openedFolders: {},
 		});
 		assert.deepStrictEqual(graphView.camera.getState(), {
 			x: 120,
@@ -51,6 +52,82 @@ suite('Graph View', () => {
 		assert.strictEqual(root.children.length, 0);
 	});
 
+	test('초기 Folder는 닫혀 있고 클릭으로 subtree와 icon 상태를 열고 닫는다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const folderId = 'folder:app';
+		const childId = 'folder:app/src';
+		const edgeId = `${folderId}->${childId}`;
+		const graphView = initializeGraphView(root.asHtmlElement());
+		const project = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+		const folder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderId,
+		);
+		const folderIcon = getDescendantByClass(folder, 'graph-folder-icon');
+
+		assert.strictEqual(folder.getAttribute('data-folder-icon'), 'folder-closed.svg');
+		assert.strictEqual(folder.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-open.svg');
+		assert.strictEqual(project.getAttribute('aria-expanded'), null);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-node-id', childId),
+			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-edge-id', edgeId),
+			undefined,
+		);
+
+		folder.dispatch('click', createClickEvent(folder));
+
+		assert.deepStrictEqual(graphView.state.getState().openedFolders, {
+			[folderId]: true,
+		});
+		assert.strictEqual(
+			getDescendantByAttribute(root, 'data-graph-node-id', folderId),
+			folder,
+		);
+		assert.strictEqual(
+			getDescendantByClass(folder, 'graph-folder-icon'),
+			folderIcon,
+		);
+		assert.strictEqual(
+			folder.getAttribute('data-folder-icon'),
+			'folder-open.svg',
+		);
+		assert.strictEqual(folder.getAttribute('aria-expanded'), 'true');
+		assert.ok(findDescendantByAttribute(root, 'data-graph-node-id', childId));
+		assert.ok(findDescendantByAttribute(root, 'data-graph-edge-id', edgeId));
+
+		folder.dispatch('click', createClickEvent(folder));
+
+		assert.deepStrictEqual(graphView.state.getState().openedFolders, {});
+		assert.strictEqual(
+			getDescendantByAttribute(root, 'data-graph-node-id', folderId),
+			folder,
+		);
+		assert.strictEqual(folder.getAttribute('data-folder-icon'), 'folder-closed.svg');
+		assert.strictEqual(folder.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-node-id', childId),
+			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-edge-id', edgeId),
+			undefined,
+		);
+
+		project.dispatch('click', createClickEvent(project));
+		assert.deepStrictEqual(graphView.state.getState().openedFolders, {});
+		graphView.dispose();
+	});
+
 	test('복원된 File Group page를 최초 Layout 높이와 Renderer contents에 반영한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -61,6 +138,10 @@ suite('Graph View', () => {
 			camera: { x: 0, y: 0, scale: 1 },
 			nodePositions: {},
 			fileGroupPages: { [fileGroupId]: 2 },
+			openedFolders: {
+				'folder:pagination-samples': true,
+				'folder:pagination-samples/seventeen-files': true,
+			},
 		});
 		const fileGroup = getDescendantByAttribute(
 			root,
@@ -86,7 +167,14 @@ suite('Graph View', () => {
 		const fileGroupId = createFileGroupId(parentId);
 		const siblingId = 'folder:pagination-samples/twenty-one-files';
 		const edgeId = `${parentId}->${fileGroupId}`;
-		const graphView = initializeGraphView(root.asHtmlElement());
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: {
+				'folder:pagination-samples': true,
+				[parentId]: true,
+			},
+		});
 		const fileGroup = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -145,7 +233,7 @@ suite('Graph View', () => {
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 0);
 	});
 
-	test('Layout invalidation은 fileGroupPages reference 변경에서만 Reflow한다', () => {
+	test('Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛴다', () => {
 		const state = createGraphState();
 		let createLayoutCalls = 0;
 		let applyLayoutCalls = 0;
@@ -160,6 +248,7 @@ suite('Graph View', () => {
 				createLayoutCalls += 1;
 				return createGraphLayout(GRAPH_MOCK_PROJECT, {
 					fileGroupPages: snapshot.fileGroupPages,
+					openedFolders: snapshot.openedFolders,
 				});
 			},
 		);
@@ -175,14 +264,19 @@ suite('Graph View', () => {
 		assert.strictEqual(createLayoutCalls, 0);
 		assert.strictEqual(applyLayoutCalls, 0);
 
-		state.showMoreFiles(createFileGroupId('folder:app/src'));
+		state.toggleFolder('folder:app');
 		assert.strictEqual(createLayoutCalls, 1);
 		assert.strictEqual(applyLayoutCalls, 1);
 
+		state.showMoreFiles(createFileGroupId('folder:app/src'));
+		assert.strictEqual(createLayoutCalls, 2);
+		assert.strictEqual(applyLayoutCalls, 2);
+
 		unsubscribe();
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
-		assert.strictEqual(createLayoutCalls, 1);
-		assert.strictEqual(applyLayoutCalls, 1);
+		state.toggleFolder('folder:app');
+		assert.strictEqual(createLayoutCalls, 2);
+		assert.strictEqual(applyLayoutCalls, 2);
 	});
 });
 

@@ -54,7 +54,8 @@ export interface GraphRendererInteractions {
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
-const FOLDER_ICON_PATH = 'M2.5 5.25A1.25 1.25 0 0 1 3.75 4h3.4l1.7 2h7.4a1.25 1.25 0 0 1 1.25 1.25v7.5A1.25 1.25 0 0 1 16.25 16H3.75a1.25 1.25 0 0 1-1.25-1.25v-9.5Z';
+const FOLDER_OPEN_ICON = 'folder-open.svg';
+const FOLDER_CLOSED_ICON = 'folder-closed.svg';
 const COLLAPSE_CHEVRON_PATH = 'm4.5 10 3.5-3.5 3.5 3.5';
 const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
 
@@ -95,13 +96,18 @@ export function initializeGraphRenderer(
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
 	let disposed = false;
 
-	for (const edge of layout.edges) {
+	/** 새 Edge path를 생성해 Layer와 ID Map에 등록한다. */
+	const addEdge = (edge: GraphLayoutEdge): void => {
 		const path = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
 
 		path.classList.add('graph-edge');
 		path.setAttribute('data-graph-edge-id', edge.id);
 		edgeLayer.append(path);
 		edgeElements.set(edge.id, path);
+	};
+
+	/** Edge를 양 끝 Node의 연결 목록에 등록한다. */
+	const indexEdge = (edge: GraphLayoutEdge): void => {
 
 		for (const nodeId of [edge.sourceId, edge.targetId]) {
 			const connectedEdges = edgesByNodeId.get(nodeId) ?? [];
@@ -109,6 +115,11 @@ export function initializeGraphRenderer(
 			connectedEdges.push(edge);
 			edgesByNodeId.set(nodeId, connectedEdges);
 		}
+	};
+
+	for (const edge of layout.edges) {
+		addEdge(edge);
+		indexEdge(edge);
 	}
 
 	/** 현재 Renderer 위치 Map으로 지정한 Edge의 Bezier path를 다시 계산한다. */
@@ -150,11 +161,19 @@ export function initializeGraphRenderer(
 		}
 	};
 
-	for (const layoutNode of layout.nodes) {
+	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
+	const addNode = (layoutNode: GraphLayoutNode): void => {
 		const element = createNodeElement(
 			layoutNode,
 			ownerDocument,
 		);
+
+		if (layoutNode.kind === 'folder') {
+			updateFolderOpenedState(
+				element,
+				graphState.isFolderOpened(layoutNode.id),
+			);
+		}
 
 		if (layoutNode.kind === 'file-group') {
 			const content = initializeFileGroupContent(
@@ -171,6 +190,11 @@ export function initializeGraphRenderer(
 
 		nodeLayer.append(element);
 		nodeElements.set(layoutNode.id, element);
+		const position = graphState.getState().nodePositions[layoutNode.id]
+			?? layoutNode.position;
+
+		renderedPositions.set(layoutNode.id, position);
+		element.style.transform = `translate(${position.x}px, ${position.y}px)`;
 		nodeDrags.set(layoutNode.id, initializeGraphNodeDrag(
 			element,
 			layoutNode.id,
@@ -183,15 +207,27 @@ export function initializeGraphRenderer(
 				},
 			},
 		));
-	}
+	};
+
+	/** 제거할 Node의 interaction과 content를 정리한 뒤 DOM과 Map에서 제외한다. */
+	const removeNode = (nodeId: string): void => {
+		nodeDrags.get(nodeId)?.dispose();
+		nodeDrags.delete(nodeId);
+		fileGroupContents.get(nodeId)?.dispose();
+		fileGroupContents.delete(nodeId);
+		nodeElements.get(nodeId)?.remove();
+		nodeElements.delete(nodeId);
+		renderedPositions.delete(nodeId);
+	};
+
+	/** 제거할 Edge path를 DOM과 ID Map에서 제외한다. */
+	const removeEdge = (edgeId: string): void => {
+		edgeElements.get(edgeId)?.remove();
+		edgeElements.delete(edgeId);
+	};
 
 	for (const layoutNode of layout.nodes) {
-		const position = renderedPositions.get(layoutNode.id) ?? layoutNode.position;
-		const element = nodeElements.get(layoutNode.id);
-
-		if (element) {
-			element.style.transform = `translate(${position.x}px, ${position.y}px)`;
-		}
+		addNode(layoutNode);
 	}
 
 	for (const edge of layout.edges) {
@@ -245,9 +281,37 @@ export function initializeGraphRenderer(
 			}
 		}
 	};
+	let renderedOpenedFolders = initialState.openedFolders;
+	/** 열린 Folder Map의 실제 값이 바뀐 기존 Folder DOM만 갱신한다. */
+	const renderFolderOpenedState = (state: GraphStateSnapshot): void => {
+		if (state.openedFolders === renderedOpenedFolders) {
+			return;
+		}
+
+		const previousFolders = renderedOpenedFolders;
+		renderedOpenedFolders = state.openedFolders;
+
+		for (const layoutNode of renderedLayout.nodes) {
+			if (layoutNode.kind !== 'folder') {
+				continue;
+			}
+
+			const wasOpened = previousFolders[layoutNode.id] === true;
+			const isOpened = state.openedFolders[layoutNode.id] === true;
+
+			if (wasOpened !== isOpened) {
+				const element = nodeElements.get(layoutNode.id);
+
+				if (element) {
+					updateFolderOpenedState(element, isOpened);
+				}
+			}
+		}
+	};
 	const renderState = (state: GraphStateSnapshot): void => {
 		renderStoredPositions(state);
 		renderFileGroupPages(state);
+		renderFolderOpenedState(state);
 	};
 	const unsubscribeState = graphState.subscribe(renderState);
 
@@ -261,19 +325,45 @@ export function initializeGraphRenderer(
 			const previousEdgesById = new Map(
 				renderedLayout.edges.map((edge) => [edge.id, edge]),
 			);
+			const nextNodesById = new Map(
+				nextLayout.nodes.map((node) => [node.id, node]),
+			);
+			const nextEdgesById = new Map(
+				nextLayout.edges.map((edge) => [edge.id, edge]),
+			);
 			const pendingEdges = new Map<string, GraphLayoutEdge>();
 
+			for (const nodeId of previousNodesById.keys()) {
+				if (!nextNodesById.has(nodeId)) {
+					removeNode(nodeId);
+				}
+			}
+
+			for (const edgeId of previousEdgesById.keys()) {
+				if (!nextEdgesById.has(edgeId)) {
+					removeEdge(edgeId);
+				}
+			}
+
 			renderedLayout = nextLayout;
-			nodesById = new Map(nextLayout.nodes.map((node) => [node.id, node]));
+			nodesById = nextNodesById;
+
+			for (const nextNode of nextLayout.nodes) {
+				if (!previousNodesById.has(nextNode.id)) {
+					addNode(nextNode);
+				}
+			}
+
+			for (const nextEdge of nextLayout.edges) {
+				if (!previousEdgesById.has(nextEdge.id)) {
+					addEdge(nextEdge);
+				}
+			}
+
 			edgesByNodeId.clear();
 
 			for (const edge of nextLayout.edges) {
-				for (const nodeId of [edge.sourceId, edge.targetId]) {
-					const connectedEdges = edgesByNodeId.get(nodeId) ?? [];
-
-					connectedEdges.push(edge);
-					edgesByNodeId.set(nodeId, connectedEdges);
-				}
+				indexEdge(edge);
 
 				const previousEdge = previousEdgesById.get(edge.id);
 
@@ -343,21 +433,15 @@ export function initializeGraphRenderer(
 			disposed = true;
 			unsubscribeState();
 
-			for (const drag of nodeDrags.values()) {
-				drag.dispose();
+			for (const nodeId of [...nodeElements.keys()]) {
+				removeNode(nodeId);
 			}
 
-			for (const content of fileGroupContents.values()) {
-				content.dispose();
+			for (const edgeId of [...edgeElements.keys()]) {
+				removeEdge(edgeId);
 			}
 
-			for (const path of edgeElements.values()) {
-				path.remove();
-			}
-
-			for (const element of nodeElements.values()) {
-				element.remove();
-			}
+			edgesByNodeId.clear();
 		},
 	};
 }
@@ -378,6 +462,7 @@ function createNodeElement(
 		const icon = createFolderIcon(ownerDocument);
 		const name = ownerDocument.createElement('span');
 
+		element.setAttribute('data-folder-icon', FOLDER_OPEN_ICON);
 		name.className = 'graph-folder-name';
 		name.textContent = `${node.name}/`;
 		element.append(icon, name);
@@ -387,27 +472,30 @@ function createNodeElement(
 }
 
 /**
- * Webview CSP의 image source 허용 여부와 무관하게 표시되는 inline Folder SVG를 만든다.
+ * CSS에서 open/closed SVG asset을 적용할 Folder icon 요소를 만든다.
  *
  * @param ownerDocument Graph View가 속한 Document
- * @returns Root와 Folder Card에서 공통으로 사용하는 SVG 요소
+ * @returns Root와 Folder Card에서 공통으로 사용하는 icon 요소
  */
-function createFolderIcon(ownerDocument: Document): SVGSVGElement {
-	const icon = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
-	const path = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
+function createFolderIcon(ownerDocument: Document): HTMLElement {
+	const icon = ownerDocument.createElement('span');
 
-	icon.classList.add('graph-node-icon', 'graph-folder-icon');
-	icon.setAttribute('viewBox', '0 0 20 20');
-	icon.setAttribute('fill', 'none');
+	icon.className = 'graph-node-icon graph-folder-icon';
 	icon.setAttribute('aria-hidden', 'true');
-	icon.setAttribute('focusable', 'false');
-	path.setAttribute('d', FOLDER_ICON_PATH);
-	path.setAttribute('stroke', '#A3A3A3');
-	path.setAttribute('stroke-width', '1.5');
-	path.setAttribute('stroke-linejoin', 'round');
-	icon.append(path);
 
 	return icon;
+}
+
+/** 기존 Folder DOM에서 icon asset 선택과 접근성 상태만 갱신한다. */
+function updateFolderOpenedState(
+	element: HTMLElement,
+	isOpened: boolean,
+): void {
+	element.setAttribute(
+		'data-folder-icon',
+		isOpened ? FOLDER_OPEN_ICON : FOLDER_CLOSED_ICON,
+	);
+	element.setAttribute('aria-expanded', String(isOpened));
 }
 
 /** Graph State page를 기준으로 한 File Group 내부 DOM과 Listener만 교체한다. */

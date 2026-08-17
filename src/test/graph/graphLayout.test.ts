@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import {
 	createFileGroupId,
-	createGraphLayout,
+	createGraphLayout as createBaseGraphLayout,
 	getFileGroupHeight,
 	GRAPH_FILE_GROUP_CONTROL_HEIGHT,
 	GRAPH_FILE_GROUP_NODE_WIDTH,
@@ -10,10 +10,57 @@ import {
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphFileGroupNode,
+	type GraphLayoutOptions,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
-import { isFile, isFolder } from '../../webview/graph/graphModel';
+import {
+	isFile,
+	isFolder,
+	type Project,
+} from '../../webview/graph/graphModel';
 import { FILE_GROUP_PAGE_SIZE } from '../../webview/graph/graphState';
+
+const ALL_OPENED_FOLDERS = openAllFolders(GRAPH_MOCK_PROJECT);
+
+/** 기존 전체 Layout 검증에서는 모든 Folder를 명시적으로 연다. */
+function createGraphLayout(
+	project: Project,
+	options: GraphLayoutOptions = {},
+): ReturnType<typeof createBaseGraphLayout> {
+	return createBaseGraphLayout(project, {
+		openedFolders: ALL_OPENED_FOLDERS,
+		...options,
+	});
+}
+
+/** 전체 opened Map에서 지정 Folder만 제거한다. */
+function closeFolders(...folderIds: string[]): Record<string, true> {
+	const openedFolders = { ...ALL_OPENED_FOLDERS };
+
+	for (const folderId of folderIds) {
+		delete openedFolders[folderId];
+	}
+
+	return openedFolders;
+}
+
+/** Layout 단위 테스트의 전체 Tree를 열기 위한 test-only sparse Map을 만든다. */
+function openAllFolders(project: Project): Record<string, true> {
+	const openedFolders: Record<string, true> = {};
+	const visit = (entries: Project['children']): void => {
+		for (const entry of entries) {
+			if (!isFolder(entry)) {
+				continue;
+			}
+
+			openedFolders[entry.id] = true;
+			visit(entry.children);
+		}
+	};
+
+	visit(project.children);
+	return openedFolders;
+}
 
 suite('Graph Model / Layout', () => {
 	test('실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다', () => {
@@ -33,6 +80,123 @@ suite('Graph Model / Layout', () => {
 		assert.ok(app.children.filter(isFile).length > 1);
 		assert.ok(appSrc.children.filter(isFile).length > FILE_GROUP_PAGE_SIZE);
 		assert.ok(appSrc.children.some(isFolder));
+	});
+
+	test('기본 상태는 모든 Folder를 닫고 Project Root는 항상 연다', () => {
+		const defaultLayout = createBaseGraphLayout(GRAPH_MOCK_PROJECT);
+		const rootStateLayout = createBaseGraphLayout(GRAPH_MOCK_PROJECT, {
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		});
+		const nodeIds = new Set(defaultLayout.nodes.map((node) => node.id));
+
+		assert.ok(nodeIds.has(GRAPH_MOCK_PROJECT.id));
+		assert.ok(nodeIds.has('folder:app'));
+		assert.ok(nodeIds.has('folder:src'));
+		assert.ok(nodeIds.has('folder:pagination-samples'));
+		assert.ok(nodeIds.has(createFileGroupId(GRAPH_MOCK_PROJECT.id)));
+		assert.strictEqual(nodeIds.has('folder:app/src'), false);
+		assert.deepStrictEqual(rootStateLayout, defaultLayout);
+	});
+
+	test('열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다', () => {
+		const folderId = 'folder:app';
+		const layout = createBaseGraphLayout(GRAPH_MOCK_PROJECT, {
+			openedFolders: { [folderId]: true },
+		});
+		const nodeIds = new Set(layout.nodes.map((node) => node.id));
+		const excludedDescendantIds = [
+			'folder:app/src/components',
+			createFileGroupId('folder:app/src'),
+			createFileGroupId('folder:app/src/components'),
+			createFileGroupId('folder:app/docs'),
+		];
+
+		assert.ok(nodeIds.has(folderId));
+		assert.ok(nodeIds.has('folder:app/src'));
+		assert.ok(nodeIds.has('folder:app/docs'));
+		assert.ok(nodeIds.has(createFileGroupId(folderId)));
+		assert.ok(layout.edges.some(
+			(edge) => edge.sourceId === GRAPH_MOCK_PROJECT.id
+				&& edge.targetId === folderId,
+		));
+
+		for (const excludedId of excludedDescendantIds) {
+			assert.strictEqual(nodeIds.has(excludedId), false);
+			assert.strictEqual(
+				layout.edges.some(
+					(edge) => edge.sourceId === excludedId
+						|| edge.targetId === excludedId,
+				),
+				false,
+			);
+		}
+
+		assert.strictEqual(
+			layout.edges.every(
+				(edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId),
+			),
+			true,
+		);
+	});
+
+	test('Folder를 닫으면 sibling을 남은 구조 기준으로 재배치한다', () => {
+		const folderId = 'folder:app';
+		const openLayout = createGraphLayout(GRAPH_MOCK_PROJECT);
+		const collapsedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			openedFolders: closeFolders(folderId),
+		});
+		const folder = GRAPH_MOCK_PROJECT.children.find(
+			(entry) => isFolder(entry) && entry.id === folderId,
+		);
+
+		assert.ok(folder && isFolder(folder));
+		const projectWithEmptyFolder: Project = {
+			...GRAPH_MOCK_PROJECT,
+			children: GRAPH_MOCK_PROJECT.children.map((entry) => (
+				entry === folder ? { ...folder, children: [] } : entry
+			)),
+		};
+		const expectedLayout = createGraphLayout(projectWithEmptyFolder);
+		const openSibling = getLayoutNode(openLayout.nodes, 'folder:src');
+		const collapsedSibling = getLayoutNode(
+			collapsedLayout.nodes,
+			'folder:src',
+		);
+
+		assert.deepStrictEqual(collapsedLayout, expectedLayout);
+		assert.ok(collapsedSibling.position.y < openSibling.position.y);
+	});
+
+	test('opened 상태를 제거하면 닫히고 다시 추가하면 전체 Layout을 복원한다', () => {
+		const openLayout = createGraphLayout(GRAPH_MOCK_PROJECT);
+		const collapsedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			openedFolders: closeFolders('folder:app'),
+		});
+		const reopenedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			openedFolders: ALL_OPENED_FOLDERS,
+		});
+
+		assert.notDeepStrictEqual(collapsedLayout, openLayout);
+		assert.deepStrictEqual(reopenedLayout, openLayout);
+	});
+
+	test('여러 Folder의 opened 상태를 독립적으로 제거한다', () => {
+		const firstFolderId = 'folder:app/src';
+		const secondFolderId = 'folder:src/webview';
+		const layout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			openedFolders: closeFolders(firstFolderId, secondFolderId),
+		});
+		const nodeIds = new Set(layout.nodes.map((node) => node.id));
+
+		assert.ok(nodeIds.has(firstFolderId));
+		assert.ok(nodeIds.has(secondFolderId));
+		assert.strictEqual(nodeIds.has('folder:app/src/components'), false);
+		assert.strictEqual(nodeIds.has(createFileGroupId(firstFolderId)), false);
+		assert.strictEqual(nodeIds.has(createFileGroupId(secondFolderId)), false);
+		assert.ok(nodeIds.has('folder:app/docs'));
+		assert.ok(nodeIds.has(createFileGroupId('folder:app/docs')));
+		assert.ok(nodeIds.has(createFileGroupId('folder:src')));
+		assert.ok(nodeIds.has('folder:pagination-samples/seventeen-files'));
 	});
 
 	test('각 Container의 직접 File을 하나의 안정적인 File Group으로 만든다', () => {

@@ -30,7 +30,8 @@ export interface GraphView {
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
 /**
- * 현재 Layout 입력인 File Group page reference가 바뀔 때만 다음 Layout을 적용한다.
+ * 현재 Layout 입력인 File Group page 또는 opened Folder reference가 바뀔 때만
+ * 다음 Layout을 적용한다.
  * Layout factory를 분리해 Camera/Drag-only 변경 fast-path를 직접 검증할 수 있다.
  */
 export function initializeGraphLayoutReflow(
@@ -40,12 +41,20 @@ export function initializeGraphLayoutReflow(
 ): () => void {
 	let active = true;
 	let renderedFileGroupPages = state.getState().fileGroupPages;
+	let renderedOpenedFolders = state.getState().openedFolders;
 	const unsubscribe = state.subscribe((nextState) => {
-		if (!active || nextState.fileGroupPages === renderedFileGroupPages) {
+		if (
+			!active
+			|| (
+				nextState.fileGroupPages === renderedFileGroupPages
+				&& nextState.openedFolders === renderedOpenedFolders
+			)
+		) {
 			return;
 		}
 
 		renderedFileGroupPages = nextState.fileGroupPages;
+		renderedOpenedFolders = nextState.openedFolders;
 		renderer.applyLayout(createLayout(nextState));
 	});
 
@@ -92,8 +101,16 @@ export function initializeGraphView(
 		nodeLayer,
 		createGraphLayout(GRAPH_MOCK_PROJECT, {
 			fileGroupPages: initialGraphState.fileGroupPages,
+			openedFolders: initialGraphState.openedFolders,
 		}),
 		state,
+		{
+			onFolderClick: (folderId) => {
+				if (folderId !== GRAPH_MOCK_PROJECT.id) {
+					state.toggleFolder(folderId);
+				}
+			},
+		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
 	let disposed = false;
@@ -102,6 +119,7 @@ export function initializeGraphView(
 		renderer,
 		(nextState) => createGraphLayout(GRAPH_MOCK_PROJECT, {
 			fileGroupPages: nextState.fileGroupPages,
+			openedFolders: nextState.openedFolders,
 		}),
 	);
 
