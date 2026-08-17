@@ -79,6 +79,12 @@ interface NodePtySpawnOptions {
 
 	/** PTY data event를 문자열로 받기 위한 고정 인코딩이다. */
 	readonly encoding: 'utf8';
+
+	/**
+	 * Windows에 함께 배포한 ConPTY backend를 사용할지 여부다.
+	 * Windows 외 플랫폼에서는 node-pty에 이 옵션을 전달하지 않는다.
+	 */
+	readonly useConptyDll?: true;
 }
 
 /**
@@ -238,9 +244,11 @@ export class NodePtyAdapter implements PtyAdapter {
 	 *
 	 * @param loadBinding 실제 spawn 시점에 호출할 module loader다.
 	 * 테스트에서는 native module을 요구하지 않는 가짜 loader를 주입할 수 있다.
+	 * @param platform Windows 전용 backend 옵션을 결정할 Host 플랫폼이다.
 	 */
 	constructor(
 		private readonly loadBinding: NodePtyBindingLoader = loadNodePtyBinding,
+		private readonly platform: NodeJS.Platform = process.platform,
 	) {}
 
 	/**
@@ -253,6 +261,7 @@ export class NodePtyAdapter implements PtyAdapter {
 	 */
 	spawn(options: PtySpawnOptions): PtyProcessHandle {
 		try {
+			const useBundledWindowsConpty = this.platform === 'win32';
 			const process = this.loadBinding().spawn(
 				options.executable,
 				[...options.args],
@@ -262,6 +271,7 @@ export class NodePtyAdapter implements PtyAdapter {
 					cols: options.cols,
 					rows: options.rows,
 					encoding: 'utf8',
+					...(useBundledWindowsConpty ? { useConptyDll: true as const } : {}),
 				},
 			);
 

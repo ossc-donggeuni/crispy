@@ -78,7 +78,7 @@ suite('Production node-pty adapter', () => {
 		const adapter = new NodePtyAdapter(() => {
 			loadCalls += 1;
 			return binding;
-		});
+		}, 'linux');
 
 		const process = adapter.spawn(spawnOptions);
 		const receivedData: string[] = [];
@@ -114,6 +114,31 @@ suite('Production node-pty adapter', () => {
 		assert.deepStrictEqual(receivedExits, [{ exitCode: 3, signal: 9 }]);
 		assert.strictEqual(dataDisposeCalls, 1);
 		assert.strictEqual(exitDisposeCalls, 1);
+	});
+
+	test('Windows spawn은 VSIX에 포함된 ConPTY DLL backend를 선택한다', () => {
+		let receivedOptions: { readonly useConptyDll?: true } | undefined;
+		const adapter = new NodePtyAdapter(() => ({
+			spawn(_executable, _args, options) {
+				receivedOptions = options;
+				return {
+					pid: 9103,
+					write() {},
+					resize() {},
+					kill() {},
+					onData() {
+						return { dispose() {} };
+					},
+					onExit() {
+						return { dispose() {} };
+					},
+				};
+			},
+		}), 'win32');
+
+		adapter.spawn(spawnOptions);
+
+		assert.strictEqual(receivedOptions?.useConptyDll, true);
 	});
 
 	test('Windows식 delayed PID를 실제 양의 PID가 될 때까지 기다린다', async () => {

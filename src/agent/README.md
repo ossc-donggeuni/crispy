@@ -27,7 +27,8 @@ win32-x64
 | Git | 현재 저장소 checkout | 소스 및 변경 이력 관리 |
 
 세 target 모두 고정된 `node-pty` package의 target prebuild를 사용한다. `linux-x64`의
-ABI baseline 검사에는 `readelf`를 제공하는 binutils가 필요하다.
+ABI baseline 검사에는 `readelf`를 제공하는 binutils가 필요하다. `win32-x64`는 Windows
+버전에 따른 시스템 ConPTY 차이를 피하기 위해 VSIX에 포함된 `conpty.dll` backend를 사용한다.
 
 버전을 먼저 확인한다.
 
@@ -66,10 +67,15 @@ pnpm run compile
 ### 3. Codex와 Claude CLI 준비
 
 Codex와 Claude provider는 Crispy가 새 Terminal을 만든 뒤 같은 Shell PTY 경로에서 각각의
-CLI를 자동 실행한다. macOS/Linux에서는 `codex` 또는 `claude`, Windows에서는 `codex.cmd`
-또는 native Claude Code의 `claude.exe`를 입력한다. 사용할 CLI가 팀원의 머신에 설치되어
-있고 VS Code Extension Host가 상속한 `PATH`에서도 resolve되어야 한다. Antigravity는
-자동 실행 없이 기본 Shell 상태로 둔다.
+CLI를 자동 실행한다. macOS/Linux에서는 `codex` 또는 `claude`를 기본으로 사용한다.
+Windows에서는 실제 PowerShell에서 `--version`을 실행해 Codex는 `codex`, `codex.cmd`,
+`codex.exe`, Claude는 `claude`, `claude.cmd`, `claude.exe` 순으로 첫 성공 후보를 선택한다.
+사용할 CLI가 팀원의 머신에 설치되어 있고 VS Code Extension Host가 상속한 `PATH`에서도
+resolve되어야 한다. Antigravity는 자동 실행 없이 기본 Shell 상태로 둔다.
+
+자동 탐색으로 찾을 수 없는 설치는 VS Code Settings의 `crispy.codexCliPath` 또는
+`crispy.claudeCliPath`에 executable 경로를 지정한다. 설정한 경로를 가장 먼저 검증하며,
+검증에 실패하면 같은 provider의 기본 후보를 계속 탐색한다.
 
 #### Codex
 
@@ -131,9 +137,9 @@ claude --version
 ```
 
 native installer의 기본 실행 파일은 `%USERPROFILE%\.local\bin\claude.exe`다. Crispy는
-이 native `claude.exe`만 지원하며 legacy npm 설치의 `claude.cmd` fallback은 사용하지
-않는다. `Get-Command` 결과에서 Claude Desktop의 `Claude.exe` alias가 native Claude Code보다
-먼저 resolve되지 않는지도 확인한다.
+native `claude.exe`뿐 아니라 설치 방식에 따라 만들어지는 `claude`와 `claude.cmd`도 자동
+탐색한다. `Get-Command` 결과에서 Claude Desktop의 `Claude.exe` alias가 Claude Code보다 먼저
+resolve되면 `crispy.claudeCliPath`에 원하는 Claude Code executable의 전체 경로를 지정한다.
 
 Git for Windows는 권장 사항이지만 필수 prerequisite로 강제하지 않는다. Git Bash가 없으면
 최신 Claude Code는 Windows PowerShell을 사용할 수 있다. 최신 설치 조건과 문제 해결 방법은
@@ -142,10 +148,11 @@ Git for Windows는 권장 사항이지만 필수 prerequisite로 강제하지 �
 
 #### 설치 및 인증 오류
 
-Crispy는 CLI 설치 여부, version, `PATH` 또는 인증 상태를 사전에 검사하지 않는다. CLI가
-없으면 Shell의 `command not found` 또는 `not recognized` 출력을 그대로 표시한다. Claude
-Code가 로그인이나 인증을 요구하면 기존 PTY/xterm.js 경로로 그 화면을 표시한다. Crispy는
-OAuth, API key 또는 Claude credential을 저장하거나 처리하지 않는다.
+Crispy는 Windows 후보 선택에 필요한 `--version` 성공 여부만 검사하며 CLI를 설치하거나
+인증 상태를 판별하지 않는다. 모든 후보가 실패하면 문서 기준 기본 이름을 Shell에 입력해
+`command not found` 또는 `not recognized` 출력을 그대로 표시한다. Claude Code가 로그인이나
+인증을 요구하면 기존 PTY/xterm.js 경로로 그 화면을 표시한다. Crispy는 OAuth, API key 또는
+Claude credential을 저장하거나 처리하지 않는다.
 
 ### 4. Extension Development Host 실행
 
@@ -247,9 +254,9 @@ pnpm run verify:linux-abi
 | `cross packaging is not supported` | 현재 host와 같은 target을 지정한다 |
 | `workspace_untrusted` 또는 workspace 오류 | trusted single-root local folder를 연다 |
 | `codex: command not found` | 일반 Terminal과 VS Code Extension Host가 같은 `PATH`에서 Codex CLI를 찾는지 확인한다 |
-| Windows에서 `codex.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy는 PowerShell 정책 변경 없이 `codex.cmd`를 사용한다 |
+| Windows에서 `codex.ps1` 또는 `claude.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy가 `.cmd`와 `.exe` 후보를 차례로 검사한다 |
 | `claude: command not found` 또는 Windows의 `not recognized` | VS Code Extension Host의 `PATH`에서 native Claude Code를 찾는지 확인한다 |
-| Windows에서 잘못된 Claude가 실행됨 | `Get-Command claude.exe -All`로 native `%USERPROFILE%\.local\bin\claude.exe`가 Claude Desktop alias보다 먼저 resolve되는지 확인한다 |
+| Windows에서 잘못된 Claude가 실행됨 | `Get-Command claude -All`로 해석 순서를 확인하고 `crispy.claudeCliPath`에 원하는 executable 전체 경로를 지정한다 |
 | `node-pty` load 실패 | 수동 rebuild/chmod 대신 Node 24에서 `pnpm install --frozen-lockfile`을 다시 실행한다 |
 | 테스트용 VS Code 다운로드 실패 | npm registry와 VS Code update server에 접근 가능한지 확인한다 |
 
@@ -306,8 +313,8 @@ src/agent/
 
 ## provider 자동 실행 정책
 
-세션은 항상 Host가 정한 기본 Shell로 시작한다. Shell이 실행된 뒤 provider에 자동 실행
-커맨드가 정의되어 있으면 Host가 그 커맨드를 Shell 입력으로 그대로 전달한다.
+세션은 항상 Host가 정한 기본 Shell로 시작한다. Host는 세션 시작 전에 Windows 후보를
+가볍게 검증하고, Shell이 실행된 뒤 선택한 provider 커맨드를 Shell 입력으로 전달한다.
 
 | provider | 자동 실행 |
 | --- | --- |
