@@ -27,8 +27,8 @@ const successfulPrepare: PrepareTerminalLaunch = async () => ({
 	policy: launchPolicy,
 });
 
-/** Codex 탭이 시작될 때 Host가 Shell에 보내는 자동 실행 입력이다. */
-const codexAutoRunInput = resolveAgentAutoRunInput('codex');
+/** 같은 Terminal lifecycle에서 CLI를 자동 실행하는 provider 목록이다. */
+const autoRunProviderIds = ['codex', 'claude'] as const;
 
 /**
  * FakePtyAdapter와 성공 준비 경계를 가진 Host 및 메시지 기록을 만든다.
@@ -98,10 +98,16 @@ function latestHandle(ptyAdapter: FakePtyAdapter): FakePtyProcessHandle {
 }
 
 suite('Agent 탭 provider 선택과 세션 routing', () => {
-	test('Codex 자동 실행은 Windows에서 codex.cmd를 선택해 PowerShell policy를 요구하지 않는다', () => {
-		assert.strictEqual(resolveAgentAutoRunInput('codex', 'win32'), 'codex.cmd\r');
+	test('provider와 platform별 Host auto-run 입력을 결정한다', () => {
 		assert.strictEqual(resolveAgentAutoRunInput('codex', 'darwin'), 'codex\r');
 		assert.strictEqual(resolveAgentAutoRunInput('codex', 'linux'), 'codex\r');
+		assert.strictEqual(resolveAgentAutoRunInput('codex', 'win32'), 'codex.cmd\r');
+
+		assert.strictEqual(resolveAgentAutoRunInput('claude', 'darwin'), 'claude\r');
+		assert.strictEqual(resolveAgentAutoRunInput('claude', 'linux'), 'claude\r');
+		assert.strictEqual(resolveAgentAutoRunInput('claude', 'win32'), 'claude.exe\r');
+
+		assert.strictEqual(resolveAgentAutoRunInput('antigravity'), undefined);
 	});
 
 	test('탭만 만들면 provider가 없으므로 세션을 시작하지 않는다', async () => {
@@ -117,43 +123,84 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		assert.strictEqual(host.getTabProvider('tab-created'), undefined);
 	});
 
-	test('Codex를 선택하면 세션을 시작하고 Codex CLI를 자동으로 실행한다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost();
+	for (const providerId of autoRunProviderIds) {
+		test(`${providerId} 선택, 재선택과 overlay restart가 공통 auto-run lifecycle을 재사용한다`, async () => {
+			const { host, ptyAdapter, messages } = createRoutingHost();
+			const tabId = `tab-lifecycle-${providerId}`;
+			const expected = resolveAgentAutoRunInput(providerId);
+			assert.ok(expected !== undefined);
 
-		await openTab(host, 'tab-codex', 'codex');
+			await openTab(host, tabId, providerId);
+			const firstSession = host.getActiveSession(tabId);
+			const firstHandle = latestHandle(ptyAdapter);
+			assert.ok(firstSession !== undefined);
+			assert.strictEqual(firstSession.state.kind, 'running');
+			assert.deepStrictEqual(firstHandle.writes, [expected]);
 
-		assert.strictEqual(ptyAdapter.spawnCalls.length, 1);
-		assert.strictEqual(messagesOfType(messages, 'terminal.started').length, 1);
-		const handle = latestHandle(ptyAdapter);
-		assert.strictEqual(handle.writes.length, 1);
-		assert.strictEqual(handle.writes[0] === codexAutoRunInput, true);
-	});
+			await host.switchAgent(tabId, providerId);
+			const secondSession = host.getActiveSession(tabId);
+			const secondHandle = latestHandle(ptyAdapter);
+			assert.ok(secondSession !== undefined);
+			assert.strictEqual(secondSession.state.kind, 'running');
+			assert.strictEqual(firstHandle.killCallCount, 1);
+			assert.strictEqual(firstHandle.dataListenerCount, 0);
+			assert.strictEqual(firstHandle.exitListenerCount, 0);
+			assert.notStrictEqual(secondSession.sessionId, firstSession.sessionId);
+			assert.deepStrictEqual(secondHandle.writes, [expected]);
 
-	test('Windows delayed PID 동안 started와 Codex 입력을 보류한다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost(0);
-		host.createTab('tab-delayed-codex');
-		await host.handleTerminalReady('tab-delayed-codex', 80, 24);
+			secondHandle.emitExit({ exitCode: 0 });
+			await host.restartSession(tabId, secondSession.sessionId);
+			const thirdSession = host.getActiveSession(tabId);
+			assert.ok(thirdSession !== undefined);
+			assert.strictEqual(secondHandle.killCallCount, 1);
+			assert.strictEqual(secondHandle.dataListenerCount, 0);
+			assert.strictEqual(secondHandle.exitListenerCount, 0);
+			assert.strictEqual(host.getTabProvider(tabId), providerId);
+			assert.notStrictEqual(thirdSession.sessionId, secondSession.sessionId);
+			assert.strictEqual(thirdSession.state.kind, 'running');
+			assert.deepStrictEqual(latestHandle(ptyAdapter).writes, [expected]);
+			assert.strictEqual(ptyAdapter.spawnCalls.length, 3);
+			assert.strictEqual(
+				messagesOfType(messages, 'terminal.started').length,
+				3,
+			);
+		});
 
-		const switching = host.switchAgent('tab-delayed-codex', 'codex');
-		await Promise.resolve();
-		const handle = latestHandle(ptyAdapter);
-		assert.deepStrictEqual(
-			host.getActiveSession('tab-delayed-codex')?.state,
-			{ kind: 'starting' },
-		);
-		assert.strictEqual(messagesOfType(messages, 'terminal.started').length, 0);
-		assert.deepStrictEqual(handle.writes, []);
+		test(`${providerId} delayed PID 동안 running과 auto-run 입력을 보류한다`, async () => {
+			const { host, ptyAdapter, messages } = createRoutingHost(0);
+			const tabId = `tab-delayed-${providerId}`;
+			const expected = resolveAgentAutoRunInput(providerId);
+			assert.ok(expected !== undefined);
+			host.createTab(tabId);
+			await host.handleTerminalReady(tabId, 80, 24);
 
-		handle.setReadyPid(4301);
-		await switching;
+			const switching = host.switchAgent(tabId, providerId);
+			await Promise.resolve();
+			const handle = latestHandle(ptyAdapter);
+			assert.deepStrictEqual(
+				host.getActiveSession(tabId)?.state,
+				{ kind: 'starting' },
+			);
+			assert.strictEqual(
+				messagesOfType(messages, 'terminal.started').length,
+				0,
+			);
+			assert.deepStrictEqual(handle.writes, []);
 
-		assert.deepStrictEqual(
-			host.getActiveSession('tab-delayed-codex')?.state,
-			{ kind: 'running', pid: 4301 },
-		);
-		assert.strictEqual(messagesOfType(messages, 'terminal.started').length, 1);
-		assert.deepStrictEqual(handle.writes, [codexAutoRunInput]);
-	});
+			handle.setReadyPid(4301);
+			await switching;
+
+			assert.deepStrictEqual(
+				host.getActiveSession(tabId)?.state,
+				{ kind: 'running', pid: 4301 },
+			);
+			assert.strictEqual(
+				messagesOfType(messages, 'terminal.started').length,
+				1,
+			);
+			assert.deepStrictEqual(handle.writes, [expected]);
+		});
+	}
 
 	test('provider 선택이 표면 준비보다 먼저 도착해도 준비 뒤에 시작한다', async () => {
 		const { host, ptyAdapter } = createRoutingHost();
@@ -170,94 +217,72 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		assert.strictEqual(latestHandle(ptyAdapter).writes.length, 1);
 	});
 
-	test('실행 중 탭에서 Codex를 다시 고르면 기존 세션을 종료하고 다시 자동 실행한다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost();
-
-		await openTab(host, 'tab-restart-codex', 'codex');
-		const firstHandle = latestHandle(ptyAdapter);
-		const firstSessionId = host.getActiveSession('tab-restart-codex')?.sessionId;
-
-		await host.switchAgent('tab-restart-codex', 'codex');
-
-		assert.strictEqual(firstHandle.killCallCount, 1);
-		assert.strictEqual(firstHandle.dataListenerCount, 0);
-		assert.strictEqual(firstHandle.exitListenerCount, 0);
-		assert.strictEqual(ptyAdapter.spawnCalls.length, 2);
-
-		const secondSessionId = host.getActiveSession('tab-restart-codex')?.sessionId;
-		assert.strictEqual(typeof secondSessionId, 'string');
-		assert.strictEqual(secondSessionId === firstSessionId, false);
-		assert.strictEqual(latestHandle(ptyAdapter).writes.length, 1);
-		assert.strictEqual(
-			latestHandle(ptyAdapter).writes[0] === codexAutoRunInput,
-			true,
-		);
-		assert.strictEqual(messagesOfType(messages, 'terminal.started').length, 2);
-	});
-
-	test('덮개 재시작 요청도 같은 provider의 자동 실행 상태로 되돌린다', async () => {
+	test('Antigravity는 세션만 시작하고 CLI를 자동 실행하지 않는다', async () => {
 		const { host, ptyAdapter } = createRoutingHost();
 
-		await openTab(host, 'tab-overlay-restart', 'codex');
-		const session = host.getActiveSession('tab-overlay-restart');
-		assert.ok(session !== undefined);
-		latestHandle(ptyAdapter).emitExit({ exitCode: 0 });
+		await openTab(host, 'tab-antigravity', 'antigravity');
 
-		await host.restartSession('tab-overlay-restart', session.sessionId);
-
-		assert.strictEqual(ptyAdapter.spawnCalls.length, 2);
-		assert.strictEqual(
-			latestHandle(ptyAdapter).writes[0] === codexAutoRunInput,
-			true,
-		);
-	});
-
-	test('Claude와 Antigravity는 세션만 시작하고 CLI를 자동 실행하지 않는다', async () => {
-		for (const providerId of ['claude', 'antigravity'] as const) {
-			const { host, ptyAdapter } = createRoutingHost();
-
-			await openTab(host, `tab-${providerId}`, providerId);
-
-			assert.strictEqual(ptyAdapter.spawnCalls.length, 1);
-			assert.strictEqual(latestHandle(ptyAdapter).writes.length, 0);
-		}
+		assert.strictEqual(ptyAdapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(latestHandle(ptyAdapter).writes, []);
 	});
 
 	test('여러 탭의 세션이 독립적으로 유지되고 입출력이 섞이지 않는다', async () => {
 		const { host, ptyAdapter, messages } = createRoutingHost();
+		const codexExpected = resolveAgentAutoRunInput('codex');
+		const claudeExpected = resolveAgentAutoRunInput('claude');
+		assert.ok(codexExpected !== undefined && claudeExpected !== undefined);
 
-		await openTab(host, 'tab-one', 'codex');
-		const firstSession = host.getActiveSession('tab-one');
-		const firstHandle = latestHandle(ptyAdapter);
+		await openTab(host, 'tab-codex', 'codex');
+		const codexSession = host.getActiveSession('tab-codex');
+		const codexHandle = latestHandle(ptyAdapter);
 
-		await openTab(host, 'tab-two', 'claude');
-		const secondSession = host.getActiveSession('tab-two');
-		const secondHandle = latestHandle(ptyAdapter);
+		await openTab(host, 'tab-claude', 'claude');
+		const claudeSession = host.getActiveSession('tab-claude');
+		const claudeHandle = latestHandle(ptyAdapter);
 
-		assert.ok(firstSession !== undefined && secondSession !== undefined);
-		assert.strictEqual(firstSession === secondSession, false);
-		assert.strictEqual(firstSession.state.kind, 'running');
-		assert.strictEqual(secondSession.state.kind, 'running');
+		assert.ok(codexSession !== undefined && claudeSession !== undefined);
+		assert.notStrictEqual(codexSession.sessionId, claudeSession.sessionId);
+		assert.notStrictEqual(codexHandle, claudeHandle);
+		assert.deepStrictEqual(codexHandle.writes, [codexExpected]);
+		assert.deepStrictEqual(claudeHandle.writes, [claudeExpected]);
 
 		host.routeInput({
 			type: 'terminal.input',
-			tabId: 'tab-two',
-			sessionId: secondSession.sessionId,
+			tabId: 'tab-claude',
+			sessionId: claudeSession.sessionId,
 			data: 'x',
 		});
 
-		/* 첫 탭에는 자동 실행 입력만 남고 두 번째 탭 입력이 섞이지 않아야 한다. */
-		assert.strictEqual(firstHandle.writes.length, 1);
-		assert.strictEqual(secondHandle.writes.length, 1);
+		assert.deepStrictEqual(codexHandle.writes, [codexExpected]);
+		assert.deepStrictEqual(claudeHandle.writes, [claudeExpected, 'x']);
 
 		messages.length = 0;
-		secondHandle.emitData('output');
+		codexHandle.emitData('codex output');
+		claudeHandle.emitData('claude output');
 		await Promise.resolve();
 
 		const outputs = messagesOfType(messages, 'terminal.output');
-		assert.strictEqual(outputs.length, 1);
-		assert.strictEqual(outputs[0].tabId, 'tab-two');
-		assert.strictEqual(outputs[0].sessionId, secondSession.sessionId);
+		assert.deepStrictEqual(
+			outputs.map(({ tabId, sessionId, data }) => ({ tabId, sessionId, data })),
+			[
+				{
+					tabId: 'tab-codex',
+					sessionId: codexSession.sessionId,
+					data: 'codex output',
+				},
+				{
+					tabId: 'tab-claude',
+					sessionId: claudeSession.sessionId,
+					data: 'claude output',
+				},
+			],
+		);
+
+		host.closeTab('tab-codex');
+		assert.strictEqual(codexHandle.killCallCount, 1);
+		assert.strictEqual(claudeHandle.killCallCount, 0);
+		assert.strictEqual(host.getActiveSession('tab-claude'), claudeSession);
+		assert.strictEqual(claudeSession.state.kind, 'running');
 	});
 
 	test('다른 탭이나 종료된 세션의 input, resize와 restart를 거부한다', async () => {

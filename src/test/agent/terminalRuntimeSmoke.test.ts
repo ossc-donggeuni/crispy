@@ -266,12 +266,21 @@ suite('Terminal end-to-end smoke', function () {
 			true,
 		);
 
+		const outputLengthBeforeInterrupt = log.outputFor(sessionId).length;
 		host.routeInput({
 			type: 'terminal.input',
 			tabId,
 			sessionId,
 			data: '\u0003',
 		});
+		assert.strictEqual(
+			await pollUntil(
+				() => log.outputFor(sessionId)
+					.slice(outputLengthBeforeInterrupt)
+					.includes('$ '),
+			),
+			true,
+		);
 		host.routeInput({
 			type: 'terminal.input',
 			tabId,

@@ -28,7 +28,7 @@ src/
 - Panel 종료 후 다시 열 때 사용할 마지막 Layout 상태를 Extension Host 메모리에 유지
 
 ### `messages.ts`
-
+z
 > Extension Host와 Webview 사이에서 사용하는 메시지 타입을 정의합니다.
 
 - Webview에서 Extension Host로 전송하는 `WebviewToExtensionMessage` 정의

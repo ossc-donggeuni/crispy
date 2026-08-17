@@ -63,11 +63,15 @@ pnpm run lint
 pnpm run compile
 ```
 
-### 3. Codex CLI 준비
+### 3. Codex와 Claude CLI 준비
 
-현재 provider 중 **Codex만 CLI를 자동 실행**한다. Crispy가 새 Terminal을 만든 뒤 Shell에
-macOS/Linux에서는 `codex`, Windows에서는 `codex.cmd`를 입력하는 방식이므로, 팀원의
-머신에 Codex CLI가 설치되어 있고 VS Code가 상속한 `PATH`에서 이를 찾을 수 있어야 한다.
+Codex와 Claude provider는 Crispy가 새 Terminal을 만든 뒤 같은 Shell PTY 경로에서 각각의
+CLI를 자동 실행한다. macOS/Linux에서는 `codex` 또는 `claude`, Windows에서는 `codex.cmd`
+또는 native Claude Code의 `claude.exe`를 입력한다. 사용할 CLI가 팀원의 머신에 설치되어
+있고 VS Code Extension Host가 상속한 `PATH`에서도 resolve되어야 한다. Antigravity는
+자동 실행 없이 기본 Shell 상태로 둔다.
+
+#### Codex
 
 macOS/Linux에서는 OpenAI 공식 installer를 사용할 수 있다.
 
@@ -86,8 +90,62 @@ codex
 플랫폼별 최신 설치·인증 방법은 [OpenAI Codex CLI 공식 문서](https://learn.chatgpt.com/docs/codex/cli)를
 따른다.
 
-> Claude와 Antigravity는 현재 UI에서 선택하고 PTY 세션을 만들 수 있지만 CLI를 자동으로
-> 실행하지 않는다. 선택하면 기본 Shell만 열린다.
+#### Claude — macOS/Linux
+
+Anthropic native installer를 사용한다.
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+설치 후 버전과 Shell에서 resolve되는 경로를 확인한다.
+
+```bash
+claude --version
+command -v claude
+```
+
+macOS에서는 `which claude`도 사용할 수 있다. 일반 Terminal에서 찾을 수 있더라도 VS Code
+Extension Host가 상속한 `PATH`에 설치 경로가 없으면 Crispy의 Shell에서는 실행되지 않는다.
+
+#### Claude — Windows
+
+PowerShell에서 Anthropic native installer를 사용한다.
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
+
+또는 WinGet으로 설치할 수 있다.
+
+```powershell
+winget install Anthropic.ClaudeCode
+```
+
+설치 후 native 실행 파일과 버전을 확인한다.
+
+```powershell
+Get-Command claude.exe -All
+Test-Path "$env:USERPROFILE\.local\bin\claude.exe"
+claude --version
+```
+
+native installer의 기본 실행 파일은 `%USERPROFILE%\.local\bin\claude.exe`다. Crispy는
+이 native `claude.exe`만 지원하며 legacy npm 설치의 `claude.cmd` fallback은 사용하지
+않는다. `Get-Command` 결과에서 Claude Desktop의 `Claude.exe` alias가 native Claude Code보다
+먼저 resolve되지 않는지도 확인한다.
+
+Git for Windows는 권장 사항이지만 필수 prerequisite로 강제하지 않는다. Git Bash가 없으면
+최신 Claude Code는 Windows PowerShell을 사용할 수 있다. 최신 설치 조건과 문제 해결 방법은
+[Claude Code 설정 문서](https://code.claude.com/docs/en/setup)와
+[Claude Code 설치 문제 해결 문서](https://code.claude.com/docs/en/troubleshoot-install)를 따른다.
+
+#### 설치 및 인증 오류
+
+Crispy는 CLI 설치 여부, version, `PATH` 또는 인증 상태를 사전에 검사하지 않는다. CLI가
+없으면 Shell의 `command not found` 또는 `not recognized` 출력을 그대로 표시한다. Claude
+Code가 로그인이나 인증을 요구하면 기존 PTY/xterm.js 경로로 그 화면을 표시한다. Crispy는
+OAuth, API key 또는 Claude credential을 저장하거나 처리하지 않는다.
 
 ### 4. Extension Development Host 실행
 
@@ -97,7 +155,7 @@ codex
 4. 새로 열린 Extension Development Host에서 테스트할 **로컬 단일 root 폴더**를 연다.
 5. Workspace Trust 요청이 나오면 신뢰할 수 있는 테스트 폴더에 한해 승인한다.
 6. Command Palette에서 `Crispy: Open Canvas`를 실행한다.
-7. Agent 영역에서 새 탭을 만들거나 현재 탭의 provider로 `Codex`를 선택한다.
+7. Agent 영역에서 새 탭을 만들거나 현재 탭의 provider로 `Codex` 또는 `Claude`를 선택한다.
 
 현재 Terminal 시작 정책은 trusted, single-root, local file workspace만 허용한다. 다음
 환경에서는 PTY 시작이 거부된다.
@@ -107,9 +165,9 @@ codex
 - multi-root workspace
 - virtual 또는 remote workspace
 
-Codex 선택 후 기본 Shell만 보이거나 `command not found: codex`가 출력되면 Crispy 설치
-문제라기보다 Extension Host가 상속한 `PATH` 문제다. VS Code를 완전히 종료한 뒤 Codex
-CLI를 찾을 수 있는 Terminal에서 `code .`로 다시 열어 비교한다.
+provider 선택 후 기본 Shell만 보이거나 CLI의 `command not found`가 출력되면 Crispy 설치
+문제라기보다 Extension Host가 상속한 `PATH` 문제일 수 있다. VS Code를 완전히 종료한 뒤
+해당 CLI를 찾을 수 있는 Terminal에서 `code .`로 다시 열어 비교한다.
 
 ### 5. 테스트
 
@@ -130,7 +188,7 @@ Agent 관련 test는 `src/test/agent/`에 있으며 다음 범위를 포함한�
 - protocol 및 session state validation
 - workspace와 Shell policy
 - 탭별 Terminal routing
-- provider 선택과 Codex 자동 실행 입력
+- provider 선택과 Codex/Claude 자동 실행 입력
 - PTY input/output, resize, restart와 cleanup
 - process tree cleanup
 - 실제 `node-pty` Terminal smoke
@@ -190,6 +248,8 @@ pnpm run verify:linux-abi
 | `workspace_untrusted` 또는 workspace 오류 | trusted single-root local folder를 연다 |
 | `codex: command not found` | 일반 Terminal과 VS Code Extension Host가 같은 `PATH`에서 Codex CLI를 찾는지 확인한다 |
 | Windows에서 `codex.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy는 PowerShell 정책 변경 없이 `codex.cmd`를 사용한다 |
+| `claude: command not found` 또는 Windows의 `not recognized` | VS Code Extension Host의 `PATH`에서 native Claude Code를 찾는지 확인한다 |
+| Windows에서 잘못된 Claude가 실행됨 | `Get-Command claude.exe -All`로 native `%USERPROFILE%\.local\bin\claude.exe`가 Claude Desktop alias보다 먼저 resolve되는지 확인한다 |
 | `node-pty` load 실패 | 수동 rebuild/chmod 대신 Node 24에서 `pnpm install --frozen-lockfile`을 다시 실행한다 |
 | 테스트용 VS Code 다운로드 실패 | npm registry와 VS Code update server에 접근 가능한지 확인한다 |
 
@@ -252,11 +312,11 @@ src/agent/
 | provider | 자동 실행 |
 | --- | --- |
 | Codex | Codex CLI를 자동으로 실행한다 |
-| Claude | 자동 실행 없이 기본 Shell 상태로 둔다 |
+| Claude | Claude Code CLI를 자동으로 실행한다 |
 | Antigravity | 자동 실행 없이 기본 Shell 상태로 둔다 |
 
-Claude와 Antigravity는 드롭다운에서 선택할 수 있고 세션도 정상적으로 시작되지만, CLI
-자동 실행은 이후 단계에서 Codex와 같은 방식으로 커맨드만 추가해 지원할 예정이다.
+Codex와 Claude는 provider별 커맨드만 다르고 탭/session ownership, Shell PTY 시작, PID 준비,
+입출력 routing, restart와 process-tree cleanup을 포함한 같은 Terminal lifecycle을 사용한다.
 
 ## ANSI 색상 계약
 

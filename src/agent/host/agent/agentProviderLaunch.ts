@@ -14,7 +14,10 @@ export interface AgentProviderLaunchDefinition {
 	 */
 	readonly autoRunCommand?: string;
 
-	/** Windows PowerShell execution policy를 우회하지 않고 사용할 `.cmd` shim override다. */
+	/**
+	 * Windows에서 provider별로 사용할 auto-run command override다.
+	 * 지정하지 않으면 `autoRunCommand`를 그대로 사용한다.
+	 */
 	readonly windowsAutoRunCommand?: string;
 }
 
@@ -22,8 +25,8 @@ export interface AgentProviderLaunchDefinition {
  * provider별 자동 실행 정책의 유일한 Host 소유 출처다.
  *
  * `ProviderRegistry`가 allowlist의 모든 provider를 요구하므로 provider가 추가되면
- * 정책 누락이 컴파일 단계에서 드러난다. 이번 단계에서는 Codex만 자동 실행 대상이며
- * Claude와 Antigravity는 자동 실행 없이 기본 Shell만 시작한다.
+ * 정책 누락이 컴파일 단계에서 드러난다. Codex와 Claude는 각 CLI를 자동 실행하며
+ * Antigravity는 자동 실행 없이 기본 Shell만 시작한다.
  */
 const AGENT_PROVIDER_LAUNCH: ProviderRegistry<AgentProviderLaunchDefinition> =
 	Object.freeze({
@@ -31,7 +34,10 @@ const AGENT_PROVIDER_LAUNCH: ProviderRegistry<AgentProviderLaunchDefinition> =
 			autoRunCommand: 'codex',
 			windowsAutoRunCommand: 'codex.cmd',
 		}),
-		claude: Object.freeze({}),
+		claude: Object.freeze({
+			autoRunCommand: 'claude',
+			windowsAutoRunCommand: 'claude.exe',
+		}),
 		antigravity: Object.freeze({}),
 	});
 
