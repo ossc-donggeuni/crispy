@@ -40,7 +40,12 @@ export function restoreWebviewState(
 		?? createDefaultWebviewState();
 }
 
-/** 현재 Panel 및 Graph 상태를 독립적인 Webview snapshot으로 저장한다. */
+/**
+ * 현재 Panel 및 Graph 상태를 독립적인 Webview snapshot으로 저장한다.
+ *
+ * @param vscodeApi Webview 상태를 저장할 VS Code API
+ * @param state 현재 Panel Layout과 Graph 상태
+ */
 export function saveWebviewState(
 	vscodeApi: WebviewStateApi,
 	state: PersistedWebviewState,
@@ -48,7 +53,12 @@ export function saveWebviewState(
 	vscodeApi.setState(parseWebviewState(state) ?? createDefaultWebviewState());
 }
 
-/** Extension Host가 새 Webview에 전달할 전체 상태를 URI 인코딩 JSON으로 직렬화한다. */
+/**
+ * Extension Host가 새 Webview에 전달할 전체 상태를 URI 인코딩 JSON으로 직렬화한다.
+ *
+ * @param state 직렬화할 전체 Webview 상태
+ * @returns 유효한 상태의 URI 인코딩 JSON이며 상태가 없거나 잘못되면 빈 문자열
+ */
 export function serializeWebviewState(
 	state: PersistedWebviewState | undefined,
 ): string {
@@ -61,7 +71,12 @@ export function serializeWebviewState(
 	return snapshot ? encodeURIComponent(JSON.stringify(snapshot)) : '';
 }
 
-/** 복원 후보에서 유효한 Panel 및 Graph 필드만 복사한다. */
+/**
+ * 복원 후보에서 유효한 Panel 및 Graph 필드만 독립적인 객체로 복사한다.
+ *
+ * @param value 검증할 Webview 상태 후보
+ * @returns 유효한 전체 Webview 상태이며 잘못되었으면 undefined
+ */
 export function parseWebviewState(
 	value: unknown,
 ): PersistedWebviewState | undefined {
@@ -80,6 +95,7 @@ export function parseWebviewState(
 	return { panel, graph };
 }
 
+/** URI 인코딩 JSON을 파싱하고 전체 Webview 상태로 검증한다. */
 function deserializeWebviewState(
 	serializedState: string | undefined,
 ): PersistedWebviewState | undefined {
@@ -96,6 +112,7 @@ function deserializeWebviewState(
 	}
 }
 
+/** Panel과 Graph의 새로운 기본 snapshot을 생성한다. */
 function createDefaultWebviewState(): PersistedWebviewState {
 	return {
 		panel: {
@@ -109,6 +126,7 @@ function createDefaultWebviewState(): PersistedWebviewState {
 				y: INITIAL_GRAPH_STATE.camera.y,
 				scale: INITIAL_GRAPH_STATE.camera.scale,
 			},
+			nodePositions: {},
 		},
 	};
 }

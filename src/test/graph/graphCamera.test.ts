@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
+	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
 	initializeGraphCamera,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
@@ -48,7 +49,10 @@ suite('Graph Camera', () => {
 
 	test('viewport 좌표와 world 좌표를 Camera 상태 기준으로 상호 변환한다', () => {
 		const fixture = createCameraFixture();
-		fixture.graphState.setState({ camera: { x: 100, y: -40, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: 100, y: -40, scale: 2 },
+			nodePositions: {},
+		});
 
 		assert.deepStrictEqual(
 			fixture.camera.worldToViewport({ x: 25, y: 30 }),
@@ -118,6 +122,35 @@ suite('Graph Camera', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
+	test('Pan 전용 차단 요소에서는 Pointer Pan을 막고 Wheel Zoom은 허용한다', () => {
+		const fixture = createCameraFixture();
+		const interactiveElement = new FakeElement();
+		interactiveElement.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE);
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(10, 10, 1, 0, interactiveElement.asEventTarget()),
+		);
+		fixture.viewport.dispatch('pointermove', createPointerEvent(30, 40));
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
+
+		const cursor = { x: 100, y: 100 };
+		const before = fixture.camera.viewportToWorld(cursor);
+		const wheelEvent = createWheelEvent(
+			cursor.x,
+			cursor.y,
+			-120,
+			interactiveElement.asEventTarget(),
+		);
+		fixture.viewport.dispatch('wheel', wheelEvent);
+
+		assert.ok(fixture.camera.getState().scale > 1);
+		assertPointAlmostEqual(fixture.camera.viewportToWorld(cursor), before);
+		assert.strictEqual(wheelEvent.defaultPrevented, true);
+	});
+
 	test('Camera 입력 차단 요소의 자식에서 발생한 Pointer와 Wheel 입력을 처리하지 않는다', () => {
 		const fixture = createCameraFixture();
 		const interactiveElement = new FakeElement();
@@ -179,7 +212,10 @@ suite('Graph Camera', () => {
 	test('외부 Graph State 변경을 World transform과 Grid에 즉시 반영한다', () => {
 		const fixture = createCameraFixture();
 
-		fixture.graphState.setState({ camera: { x: -80, y: 65, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: -80, y: 65, scale: 2 },
+			nodePositions: {},
+		});
 
 		assert.strictEqual(
 			fixture.world.style.transform,
@@ -234,7 +270,10 @@ suite('Graph Camera', () => {
 		fixture.viewport.dispatch('wheel', createWheelEvent(100, 100, -120));
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
 
-		fixture.graphState.setState({ camera: { x: 90, y: 70, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: 90, y: 70, scale: 2 },
+			nodePositions: {},
+		});
 		assert.strictEqual(
 			fixture.world.style.transform,
 			'translate(0px, 0px) scale(1)',

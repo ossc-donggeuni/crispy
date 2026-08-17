@@ -26,6 +26,7 @@ suite('Webview State', () => {
 		assert.notStrictEqual(state.panel, DEFAULT_PANEL_LAYOUT_STATE);
 		assert.notStrictEqual(state.graph, INITIAL_GRAPH_STATE);
 		assert.notStrictEqual(state.graph.camera, INITIAL_GRAPH_STATE.camera);
+		assert.notStrictEqual(state.graph.nodePositions, INITIAL_GRAPH_STATE.nodePositions);
 	});
 
 	test('getState의 전체 Webview 상태를 외부 객체와 분리해 우선 복원한다', () => {
@@ -42,6 +43,10 @@ suite('Webview State', () => {
 		assert.notStrictEqual(state.panel, savedState.panel);
 		assert.notStrictEqual(state.graph, savedState.graph);
 		assert.notStrictEqual(state.graph.camera, savedState.graph.camera);
+		assert.notStrictEqual(
+			state.graph.nodePositions,
+			savedState.graph.nodePositions,
+		);
 	});
 
 	test('getState가 없으면 HTML의 data-webview-state를 복원한다', () => {
@@ -55,6 +60,10 @@ suite('Webview State', () => {
 		assert.deepStrictEqual(state, initialState);
 		assert.notStrictEqual(state.panel, initialState.panel);
 		assert.notStrictEqual(state.graph.camera, initialState.graph.camera);
+		assert.notStrictEqual(
+			state.graph.nodePositions,
+			initialState.graph.nodePositions,
+		);
 	});
 
 	test('잘못된 저장 상태와 HTML 상태는 안전하게 기본값으로 처리한다', () => {
@@ -112,9 +121,13 @@ suite('Webview State', () => {
 		assert.notStrictEqual(savedState?.panel, state.panel);
 		assert.notStrictEqual(savedState?.graph, state.graph);
 		assert.notStrictEqual(savedState?.graph.camera, state.graph.camera);
+		assert.notStrictEqual(
+			savedState?.graph.nodePositions,
+			state.graph.nodePositions,
+		);
 	});
 
-	test('저장한 Camera를 getState 결과로 제공해 새 Graph State 초기화에 복원한다', () => {
+	test('Camera와 일부 Node 위치를 새 Store와 View 초기화용 상태로 Round Trip한다', () => {
 		let savedState: PersistedWebviewState | undefined;
 		const api: WebviewStateApi = {
 			getState: () => savedState,
@@ -133,12 +146,20 @@ suite('Webview State', () => {
 
 		graphState.setState({
 			camera: { x: 513, y: 324, scale: 1.2 },
+			nodePositions: {
+				'folder:app': { x: 720, y: 180 },
+				'folder:app/src:files': { x: 1040, y: 360 },
+			},
 		});
 
 		assert.deepStrictEqual(api.getState(), {
 			panel: DEFAULT_PANEL_LAYOUT_STATE,
 			graph: {
 				camera: { x: 513, y: 324, scale: 1.2 },
+				nodePositions: {
+					'folder:app': { x: 720, y: 180 },
+					'folder:app/src:files': { x: 1040, y: 360 },
+				},
 			},
 		});
 		unsubscribe();
@@ -152,6 +173,10 @@ suite('Webview State', () => {
 			y: 324,
 			scale: 1.2,
 		});
+		assert.deepStrictEqual(reinitializedGraphState.getState().nodePositions, {
+			'folder:app': { x: 720, y: 180 },
+			'folder:app/src:files': { x: 1040, y: 360 },
+		});
 	});
 });
 
@@ -160,6 +185,7 @@ suite('Webview State Wiring', () => {
 		const initialState = createWebviewState('left', 35, -25, 1.25);
 		const nextGraphState = {
 			camera: { x: 120, y: -60, scale: 2 },
+			nodePositions: { 'folder:src': { x: 800, y: 240 } },
 		};
 		const savedStates: PersistedWebviewState[] = [];
 		const postedMessages: WebviewToExtensionMessage[] = [];
@@ -190,15 +216,17 @@ suite('Webview State Wiring', () => {
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
 			currentGraphState = {
 				camera: { ...graphState.camera },
+				nodePositions: { ...graphState.nodePositions },
 			};
 
 			return {
 				state: {
 					getState: () => currentGraphState,
 					setState: (state) => {
-						currentGraphState = {
-							camera: { ...state.camera },
-						};
+					currentGraphState = {
+						camera: { ...state.camera },
+						nodePositions: { ...state.nodePositions },
+					};
 					},
 					subscribe: (subscriber) => {
 						graphSubscriber = subscriber;
@@ -387,6 +415,7 @@ function createWebviewState(
 		},
 		graph: {
 			camera: { x, y, scale },
+			nodePositions: {},
 		},
 	};
 }
