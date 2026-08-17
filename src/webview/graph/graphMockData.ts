@@ -1,4 +1,18 @@
-import type { Project } from './graphModel';
+import type { File, Project } from './graphModel';
+
+/** Pagination UI를 눈으로 확인할 수 있는 안정적인 순번 File 목록을 만든다. */
+function createPaginationMockFiles(folderPath: string, count: number): File[] {
+	return Array.from({ length: count }, (_, index) => {
+		const sequence = String(index + 1).padStart(2, '0');
+		const name = `sample-${sequence}.ts`;
+
+		return {
+			kind: 'file',
+			id: `file:${folderPath}/${name}`,
+			name,
+		};
+	});
+}
 
 /**
  * 실제 Workspace나 파일 시스템을 사용하지 않고 G-05 렌더링과 테스트에
@@ -66,6 +80,31 @@ export const GRAPH_MOCK_PROJECT: Project = {
 				},
 				{ kind: 'file', id: 'file:src/extension.ts', name: 'extension.ts' },
 				{ kind: 'file', id: 'file:src/messages.ts', name: 'messages.ts' },
+			],
+		},
+		{
+			kind: 'folder',
+			id: 'folder:pagination-samples',
+			name: 'pagination-samples',
+			children: [
+				{
+					kind: 'folder',
+					id: 'folder:pagination-samples/seventeen-files',
+					name: 'seventeen-files',
+					children: createPaginationMockFiles(
+						'pagination-samples/seventeen-files',
+						17,
+					),
+				},
+				{
+					kind: 'folder',
+					id: 'folder:pagination-samples/twenty-one-files',
+					name: 'twenty-one-files',
+					children: createPaginationMockFiles(
+						'pagination-samples/twenty-one-files',
+						21,
+					),
+				},
 			],
 		},
 		{ kind: 'file', id: 'file:README.md', name: 'README.md' },

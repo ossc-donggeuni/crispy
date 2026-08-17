@@ -5,6 +5,11 @@ import {
 	type Project,
 	type ProjectContainer,
 } from './graphModel';
+import {
+	FILE_GROUP_PAGE_SIZE,
+	getRemainingFileCount,
+	getVisibleFileCount,
+} from './graphState';
 
 /** Graph World 좌표계에서 Node의 좌상단 위치를 나타낸다. */
 export interface GraphLayoutPosition {
@@ -37,8 +42,6 @@ export interface GraphFileGroupNode extends GraphLayoutNodeBase {
 	readonly kind: 'file-group';
 	readonly parentId: string;
 	readonly files: readonly File[];
-	readonly visibleFiles: readonly File[];
-	readonly hiddenFileCount: number;
 }
 
 /** Renderer가 처리하는 Project Root, Folder, File Group Node의 합집합이다. */
@@ -60,6 +63,11 @@ export interface GraphLayout {
 	readonly edges: readonly GraphLayoutEdge[];
 }
 
+/** 순수 Layout 계산에 필요한 File Group pagination snapshot이다. */
+export interface GraphLayoutOptions {
+	readonly fileGroupPages?: Readonly<Record<string, number>>;
+}
+
 /** Project Root 및 Folder Node의 고정 폭이다. */
 export const GRAPH_FOLDER_NODE_WIDTH = 200;
 /** Project Root 및 Folder Node의 고정 높이다. */
@@ -70,11 +78,10 @@ export const GRAPH_FILE_GROUP_NODE_WIDTH = 200;
 export const GRAPH_FILE_GROUP_ROW_HEIGHT = 30;
 /** File Group Border 안쪽의 상하좌우 여백이다. */
 export const GRAPH_FILE_GROUP_PADDING = 9;
-/** 숨겨진 File 개수를 표시하는 More Bar의 높이다. */
-export const GRAPH_FILE_GROUP_MORE_HEIGHT = 26;
-/** File Group에서 최초 렌더링하는 최대 File 개수다. */
-export const GRAPH_MAX_VISIBLE_FILES = 5;
-
+/** 더보기와 접기가 같은 줄에 배치되는 pagination control 영역의 높이다. */
+export const GRAPH_FILE_GROUP_CONTROL_HEIGHT = 26;
+/** 기존 More Bar 높이 참조와 호환되는 pagination control 높이 alias다. */
+export const GRAPH_FILE_GROUP_MORE_HEIGHT = GRAPH_FILE_GROUP_CONTROL_HEIGHT;
 const GRAPH_LAYOUT_START_X = 48;
 const GRAPH_LAYOUT_START_Y = 48;
 const GRAPH_LAYOUT_COLUMN_GAP = 62;
@@ -100,10 +107,14 @@ interface LayoutTreeNode {
  * 같은 입력은 항상 같은 위치와 Edge 순서를 생성한다.
  *
  * @param project Layout을 생성할 Project Root
+ * @param options File Group 높이에 반영할 pagination snapshot
  * @returns 기본 World 위치가 계산된 Node와 직접 Parent-Child Edge
  */
-export function createGraphLayout(project: Project): GraphLayout {
-	const tree = createContainerTree(project, 0);
+export function createGraphLayout(
+	project: Project,
+	options: GraphLayoutOptions = {},
+): GraphLayout {
+	const tree = createContainerTree(project, 0, options.fileGroupPages ?? {});
 	const nodes: GraphLayoutNode[] = [];
 	const edges: GraphLayoutEdge[] = [];
 
@@ -126,13 +137,14 @@ export function createFileGroupId(parentId: string): string {
 function createContainerTree(
 	container: ProjectContainer,
 	depth: number,
+	fileGroupPages: Readonly<Record<string, number>>,
 ): LayoutTreeNode {
 	const folderChildren = container.children
 		.filter(isFolder)
-		.map((folder) => createContainerTree(folder, depth + 1));
+		.map((folder) => createContainerTree(folder, depth + 1, fileGroupPages));
 	const files = container.children.filter(isFile);
 	const fileGroup = files.length > 0
-		? createFileGroupTree(container, files, depth + 1)
+		? createFileGroupTree(container, files, depth + 1, fileGroupPages)
 		: [];
 
 	return {
@@ -151,31 +163,37 @@ function createFileGroupTree(
 	parent: ProjectContainer,
 	files: readonly File[],
 	depth: number,
+	fileGroupPages: Readonly<Record<string, number>>,
 ): readonly LayoutTreeNode[] {
+	const id = createFileGroupId(parent.id);
+	const page = fileGroupPages[id] ?? 1;
+	const visibleFileCount = getVisibleFileCount(files.length, page);
+	const remainingFileCount = getRemainingFileCount(files.length, page);
+	const hasPaginationControls = remainingFileCount > 0
+		|| (files.length > FILE_GROUP_PAGE_SIZE && page > 1);
+
 	return [{
-		id: createFileGroupId(parent.id),
+		id,
 		name: `${parent.name} files`,
 		kind: 'file-group',
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
-		height: getFileGroupHeight(files.length),
+		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
 		parentId: parent.id,
 		files,
 		children: [],
 	}];
 }
 
-/** 표시 Row와 선택적 More Bar를 포함한 File Group의 실제 CSS 높이를 계산한다. */
-function getFileGroupHeight(fileCount: number): number {
-	const visibleCount = Math.min(fileCount, GRAPH_MAX_VISIBLE_FILES);
-	const moreHeight = fileCount > GRAPH_MAX_VISIBLE_FILES
-		? GRAPH_FILE_GROUP_MORE_HEIGHT
-		: 0;
-
+/** 표시 Row와 선택적 단일 control 영역을 포함한 File Group 높이를 계산한다. */
+export function getFileGroupHeight(
+	visibleFileCount: number,
+	hasPaginationControls: boolean,
+): number {
 	return GRAPH_NODE_BORDER_SIZE
 		+ GRAPH_FILE_GROUP_PADDING * 2
-		+ visibleCount * GRAPH_FILE_GROUP_ROW_HEIGHT
-		+ moreHeight;
+		+ visibleFileCount * GRAPH_FILE_GROUP_ROW_HEIGHT
+		+ (hasPaginationControls ? GRAPH_FILE_GROUP_CONTROL_HEIGHT : 0);
 }
 
 /** Subtree 높이를 기준으로 Node를 배치하고 직접 Child Edge를 순서대로 생성한다. */
@@ -255,8 +273,6 @@ function toGraphLayoutNode(
 			kind: 'file-group',
 			parentId: tree.parentId ?? '',
 			files,
-			visibleFiles: files.slice(0, GRAPH_MAX_VISIBLE_FILES),
-			hiddenFileCount: Math.max(0, files.length - GRAPH_MAX_VISIBLE_FILES),
 		};
 	}
 

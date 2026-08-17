@@ -1,6 +1,9 @@
 import * as assert from 'assert';
 import {
 	createGraphState,
+	FILE_GROUP_PAGE_SIZE,
+	getRemainingFileCount,
+	getVisibleFileCount,
 	INITIAL_GRAPH_STATE,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
@@ -15,6 +18,7 @@ suite('Graph State', () => {
 		assert.deepStrictEqual(state.getState(), {
 			camera: { x: 0, y: 0, scale: 1 },
 			nodePositions: {},
+			fileGroupPages: {},
 		});
 		assert.deepStrictEqual(state.getState(), INITIAL_GRAPH_STATE);
 	});
@@ -24,21 +28,85 @@ suite('Graph State', () => {
 		const nextState = {
 			camera: { x: 30, y: -20, scale: 1.5 },
 			nodePositions: { 'folder:src': { x: 120, y: 80 } },
+			fileGroupPages: { 'folder:src:files': 2 },
 		};
 
 		state.setState(nextState);
 		nextState.camera.x = 999;
 		nextState.nodePositions['folder:src'].x = 999;
+		nextState.fileGroupPages['folder:src:files'] = 999;
 
 		const snapshot = state.getState();
 		assert.deepStrictEqual(snapshot.camera, { x: 30, y: -20, scale: 1.5 });
 		assert.deepStrictEqual(snapshot.nodePositions, {
 			'folder:src': { x: 120, y: 80 },
 		});
+		assert.deepStrictEqual(snapshot.fileGroupPages, {
+			'folder:src:files': 2,
+		});
 		assert.strictEqual(Object.isFrozen(snapshot), true);
 		assert.strictEqual(Object.isFrozen(snapshot.camera), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions['folder:src']), true);
+		assert.strictEqual(Object.isFrozen(snapshot.fileGroupPages), true);
+	});
+
+	test('저장되지 않은 파일 그룹의 기본 page는 1이다', () => {
+		const state = createGraphState();
+
+		assert.strictEqual(state.getFileGroupPage('folder:missing:files'), 1);
+		assert.strictEqual(state.getFileGroupPage('toString'), 1);
+	});
+
+	test('showMore는 해당 파일 그룹의 page만 증가시키고 그룹별 상태를 독립 관리한다', () => {
+		const state = createGraphState();
+
+		state.showMoreFiles('folder:src:files');
+		assert.strictEqual(state.getFileGroupPage('folder:src:files'), 2);
+		assert.strictEqual(state.getFileGroupPage('folder:test:files'), 1);
+
+		state.showMoreFiles('folder:src:files');
+		state.showMoreFiles('folder:test:files');
+
+		assert.strictEqual(state.getFileGroupPage('folder:src:files'), 3);
+		assert.strictEqual(state.getFileGroupPage('folder:test:files'), 2);
+		assert.deepStrictEqual(state.getState().fileGroupPages, {
+			'folder:src:files': 3,
+			'folder:test:files': 2,
+		});
+	});
+
+	test('collapse는 현재 page와 관계없이 해당 파일 그룹을 page 1로 복원한다', () => {
+		const state = createGraphState();
+
+		state.showMoreFiles('folder:src:files');
+		state.showMoreFiles('folder:src:files');
+		state.showMoreFiles('folder:test:files');
+		state.collapseFileGroup('folder:src:files');
+
+		assert.strictEqual(state.getFileGroupPage('folder:src:files'), 1);
+		assert.strictEqual(state.getFileGroupPage('folder:test:files'), 2);
+	});
+
+	test('17개 파일의 page별 표시 개수와 남은 개수를 계산한다', () => {
+		assert.strictEqual(FILE_GROUP_PAGE_SIZE, 5);
+		assert.deepStrictEqual(
+			[1, 2, 3, 4].map((page) => getVisibleFileCount(17, page)),
+			[5, 10, 15, 17],
+		);
+		assert.deepStrictEqual(
+			[1, 2, 3, 4].map((page) => getRemainingFileCount(17, page)),
+			[12, 7, 2, 0],
+		);
+	});
+
+	test('파일이 없거나 한 page 이하이고 page가 필요 범위보다 큰 경우를 제한한다', () => {
+		assert.strictEqual(getVisibleFileCount(0, 1), 0);
+		assert.strictEqual(getRemainingFileCount(0, 1), 0);
+		assert.strictEqual(getVisibleFileCount(4, 1), 4);
+		assert.strictEqual(getRemainingFileCount(4, 1), 0);
+		assert.strictEqual(getVisibleFileCount(17, 100), 17);
+		assert.strictEqual(getRemainingFileCount(17, 100), 0);
 	});
 
 	test('변경된 상태를 subscriber에 전달하고 unsubscribe 이후 호출하지 않는다', () => {
@@ -114,6 +182,7 @@ suite('Graph State', () => {
 			nodePositions: {
 				'folder:src': { x: 400, y: 120, transient: true },
 			},
+			fileGroupPages: { 'folder:src:files': 3 },
 		};
 
 		const state = parseGraphState(value);
@@ -121,6 +190,7 @@ suite('Graph State', () => {
 		assert.deepStrictEqual(state, {
 			camera: { x: 30, y: -20, scale: 1.5 },
 			nodePositions: { 'folder:src': { x: 400, y: 120 } },
+			fileGroupPages: { 'folder:src:files': 3 },
 		});
 		assert.notStrictEqual(state, value);
 		assert.notStrictEqual(state?.camera, value.camera);
@@ -128,14 +198,16 @@ suite('Graph State', () => {
 			state?.nodePositions['folder:src'],
 			value.nodePositions['folder:src'],
 		);
+		assert.notStrictEqual(state?.fileGroupPages, value.fileGroupPages);
 	});
 
-	test('기존 Camera 전용 상태를 빈 Node 위치로 호환 파싱한다', () => {
+	test('기존 저장 상태를 빈 Node 위치와 파일 그룹 page로 호환 파싱한다', () => {
 		assert.deepStrictEqual(
 			parseGraphState({ camera: { x: 1, y: 2, scale: 1 } }),
 			{
 				camera: { x: 1, y: 2, scale: 1 },
 				nodePositions: {},
+				fileGroupPages: {},
 			},
 		);
 	});
@@ -153,6 +225,21 @@ suite('Graph State', () => {
 			{
 				camera: { x: 0, y: 0, scale: 1 },
 				nodePositions: { invalid: { x: Number.NaN, y: 1 } },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				fileGroupPages: [],
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				fileGroupPages: { 'folder:src:files': 0 },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				fileGroupPages: { 'folder:src:files': 1.5 },
 			},
 		];
 

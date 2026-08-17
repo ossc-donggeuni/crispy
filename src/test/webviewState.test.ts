@@ -3,6 +3,7 @@ import type { WebviewToExtensionMessage } from '../messages';
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
+	type GraphStateSnapshot,
 } from '../webview/graph/graphState';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
@@ -27,6 +28,10 @@ suite('Webview State', () => {
 		assert.notStrictEqual(state.graph, INITIAL_GRAPH_STATE);
 		assert.notStrictEqual(state.graph.camera, INITIAL_GRAPH_STATE.camera);
 		assert.notStrictEqual(state.graph.nodePositions, INITIAL_GRAPH_STATE.nodePositions);
+		assert.notStrictEqual(
+			state.graph.fileGroupPages,
+			INITIAL_GRAPH_STATE.fileGroupPages,
+		);
 	});
 
 	test('getState의 전체 Webview 상태를 외부 객체와 분리해 우선 복원한다', () => {
@@ -47,6 +52,10 @@ suite('Webview State', () => {
 			state.graph.nodePositions,
 			savedState.graph.nodePositions,
 		);
+		assert.notStrictEqual(
+			state.graph.fileGroupPages,
+			savedState.graph.fileGroupPages,
+		);
 	});
 
 	test('getState가 없으면 HTML의 data-webview-state를 복원한다', () => {
@@ -64,6 +73,25 @@ suite('Webview State', () => {
 			state.graph.nodePositions,
 			initialState.graph.nodePositions,
 		);
+		assert.notStrictEqual(
+			state.graph.fileGroupPages,
+			initialState.graph.fileGroupPages,
+		);
+	});
+
+	test('이전 저장 상태에 fileGroupPages가 없어도 빈 상태로 호환 복원한다', () => {
+		const previousState = {
+			panel: DEFAULT_PANEL_LAYOUT_STATE,
+			graph: {
+				camera: { x: 10, y: 20, scale: 1 },
+				nodePositions: {},
+			},
+		};
+
+		const restored = restoreWebviewState(createStateApi(previousState));
+
+		assert.deepStrictEqual(restored.graph.fileGroupPages, {});
+		assert.strictEqual(createGraphState(restored.graph).getFileGroupPage('missing'), 1);
 	});
 
 	test('잘못된 저장 상태와 HTML 상태는 안전하게 기본값으로 처리한다', () => {
@@ -125,9 +153,13 @@ suite('Webview State', () => {
 			savedState?.graph.nodePositions,
 			state.graph.nodePositions,
 		);
+		assert.notStrictEqual(
+			savedState?.graph.fileGroupPages,
+			state.graph.fileGroupPages,
+		);
 	});
 
-	test('Camera와 일부 Node 위치를 새 Store와 View 초기화용 상태로 Round Trip한다', () => {
+	test('Camera, Node 위치와 파일 그룹 page를 새 Store용 상태로 Round Trip한다', () => {
 		let savedState: PersistedWebviewState | undefined;
 		const api: WebviewStateApi = {
 			getState: () => savedState,
@@ -151,6 +183,8 @@ suite('Webview State', () => {
 				'folder:app/src:files': { x: 1040, y: 360 },
 			},
 		});
+		graphState.showMoreFiles('folder:app/src:files');
+		graphState.showMoreFiles('folder:app/src:files');
 
 		assert.deepStrictEqual(api.getState(), {
 			panel: DEFAULT_PANEL_LAYOUT_STATE,
@@ -160,6 +194,7 @@ suite('Webview State', () => {
 					'folder:app': { x: 720, y: 180 },
 					'folder:app/src:files': { x: 1040, y: 360 },
 				},
+				fileGroupPages: { 'folder:app/src:files': 3 },
 			},
 		});
 		unsubscribe();
@@ -177,6 +212,28 @@ suite('Webview State', () => {
 			'folder:app': { x: 720, y: 180 },
 			'folder:app/src:files': { x: 1040, y: 360 },
 		});
+		assert.strictEqual(
+			reinitializedGraphState.getFileGroupPage('folder:app/src:files'),
+			3,
+		);
+	});
+
+	test('serialize 후 restore해도 파일 그룹 page를 유지한다', () => {
+		const state = createWebviewState('right', 10, -20, 1.25);
+		state.graph.fileGroupPages = {
+			'folder:src:files': 4,
+			'folder:test:files': 2,
+		};
+
+		const restored = restoreWebviewState(
+			createStateApi(undefined),
+			serializeWebviewState(state),
+		);
+
+		assert.deepStrictEqual(restored.graph.fileGroupPages, {
+			'folder:src:files': 4,
+			'folder:test:files': 2,
+		});
 	});
 });
 
@@ -186,10 +243,15 @@ suite('Webview State Wiring', () => {
 		const nextGraphState = {
 			camera: { x: 120, y: -60, scale: 2 },
 			nodePositions: { 'folder:src': { x: 800, y: 240 } },
+			fileGroupPages: {},
 		};
 		const savedStates: PersistedWebviewState[] = [];
 		const postedMessages: WebviewToExtensionMessage[] = [];
-		let currentGraphState = initialState.graph;
+		let currentGraphState: GraphStateSnapshot = {
+			camera: initialState.graph.camera,
+			nodePositions: initialState.graph.nodePositions,
+			fileGroupPages: initialState.graph.fileGroupPages ?? {},
+		};
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
 		let panelState: PanelLayoutState | undefined;
 		let persistPanelState: (() => void) | undefined;
@@ -217,6 +279,7 @@ suite('Webview State Wiring', () => {
 			currentGraphState = {
 				camera: { ...graphState.camera },
 				nodePositions: { ...graphState.nodePositions },
+				fileGroupPages: { ...graphState.fileGroupPages },
 			};
 
 			return {
@@ -226,8 +289,16 @@ suite('Webview State Wiring', () => {
 					currentGraphState = {
 						camera: { ...state.camera },
 						nodePositions: { ...state.nodePositions },
+						fileGroupPages: {
+							...(state.fileGroupPages ?? currentGraphState.fileGroupPages),
+						},
 					};
 					},
+					getFileGroupPage: (fileGroupId) => (
+						currentGraphState.fileGroupPages[fileGroupId] ?? 1
+					),
+					showMoreFiles: () => undefined,
+					collapseFileGroup: () => undefined,
 					subscribe: (subscriber) => {
 						graphSubscriber = subscriber;
 
@@ -236,7 +307,9 @@ suite('Webview State Wiring', () => {
 						};
 					},
 				},
-				camera: {},
+				camera: {} as ReturnType<
+					typeof originalInitializeGraphView
+				>['camera'],
 				dispose: () => undefined,
 			};
 		}) as typeof graphViewModule.initializeGraphView;
@@ -416,6 +489,7 @@ function createWebviewState(
 		graph: {
 			camera: { x, y, scale },
 			nodePositions: {},
+			fileGroupPages: {},
 		},
 	};
 }

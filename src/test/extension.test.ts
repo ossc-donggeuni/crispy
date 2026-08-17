@@ -121,6 +121,7 @@ suite('Crispy Extension Host', () => {
 			graph: {
 				camera: { x: 120, y: -45, scale: 1.5 },
 				nodePositions: {},
+				fileGroupPages: {},
 			},
 		};
 		const initialPanel = await openCanvas();
@@ -156,6 +157,7 @@ suite('Crispy Extension Host', () => {
 			graph: {
 				camera: { x: -80, y: 65, scale: 2 },
 				nodePositions: {},
+				fileGroupPages: {},
 			},
 		};
 		const panel = await openCanvas();
