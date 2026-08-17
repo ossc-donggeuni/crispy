@@ -101,11 +101,11 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 	test('provider와 platform별 Host auto-run 입력을 결정한다', () => {
 		assert.strictEqual(resolveAgentAutoRunInput('codex', 'darwin'), 'codex\r');
 		assert.strictEqual(resolveAgentAutoRunInput('codex', 'linux'), 'codex\r');
-		assert.strictEqual(resolveAgentAutoRunInput('codex', 'win32'), 'codex.cmd\r');
+		assert.strictEqual(resolveAgentAutoRunInput('codex', 'win32'), 'codex\r');
 
 		assert.strictEqual(resolveAgentAutoRunInput('claude', 'darwin'), 'claude\r');
 		assert.strictEqual(resolveAgentAutoRunInput('claude', 'linux'), 'claude\r');
-		assert.strictEqual(resolveAgentAutoRunInput('claude', 'win32'), 'claude.exe\r');
+		assert.strictEqual(resolveAgentAutoRunInput('claude', 'win32'), 'claude\r');
 
 		assert.strictEqual(resolveAgentAutoRunInput('antigravity'), undefined);
 	});
@@ -175,6 +175,8 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 			await host.handleTerminalReady(tabId, 80, 24);
 
 			const switching = host.switchAgent(tabId, providerId);
+			/** launch 준비 뒤 provider CLI resolver가 완료되는 microtask까지 기다린다. */
+			await Promise.resolve();
 			await Promise.resolve();
 			const handle = latestHandle(ptyAdapter);
 			assert.deepStrictEqual(

@@ -6,6 +6,7 @@ import {
 } from './agent/protocol';
 import { nodePtyAdapter } from './agent/host/terminal/nodePtyAdapter';
 import { TerminalHost } from './agent/host/terminal/terminalHost';
+import { createAgentAutoRunInputResolver } from './agent/host/agent/agentProviderLaunch';
 import {
 	createTerminalRuntimeCleanup,
 	runCleanupWithTimeout,
@@ -93,6 +94,16 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		);
 		const terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
+			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
+				getCliPath: (providerId) => {
+					if (providerId === 'antigravity') {
+						return undefined;
+					}
+					return vscode.workspace
+						.getConfiguration('crispy')
+						.get<string>(`${providerId}CliPath`);
+				},
+			}),
 			emitMessage: (message) => {
 				void Promise.resolve(panel.webview.postMessage(message)).catch(
 					() => undefined,

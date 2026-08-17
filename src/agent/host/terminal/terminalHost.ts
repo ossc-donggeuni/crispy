@@ -6,7 +6,11 @@ import type {
 	WebviewToHostMessage,
 } from '../../protocol/messages';
 import type { ProviderId } from '../../protocol/providers';
-import { resolveAgentAutoRunInput } from '../agent/agentProviderLaunch';
+import {
+	resolveAgentAutoRunInput,
+	resolveDetectedAgentAutoRunInput,
+	type AgentAutoRunInputResolver,
+} from '../agent/agentProviderLaunch';
 import type { PtyAdapter, PtyExitEvent } from './ptyAdapter';
 import {
 	prepareTerminalLaunch,
@@ -47,6 +51,9 @@ export interface TerminalHostOptions {
 	/** 생성된 생명주기 메시지를 Webview 전송 계층으로 넘기는 함수다. */
 	readonly emitMessage: TerminalHostMessageEmitter;
 
+	/** Shell 정책에서 provider CLI 자동 실행 입력을 탐색하는 Host 경계다. */
+	readonly resolveAgentAutoRunInput?: AgentAutoRunInputResolver;
+
 	/** Panel detach 뒤 PID snapshot과 비동기 OS 종료를 담당하는 Host controller다. */
 	readonly processTreeController?: ProcessTreeController;
 }
@@ -86,6 +93,9 @@ export class TerminalHost {
 	/** 탭별로 마지막에 선택된 provider이며 세션 시작과 재시작에 함께 사용한다. */
 	private readonly providerByTab = new Map<TabId, ProviderId>();
 
+	/** 세션 시작 전에 탐색을 마친 provider CLI 입력을 현재 session에 연결한다. */
+	private readonly providerAutoRunInputBySession = new Map<SessionId, string>();
+
 	/** 재시작 PTY를 이전과 같은 크기로 생성하기 위한 탭별 마지막 terminal 크기다. */
 	private readonly lastDimensionsByTab = new Map<
 		TabId,
@@ -100,6 +110,9 @@ export class TerminalHost {
 
 	/** Host 생명주기 메시지를 Webview 전송 계층으로 넘기는 경계다. */
 	private readonly emitMessage: TerminalHostMessageEmitter;
+
+	/** 실제 Shell 정책에서 provider CLI command를 선택하는 비동기 resolver다. */
+	private readonly resolveProviderAutoRunInput: AgentAutoRunInputResolver;
 
 	/** Panel 종료 경로에서 동기 node-pty kill을 피하는 process-tree controller다. */
 	private readonly processTreeController: ProcessTreeController;
@@ -129,6 +142,8 @@ export class TerminalHost {
 		this.ptyAdapter = options.ptyAdapter;
 		this.prepareLaunch = options.prepareLaunch ?? prepareTerminalLaunch;
 		this.emitMessage = options.emitMessage;
+		this.resolveProviderAutoRunInput = options.resolveAgentAutoRunInput
+			?? resolveDetectedAgentAutoRunInput;
 		this.processTreeController = options.processTreeController
 			?? createHostProcessTreeController();
 	}
@@ -422,10 +437,33 @@ export class TerminalHost {
 			return;
 		}
 
+		const providerId = this.providerByTab.get(tabId);
+		let autoRunInput: string | undefined;
+		if (providerId !== undefined) {
+			try {
+				autoRunInput = await this.resolveProviderAutoRunInput(
+					providerId,
+					preparation.policy,
+				);
+			} catch {
+				/** 탐색 경계 자체의 실패는 기존 기본 command로 안전하게 복구한다. */
+				autoRunInput = resolveAgentAutoRunInput(providerId);
+			}
+		}
+
+		if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+			/** stale 탐색 결과가 교체되거나 닫힌 session에 입력되지 않게 한다. */
+			return;
+		}
+		if (autoRunInput !== undefined) {
+			this.providerAutoRunInputBySession.set(session.sessionId, autoRunInput);
+		}
+
 		this.lastDimensionsByTab.set(tabId, { cols, rows });
 		try {
 			await session.start(preparation.policy, cols, rows);
 		} catch {
+			this.providerAutoRunInputBySession.delete(session.sessionId);
 			if (!this.lifecycleActive || !this.isCurrentSession(session)) {
 				return;
 			}
@@ -457,19 +495,18 @@ export class TerminalHost {
 	}
 
 	/**
-	 * 시작된 Shell 위에서 provider별 CLI 자동 실행 입력을 그대로 전달한다.
-	 * 커맨드는 Host registry에서만 결정되며 Webview가 보낸 값은 사용하지 않는다.
-	 * 자동 실행 대상이 아닌 provider는 기본 Shell 상태를 그대로 유지한다.
+	 * 시작된 Shell 위에서 세션 준비 중 탐색을 마친 provider CLI 입력을 전달한다.
+	 * 커맨드는 Host resolver에서만 결정되며 Webview가 보낸 값은 사용하지 않는다.
 	 *
 	 * @param session 방금 running 상태가 된 탭의 현재 세션
 	 */
 	private runProviderAutoStart(session: TerminalSession): void {
-		const providerId = this.providerByTab.get(session.tabId);
-		if (providerId === undefined || session.state.kind !== 'running') {
+		if (session.state.kind !== 'running') {
 			return;
 		}
 
-		const autoRunInput = resolveAgentAutoRunInput(providerId);
+		const autoRunInput = this.providerAutoRunInputBySession.get(session.sessionId);
+		this.providerAutoRunInputBySession.delete(session.sessionId);
 		if (autoRunInput === undefined) {
 			return;
 		}
@@ -666,6 +703,7 @@ export class TerminalHost {
 		this.detachedRootPids = Object.freeze([...new Set(rootPids)]);
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
+		this.providerAutoRunInputBySession.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.providerByTab.clear();
@@ -716,6 +754,7 @@ export class TerminalHost {
 
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
+		this.providerAutoRunInputBySession.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.providerByTab.clear();
@@ -823,6 +862,7 @@ export class TerminalHost {
 		}
 
 		this.sessionsById.delete(sessionId);
+		this.providerAutoRunInputBySession.delete(sessionId);
 		if (this.activeSessionByTab.get(session.tabId) === sessionId) {
 			this.activeSessionByTab.delete(session.tabId);
 		}

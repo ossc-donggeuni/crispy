@@ -19,7 +19,24 @@
         "command": "crispy.openCanvas",
         "title": "Crispy: Open Canvas"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Crispy",
+      "properties": {
+        "crispy.codexCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Optional Codex CLI executable path. When empty, Windows tries `codex`, `codex.cmd`, and `codex.exe` in order."
+        },
+        "crispy.claudeCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Optional Claude CLI executable path. When empty, Windows tries `claude`, `claude.cmd`, and `claude.exe` in order."
+        }
+      }
+    }
   },
   "scripts": {
     "postinstall": "node scripts/prepare-node-pty.js",
