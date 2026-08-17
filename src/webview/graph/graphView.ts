@@ -10,6 +10,7 @@ import {
 	initializeGraphRenderer,
 	type GraphRenderer,
 } from './graphRenderer';
+import type { GraphDetachDropRequest } from './graphDetachDrag';
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
@@ -26,6 +27,12 @@ export interface GraphView {
 	readonly camera: GraphCamera;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
+}
+
+/** Graph View가 Renderer의 향후 Root Promotion 요청을 전달할 상위 계약이다. */
+export interface GraphViewInteractions {
+	/** Detach Handle Drag 완료 시 대상 ID와 client 좌표만 전달한다. */
+	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -72,12 +79,14 @@ export function initializeGraphLayoutReflow(
  * @param root Graph View를 마운트할 요소
  * @param initialState 복원할 초기 Graph 상태
  * @param graph 렌더링할 Root 목록과 Project Tree
+ * @param interactions Detach 완료 요청을 Graph 변경 없이 전달할 callback
  * @returns State와 Camera 및 전체 lifecycle을 제공하는 Graph View
  */
 export function initializeGraphView(
 	root: HTMLElement,
 	initialState: GraphState = INITIAL_GRAPH_STATE,
 	graph: Graph = GRAPH_MOCK,
+	interactions: GraphViewInteractions = {},
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
 	const viewport = ownerDocument.createElement('div');
@@ -98,6 +107,7 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
+	const rootNodeIds = new Set(graph.roots.map((graphRoot) => graphRoot.nodeId));
 	const camera = initializeGraphCamera(viewport, world, state);
 	const renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -108,9 +118,11 @@ export function initializeGraphView(
 		}),
 		state,
 		{
+			rootNodeIds,
 			onFolderClick: (folderId) => {
 				state.toggleFolder(folderId);
 			},
+			onDetachDrop: interactions.onDetachDrop,
 		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);

@@ -6,6 +6,11 @@ import type {
 	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
+import {
+	initializeGraphDetachDrag,
+	type GraphDetachDrag,
+	type GraphDetachDropRequest,
+} from './graphDetachDrag';
 import { resolveFileIcon } from './fileIconResolver';
 import {
 	GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE,
@@ -45,18 +50,23 @@ export interface GraphRenderer {
 
 /** Graph Node 종류별 Click을 상위 View가 선택적으로 처리하는 callback이다. */
 export interface GraphRendererInteractions {
+	/** 현재 Graph Root여서 Detach 대상에서 제외할 Node ID 집합이다. */
+	rootNodeIds?: ReadonlySet<string>;
 	/** Project Root 또는 Folder가 Click됐을 때 안정적인 Container ID를 전달한다. */
 	onFolderClick?: (folderId: string) => void;
 	/** Grouped File Group이 Click됐을 때 소유 Project 또는 Folder ID를 전달한다. */
 	onFileGroupClick?: (folderId: string) => void;
 	/** Standalone presentation 또는 File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
 	onFileClick?: (fileId: string) => void;
+	/** Handle Drag가 완료됐을 때 대상 ID와 client 좌표를 상위로 전달한다. */
+	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const FOLDER_OPEN_ICON = 'folder-open.svg';
 const FOLDER_CLOSED_ICON = 'folder-closed.svg';
 const COLLAPSE_CHEVRON_PATH = 'm4.5 10 3.5-3.5 3.5 3.5';
+const DETACH_ARROW_PATH = 'M4 12 12 4 M7 4h5v5';
 const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
 
 /**
@@ -93,7 +103,9 @@ export function initializeGraphRenderer(
 		]),
 	);
 	const nodeDrags = new Map<string, GraphNodeDrag>();
+	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
+	const rootNodeIds = interactions.rootNodeIds ?? new Set<string>();
 	let disposed = false;
 
 	/** 새 Edge path를 생성해 Layer와 ID Map에 등록한다. */
@@ -167,6 +179,19 @@ export function initializeGraphRenderer(
 			layoutNode,
 			ownerDocument,
 		);
+		const detachNodeId = getDetachNodeId(layoutNode, rootNodeIds);
+
+		if (detachNodeId) {
+			nodeDetachDrags.set(
+				layoutNode.id,
+				appendDetachHandle(
+					element,
+					detachNodeId,
+					ownerDocument,
+					interactions,
+				),
+			);
+		}
 
 		if (layoutNode.kind === 'project' || layoutNode.kind === 'folder') {
 			updateContainerOpenedState(
@@ -185,6 +210,7 @@ export function initializeGraphRenderer(
 				ownerDocument,
 				graphState,
 				interactions,
+				rootNodeIds,
 			);
 
 			content.render(graphState.getFileGroupPage(layoutNode.id));
@@ -216,6 +242,8 @@ export function initializeGraphRenderer(
 	const removeNode = (nodeId: string): void => {
 		nodeDrags.get(nodeId)?.dispose();
 		nodeDrags.delete(nodeId);
+		nodeDetachDrags.get(nodeId)?.dispose();
+		nodeDetachDrags.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
 		fileGroupContents.delete(nodeId);
 		nodeElements.get(nodeId)?.remove();
@@ -536,6 +564,7 @@ function initializeFileGroupContent(
 	ownerDocument: Document,
 	graphState: GraphStateStore,
 	interactions: GraphRendererInteractions,
+	rootNodeIds: ReadonlySet<string>,
 ): FileGroupContentRenderer {
 	let content: FileGroupContentElements = { elements: [], cleanups: [] };
 	let disposed = false;
@@ -568,7 +597,12 @@ function initializeFileGroupContent(
 			list.className = 'graph-file-list';
 
 			for (const file of node.children.slice(0, visibleCount)) {
-				const row = createFileRow(file, ownerDocument, interactions);
+				const row = createFileRow(
+					file,
+					ownerDocument,
+					interactions,
+					rootNodeIds,
+				);
 
 				list.append(row.element);
 				cleanups.push(row.dispose);
@@ -640,6 +674,7 @@ function createFileRow(
 	file: GraphFileNode,
 	ownerDocument: Document,
 	interactions: GraphRendererInteractions,
+	rootNodeIds: ReadonlySet<string>,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
@@ -647,6 +682,9 @@ function createFileRow(
 	item.setAttribute('data-file-id', file.id);
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	appendFileContent(item, file, ownerDocument);
+	const detachDrag = rootNodeIds.has(file.id)
+		? undefined
+		: appendDetachHandle(item, file.id, ownerDocument, interactions);
 	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
 	const animateFileClick = (): void => {
 		item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
@@ -670,11 +708,72 @@ function createFileRow(
 	return {
 		element: item,
 		dispose: () => {
+			detachDrag?.dispose();
 			item.removeEventListener('click', handleFileClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
 		},
 	};
+}
+
+/** Project와 Root Node를 제외하고 Card 자체에서 분리할 Folder/File ID를 찾는다. */
+function getDetachNodeId(
+	node: GraphLayoutNode,
+	rootNodeIds: ReadonlySet<string>,
+): string | undefined {
+	if (node.kind === 'folder') {
+		return rootNodeIds.has(node.id) ? undefined : node.id;
+	}
+
+	if (node.kind !== 'file-group' || node.presentation !== 'standalone') {
+		return undefined;
+	}
+
+	const file = node.children[0];
+
+	return file && !rootNodeIds.has(file.id) ? file.id : undefined;
+}
+
+/** 대상 끝에 고정 공간의 Handle을 추가하고 독립 Detach Drag를 초기화한다. */
+function appendDetachHandle(
+	target: HTMLElement,
+	nodeId: string,
+	ownerDocument: Document,
+	interactions: GraphRendererInteractions,
+): GraphDetachDrag {
+	const handle = createDetachHandle(ownerDocument);
+
+	target.append(handle);
+
+	return initializeGraphDetachDrag(handle, nodeId, {
+		onDetachDrop: interactions.onDetachDrop,
+	});
+}
+
+/** 현재 Node 스타일에 맞는 북동쪽 화살표 inline SVG Handle을 만든다. */
+function createDetachHandle(ownerDocument: Document): HTMLButtonElement {
+	const handle = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
+	const path = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
+
+	handle.className = 'graph-detach-handle';
+	handle.type = 'button';
+	handle.setAttribute('aria-label', 'Graph Root로 분리');
+	handle.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	icon.classList.add('graph-detach-icon');
+	icon.setAttribute('viewBox', '0 0 16 16');
+	icon.setAttribute('fill', 'none');
+	icon.setAttribute('aria-hidden', 'true');
+	icon.setAttribute('focusable', 'false');
+	path.setAttribute('d', DETACH_ARROW_PATH);
+	path.setAttribute('stroke', 'currentColor');
+	path.setAttribute('stroke-width', '1.5');
+	path.setAttribute('stroke-linecap', 'round');
+	path.setAttribute('stroke-linejoin', 'round');
+	icon.append(path);
+	handle.append(icon);
+
+	return handle;
 }
 
 /** 외부 asset 없이 접기 Button에 표시하는 inline 위쪽 Chevron SVG를 만든다. */

@@ -96,6 +96,103 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Graph Root ID를 Detach 대상에서 제외하고 Drop 요청을 client 좌표로 전달한다', () => {
+		const childFolder = {
+			kind: 'folder' as const,
+			id: 'folder:detach-child',
+			name: 'detach-child',
+			children: [],
+		};
+		const childFile = {
+			kind: 'file' as const,
+			id: 'file:detach-child/index.ts',
+			name: 'index.ts',
+		};
+		const rootFolder = {
+			kind: 'folder' as const,
+			id: 'folder:detach-root',
+			name: 'detach-root',
+			children: [childFolder, childFile],
+		};
+		const rootFile = {
+			kind: 'file' as const,
+			id: 'file:detach-root.ts',
+			name: 'detach-root.ts',
+		};
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:folder', nodeId: rootFolder.id },
+				{ id: 'root:file', nodeId: rootFile.id },
+			],
+			rootNodes: {
+				[rootFolder.id]: rootFolder,
+				[rootFile.id]: rootFile,
+			},
+		};
+		const detachDrops: Array<{
+			readonly nodeId: string;
+			readonly clientX: number;
+			readonly clientY: number;
+		}> = [];
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				openedFolders: { [rootFolder.id]: true },
+			},
+			graph,
+			{ onDetachDrop: (request) => detachDrops.push(request) },
+		);
+		const rootFolderNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			rootFolder.id,
+		);
+		const childFolderNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childFolder.id,
+		);
+		const childFileNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childFile.id,
+		);
+		const rootFileNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			rootFile.id,
+		);
+
+		assert.strictEqual(
+			findDescendantByClass(rootFolderNode, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.ok(findDescendantByClass(childFolderNode, 'graph-detach-handle'));
+		assert.ok(findDescendantByClass(childFileNode, 'graph-detach-handle'));
+		assert.strictEqual(
+			findDescendantByClass(rootFileNode, 'graph-detach-handle'),
+			undefined,
+		);
+
+		const handle = getDescendantByClass(childFileNode, 'graph-detach-handle');
+
+		handle.dispatch('pointerdown', createPointerEvent(handle, 20, 30));
+		handle.dispatch('pointermove', createPointerEvent(handle, 40, 50));
+		handle.dispatch('pointerup', createPointerEvent(handle, 64, 72));
+		assert.deepStrictEqual(detachDrops, [{
+			nodeId: childFile.id,
+			clientX: 64,
+			clientY: 72,
+		}]);
+		assert.deepStrictEqual(graphView.state.getState().nodePositions, {});
+
+		graphView.dispose();
+	});
+
 	test('초기 Graph Camera 상태를 Store와 World transform에 복원한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -649,6 +746,30 @@ function createClickEvent(
 			return propagationStopped;
 		},
 	} as unknown as MouseEvent & { readonly propagationStopped: boolean };
+}
+
+function createPointerEvent(
+	target: FakeElement,
+	clientX: number,
+	clientY: number,
+): PointerEvent {
+	let propagationStopped = false;
+
+	return {
+		isPrimary: true,
+		button: 0,
+		pointerId: 1,
+		clientX,
+		clientY,
+		target: target.asHtmlElement(),
+		preventDefault: () => undefined,
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as unknown as PointerEvent;
 }
 
 function readTranslateY(transform: string): number {

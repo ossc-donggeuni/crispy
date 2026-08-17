@@ -140,10 +140,56 @@
 
 .graph-folder-name,
 .graph-file-name {
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.graph-detach-handle {
+	display: flex;
+	width: 20px;
+	height: 20px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	margin-left: auto;
+	padding: 0;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	background: transparent;
+	border: 0;
+	border-radius: 3px;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	touch-action: none;
+	cursor: grab;
+}
+
+.graph-folder-node:hover > .graph-detach-handle,
+.graph-file-group-node[data-file-group-presentation='standalone']:hover > .graph-detach-handle,
+.graph-file-item:hover > .graph-detach-handle,
+.graph-detach-handle.is-detach-active {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.graph-detach-handle:hover {
+	color: #fcfcfc;
+	background: #3a3b3c;
+}
+
+.graph-detach-handle.is-detach-dragging {
+	cursor: grabbing;
+}
+
+.graph-detach-icon {
+	display: block;
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
 }
 
 .graph-file-group-node[data-file-group-presentation='grouped'] {

@@ -126,6 +126,282 @@ suite('Graph Renderer / Node Drag', () => {
 		grouped.renderer.dispose();
 	});
 
+	test('Root가 아닌 Folder와 standalone/grouped File에만 Detach Handle을 렌더링한다', () => {
+		const standaloneFile = {
+			kind: 'file' as const,
+			id: 'file:detach-standalone/index.ts',
+			name: 'index.ts',
+		};
+		const standaloneProject: Project = {
+			kind: 'project',
+			id: 'project:detach-standalone',
+			name: 'detach-standalone',
+			children: [standaloneFile],
+		};
+		const standalone = createRendererFixture(
+			1,
+			undefined,
+			{},
+			standaloneProject,
+		);
+		const project = standalone.getNode(standaloneProject.id);
+		const fileNode = standalone.getNode(standaloneFile.id);
+
+		assert.strictEqual(
+			findDescendantByClass(project, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.ok(findDescendantByClass(fileNode, 'graph-detach-handle'));
+		standalone.renderer.dispose();
+
+		const groupedProject = createPaginationProject([2]);
+		const allGrouped = createRendererFixture(
+			1,
+			undefined,
+			{},
+			groupedProject,
+		);
+		const allGroupedFileGroup = allGrouped.getNode(
+			createFileGroupId('folder:pagination-0'),
+		);
+
+		assert.strictEqual(
+			getDescendantsByClass(allGroupedFileGroup, 'graph-detach-handle').length,
+			2,
+		);
+		allGrouped.renderer.dispose();
+
+		const rootFileId = 'file:pagination-0/file-1.ts';
+		const grouped = createRendererFixture(
+			1,
+			undefined,
+			{ rootNodeIds: new Set([groupedProject.id, rootFileId]) },
+			groupedProject,
+		);
+		const folder = grouped.getNode('folder:pagination-0');
+		const fileGroup = grouped.getNode(createFileGroupId('folder:pagination-0'));
+		const rootFileRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			rootFileId,
+		);
+		const detachableFileRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			'file:pagination-0/file-2.ts',
+		);
+
+		assert.ok(findDescendantByClass(folder, 'graph-detach-handle'));
+		assert.strictEqual(
+			findDescendantByClass(rootFileRow, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.ok(findDescendantByClass(
+			detachableFileRow,
+			'graph-detach-handle',
+		));
+		grouped.renderer.dispose();
+
+		const rootFolder = {
+			kind: 'folder' as const,
+			id: 'folder:detach-root',
+			name: 'detach-root',
+			children: [],
+		};
+		const folderRoot = createRendererFixture(1, undefined, {}, rootFolder);
+
+		assert.strictEqual(
+			findDescendantByClass(
+				folderRoot.getNode(rootFolder.id),
+				'graph-detach-handle',
+			),
+			undefined,
+		);
+		folderRoot.renderer.dispose();
+
+		const fileRoot = createRendererFixture(1, undefined, {}, standaloneFile);
+
+		assert.strictEqual(
+			findDescendantByClass(
+				fileRoot.getNode(standaloneFile.id),
+				'graph-detach-handle',
+			),
+			undefined,
+		);
+		fileRoot.renderer.dispose();
+	});
+
+	test('Folder Detach Handle은 Node Click/Move와 Camera Pan 없이 threshold Drag만 전달한다', () => {
+		const detachDrops: Array<{
+			readonly nodeId: string;
+			readonly clientX: number;
+			readonly clientY: number;
+		}> = [];
+		const folderClicks: string[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onFolderClick: (folderId) => folderClicks.push(folderId),
+			onDetachDrop: (request) => detachDrops.push(request),
+		});
+		const folder = fixture.getNode('folder:app');
+		const handle = getDescendantByClass(folder, 'graph-detach-handle');
+		const initialTransform = folder.style.transform;
+		const pointerDown = createPointerEvent(handle, 10, 20);
+
+		handle.dispatch('pointerdown', pointerDown);
+		assert.strictEqual(pointerDown.defaultPrevented, true);
+		assert.strictEqual(pointerDown.propagationStopped, true);
+		assert.strictEqual(handle.hasPointerCapture(1), true);
+		assert.strictEqual(handle.hasClass('is-detach-active'), true);
+		assert.strictEqual(folder.hasPointerCapture(1), false);
+		assert.strictEqual(folder.hasClass('is-dragging'), false);
+
+		handle.dispatch('pointermove', createPointerEvent(handle, 12, 22));
+		handle.dispatch('pointerup', createPointerEvent(handle, 12, 22));
+		handle.dispatch('click', createClickEvent(handle));
+		assert.deepStrictEqual(detachDrops, []);
+		assert.deepStrictEqual(folderClicks, []);
+
+		handle.dispatch('pointerdown', createPointerEvent(handle, 30, 40, 2));
+		handle.dispatch('pointermove', createPointerEvent(handle, 50, 65, 2));
+		assert.strictEqual(handle.hasClass('is-detach-dragging'), true);
+		handle.dispatch('pointerup', createPointerEvent(handle, 72, 84, 2));
+
+		assert.deepStrictEqual(detachDrops, [{
+			nodeId: 'folder:app',
+			clientX: 72,
+			clientY: 84,
+		}]);
+		assert.strictEqual(handle.hasPointerCapture(2), false);
+		assert.strictEqual(handle.hasClass('is-detach-active'), false);
+		assert.strictEqual(handle.hasClass('is-detach-dragging'), false);
+		assert.strictEqual(folder.style.transform, initialTransform);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+
+		const viewport = fixture.document.createSizedElement(1000, 800);
+		const world = fixture.document.createElement('div');
+		const camera = initializeGraphCamera(
+			viewport.asHtmlElement(),
+			world.asHtmlElement(),
+			fixture.graphState,
+		);
+
+		viewport.dispatch('pointerdown', createPointerEvent(handle, 72, 84, 3));
+		viewport.dispatch('pointermove', createPointerEvent(handle, 120, 140, 3));
+		assert.deepStrictEqual(camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(viewport.hasPointerCapture(3), false);
+		assert.strictEqual(viewport.hasClass('is-panning'), false);
+
+		camera.dispose();
+		fixture.renderer.dispose();
+	});
+
+	test('grouped File Handle은 Row Click 없이 해당 File ID의 Detach Drop만 전달한다', () => {
+		const detachDrops: Array<{
+			readonly nodeId: string;
+			readonly clientX: number;
+			readonly clientY: number;
+		}> = [];
+		const fileClicks: string[] = [];
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onDetachDrop: (request) => detachDrops.push(request),
+			},
+			createPaginationProject([2]),
+		);
+		const fileGroup = fixture.getNode(createFileGroupId('folder:pagination-0'));
+		const fileIds = [
+			'file:pagination-0/file-1.ts',
+			'file:pagination-0/file-2.ts',
+		];
+
+		for (const [index, fileId] of fileIds.entries()) {
+			const fileRow = getDescendantByAttribute(
+				fileGroup,
+				'data-file-id',
+				fileId,
+			);
+			const handle = getDescendantByClass(fileRow, 'graph-detach-handle');
+			const pointerId = index + 1;
+
+			handle.dispatch(
+				'pointerdown',
+				createPointerEvent(handle, 100, 120, pointerId),
+			);
+			handle.dispatch(
+				'pointermove',
+				createPointerEvent(handle, 116, 138, pointerId),
+			);
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, 130 + index, 150 + index, pointerId),
+			);
+			handle.dispatch('click', createClickEvent(handle));
+
+			assert.strictEqual(fileRow.hasClass('is-file-clicking'), false);
+		}
+
+		assert.deepStrictEqual(detachDrops, fileIds.map((nodeId, index) => ({
+			nodeId,
+			clientX: 130 + index,
+			clientY: 150 + index,
+		})));
+		assert.deepStrictEqual(fileClicks, []);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+		fixture.renderer.dispose();
+	});
+
+	for (const eventType of ['pointercancel', 'lostpointercapture'] as const) {
+		test(`${eventType}은 Detach 요청 없이 Handle session을 정리한다`, () => {
+			const detachDrops: string[] = [];
+			const fixture = createRendererFixture(1, undefined, {
+				onDetachDrop: (request) => detachDrops.push(request.nodeId),
+			});
+			const handle = getDescendantByClass(
+				fixture.getNode('folder:app'),
+				'graph-detach-handle',
+			);
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 40));
+
+			if (eventType === 'lostpointercapture') {
+				handle.releasePointerCapture(1);
+			}
+
+			handle.dispatch(eventType, createPointerEvent(handle, 30, 40));
+			handle.dispatch('pointerup', createPointerEvent(handle, 50, 60));
+
+			assert.deepStrictEqual(detachDrops, []);
+			assert.strictEqual(handle.hasPointerCapture(1), false);
+			assert.strictEqual(handle.hasClass('is-detach-active'), false);
+			assert.strictEqual(handle.hasClass('is-detach-dragging'), false);
+			fixture.renderer.dispose();
+		});
+	}
+
+	test('Renderer dispose 이후 Detach interaction이 동작하지 않는다', () => {
+		const detachDrops: string[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onDetachDrop: (request) => detachDrops.push(request.nodeId),
+		});
+		const handle = getDescendantByClass(
+			fixture.getNode('folder:app'),
+			'graph-detach-handle',
+		);
+
+		fixture.renderer.dispose();
+		handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+		handle.dispatch('pointermove', createPointerEvent(handle, 40, 50));
+		handle.dispatch('pointerup', createPointerEvent(handle, 40, 50));
+
+		assert.deepStrictEqual(detachDrops, []);
+		assert.strictEqual(handle.hasPointerCapture(1), false);
+		assert.strictEqual(handle.hasClass('is-detach-active'), false);
+	});
+
 	test('standalone File Group은 File ID로 기존 Graph Node Drag lifecycle을 사용한다', () => {
 		const file = {
 			kind: 'file' as const,
@@ -1023,7 +1299,10 @@ function createRendererFixture(
 		nodeLayer.asHtmlElement(),
 		layout,
 		graphState,
-		interactions,
+		{
+			...interactions,
+			rootNodeIds: interactions.rootNodeIds ?? new Set([rootNode.id]),
+		},
 	);
 	const getNode = (nodeId: string): FakeElement => {
 		const node = nodeLayer.children.find(
@@ -1124,7 +1403,13 @@ function createPointerEvent(
 	clientX: number,
 	clientY: number,
 	pointerId = 1,
-): PointerEvent {
+): PointerEvent & {
+	readonly defaultPrevented: boolean;
+	readonly propagationStopped: boolean;
+} {
+	let defaultPrevented = false;
+	let propagationStopped = false;
+
 	return {
 		isPrimary: true,
 		button: 0,
@@ -1132,8 +1417,22 @@ function createPointerEvent(
 		clientX,
 		clientY,
 		target: target.asEventTarget(),
-		preventDefault: () => undefined,
-	} as PointerEvent;
+		preventDefault: () => {
+			defaultPrevented = true;
+		},
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get defaultPrevented() {
+			return defaultPrevented;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as PointerEvent & {
+		readonly defaultPrevented: boolean;
+		readonly propagationStopped: boolean;
+	};
 }
 
 function createWheelEvent(
