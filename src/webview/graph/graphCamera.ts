@@ -19,6 +19,22 @@ export interface GraphPoint {
 	y: number;
 }
 
+/** Camera Focus 이동 시간을 선택적으로 지정한다. */
+export interface GraphCameraFocusOptions {
+	duration?: number;
+}
+
+/** requestAnimationFrame lifecycle을 테스트 가능하게 주입하는 최소 Scheduler다. */
+export interface GraphAnimationFrameScheduler {
+	request(callback: FrameRequestCallback): number;
+	cancel(requestId: number): void;
+}
+
+/** Camera 초기화 시 선택적으로 주입하는 platform dependency다. */
+export interface GraphCameraOptions {
+	animationFrameScheduler?: GraphAnimationFrameScheduler;
+}
+
 /** Camera 상태, 좌표 변환, 기준점 Zoom 및 lifecycle을 제공한다. */
 export interface GraphCamera {
 	/** 현재 Camera 상태의 독립적인 복사본을 반환한다. */
@@ -31,6 +47,8 @@ export interface GraphCamera {
 	viewportToWorld(point: GraphPoint): GraphPoint;
 	/** World 좌표를 현재 Camera 기준 Viewport 좌표로 변환한다. */
 	worldToViewport(point: GraphPoint): GraphPoint;
+	/** 현재 scale을 유지하며 World 지점을 Viewport 중앙으로 부드럽게 이동한다. */
+	focusOn(point: GraphPoint, options?: GraphCameraFocusOptions): void;
 	/** 등록한 입력 Listener와 State 구독을 정리한다. */
 	dispose(): void;
 }
@@ -45,6 +63,7 @@ const WHEEL_LINE_HEIGHT = 16;
 const GRAPH_GRID_SIZE = 20;
 const GRAPH_CAMERA_IGNORE_SELECTOR = `[${GRAPH_CAMERA_IGNORE_ATTRIBUTE}]`;
 const GRAPH_CAMERA_PAN_IGNORE_SELECTOR = `[${GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE}]`;
+const DEFAULT_FOCUS_DURATION = 300;
 
 /** 활성 Camera Pan을 시작 좌표와 시작 Camera 위치에 고정하는 session이다. */
 interface PanSession {
@@ -53,6 +72,15 @@ interface PanSession {
 	startClientY: number;
 	startCameraX: number;
 	startCameraY: number;
+}
+
+/** 단일 Focus Animation의 시작/목표 상태와 예약 Frame이다. */
+interface FocusAnimationSession {
+	readonly startState: GraphCameraState;
+	readonly targetState: GraphCameraState;
+	readonly duration: number;
+	startTime?: number;
+	frameRequestId?: number;
 }
 
 /**
@@ -68,6 +96,7 @@ export function initializeGraphCamera(
 	viewport: HTMLElement,
 	world: HTMLElement,
 	graphStateOrInitialState: GraphStateStore | GraphCameraState = createGraphState(),
+	options: GraphCameraOptions = {},
 ): GraphCamera {
 	const graphState = isGraphStateStore(graphStateOrInitialState)
 		? graphStateOrInitialState
@@ -75,7 +104,10 @@ export function initializeGraphCamera(
 			camera: graphStateOrInitialState,
 			nodePositions: {},
 		});
+	const animationFrameScheduler = options.animationFrameScheduler
+		?? resolveAnimationFrameScheduler(viewport);
 	let panSession: PanSession | undefined;
+	let focusAnimation: FocusAnimationSession | undefined;
 	let disposed = false;
 
 	/** Camera transform과 Viewport의 World Grid 표시를 함께 갱신한다. */
@@ -91,12 +123,33 @@ export function initializeGraphCamera(
 	/** 현재 Camera 상태를 Store snapshot과 분리된 객체로 반환한다. */
 	const getState = (): GraphCameraState => ({ ...graphState.getState().camera });
 
-	/** Node 위치를 유지하면서 Camera 값만 Store에 반영한다. */
-	const setState = (nextState: GraphCameraState): void => {
+	/** Node 위치를 유지하면서 Camera 값만 Store에 직접 반영한다. */
+	const applyCameraState = (nextState: GraphCameraState): void => {
 		graphState.setState({
 			...graphState.getState(),
 			camera: nextState,
 		});
+	};
+
+	/** 예약된 Focus Frame을 취소하고 session을 제거한다. */
+	const cancelFocusAnimation = (): void => {
+		const session = focusAnimation;
+
+		focusAnimation = undefined;
+
+		if (session?.frameRequestId !== undefined) {
+			animationFrameScheduler?.cancel(session.frameRequestId);
+		}
+	};
+
+	/** 직접 Camera 변경은 진행 중인 Focus보다 우선한다. */
+	const setState = (nextState: GraphCameraState): void => {
+		if (disposed) {
+			return;
+		}
+
+		cancelFocusAnimation();
+		applyCameraState(nextState);
 	};
 
 	/** 현재 Camera transform을 역산해 Viewport 좌표를 World 좌표로 변환한다. */
@@ -121,6 +174,11 @@ export function initializeGraphCamera(
 
 	/** 지정한 Viewport 지점 아래의 World 좌표를 유지하며 Camera scale을 변경한다. */
 	const setScaleAt = (scale: number, viewportPoint: GraphPoint): void => {
+		if (disposed) {
+			return;
+		}
+
+		cancelFocusAnimation();
 		const currentCamera = graphState.getState().camera;
 		const nextScale = clampScale(scale);
 
@@ -130,11 +188,82 @@ export function initializeGraphCamera(
 
 		const worldAtPoint = viewportToWorld(viewportPoint);
 
-		setState({
+		applyCameraState({
 			x: viewportPoint.x - worldAtPoint.x * nextScale,
 			y: viewportPoint.y - worldAtPoint.y * nextScale,
 			scale: nextScale,
 		});
+	};
+
+	/** World 지점이 Viewport 중앙에 오도록 x/y만 ease-out 보간한다. */
+	const focusOn = (
+		point: GraphPoint,
+		focusOptions: GraphCameraFocusOptions = {},
+	): void => {
+		if (disposed) {
+			return;
+		}
+
+		cancelFocusAnimation();
+		const startState = getState();
+		const duration = Math.max(0, focusOptions.duration ?? DEFAULT_FOCUS_DURATION);
+		const targetState: GraphCameraState = {
+			x: viewport.clientWidth / 2 - point.x * startState.scale,
+			y: viewport.clientHeight / 2 - point.y * startState.scale,
+			scale: startState.scale,
+		};
+
+		if (!animationFrameScheduler || duration === 0) {
+			applyCameraState(targetState);
+			return;
+		}
+
+		const session: FocusAnimationSession = {
+			startState,
+			targetState,
+			duration,
+		};
+		const renderFrame = (timestamp: number): void => {
+			if (disposed || focusAnimation !== session) {
+				return;
+			}
+
+			session.frameRequestId = undefined;
+			session.startTime ??= timestamp;
+			const progress = Math.min(
+				1,
+				Math.max(0, (timestamp - session.startTime) / session.duration),
+			);
+
+			if (progress === 1) {
+				focusAnimation = undefined;
+				applyCameraState(session.targetState);
+				return;
+			}
+
+			const easedProgress = easeOutCubic(progress);
+
+			applyCameraState({
+				x: interpolate(
+					session.startState.x,
+					session.targetState.x,
+					easedProgress,
+				),
+				y: interpolate(
+					session.startState.y,
+					session.targetState.y,
+					easedProgress,
+				),
+				scale: session.startState.scale,
+			});
+
+			if (focusAnimation === session) {
+				session.frameRequestId = animationFrameScheduler.request(renderFrame);
+			}
+		};
+
+		focusAnimation = session;
+		session.frameRequestId = animationFrameScheduler.request(renderFrame);
 	};
 
 	/** 이벤트 target 또는 조상에 입력 정책 attribute가 있는지 판별한다. */
@@ -179,6 +308,7 @@ export function initializeGraphCamera(
 		}
 
 		event.preventDefault();
+		cancelFocusAnimation();
 		panSession = {
 			pointerId: event.pointerId,
 			startClientX: event.clientX,
@@ -230,6 +360,7 @@ export function initializeGraphCamera(
 		}
 
 		event.preventDefault();
+		cancelFocusAnimation();
 
 		const bounds = viewport.getBoundingClientRect();
 		const cursor = {
@@ -260,12 +391,14 @@ export function initializeGraphCamera(
 		setScaleAt,
 		viewportToWorld,
 		worldToViewport,
+		focusOn,
 		dispose(): void {
 			if (disposed) {
 				return;
 			}
 
 			disposed = true;
+			cancelFocusAnimation();
 			unsubscribeState();
 			viewport.removeEventListener('pointerdown', handlePointerDown);
 			viewport.removeEventListener('pointermove', handlePointerMove);
@@ -279,6 +412,36 @@ export function initializeGraphCamera(
 			}
 		},
 	};
+}
+
+/** Browser Window의 requestAnimationFrame API를 Camera Scheduler로 감싼다. */
+function resolveAnimationFrameScheduler(
+	viewport: HTMLElement,
+): GraphAnimationFrameScheduler | undefined {
+	const ownerWindow = viewport.ownerDocument?.defaultView;
+	const request = ownerWindow?.requestAnimationFrame
+		?? globalThis.requestAnimationFrame;
+	const cancel = ownerWindow?.cancelAnimationFrame
+		?? globalThis.cancelAnimationFrame;
+
+	if (typeof request !== 'function' || typeof cancel !== 'function') {
+		return undefined;
+	}
+
+	return {
+		request: (callback) => request.call(ownerWindow ?? globalThis, callback),
+		cancel: (requestId) => cancel.call(ownerWindow ?? globalThis, requestId),
+	};
+}
+
+/** 0..1 진행률에 감속되는 cubic ease-out을 적용한다. */
+function easeOutCubic(progress: number): number {
+	return 1 - (1 - progress) ** 3;
+}
+
+/** 두 수 사이를 진행률만큼 선형 보간한다. */
+function interpolate(start: number, end: number, progress: number): number {
+	return start + (end - start) * progress;
 }
 
 /** Store 또는 호환용 Camera 초기값인지 판별한다. */

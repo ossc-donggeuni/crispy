@@ -3,12 +3,16 @@ import {
 	type GraphCamera,
 } from './graphCamera';
 import { createGraphLayout, type GraphLayout } from './graphLayout';
-import { GRAPH_MOCK_PROJECT } from './graphMockData';
+import { GRAPH_MOCK } from './graphMockData';
+import type { Graph } from './graphModel';
+import { addGraphRoot, removeGraphRoot } from './graphRootPromotion';
 import { initializeGraphNavigator } from './graphNavigator';
 import {
 	initializeGraphRenderer,
 	type GraphRenderer,
+	type GraphRootReattachRequest,
 } from './graphRenderer';
+import type { GraphDetachDropRequest } from './graphDetachDrag';
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
@@ -25,6 +29,12 @@ export interface GraphView {
 	readonly camera: GraphCamera;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
+}
+
+/** Graph View가 Renderer의 향후 Root Promotion 요청을 전달할 상위 계약이다. */
+export interface GraphViewInteractions {
+	/** 내부 Promotion 처리 뒤 Detach 완료 요청을 관찰하는 선택적 callback이다. */
+	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -65,16 +75,114 @@ export function initializeGraphLayoutReflow(
 }
 
 /**
+ * Folder/File Detach 요청을 공통 Root 추가와 위치 저장으로 처리한다.
+ * client 좌표는 Viewport local 좌표를 거쳐 기존 Camera 역변환을 사용한다.
+ */
+export function promoteToGraphRoot(
+	graph: Graph,
+	request: GraphDetachDropRequest,
+	viewport: HTMLElement,
+	camera: GraphCamera,
+	state: GraphStateStore,
+): Graph | undefined {
+	const addition = addGraphRoot(graph, request.nodeId);
+
+	if (!addition) {
+		return undefined;
+	}
+
+	const bounds = viewport.getBoundingClientRect();
+	const worldPosition = camera.viewportToWorld({
+		x: request.clientX - bounds.left,
+		y: request.clientY - bounds.top,
+	});
+	const snapshot = state.getState();
+
+	state.setState({
+		camera: snapshot.camera,
+		nodePositions: {
+			...snapshot.nodePositions,
+			[request.nodeId]: worldPosition,
+		},
+		fileGroupPages: snapshot.fileGroupPages,
+		openedFolders: snapshot.openedFolders,
+	});
+
+	return addition.graph;
+}
+
+/**
+ * 최신 Graph/Layout/State에서 Root 중심을 구해 공통 Camera Focus를 요청한다.
+ * 저장 위치가 없을 때만 현재 Layout 기본 위치를 사용한다.
+ */
+export function focusGraphRoot(
+	graph: Graph,
+	layout: GraphLayout,
+	state: Pick<GraphStateStore, 'getState'>,
+	camera: Pick<GraphCamera, 'focusOn'>,
+	targetRootId: string,
+): boolean {
+	const targetRoot = graph.roots.find((root) => root.id === targetRootId);
+
+	if (!targetRoot) {
+		return false;
+	}
+
+	const rootNode = layout.nodes.find((node) => node.id === targetRoot.nodeId);
+
+	if (!rootNode) {
+		return false;
+	}
+
+	const rootPosition = state.getState().nodePositions[targetRoot.nodeId]
+		?? rootNode.position;
+
+	camera.focusOn({
+		x: rootPosition.x + rootNode.width / 2,
+		y: rootPosition.y + rootNode.height / 2,
+	});
+
+	return true;
+}
+
+/** Backlink DOM의 client 중심을 Viewport local과 World 좌표로 변환해 Focus한다. */
+export function focusGraphBacklink(
+	renderer: Pick<GraphRenderer, 'getBacklinkClientCenter'>,
+	viewport: HTMLElement,
+	camera: Pick<GraphCamera, 'viewportToWorld' | 'focusOn'>,
+	targetRootId: string,
+): boolean {
+	const backlinkCenter = renderer.getBacklinkClientCenter(targetRootId);
+
+	if (!backlinkCenter) {
+		return false;
+	}
+
+	const viewportBounds = viewport.getBoundingClientRect();
+	const worldPoint = camera.viewportToWorld({
+		x: backlinkCenter.clientX - viewportBounds.left,
+		y: backlinkCenter.clientY - viewportBounds.top,
+	});
+
+	camera.focusOn(worldPoint);
+	return true;
+}
+
+/**
  * Graph가 렌더링될 Viewport, World, Edge/Node/Overlay Layer를 생성하고
  * Mock Project 기반 Layout, Renderer, Camera, Navigator를 초기화한다.
  *
  * @param root Graph View를 마운트할 요소
  * @param initialState 복원할 초기 Graph 상태
+ * @param graph 렌더링할 Root 목록과 Project Tree
+ * @param interactions Detach 완료 요청을 Graph 변경 없이 전달할 callback
  * @returns State와 Camera 및 전체 lifecycle을 제공하는 Graph View
  */
 export function initializeGraphView(
 	root: HTMLElement,
 	initialState: GraphState = INITIAL_GRAPH_STATE,
+	graph: Graph = GRAPH_MOCK,
+	interactions: GraphViewInteractions = {},
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
 	const viewport = ownerDocument.createElement('div');
@@ -95,21 +203,95 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
+	let currentGraph = graph;
 	const camera = initializeGraphCamera(viewport, world, state);
-	const renderer = initializeGraphRenderer(
+	let renderer: GraphRenderer;
+	let currentLayout: GraphLayout;
+	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => {
+		currentLayout = createGraphLayout(currentGraph, {
+			fileGroupPages: snapshot.fileGroupPages,
+			openedFolders: snapshot.openedFolders,
+		});
+
+		return currentLayout;
+	};
+	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
+		const nextGraph = promoteToGraphRoot(
+			currentGraph,
+			request,
+			viewport,
+			camera,
+			state,
+		);
+
+		if (nextGraph) {
+			currentGraph = nextGraph;
+			renderer.applyLayout(createCurrentLayout(state.getState()));
+		}
+
+		interactions.onDetachDrop?.(request);
+	};
+	const handleBacklinkClick = (targetRootId: string): void => {
+		focusGraphRoot(
+			currentGraph,
+			currentLayout,
+			state,
+			camera,
+			targetRootId,
+		);
+	};
+	const handleRootContextClick = (rootId: string): void => {
+		focusGraphBacklink(renderer, viewport, camera, rootId);
+	};
+	const handleRootReattach = ({
+		rootId,
+		nodeId,
+	}: GraphRootReattachRequest): boolean => {
+		const targetRoot = currentGraph.roots.find(
+			(root) => root.id === rootId && root.nodeId === nodeId,
+		);
+
+		if (!targetRoot) {
+			return false;
+		}
+
+		const nextGraph = removeGraphRoot(currentGraph, rootId);
+
+		if (nextGraph === currentGraph) {
+			return false;
+		}
+
+		currentGraph = nextGraph;
+		const snapshot = state.getState();
+		const nodePositions = { ...snapshot.nodePositions };
+
+		delete nodePositions[nodeId];
+		state.setState({
+			camera: snapshot.camera,
+			nodePositions,
+			fileGroupPages: snapshot.fileGroupPages,
+			openedFolders: snapshot.openedFolders,
+		});
+		renderer.applyLayout(createCurrentLayout(state.getState()));
+		return true;
+	};
+
+	renderer = initializeGraphRenderer(
 		edgeLayer,
 		nodeLayer,
-		createGraphLayout(GRAPH_MOCK_PROJECT, {
-			fileGroupPages: initialGraphState.fileGroupPages,
-			openedFolders: initialGraphState.openedFolders,
-		}),
+		createCurrentLayout(initialGraphState),
 		state,
 		{
 			onFolderClick: (folderId) => {
-				if (folderId !== GRAPH_MOCK_PROJECT.id) {
-					state.toggleFolder(folderId);
-				}
+				state.toggleFolder(folderId);
 			},
+			onDetachDrop: handleDetachDrop,
+			onBacklinkClick: handleBacklinkClick,
+			onRootContextClick: handleRootContextClick,
+			onRootReattach: handleRootReattach,
+			resolveRootId: (rootNodeId) => currentGraph.roots.find(
+				(root) => root.nodeId === rootNodeId,
+			)?.id,
 		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
@@ -117,10 +299,7 @@ export function initializeGraphView(
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
 		renderer,
-		(nextState) => createGraphLayout(GRAPH_MOCK_PROJECT, {
-			fileGroupPages: nextState.fileGroupPages,
-			openedFolders: nextState.openedFolders,
-		}),
+		createCurrentLayout,
 	);
 
 	return {

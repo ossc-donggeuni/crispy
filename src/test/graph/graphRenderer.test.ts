@@ -11,7 +11,18 @@ import {
 	type GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
-import { isFolder, type Project } from '../../webview/graph/graphModel';
+import {
+	createSingleRootGraph,
+	isFolder,
+	type GraphRootContext,
+	type GraphRootNode,
+	type Project,
+} from '../../webview/graph/graphModel';
+import {
+	addGraphRoot,
+	createFileBacklinkGroupId,
+	createFolderBacklinkId,
+} from '../../webview/graph/graphRootPromotion';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import {
 	initializeGraphRenderer,
@@ -30,6 +41,927 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Renderer / Node Drag', () => {
+	test('Context가 있는 Folder/File Root에만 좌측 정렬 Label을 렌더링한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:context-root',
+			name: 'context-root',
+			children: [{
+				kind: 'file' as const,
+				id: 'file:context-root/child.ts',
+				name: 'child.ts',
+			}],
+		};
+		const folderContext = { relativePath: 'packages/demo/src/context-root' };
+		const folderFixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			folder,
+			folderContext,
+		);
+		const folderRoot = folderFixture.getNode(folder.id);
+		const folderLabel = getDescendantByClass(
+			folderRoot,
+			'graph-root-context-label',
+		);
+		const child = folderFixture.getNode(folder.children[0].id);
+
+		assert.strictEqual(folderLabel.textContent, folderContext.relativePath);
+		assert.strictEqual(folderLabel.style.left, '0px');
+		assert.strictEqual(folderLabel.style.maxWidth, '300px');
+		assert.strictEqual(
+			findDescendantByClass(child, 'graph-root-context-label'),
+			undefined,
+		);
+		folderFixture.renderer.dispose();
+
+		const file = {
+			kind: 'file' as const,
+			id: 'file:context-root.ts',
+			name: 'context-root.ts',
+		};
+		const fileContext = { relativePath: 'src/webview/graph/context-root.ts' };
+		const fileClicks: string[] = [];
+		const fileFixture = createRendererFixture(
+			1,
+			undefined,
+			{ onFileClick: (fileId) => fileClicks.push(fileId) },
+			file,
+			fileContext,
+		);
+		const fileLabel = getDescendantByClass(
+			fileFixture.getNode(file.id),
+			'graph-root-context-label',
+		);
+
+		assert.strictEqual(fileLabel.textContent, fileContext.relativePath);
+		fileLabel.dispatch('click', createClickEvent(fileLabel));
+		assert.deepStrictEqual(fileClicks, []);
+		fileFixture.renderer.dispose();
+
+		const noContext = createRendererFixture(1, undefined, {}, folder);
+
+		assert.strictEqual(
+			findDescendantByClass(
+				noContext.getNode(folder.id),
+				'graph-root-context-label',
+			),
+			undefined,
+		);
+		noContext.renderer.dispose();
+	});
+
+	test('Root Label은 Node 이동을 함께 따르며 Graph interaction을 시작하지 않는다', () => {
+		const folderClicks: string[] = [];
+		const detachDrops: string[] = [];
+		const rootContextClicks: string[] = [];
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{
+				onFolderClick: (folderId) => folderClicks.push(folderId),
+				onDetachDrop: (request) => detachDrops.push(request.nodeId),
+				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
+				resolveRootId: () => 'root:context-project',
+			},
+			GRAPH_MOCK_PROJECT,
+			{ relativePath: 'src/webview/graph' },
+		);
+		const root = fixture.getNode(GRAPH_MOCK_PROJECT.id);
+		const label = getDescendantByClass(root, 'graph-root-context-label');
+		const pointerDown = createPointerEvent(label, 10, 10);
+
+		label.dispatch('pointerdown', pointerDown);
+		label.dispatch('pointermove', createPointerEvent(label, 50, 40));
+		label.dispatch('pointerup', createPointerEvent(label, 50, 40));
+		label.dispatch('click', createClickEvent(label));
+		assert.strictEqual(pointerDown.defaultPrevented, true);
+		assert.strictEqual(pointerDown.propagationStopped, true);
+		assert.deepStrictEqual(folderClicks, []);
+		assert.deepStrictEqual(detachDrops, []);
+		assert.deepStrictEqual(rootContextClicks, ['root:context-project']);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+		assert.strictEqual(root.hasClass('is-dragging'), false);
+
+		const viewport = fixture.document.createSizedElement(1000, 800);
+		const world = fixture.document.createElement('div');
+		const camera = initializeGraphCamera(
+			viewport.asHtmlElement(),
+			world.asHtmlElement(),
+			fixture.graphState,
+		);
+
+		viewport.dispatch('pointerdown', createPointerEvent(label, 10, 10, 2));
+		viewport.dispatch('pointermove', createPointerEvent(label, 60, 50, 2));
+		assert.deepStrictEqual(camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(viewport.hasClass('is-panning'), false);
+
+		const movedPosition = { x: 420, y: 260 };
+		const state = fixture.graphState.getState();
+
+		fixture.graphState.setState({
+			...state,
+			nodePositions: {
+				...state.nodePositions,
+				[GRAPH_MOCK_PROJECT.id]: movedPosition,
+			},
+		});
+		assert.strictEqual(root.style.transform, 'translate(420px, 260px)');
+		assert.strictEqual(
+			getDescendantByClass(root, 'graph-root-context-label'),
+			label,
+		);
+
+		camera.dispose();
+		fixture.renderer.dispose();
+	});
+
+	test('applyLayout은 기존 Root DOM에서 Context Label을 추가, 갱신, 제거한다', () => {
+		const fixture = createRendererFixture();
+		const root = fixture.getNode(GRAPH_MOCK_PROJECT.id);
+		const firstContext = { relativePath: 'src/first' };
+		const secondContext = { relativePath: 'src/second' };
+
+		fixture.renderer.applyLayout({
+			...fixture.layout,
+			rootContexts: { [GRAPH_MOCK_PROJECT.id]: firstContext },
+		});
+		const label = getDescendantByClass(root, 'graph-root-context-label');
+
+		assert.strictEqual(label.textContent, firstContext.relativePath);
+		fixture.renderer.applyLayout({
+			...fixture.layout,
+			rootContexts: { [GRAPH_MOCK_PROJECT.id]: secondContext },
+		});
+		assert.strictEqual(
+			getDescendantByClass(root, 'graph-root-context-label'),
+			label,
+		);
+		assert.strictEqual(label.textContent, secondContext.relativePath);
+
+		fixture.renderer.applyLayout({ ...fixture.layout, rootContexts: {} });
+		assert.strictEqual(
+			findDescendantByClass(root, 'graph-root-context-label'),
+			undefined,
+		);
+		assert.strictEqual(label.getEventListenerCount(), 0);
+		fixture.renderer.dispose();
+	});
+
+	test('File Root를 저장 위치와 File interaction을 쓰는 standalone File Group으로 렌더링한다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:standalone/graphRenderer.ts',
+			name: 'graphRenderer.ts',
+		};
+		const savedPosition = { x: 640, y: 280 };
+		const fileClicks: string[] = [];
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [file.id]: savedPosition },
+		}, {
+			onFileClick: (fileId) => fileClicks.push(fileId),
+		}, file);
+		const layoutNode = getLayoutNode(fixture.layout, file.id);
+		const node = fixture.getNode(file.id);
+		const icon = getDescendantByClass(node, 'graph-file-icon');
+
+		assert.strictEqual(fixture.layout.nodes.length, 1);
+		assert.strictEqual(fixture.layout.edges.length, 0);
+		assert.strictEqual(layoutNode.kind, 'file-group');
+		assert.ok(layoutNode.kind === 'file-group');
+		assert.strictEqual(layoutNode.presentation, 'standalone');
+		assert.strictEqual(layoutNode.children[0]?.id, file.id);
+		assert.strictEqual(node.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(node.hasClass('graph-file-node'), false);
+		assert.strictEqual(
+			node.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.strictEqual(node.style.transform, 'translate(640px, 280px)');
+		assert.strictEqual(node.getAttribute('data-file-id'), file.id);
+		assert.strictEqual(node.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), false);
+		assert.strictEqual(icon.getAttribute('data-file-icon'), 'typescript');
+		assert.ok(getText(node).includes(file.name));
+		assert.strictEqual(findDescendantByClass(node, 'graph-file-item'), undefined);
+
+		node.dispatch('click', createClickEvent(node));
+		assert.deepStrictEqual(fileClicks, [file.id]);
+		assert.deepStrictEqual(fixture.graphState.getState().openedFolders, {});
+		fixture.renderer.dispose();
+	});
+
+	test('Folder의 Singleton은 standalone Group, 두 File은 grouped Row로 렌더링한다', () => {
+		const singletonProject = createPaginationProject([1]);
+		const singletonFileId = 'file:pagination-0/file-1.ts';
+		const singleton = createRendererFixture(
+			1,
+			undefined,
+			{},
+			singletonProject,
+		);
+		const fileNode = singleton.getNode(singletonFileId);
+
+		assert.strictEqual(fileNode.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(
+			fileNode.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.strictEqual(findDescendantByClass(fileNode, 'graph-file-item'), undefined);
+		assert.strictEqual(
+			singleton.nodeLayer.children.some(
+				(node) => node.getAttribute('data-graph-node-id')
+					=== createFileGroupId('folder:pagination-0'),
+			),
+			false,
+		);
+		assert.ok(singleton.layout.edges.some((edge) => (
+			edge.sourceId === 'folder:pagination-0'
+				&& edge.targetId === singletonFileId
+		)));
+		singleton.renderer.dispose();
+
+		const grouped = createRendererFixture(1, undefined, {}, createPaginationProject([2]));
+		const fileGroup = grouped.getNode(createFileGroupId('folder:pagination-0'));
+
+		assert.strictEqual(fileGroup.hasClass('graph-file-group-node'), true);
+		assert.strictEqual(
+			fileGroup.getAttribute('data-file-group-presentation'),
+			'grouped',
+		);
+		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 2);
+		assert.strictEqual(
+			grouped.nodeLayer.children.some(
+				(node) => node.getAttribute('data-graph-node-id') === singletonFileId,
+			),
+			false,
+		);
+		grouped.renderer.dispose();
+	});
+
+	test('Root가 아닌 Folder와 standalone/grouped File에만 Detach Handle을 렌더링한다', () => {
+		const standaloneFile = {
+			kind: 'file' as const,
+			id: 'file:detach-standalone/index.ts',
+			name: 'index.ts',
+		};
+		const standaloneProject: Project = {
+			kind: 'project',
+			id: 'project:detach-standalone',
+			name: 'detach-standalone',
+			children: [standaloneFile],
+		};
+		const standalone = createRendererFixture(
+			1,
+			undefined,
+			{},
+			standaloneProject,
+		);
+		const project = standalone.getNode(standaloneProject.id);
+		const fileNode = standalone.getNode(standaloneFile.id);
+
+		assert.strictEqual(
+			findDescendantByClass(project, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.ok(findDescendantByClass(fileNode, 'graph-detach-handle'));
+		standalone.renderer.dispose();
+
+		const groupedProject = createPaginationProject([2]);
+		const allGrouped = createRendererFixture(
+			1,
+			undefined,
+			{},
+			groupedProject,
+		);
+		const allGroupedFileGroup = allGrouped.getNode(
+			createFileGroupId('folder:pagination-0'),
+		);
+
+		assert.strictEqual(
+			getDescendantsByClass(allGroupedFileGroup, 'graph-detach-handle').length,
+			2,
+		);
+		allGrouped.renderer.dispose();
+
+		const rootFolder = {
+			kind: 'folder' as const,
+			id: 'folder:detach-root',
+			name: 'detach-root',
+			children: [],
+		};
+		const folderRoot = createRendererFixture(1, undefined, {}, rootFolder);
+
+		assert.strictEqual(
+			findDescendantByClass(
+				folderRoot.getNode(rootFolder.id),
+				'graph-detach-handle',
+			),
+			undefined,
+		);
+		folderRoot.renderer.dispose();
+
+		const fileRoot = createRendererFixture(1, undefined, {}, standaloneFile);
+
+		assert.strictEqual(
+			findDescendantByClass(
+				fileRoot.getNode(standaloneFile.id),
+				'graph-detach-handle',
+			),
+			undefined,
+		);
+		fileRoot.renderer.dispose();
+	});
+
+	test('Folder Detach Handle은 Node Click/Move와 Camera Pan 없이 threshold Drag만 전달한다', () => {
+		const detachDrops: Array<{
+			readonly nodeId: string;
+			readonly clientX: number;
+			readonly clientY: number;
+		}> = [];
+		const folderClicks: string[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onFolderClick: (folderId) => folderClicks.push(folderId),
+			onDetachDrop: (request) => detachDrops.push(request),
+		});
+		const folder = fixture.getNode('folder:app');
+		const handle = getDescendantByClass(folder, 'graph-detach-handle');
+		const initialTransform = folder.style.transform;
+		const pointerDown = createPointerEvent(handle, 10, 20);
+
+		handle.dispatch('pointerdown', pointerDown);
+		assert.strictEqual(pointerDown.defaultPrevented, true);
+		assert.strictEqual(pointerDown.propagationStopped, true);
+		assert.strictEqual(handle.hasPointerCapture(1), true);
+		assert.strictEqual(handle.hasClass('is-detach-active'), true);
+		assert.strictEqual(folder.hasPointerCapture(1), false);
+		assert.strictEqual(folder.hasClass('is-dragging'), false);
+
+		handle.dispatch('pointermove', createPointerEvent(handle, 12, 22));
+		handle.dispatch('pointerup', createPointerEvent(handle, 12, 22));
+		handle.dispatch('click', createClickEvent(handle));
+		assert.deepStrictEqual(detachDrops, []);
+		assert.deepStrictEqual(folderClicks, []);
+
+		handle.dispatch('pointerdown', createPointerEvent(handle, 30, 40, 2));
+		handle.dispatch('pointermove', createPointerEvent(handle, 50, 65, 2));
+		assert.strictEqual(handle.hasClass('is-detach-dragging'), true);
+		handle.dispatch('pointerup', createPointerEvent(handle, 72, 84, 2));
+
+		assert.deepStrictEqual(detachDrops, [{
+			nodeId: 'folder:app',
+			clientX: 72,
+			clientY: 84,
+		}]);
+		assert.strictEqual(handle.hasPointerCapture(2), false);
+		assert.strictEqual(handle.hasClass('is-detach-active'), false);
+		assert.strictEqual(handle.hasClass('is-detach-dragging'), false);
+		assert.strictEqual(folder.style.transform, initialTransform);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+
+		const viewport = fixture.document.createSizedElement(1000, 800);
+		const world = fixture.document.createElement('div');
+		const camera = initializeGraphCamera(
+			viewport.asHtmlElement(),
+			world.asHtmlElement(),
+			fixture.graphState,
+		);
+
+		viewport.dispatch('pointerdown', createPointerEvent(handle, 72, 84, 3));
+		viewport.dispatch('pointermove', createPointerEvent(handle, 120, 140, 3));
+		assert.deepStrictEqual(camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(viewport.hasPointerCapture(3), false);
+		assert.strictEqual(viewport.hasClass('is-panning'), false);
+
+		camera.dispose();
+		fixture.renderer.dispose();
+	});
+
+	test('grouped File Handle은 Row Click 없이 해당 File ID의 Detach Drop만 전달한다', () => {
+		const detachDrops: Array<{
+			readonly nodeId: string;
+			readonly clientX: number;
+			readonly clientY: number;
+		}> = [];
+		const fileClicks: string[] = [];
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onDetachDrop: (request) => detachDrops.push(request),
+			},
+			createPaginationProject([2]),
+		);
+		const fileGroup = fixture.getNode(createFileGroupId('folder:pagination-0'));
+		const fileIds = [
+			'file:pagination-0/file-1.ts',
+			'file:pagination-0/file-2.ts',
+		];
+
+		for (const [index, fileId] of fileIds.entries()) {
+			const fileRow = getDescendantByAttribute(
+				fileGroup,
+				'data-file-id',
+				fileId,
+			);
+			const handle = getDescendantByClass(fileRow, 'graph-detach-handle');
+			const pointerId = index + 1;
+
+			handle.dispatch(
+				'pointerdown',
+				createPointerEvent(handle, 100, 120, pointerId),
+			);
+			handle.dispatch(
+				'pointermove',
+				createPointerEvent(handle, 116, 138, pointerId),
+			);
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, 130 + index, 150 + index, pointerId),
+			);
+			handle.dispatch('click', createClickEvent(handle));
+
+			assert.strictEqual(fileRow.hasClass('is-file-clicking'), false);
+		}
+
+		assert.deepStrictEqual(detachDrops, fileIds.map((nodeId, index) => ({
+			nodeId,
+			clientX: 130 + index,
+			clientY: 150 + index,
+		})));
+		assert.deepStrictEqual(fileClicks, []);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+		fixture.renderer.dispose();
+	});
+
+	test('승격된 File Row는 순서/페이지를 유지한 반투명 Backlink이고 새 Root는 standalone이다', () => {
+		const project = createPaginationProject([7]);
+		const fileGroupId = createFileGroupId('folder:pagination-0');
+		const targetFileId = 'file:pagination-0/file-4.ts';
+		const addition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			targetFileId,
+		);
+
+		assert.ok(addition);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			fileGroupPages: { [fileGroupId]: 2 },
+			openedFolders: {
+				[project.id]: true,
+				'folder:pagination-0': true,
+			},
+		});
+		const layout = createGraphLayout(addition.graph, {
+			fileGroupPages: graphState.getState().fileGroupPages,
+			openedFolders: graphState.getState().openedFolders,
+		});
+		const fileClicks: string[] = [];
+		const backlinkClicks: string[] = [];
+		const rootContextClicks: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			layout,
+			graphState,
+			{
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
+				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
+				resolveRootId: (rootNodeId) => addition.graph.roots.find(
+					(root) => root.nodeId === rootNodeId,
+				)?.id,
+			},
+		);
+		const fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const rows = getDescendantsByClass(fileGroup, 'graph-file-item');
+		const backlinkRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			targetFileId,
+		);
+		const actualRoot = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			targetFileId,
+		);
+
+		assert.deepStrictEqual(
+			rows.map((row) => row.getAttribute('data-file-id')),
+			Array.from({ length: 7 }, (_, index) => (
+				`file:pagination-0/file-${index + 1}.ts`
+			)),
+		);
+		assert.strictEqual(rows.length, 7);
+		assert.strictEqual(graphState.getFileGroupPage(fileGroupId), 2);
+		assert.strictEqual(backlinkRow.hasClass('is-backlink'), true);
+		assert.strictEqual(backlinkRow.getAttribute('data-graph-backlink'), 'file');
+		assert.strictEqual(
+			backlinkRow.getAttribute('data-target-root-id'),
+			addition.root.id,
+		);
+		assert.strictEqual(
+			findDescendantByClass(backlinkRow, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.ok(getText(backlinkRow).includes('↗'));
+		backlinkRow.boundsLeft = 120;
+		backlinkRow.boundsTop = 80;
+		backlinkRow.clientWidth = 160;
+		backlinkRow.clientHeight = 30;
+		assert.deepStrictEqual(
+			renderer.getBacklinkClientCenter(addition.root.id),
+			{ clientX: 200, clientY: 95 },
+		);
+		backlinkRow.dispatch('pointerdown', createPointerEvent(backlinkRow, 10, 10));
+		backlinkRow.dispatch('pointermove', createPointerEvent(backlinkRow, 50, 60));
+		backlinkRow.dispatch('pointerup', createPointerEvent(backlinkRow, 50, 60));
+		backlinkRow.dispatch('click', createClickEvent(backlinkRow));
+		assert.strictEqual(fileGroup.hasPointerCapture(1), false);
+		assert.deepStrictEqual(graphState.getState().nodePositions, {});
+		assert.deepStrictEqual(fileClicks, []);
+		assert.deepStrictEqual(backlinkClicks, [addition.root.id]);
+		assert.strictEqual(
+			backlinkRow.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.strictEqual(
+			actualRoot.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.strictEqual(
+			findDescendantByClass(actualRoot, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.strictEqual(
+			getDescendantByClass(
+				actualRoot,
+				'graph-root-context-label',
+			).textContent,
+			'pagination/pagination-0/',
+		);
+		getDescendantByClass(actualRoot, 'graph-root-context-label').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				actualRoot,
+				'graph-root-context-label',
+			)),
+		);
+		assert.deepStrictEqual(rootContextClicks, [addition.root.id]);
+
+		renderer.applyLayout(createGraphLayout(
+			createSingleRootGraph(project, 'root:project'),
+			{
+				fileGroupPages: graphState.getState().fileGroupPages,
+				openedFolders: graphState.getState().openedFolders,
+			},
+		));
+		assert.strictEqual(
+			renderer.getBacklinkClientCenter(addition.root.id),
+			undefined,
+		);
+
+		renderer.dispose();
+	});
+
+	test('Folder와 singleton File Backlink은 일반 Click을 막고 각 targetRootId를 전달한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:backlink-target',
+			name: 'backlink-target',
+			children: [],
+		};
+		const file = {
+			kind: 'file' as const,
+			id: 'file:singleton-target.ts',
+			name: 'singleton-target.ts',
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:backlink-click',
+			name: 'backlink-click',
+			children: [folder, file],
+		};
+		const folderAddition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(folderAddition);
+		const fileAddition = addGraphRoot(folderAddition.graph, file.id);
+
+		assert.ok(fileAddition);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true },
+		});
+		const layout = createGraphLayout(fileAddition.graph, {
+			openedFolders: graphState.getState().openedFolders,
+		});
+		const folderClicks: string[] = [];
+		const fileClicks: string[] = [];
+		const backlinkClicks: string[] = [];
+		const rootContextClicks: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			layout,
+			graphState,
+			{
+				onFolderClick: (folderId) => folderClicks.push(folderId),
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
+				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
+				resolveRootId: (rootNodeId) => fileAddition.graph.roots.find(
+					(root) => root.nodeId === rootNodeId,
+				)?.id,
+			},
+		);
+		const folderBacklink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFolderBacklinkId(folderAddition.root.id),
+		);
+		const fileBacklink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFileBacklinkGroupId(fileAddition.root.id),
+		);
+		const folderEvent = createClickEvent(folderBacklink);
+		const fileEvent = createClickEvent(fileBacklink);
+
+		folderBacklink.boundsLeft = 40;
+		folderBacklink.boundsTop = 60;
+		folderBacklink.clientWidth = 200;
+		folderBacklink.clientHeight = 42;
+		fileBacklink.boundsLeft = 310;
+		fileBacklink.boundsTop = 180;
+		fileBacklink.clientWidth = 200;
+		fileBacklink.clientHeight = 42;
+		assert.deepStrictEqual(
+			renderer.getBacklinkClientCenter(folderAddition.root.id),
+			{ clientX: 140, clientY: 81 },
+		);
+		assert.deepStrictEqual(
+			renderer.getBacklinkClientCenter(fileAddition.root.id),
+			{ clientX: 410, clientY: 201 },
+		);
+
+		folderBacklink.dispatch('click', folderEvent);
+		fileBacklink.dispatch('click', fileEvent);
+
+		assert.deepStrictEqual(backlinkClicks, [
+			folderAddition.root.id,
+			fileAddition.root.id,
+		]);
+		assert.deepStrictEqual(folderClicks, []);
+		assert.deepStrictEqual(fileClicks, []);
+		assert.strictEqual(folderEvent.defaultPrevented, true);
+		assert.strictEqual(fileEvent.defaultPrevented, true);
+		assert.strictEqual(folderEvent.propagationStopped, true);
+		assert.strictEqual(fileEvent.propagationStopped, true);
+		assert.strictEqual(
+			folderBacklink.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.strictEqual(
+			fileBacklink.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
+		);
+		const folderRoot = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			folder.id,
+		);
+		const fileRoot = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			file.id,
+		);
+
+		for (const root of [folderRoot, fileRoot]) {
+			const label = getDescendantByClass(root, 'graph-root-context-label');
+
+			label.dispatch('click', createClickEvent(label));
+		}
+
+		assert.deepStrictEqual(rootContextClicks, [
+			folderAddition.root.id,
+			fileAddition.root.id,
+		]);
+
+		renderer.applyLayout(createGraphLayout(
+			createSingleRootGraph(project, 'root:project'),
+			{ openedFolders: graphState.getState().openedFolders },
+		));
+		assert.strictEqual(
+			renderer.getBacklinkClientCenter(folderAddition.root.id),
+			undefined,
+		);
+		assert.strictEqual(
+			renderer.getBacklinkClientCenter(fileAddition.root.id),
+			undefined,
+		);
+
+		renderer.dispose();
+	});
+
+	test('Root Drag의 자기 Backlink Target은 진입/이탈하고 cancel·layout·dispose에서 정리된다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-lifecycle',
+			name: 'reattach-lifecycle',
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:reattach-lifecycle',
+			name: 'reattach-lifecycle',
+			children: [folder],
+		};
+		const addition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(addition);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [folder.id]: { x: 600, y: 300 } },
+			openedFolders: { [project.id]: true },
+		});
+		const layout = createGraphLayout(addition.graph, {
+			openedFolders: graphState.getState().openedFolders,
+		});
+		const reattachRequests: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			layout,
+			graphState,
+			{
+				resolveRootId: (nodeId) => addition.graph.roots.find(
+					(root) => root.nodeId === nodeId,
+				)?.id,
+				onRootReattach: ({ rootId }) => {
+					reattachRequests.push(rootId);
+					return true;
+				},
+			},
+		);
+		const rootNode = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			folder.id,
+		);
+		const backlink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFolderBacklinkId(addition.root.id),
+		);
+
+		backlink.boundsLeft = 200;
+		backlink.boundsTop = 100;
+		backlink.clientWidth = 200;
+		backlink.clientHeight = 42;
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 500, 300));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		rootNode.dispatch('pointercancel', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(reattachRequests, []);
+
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		rootNode.releasePointerCapture(1);
+		rootNode.dispatch(
+			'lostpointercapture',
+			createPointerEvent(rootNode, 300, 121),
+		);
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(reattachRequests, []);
+
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		renderer.applyLayout(layout);
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		rootNode.dispatch('pointercancel', createPointerEvent(rootNode, 300, 121));
+
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		renderer.dispose();
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(reattachRequests, []);
+		assert.deepStrictEqual(
+			graphState.getState().nodePositions[folder.id],
+			{ x: 600, y: 300 },
+		);
+	});
+
+	for (const eventType of ['pointercancel', 'lostpointercapture'] as const) {
+		test(`${eventType}은 Detach 요청 없이 Handle session을 정리한다`, () => {
+			const detachDrops: string[] = [];
+			const fixture = createRendererFixture(1, undefined, {
+				onDetachDrop: (request) => detachDrops.push(request.nodeId),
+			});
+			const handle = getDescendantByClass(
+				fixture.getNode('folder:app'),
+				'graph-detach-handle',
+			);
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 40));
+
+			if (eventType === 'lostpointercapture') {
+				handle.releasePointerCapture(1);
+			}
+
+			handle.dispatch(eventType, createPointerEvent(handle, 30, 40));
+			handle.dispatch('pointerup', createPointerEvent(handle, 50, 60));
+
+			assert.deepStrictEqual(detachDrops, []);
+			assert.strictEqual(handle.hasPointerCapture(1), false);
+			assert.strictEqual(handle.hasClass('is-detach-active'), false);
+			assert.strictEqual(handle.hasClass('is-detach-dragging'), false);
+			fixture.renderer.dispose();
+		});
+	}
+
+	test('Renderer dispose 이후 Detach interaction이 동작하지 않는다', () => {
+		const detachDrops: string[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onDetachDrop: (request) => detachDrops.push(request.nodeId),
+		});
+		const handle = getDescendantByClass(
+			fixture.getNode('folder:app'),
+			'graph-detach-handle',
+		);
+
+		fixture.renderer.dispose();
+		handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+		handle.dispatch('pointermove', createPointerEvent(handle, 40, 50));
+		handle.dispatch('pointerup', createPointerEvent(handle, 40, 50));
+
+		assert.deepStrictEqual(detachDrops, []);
+		assert.strictEqual(handle.hasPointerCapture(1), false);
+		assert.strictEqual(handle.hasClass('is-detach-active'), false);
+	});
+
+	test('standalone File Group은 File ID로 기존 Graph Node Drag lifecycle을 사용한다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:standalone/index.ts',
+			name: 'index.ts',
+		};
+		const fixture = createRendererFixture(2, undefined, {}, file);
+		const layoutNode = getLayoutNode(fixture.layout, file.id);
+		const node = fixture.getNode(file.id);
+
+		node.dispatch('pointerdown', createPointerEvent(node, 100, 80));
+		assert.strictEqual(node.hasPointerCapture(1), true);
+		assert.strictEqual(node.hasClass('is-dragging'), true);
+		node.dispatch('pointermove', createPointerEvent(node, 140, 60));
+		assert.strictEqual(
+			node.style.transform,
+			`translate(${layoutNode.position.x + 20}px, ${layoutNode.position.y - 10}px)`,
+		);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+
+		node.dispatch('pointerup', createPointerEvent(node, 140, 60));
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {
+			[file.id]: {
+				x: layoutNode.position.x + 20,
+				y: layoutNode.position.y - 10,
+			},
+		});
+		assert.strictEqual(node.hasPointerCapture(1), false);
+		assert.strictEqual(node.hasClass('is-dragging'), false);
+		fixture.renderer.dispose();
+	});
+
 	test('Project Root, Folder, File Group과 Edge를 지정된 Layer에 렌더링한다', () => {
 		const fixture = createRendererFixture();
 		const root = fixture.getNode(GRAPH_MOCK_PROJECT.id);
@@ -54,7 +986,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.ok(containerNodes.every(
 			(node) => node.getAttribute('data-folder-icon') === 'folder-open.svg',
 		));
-		assert.strictEqual(root.getAttribute('aria-expanded'), null);
+		assert.strictEqual(root.getAttribute('aria-expanded'), 'true');
 		assert.strictEqual(folder.getAttribute('aria-expanded'), 'true');
 		assert.ok(!getText(root).includes('📁'));
 		assert.ok(getText(root).includes('crispy/'));
@@ -390,9 +1322,9 @@ suite('Graph Renderer / Node Drag', () => {
 		const removedEdge = fixture.getEdge(removedEdgeId);
 		const retainedNode = fixture.getNode(retainedNodeId);
 		const retainedEdge = fixture.getEdge(retainedEdgeId);
-		const collapsedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+		const collapsedLayout = createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			openedFolders: {},
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
 		});
 
 		fixture.renderer.applyLayout(collapsedLayout);
@@ -421,7 +1353,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.deepStrictEqual(folderClicks, []);
 		assert.deepStrictEqual(fileClicks, []);
 
-		const restoredLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+		const restoredLayout = createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
 			openedFolders: fixture.graphState.getState().openedFolders,
 		});
@@ -475,16 +1407,19 @@ suite('Graph Renderer / Node Drag', () => {
 			15,
 		);
 
-		fixture.renderer.applyLayout(createGraphLayout(project, {
+		fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			openedFolders: {},
+			openedFolders: { [project.id]: true },
 		}));
 
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
 
-		fixture.renderer.applyLayout(createGraphLayout(project, {
+		fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: fixture.graphState.getState().fileGroupPages,
-			openedFolders: { [folderId]: true },
+			openedFolders: {
+				[project.id]: true,
+				[folderId]: true,
+			},
 		}));
 
 		const restoredFileGroup = fixture.getNode(fileGroupId);
@@ -515,7 +1450,7 @@ suite('Graph Renderer / Node Drag', () => {
 			},
 		}, project);
 		const openLayout = fixture.layout;
-		const collapsedLayout = createGraphLayout(project, {
+		const collapsedLayout = createGraphLayout(createSingleRootGraph(project), {
 			openedFolders: {},
 		});
 		let activeFileGroup = fixture.getNode(fileGroupId);
@@ -613,7 +1548,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const fileGroup = fixture.getNode(fileGroupId);
 		const edge = fixture.getConnectedEdge(fileGroupId);
 		const initialEdgePath = edge.getAttribute('d');
-		const nextLayout = createGraphLayout(project, {
+		const nextLayout = createGraphLayout(createSingleRootGraph(project), {
 			fileGroupPages: { [fileGroupId]: 2 },
 			openedFolders: fixture.graphState.getState().openedFolders,
 		});
@@ -816,7 +1751,10 @@ suite('Graph Renderer / Node Drag', () => {
 			},
 		};
 		const firstState = restoreWebviewState(api);
-		const first = createRendererFixture(1, firstState.graph);
+		const first = createRendererFixture(1, {
+			...firstState.graph,
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		});
 		const movedId = 'folder:app';
 		const untouchedId = 'folder:src';
 		const movedLayout = getLayoutNode(first.layout, movedId);
@@ -871,16 +1809,24 @@ function createRendererFixture(
 		nodePositions: {},
 	},
 	interactions: GraphRendererInteractions = {},
-	project: Project = GRAPH_MOCK_PROJECT,
+	rootNode: GraphRootNode = GRAPH_MOCK_PROJECT,
+	rootContext?: GraphRootContext,
 ) {
 	const document = new FakeDocument();
 	const edgeLayer = document.createElementNS('', 'svg');
 	const nodeLayer = document.createElement('div');
 	const graphState = createGraphState({
 		...initialState,
-		openedFolders: initialState.openedFolders ?? openAllFolders(project),
+		openedFolders: initialState.openedFolders ?? openAllContainers(rootNode),
 	});
-	const layout = createGraphLayout(project, {
+	const singleRootGraph = createSingleRootGraph(rootNode);
+	const graph = rootContext
+		? {
+			...singleRootGraph,
+			roots: singleRootGraph.roots.map((root) => ({ ...root, context: rootContext })),
+		}
+		: singleRootGraph;
+	const layout = createGraphLayout(graph, {
 		fileGroupPages: graphState.getState().fileGroupPages,
 		openedFolders: graphState.getState().openedFolders,
 	});
@@ -954,21 +1900,24 @@ function getLayoutNode(layout: GraphLayout, nodeId: string): GraphLayoutNode {
 	return node;
 }
 
-/** Renderer 단위 테스트의 기존 전체 Tree fixture를 명시적으로 연다. */
-function openAllFolders(project: Project): Record<string, true> {
+/** Renderer 단위 테스트의 기존 Container Tree fixture를 명시적으로 연다. */
+function openAllContainers(rootNode: GraphRootNode): Record<string, true> {
 	const openedFolders: Record<string, true> = {};
-	const visit = (entries: Project['children']): void => {
-		for (const entry of entries) {
-			if (!isFolder(entry)) {
-				continue;
-			}
+	const visit = (node: GraphRootNode): void => {
+		if (node.kind === 'file') {
+			return;
+		}
 
-			openedFolders[entry.id] = true;
-			visit(entry.children);
+		openedFolders[node.id] = true;
+
+		for (const entry of node.children) {
+			if (isFolder(entry)) {
+				visit(entry);
+			}
 		}
 	};
 
-	visit(project.children);
+	visit(rootNode);
 	return openedFolders;
 }
 
@@ -979,6 +1928,8 @@ function replaceLayoutNode(
 	return {
 		nodes: layout.nodes.map((node) => node.id === nextNode.id ? nextNode : node),
 		edges: layout.edges,
+		rootContexts: layout.rootContexts,
+		rootNodeIds: layout.rootNodeIds,
 	};
 }
 
@@ -987,7 +1938,13 @@ function createPointerEvent(
 	clientX: number,
 	clientY: number,
 	pointerId = 1,
-): PointerEvent {
+): PointerEvent & {
+	readonly defaultPrevented: boolean;
+	readonly propagationStopped: boolean;
+} {
+	let defaultPrevented = false;
+	let propagationStopped = false;
+
 	return {
 		isPrimary: true,
 		button: 0,
@@ -995,8 +1952,22 @@ function createPointerEvent(
 		clientX,
 		clientY,
 		target: target.asEventTarget(),
-		preventDefault: () => undefined,
-	} as PointerEvent;
+		preventDefault: () => {
+			defaultPrevented = true;
+		},
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get defaultPrevented() {
+			return defaultPrevented;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as PointerEvent & {
+		readonly defaultPrevented: boolean;
+		readonly propagationStopped: boolean;
+	};
 }
 
 function createWheelEvent(
@@ -1197,6 +2168,10 @@ class FakeElement {
 	className = '';
 	textContent = '';
 	type = '';
+	clientWidth: number;
+	clientHeight: number;
+	boundsLeft = 0;
+	boundsTop = 0;
 	private readonly attributes = new Map<string, string>();
 	private readonly attributeWriteCounts = new Map<string, number>();
 	private readonly classNames = new Set<string>();
@@ -1207,9 +2182,12 @@ class FakeElement {
 	constructor(
 		readonly ownerDocument: FakeDocument,
 		readonly tagName: string,
-		readonly clientWidth = 0,
-		readonly clientHeight = 0,
-	) {}
+		clientWidth = 0,
+		clientHeight = 0,
+	) {
+		this.clientWidth = clientWidth;
+		this.clientHeight = clientHeight;
+	}
 
 	asHtmlElement(): HTMLElement {
 		return this as unknown as HTMLElement;
@@ -1318,12 +2296,12 @@ class FakeElement {
 
 	getBoundingClientRect(): DOMRect {
 		return {
-			x: 0,
-			y: 0,
-			left: 0,
-			top: 0,
-			right: this.clientWidth,
-			bottom: this.clientHeight,
+			x: this.boundsLeft,
+			y: this.boundsTop,
+			left: this.boundsLeft,
+			top: this.boundsTop,
+			right: this.boundsLeft + this.clientWidth,
+			bottom: this.boundsTop + this.clientHeight,
 			width: this.clientWidth,
 			height: this.clientHeight,
 			toJSON: () => ({}),

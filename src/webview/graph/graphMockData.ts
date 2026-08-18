@@ -1,4 +1,9 @@
-import type { File, Project } from './graphModel';
+import {
+	type File,
+	type Folder,
+	type Graph,
+	type Project,
+} from './graphModel';
 
 /** Pagination UI를 눈으로 확인할 수 있는 안정적인 순번 File 목록을 만든다. */
 function createPaginationMockFiles(folderPath: string, count: number): File[] {
@@ -111,4 +116,76 @@ export const GRAPH_MOCK_PROJECT: Project = {
 		{ kind: 'file', id: 'file:package.json', name: 'package.json' },
 		{ kind: 'file', id: 'file:tsconfig.json', name: 'tsconfig.json' },
 	],
+};
+
+/** Folder Root와 grouped/standalone File presentation을 함께 확인하는 독립 Tree다. */
+export const GRAPH_MOCK_FOLDER_ROOT: Folder = {
+	kind: 'folder',
+	id: 'folder:multi-root-demo',
+	name: 'multi-root-demo',
+	children: [
+		{
+			kind: 'folder',
+			id: 'folder:multi-root-demo/single-file',
+			name: 'single-file',
+			children: [
+				{
+					kind: 'file',
+					id: 'file:multi-root-demo/single-file/single.ts',
+					name: 'single.ts',
+				},
+			],
+		},
+		{
+			kind: 'file',
+			id: 'file:multi-root-demo/alpha.ts',
+			name: 'alpha.ts',
+		},
+		{
+			kind: 'file',
+			id: 'file:multi-root-demo/beta.ts',
+			name: 'beta.ts',
+		},
+		{
+			kind: 'file',
+			id: 'file:multi-root-demo/gamma.ts',
+			name: 'gamma.ts',
+		},
+	],
+};
+
+/** standalone presentation과 File Root Drag를 눈으로 확인하는 독립 File이다. */
+export const GRAPH_MOCK_FILE_ROOT: File = {
+	kind: 'file',
+	id: 'file:standalone-root.ts',
+	name: 'standalone-root.ts',
+};
+
+/** Project, Folder, File Root를 한 World에 표시하는 시각 검증용 Graph다. */
+export const GRAPH_MOCK: Graph = {
+	roots: [
+		{
+			id: 'root:workspace:crispy',
+			nodeId: GRAPH_MOCK_PROJECT.id,
+		},
+		{
+			id: 'root:folder:multi-root-demo',
+			nodeId: GRAPH_MOCK_FOLDER_ROOT.id,
+			context: {
+				relativePath: 'crispy/packages/demo/src/',
+			},
+		},
+		{
+			id: 'root:file:standalone-demo',
+			nodeId: GRAPH_MOCK_FILE_ROOT.id,
+			context: {
+				relativePath: 'crispy/src/webview/graph/examples/promoted/standalone/file/',
+			},
+		},
+	],
+	rootNodes: {
+		[GRAPH_MOCK_PROJECT.id]: GRAPH_MOCK_PROJECT,
+		[GRAPH_MOCK_FOLDER_ROOT.id]: GRAPH_MOCK_FOLDER_ROOT,
+		[GRAPH_MOCK_FILE_ROOT.id]: GRAPH_MOCK_FILE_ROOT,
+	},
 };

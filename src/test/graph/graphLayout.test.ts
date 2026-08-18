@@ -7,27 +7,60 @@ import {
 	GRAPH_FILE_GROUP_NODE_WIDTH,
 	GRAPH_FILE_GROUP_PADDING,
 	GRAPH_FILE_GROUP_ROW_HEIGHT,
+	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphFileGroupNode,
+	type GraphFolderBacklinkNode,
 	type GraphLayoutOptions,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
 import {
+	createSingleRootGraph,
 	isFile,
 	isFolder,
+	type Graph,
 	type Project,
 } from '../../webview/graph/graphModel';
+import {
+	addGraphRoot,
+	createFileBacklinkGroupId,
+	createFolderBacklinkId,
+} from '../../webview/graph/graphRootPromotion';
 import { FILE_GROUP_PAGE_SIZE } from '../../webview/graph/graphState';
 
 const ALL_OPENED_FOLDERS = openAllFolders(GRAPH_MOCK_PROJECT);
+const SECOND_PROJECT: Project = {
+	kind: 'project',
+	id: 'project:secondary',
+	name: 'secondary',
+	children: [
+		{
+			kind: 'folder',
+			id: 'folder:secondary/src',
+			name: 'src',
+			children: [
+				{
+					kind: 'file',
+					id: 'file:secondary/src/index.ts',
+					name: 'index.ts',
+				},
+			],
+		},
+		{
+			kind: 'file',
+			id: 'file:secondary/package.json',
+			name: 'package.json',
+		},
+	],
+};
 
 /** 기존 전체 Layout 검증에서는 모든 Folder를 명시적으로 연다. */
 function createGraphLayout(
 	project: Project,
 	options: GraphLayoutOptions = {},
 ): ReturnType<typeof createBaseGraphLayout> {
-	return createBaseGraphLayout(project, {
+	return createBaseGraphLayout(createSingleRootGraph(project), {
 		openedFolders: ALL_OPENED_FOLDERS,
 		...options,
 	});
@@ -46,7 +79,7 @@ function closeFolders(...folderIds: string[]): Record<string, true> {
 
 /** Layout 단위 테스트의 전체 Tree를 열기 위한 test-only sparse Map을 만든다. */
 function openAllFolders(project: Project): Record<string, true> {
-	const openedFolders: Record<string, true> = {};
+	const openedFolders: Record<string, true> = { [project.id]: true };
 	const visit = (entries: Project['children']): void => {
 		for (const entry of entries) {
 			if (!isFolder(entry)) {
@@ -63,6 +96,331 @@ function openAllFolders(project: Project): Record<string, true> {
 }
 
 suite('Graph Model / Layout', () => {
+	test('Graph Root 모델이 Project, Folder, File Node를 모두 표현한다', () => {
+		const folder = SECOND_PROJECT.children[0];
+		const file = SECOND_PROJECT.children[1];
+
+		assert.ok(folder && file);
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:project', nodeId: SECOND_PROJECT.id },
+				{ id: 'root:folder', nodeId: folder.id },
+				{ id: 'root:file', nodeId: file.id },
+			],
+			rootNodes: {
+				[SECOND_PROJECT.id]: SECOND_PROJECT,
+				[folder.id]: folder,
+				[file.id]: file,
+			},
+		};
+
+		assert.strictEqual(graph.rootNodes[SECOND_PROJECT.id]?.kind, 'project');
+		assert.strictEqual(graph.rootNodes[folder.id]?.kind, 'folder');
+		assert.strictEqual(graph.rootNodes[file.id]?.kind, 'file');
+	});
+
+	test('Context가 있는 Root만 Layout rootContexts로 전달하고 일반 Node는 확장하지 않는다', () => {
+		const folder = SECOND_PROJECT.children[0];
+		const file = SECOND_PROJECT.children[1];
+
+		assert.ok(folder && file);
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:project', nodeId: SECOND_PROJECT.id },
+				{
+					id: 'root:folder',
+					nodeId: folder.id,
+					context: { relativePath: 'packages/demo/src' },
+				},
+				{
+					id: 'root:file',
+					nodeId: file.id,
+					context: { relativePath: 'src/package.json' },
+				},
+			],
+			rootNodes: {
+				[SECOND_PROJECT.id]: SECOND_PROJECT,
+				[folder.id]: folder,
+				[file.id]: file,
+			},
+		};
+		const layout = createBaseGraphLayout(graph);
+
+		assert.deepStrictEqual(layout.rootContexts, {
+			[folder.id]: { relativePath: 'packages/demo/src' },
+			[file.id]: { relativePath: 'src/package.json' },
+		});
+		assert.strictEqual(layout.rootContexts[SECOND_PROJECT.id], undefined);
+		assert.ok(layout.nodes.every((node) => !('context' in node)));
+	});
+
+	test('File Root를 edge 없는 standalone File Group으로 배치한다', () => {
+		const file = SECOND_PROJECT.children.find(isFile);
+
+		assert.ok(file);
+		const layout = createBaseGraphLayout(createSingleRootGraph(file));
+
+		assert.strictEqual(layout.nodes.length, 1);
+		assert.strictEqual(layout.edges.length, 0);
+		assert.deepStrictEqual(layout.nodes[0], {
+			kind: 'file-group',
+			id: file.id,
+			name: file.name,
+			depth: 0,
+			position: { x: 48, y: 48 },
+			width: GRAPH_FILE_GROUP_NODE_WIDTH,
+			height: GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
+			children: [{
+				kind: 'file',
+				id: file.id,
+				name: file.name,
+				presentation: 'normal',
+			}],
+			presentation: 'standalone',
+		});
+	});
+
+	test('Folder의 File이 하나이면 File ID 기반 standalone File Group과 edge를 만든다', () => {
+		const layout = createBaseGraphLayout(
+			createSingleRootGraph(SECOND_PROJECT),
+			{
+				openedFolders: {
+					[SECOND_PROJECT.id]: true,
+					'folder:secondary/src': true,
+				},
+			},
+		);
+		const fileId = 'file:secondary/src/index.ts';
+		const fileNode = layout.nodes.find((node) => node.id === fileId);
+
+		assert.ok(fileNode && fileNode.kind === 'file-group');
+		assert.strictEqual(fileNode.presentation, 'standalone');
+		assert.strictEqual(fileNode.parentId, 'folder:secondary/src');
+		assert.deepStrictEqual(fileNode.children, [{
+			kind: 'file',
+			id: fileId,
+			name: 'index.ts',
+			presentation: 'normal',
+		}]);
+		assert.strictEqual(
+			layout.nodes.some(
+				(node) => node.id === createFileGroupId('folder:secondary/src'),
+			),
+			false,
+		);
+		assert.ok(layout.edges.some((edge) => (
+			edge.sourceId === 'folder:secondary/src' && edge.targetId === fileId
+		)));
+	});
+
+	test('승격된 Folder는 원래 Parent 아래 Backlink로, 자신의 Root에서는 실제 subtree로 배치한다', () => {
+		const graph = createSingleRootGraph(SECOND_PROJECT, 'root:project');
+		const addition = addGraphRoot(graph, 'folder:secondary/src');
+
+		assert.ok(addition);
+		const layout = createBaseGraphLayout(addition.graph, {
+			openedFolders: {
+				[SECOND_PROJECT.id]: true,
+				'folder:secondary/src': true,
+			},
+		});
+		const backlinkId = createFolderBacklinkId(addition.root.id);
+		const backlink = layout.nodes.find(
+			(node): node is GraphFolderBacklinkNode => node.id === backlinkId,
+		);
+		const actualFolders = layout.nodes.filter(
+			(node) => node.id === 'folder:secondary/src',
+		);
+
+		assert.ok(backlink);
+		assert.strictEqual(backlink.kind, 'folder-backlink');
+		assert.strictEqual(backlink.name, 'src');
+		assert.strictEqual(backlink.targetRootId, addition.root.id);
+		assert.strictEqual(backlink.targetNodeId, 'folder:secondary/src');
+		assert.strictEqual(actualFolders.length, 1);
+		assert.ok(layout.nodes.some(
+			(node) => node.id === 'file:secondary/src/index.ts',
+		));
+		assert.ok(layout.edges.some((edge) => (
+			edge.sourceId === SECOND_PROJECT.id && edge.targetId === backlinkId
+		)));
+		assert.ok(!layout.edges.some((edge) => (
+			edge.sourceId === backlinkId
+				&& edge.targetId === 'folder:secondary/src'
+		)));
+		assert.strictEqual(
+			layout.rootNodeIds.has('folder:secondary/src'),
+			true,
+		);
+	});
+
+	test('승격된 grouped File은 순서와 item 수를 유지한 Backlink Row와 standalone Root를 만든다', () => {
+		const project: Project = {
+			kind: 'project',
+			id: 'project:file-backlink',
+			name: 'crispy',
+			children: [
+				{ kind: 'file', id: 'file:a', name: 'a.ts' },
+				{ kind: 'file', id: 'file:index', name: 'index.ts' },
+				{ kind: 'file', id: 'file:b', name: 'b.ts' },
+			],
+		};
+		const addition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			'file:index',
+		);
+
+		assert.ok(addition);
+		const layout = createBaseGraphLayout(addition.graph, {
+			openedFolders: { [project.id]: true },
+		});
+		const group = layout.nodes.find(
+			(node): node is GraphFileGroupNode => (
+				node.id === createFileGroupId(project.id)
+					&& node.kind === 'file-group'
+			),
+		);
+		const fileRoot = layout.nodes.find((node) => node.id === 'file:index');
+
+		assert.ok(group);
+		assert.deepStrictEqual(
+			group.children.map((file) => file.id),
+			['file:a', 'file:index', 'file:b'],
+		);
+		assert.deepStrictEqual(
+			group.children.map((file) => file.presentation),
+			['normal', 'backlink', 'normal'],
+		);
+		assert.strictEqual(group.children[1]?.targetRootId, addition.root.id);
+		assert.ok(fileRoot && fileRoot.kind === 'file-group');
+		assert.strictEqual(fileRoot.presentation, 'standalone');
+		assert.strictEqual(fileRoot.children[0]?.presentation, 'normal');
+		assert.strictEqual(
+			layout.nodes.filter((node) => node.id === 'file:index').length,
+			1,
+		);
+	});
+
+	test('Singleton File Backlink Group은 실제 File Root와 충돌하지 않는 ID를 사용한다', () => {
+		const graph = createSingleRootGraph(SECOND_PROJECT, 'root:project');
+		const addition = addGraphRoot(graph, 'file:secondary/package.json');
+
+		assert.ok(addition);
+		const layout = createBaseGraphLayout(addition.graph, {
+			openedFolders: { [SECOND_PROJECT.id]: true },
+		});
+		const backlinkGroupId = createFileBacklinkGroupId(addition.root.id);
+		const backlinkGroup = layout.nodes.find(
+			(node) => node.id === backlinkGroupId,
+		);
+		const actualRoot = layout.nodes.find(
+			(node) => node.id === 'file:secondary/package.json',
+		);
+
+		assert.ok(backlinkGroup && backlinkGroup.kind === 'file-group');
+		assert.strictEqual(backlinkGroup.children[0]?.presentation, 'backlink');
+		assert.strictEqual(
+			backlinkGroup.children[0]?.targetRootId,
+			addition.root.id,
+		);
+		assert.ok(actualRoot && actualRoot.kind === 'file-group');
+		assert.strictEqual(actualRoot.children[0]?.presentation, 'normal');
+	});
+
+	test('기존 Project 하나를 roots.length === 1인 Graph Layout으로 생성한다', () => {
+		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
+		const layout = createBaseGraphLayout(graph, {
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		});
+		const projectRoots = layout.nodes.filter((node) => node.kind === 'project');
+
+		assert.strictEqual(graph.roots.length, 1);
+		assert.deepStrictEqual(graph.roots[0], {
+			id: `root:${GRAPH_MOCK_PROJECT.id}`,
+			nodeId: GRAPH_MOCK_PROJECT.id,
+		});
+		assert.strictEqual(projectRoots.length, 1);
+		assert.strictEqual(projectRoots[0]?.id, GRAPH_MOCK_PROJECT.id);
+		assert.ok(layout.edges.some(
+			(edge) => edge.sourceId === GRAPH_MOCK_PROJECT.id,
+		));
+	});
+
+	test('여러 Root와 각 하위 구조를 독립적으로 하나의 World에 배치한다', () => {
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:primary', nodeId: GRAPH_MOCK_PROJECT.id },
+				{ id: 'root:secondary', nodeId: SECOND_PROJECT.id },
+			],
+			rootNodes: {
+				[GRAPH_MOCK_PROJECT.id]: GRAPH_MOCK_PROJECT,
+				[SECOND_PROJECT.id]: SECOND_PROJECT,
+			},
+		};
+		const layout = createBaseGraphLayout(graph, {
+			openedFolders: {
+				...ALL_OPENED_FOLDERS,
+				[SECOND_PROJECT.id]: true,
+				'folder:secondary/src': true,
+			},
+		});
+		const primaryNodeIds = new Set(
+			layout.nodes
+				.filter((node) => !node.id.includes('secondary'))
+				.map((node) => node.id),
+		);
+		const secondaryNodeIds = new Set(
+			layout.nodes
+				.filter((node) => node.id.includes('secondary'))
+				.map((node) => node.id),
+		);
+		const primaryNodes = layout.nodes.filter((node) => primaryNodeIds.has(node.id));
+		const secondaryNodes = layout.nodes.filter(
+			(node) => secondaryNodeIds.has(node.id),
+		);
+
+		assert.ok(primaryNodeIds.has(GRAPH_MOCK_PROJECT.id));
+		assert.ok(primaryNodeIds.has('folder:app'));
+		assert.ok(secondaryNodeIds.has(SECOND_PROJECT.id));
+		assert.ok(secondaryNodeIds.has('folder:secondary/src'));
+		assert.ok(secondaryNodeIds.has('file:secondary/package.json'));
+		assert.ok(secondaryNodeIds.has('file:secondary/src/index.ts'));
+		assert.strictEqual(
+			secondaryNodeIds.has(createFileGroupId(SECOND_PROJECT.id)),
+			false,
+		);
+		assert.strictEqual(
+			secondaryNodeIds.has(createFileGroupId('folder:secondary/src')),
+			false,
+		);
+		assert.strictEqual(
+			layout.edges.every((edge) => (
+				(primaryNodeIds.has(edge.sourceId) && primaryNodeIds.has(edge.targetId))
+				|| (secondaryNodeIds.has(edge.sourceId) && secondaryNodeIds.has(edge.targetId))
+			)),
+			true,
+		);
+
+		const primaryBottom = Math.max(
+			...primaryNodes.map((node) => node.position.y + node.height),
+		);
+		const secondaryTop = Math.min(
+			...secondaryNodes.map((node) => node.position.y),
+		);
+
+		assert.ok(secondaryTop > primaryBottom);
+		assert.deepStrictEqual(
+			createBaseGraphLayout(graph, {
+				openedFolders: {
+					...ALL_OPENED_FOLDERS,
+					[SECOND_PROJECT.id]: true,
+					'folder:secondary/src': true,
+				},
+			}),
+			layout,
+		);
+	});
+
 	test('실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다', () => {
 		const app = GRAPH_MOCK_PROJECT.children.find(
 			(entry) => isFolder(entry) && entry.id === 'folder:app',
@@ -82,27 +440,35 @@ suite('Graph Model / Layout', () => {
 		assert.ok(appSrc.children.some(isFolder));
 	});
 
-	test('기본 상태는 모든 Folder를 닫고 Project Root는 항상 연다', () => {
-		const defaultLayout = createBaseGraphLayout(GRAPH_MOCK_PROJECT);
-		const rootStateLayout = createBaseGraphLayout(GRAPH_MOCK_PROJECT, {
+	test('Project Root가 Open 상태가 아니면 children을 제외한 닫힌 Layout을 만든다', () => {
+		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
+		const closedLayout = createBaseGraphLayout(graph);
+		const openedLayout = createBaseGraphLayout(graph, {
 			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
 		});
-		const nodeIds = new Set(defaultLayout.nodes.map((node) => node.id));
+		const closedNodeIds = new Set(closedLayout.nodes.map((node) => node.id));
+		const openedNodeIds = new Set(openedLayout.nodes.map((node) => node.id));
 
-		assert.ok(nodeIds.has(GRAPH_MOCK_PROJECT.id));
-		assert.ok(nodeIds.has('folder:app'));
-		assert.ok(nodeIds.has('folder:src'));
-		assert.ok(nodeIds.has('folder:pagination-samples'));
-		assert.ok(nodeIds.has(createFileGroupId(GRAPH_MOCK_PROJECT.id)));
-		assert.strictEqual(nodeIds.has('folder:app/src'), false);
-		assert.deepStrictEqual(rootStateLayout, defaultLayout);
+		assert.deepStrictEqual([...closedNodeIds], [GRAPH_MOCK_PROJECT.id]);
+		assert.deepStrictEqual(closedLayout.edges, []);
+		assert.ok(openedNodeIds.has('folder:app'));
+		assert.ok(openedNodeIds.has('folder:src'));
+		assert.ok(openedNodeIds.has('folder:pagination-samples'));
+		assert.ok(openedNodeIds.has(createFileGroupId(GRAPH_MOCK_PROJECT.id)));
+		assert.strictEqual(openedNodeIds.has('folder:app/src'), false);
 	});
 
 	test('열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다', () => {
 		const folderId = 'folder:app';
-		const layout = createBaseGraphLayout(GRAPH_MOCK_PROJECT, {
-			openedFolders: { [folderId]: true },
-		});
+		const layout = createBaseGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+			{
+				openedFolders: {
+					[GRAPH_MOCK_PROJECT.id]: true,
+					[folderId]: true,
+				},
+			},
+		);
 		const nodeIds = new Set(layout.nodes.map((node) => node.id));
 		const excludedDescendantIds = [
 			'folder:app/src/components',
@@ -213,9 +579,20 @@ suite('Graph Model / Layout', () => {
 		];
 
 		assert.strictEqual(appSrcFiles.id, createFileGroupId('folder:app/src'));
+		assert.strictEqual(appSrcFiles.presentation, 'grouped');
 		assert.deepStrictEqual(
-			appSrcFiles.files.map((file) => file.name),
+			appSrcFiles.children.map((file) => file.name),
 			expectedFiles,
+		);
+		assert.strictEqual(
+			appSrcFiles.children.every((file) => file.kind === 'file'),
+			true,
+		);
+		assert.strictEqual(
+			layout.nodes.some(
+				(node) => appSrcFiles.children.some((file) => file.id === node.id),
+			),
+			false,
 		);
 		assert.strictEqual('visibleFiles' in appSrcFiles, false);
 		assert.strictEqual('hiddenFileCount' in appSrcFiles, false);
@@ -243,11 +620,11 @@ suite('Graph Model / Layout', () => {
 
 		const layout = createGraphLayout(GRAPH_MOCK_PROJECT);
 		assert.strictEqual(
-			getFileGroup(layout.nodes, seventeenFiles.id).files.length,
+			getFileGroup(layout.nodes, seventeenFiles.id).children.length,
 			17,
 		);
 		assert.strictEqual(
-			getFileGroup(layout.nodes, twentyOneFiles.id).files.length,
+			getFileGroup(layout.nodes, twentyOneFiles.id).children.length,
 			21,
 		);
 	});
@@ -424,7 +801,7 @@ suite('Graph Model / Layout', () => {
 			+ GRAPH_FILE_GROUP_CONTROL_HEIGHT;
 
 		assert.strictEqual(GRAPH_FILE_GROUP_ROW_HEIGHT, 30);
-		assert.strictEqual(fileGroup.files.length, 7);
+		assert.strictEqual(fileGroup.children.length, 7);
 		assert.strictEqual(fileGroup.height, expectedHeight);
 		assert.strictEqual(fileGroup.height, 198);
 	});
@@ -450,5 +827,6 @@ function getFileGroup(
 	);
 
 	assert.ok(node, `${parentId}의 File Group이 있어야 한다.`);
+	assert.strictEqual(node.presentation, 'grouped');
 	return node;
 }

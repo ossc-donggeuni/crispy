@@ -99,8 +99,40 @@
 	cursor: grabbing;
 }
 
+.graph-folder-backlink-node,
+.graph-folder-backlink-node:hover,
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink,
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink:hover {
+	cursor: pointer;
+}
+
+.graph-folder-backlink-node {
+	opacity: 0.72;
+}
+
+.graph-root-context-label {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	left: 0;
+	display: block;
+	width: max-content;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-family: Inter, var(--vscode-font-family);
+	font-size: 12px;
+	font-weight: 400;
+	line-height: 16px;
+	text-align: left;
+	white-space: nowrap;
+	touch-action: none;
+	user-select: none;
+	pointer-events: auto;
+	cursor: pointer;
+}
+
 .graph-project-node,
-.graph-folder-node {
+.graph-folder-node,
+.graph-file-group-node[data-file-group-presentation='standalone'] {
 	align-items: center;
 	gap: 11px;
 	padding: 0 14px;
@@ -131,6 +163,7 @@
 	-webkit-mask-image: url('./assets/file-icons/folder-open.svg');
 }
 
+.graph-project-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon,
 .graph-folder-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon {
 	mask-image: url('./assets/file-icons/folder-closed.svg');
 	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
@@ -138,13 +171,59 @@
 
 .graph-folder-name,
 .graph-file-name {
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.graph-file-group-node {
+.graph-detach-handle {
+	display: flex;
+	width: 20px;
+	height: 20px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	margin-left: auto;
+	padding: 0;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	background: transparent;
+	border: 0;
+	border-radius: 3px;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	touch-action: none;
+	cursor: grab;
+}
+
+.graph-folder-node:hover > .graph-detach-handle,
+.graph-file-group-node[data-file-group-presentation='standalone']:hover > .graph-detach-handle,
+.graph-file-item:hover > .graph-detach-handle,
+.graph-detach-handle.is-detach-active {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.graph-detach-handle:hover {
+	color: #fcfcfc;
+	background: #3a3b3c;
+}
+
+.graph-detach-handle.is-detach-dragging {
+	cursor: grabbing;
+}
+
+.graph-detach-icon {
+	display: block;
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
+}
+
+.graph-file-group-node[data-file-group-presentation='grouped'] {
 	flex-direction: column;
 	justify-content: flex-start;
 	padding: 9px;
@@ -174,8 +253,42 @@
 	cursor: pointer;
 }
 
+.graph-file-item.is-backlink {
+	opacity: 0.55;
+	cursor: pointer;
+}
+
+.graph-file-item.is-backlink:hover {
+	background: transparent;
+}
+
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink {
+	opacity: 0.55;
+}
+
+.graph-folder-backlink-node.is-reattach-target,
+.graph-file-group-node.is-backlink.is-reattach-target,
+.graph-file-item.is-backlink.is-reattach-target {
+	--graph-node-outline-color: #a8a8a8;
+
+	opacity: 1;
+	background: #343536;
+	box-shadow: 0 0 0 2px rgb(168 168 168 / 55%);
+}
+
+.graph-backlink-indicator {
+	flex: none;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	font-size: 14px;
+	line-height: 1;
+}
+
 .graph-file-item:active {
 	background: #38393a;
+}
+
+.graph-file-item.is-backlink:active {
+	background: transparent;
 }
 
 .graph-file-item.is-file-clicking {
