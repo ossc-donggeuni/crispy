@@ -181,6 +181,163 @@ suite('Graph View', () => {
 		assert.strictEqual(focusPoints.length, 2);
 	});
 
+	test('Folder/grouped/singleton Root Context는 실제 Backlink client 중심을 World로 변환해 Focus한다', () => {
+		const folderTarget = {
+			kind: 'folder' as const,
+			id: 'folder:context-focus-target',
+			name: 'context-focus-target',
+			children: [],
+		};
+		const groupedTarget = {
+			kind: 'file' as const,
+			id: 'file:grouped/context-focus.ts',
+			name: 'context-focus.ts',
+		};
+		const groupedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:grouped-context',
+			name: 'grouped-context',
+			children: [groupedTarget, {
+				kind: 'file' as const,
+				id: 'file:grouped/sibling.ts',
+				name: 'sibling.ts',
+			}],
+		};
+		const singletonTarget = {
+			kind: 'file' as const,
+			id: 'file:singleton/context-focus.ts',
+			name: 'context-focus.ts',
+		};
+		const singletonFolder = {
+			kind: 'folder' as const,
+			id: 'folder:singleton-context',
+			name: 'singleton-context',
+			children: [singletonTarget],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:context-focus',
+			name: 'context-focus',
+			children: [folderTarget, groupedFolder, singletonFolder],
+		};
+		const folderAddition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folderTarget.id,
+		);
+
+		assert.ok(folderAddition);
+		const groupedAddition = addGraphRoot(
+			folderAddition.graph,
+			groupedTarget.id,
+		);
+
+		assert.ok(groupedAddition);
+		const singletonAddition = addGraphRoot(
+			groupedAddition.graph,
+			singletonTarget.id,
+		);
+
+		assert.ok(singletonAddition);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				camera: { x: 100, y: 50, scale: 2 },
+				nodePositions: {},
+				openedFolders: {
+					[project.id]: true,
+					[groupedFolder.id]: true,
+					[singletonFolder.id]: true,
+				},
+			},
+			singletonAddition.graph,
+		);
+		const viewport = root.children[0];
+
+		assert.ok(viewport);
+		viewport.boundsLeft = 20;
+		viewport.boundsTop = 30;
+		const folderBacklink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(folderAddition.root.id),
+		);
+		const groupedFileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFileGroupId(groupedFolder.id),
+		);
+		const groupedBacklink = getDescendantByAttribute(
+			groupedFileGroup,
+			'data-file-id',
+			groupedTarget.id,
+		);
+		const singletonBacklink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFileBacklinkGroupId(singletonAddition.root.id),
+		);
+
+		setClientBounds(folderBacklink, 220, 180, 200, 42);
+		setClientBounds(groupedBacklink, 480, 300, 180, 30);
+		setClientBounds(singletonBacklink, 740, 420, 200, 42);
+		const focusPoints: Array<{ x: number; y: number }> = [];
+
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		const roots = [
+			{ nodeId: folderTarget.id, backlink: folderBacklink },
+			{ nodeId: groupedTarget.id, backlink: groupedBacklink },
+			{ nodeId: singletonTarget.id, backlink: singletonBacklink },
+		];
+
+		for (const entry of roots) {
+			const rootNode = getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				entry.nodeId,
+			);
+			const label = getDescendantByClass(rootNode, 'graph-root-context-label');
+			const clickEvent = createClickEvent(label);
+
+			label.dispatch('click', clickEvent);
+			assert.strictEqual(clickEvent.propagationStopped, true);
+		}
+
+		assert.deepStrictEqual(focusPoints, roots.map(({ backlink }) => {
+			const bounds = backlink.getBoundingClientRect();
+
+			return {
+				x: (bounds.left + bounds.width / 2 - viewport.boundsLeft - 100) / 2,
+				y: (bounds.top + bounds.height / 2 - viewport.boundsTop - 50) / 2,
+			};
+		}));
+		assert.strictEqual(graphView.state.isFolderOpened(folderTarget.id), false);
+
+		graphView.state.toggleFolder(project.id);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				createFolderBacklinkId(folderAddition.root.id),
+			),
+			undefined,
+		);
+		const folderRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderTarget.id,
+		);
+		const folderLabel = getDescendantByClass(
+			folderRoot,
+			'graph-root-context-label',
+		);
+
+		folderLabel.dispatch('click', createClickEvent(folderLabel));
+		assert.strictEqual(focusPoints.length, 3);
+		graphView.dispose();
+	});
+
 	test('File Detach Drop을 Root/Backlink로 승격하고 기존 Root를 Detach 대상에서 제외한다', () => {
 		const childFolder = {
 			kind: 'folder' as const,
@@ -991,6 +1148,19 @@ function createPointerEvent(
 			return propagationStopped;
 		},
 	} as unknown as PointerEvent;
+}
+
+function setClientBounds(
+	element: FakeElement,
+	left: number,
+	top: number,
+	width: number,
+	height: number,
+): void {
+	element.boundsLeft = left;
+	element.boundsTop = top;
+	element.clientWidth = width;
+	element.clientHeight = height;
 }
 
 function readTranslateY(transform: string): number {

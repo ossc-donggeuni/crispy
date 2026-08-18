@@ -38,6 +38,11 @@ type FileRowRenderer = {
 	readonly dispose: () => void;
 };
 
+type BacklinkInitializer = (
+	element: HTMLElement,
+	targetRootId: string,
+) => () => void;
+
 interface FileGroupContentElements {
 	readonly elements: HTMLElement[];
 	readonly cleanups: Array<() => void>;
@@ -53,6 +58,11 @@ interface RootContextLabelRenderer {
 export interface GraphRenderer {
 	/** 기존 Node/Edge DOM을 새로운 Layout geometry와 동기화한다. */
 	applyLayout(layout: GraphLayout): void;
+	/** 현재 렌더링된 Backlink DOM의 client 좌표계 중심을 반환한다. */
+	getBacklinkClientCenter(targetRootId: string): {
+		readonly clientX: number;
+		readonly clientY: number;
+	} | undefined;
 	/** Node/Edge DOM, Drag controller, Listener 및 State 구독을 정리한다. */
 	dispose(): void;
 }
@@ -69,6 +79,10 @@ export interface GraphRendererInteractions {
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 	/** Folder/File Backlink Click 시 연결된 Graph Root ID를 전달한다. */
 	onBacklinkClick?: (targetRootId: string) => void;
+	/** Context Label Click 시 현재 Graph Root ID를 전달한다. */
+	onRootContextClick?: (rootId: string) => void;
+	/** Layout Root Node ID를 최신 Graph Root ID로 해석한다. */
+	resolveRootId?: (rootNodeId: string) => string | undefined;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -115,10 +129,28 @@ export function initializeGraphRenderer(
 	const nodeDrags = new Map<string, GraphNodeDrag>();
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
 	const backlinkClickCleanups = new Map<string, () => void>();
+	const backlinkElements = new Map<string, HTMLElement>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
 	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
 	let rootNodeIds = layout.rootNodeIds;
 	let disposed = false;
+	/** Backlink Click listener와 target Root별 최신 DOM registry를 함께 관리한다. */
+	const initializeBacklink: BacklinkInitializer = (element, targetRootId) => {
+		backlinkElements.set(targetRootId, element);
+		const disposeClick = initializeBacklinkClick(
+			element,
+			targetRootId,
+			interactions,
+		);
+
+		return () => {
+			disposeClick();
+
+			if (backlinkElements.get(targetRootId) === element) {
+				backlinkElements.delete(targetRootId);
+			}
+		};
+	};
 
 	/** 새 Edge path를 생성해 Layer와 ID Map에 등록한다. */
 	const addEdge = (edge: GraphLayoutEdge): void => {
@@ -199,7 +231,17 @@ export function initializeGraphRenderer(
 			return;
 		}
 
-		const label = current ?? initializeRootContextLabel(element, ownerDocument);
+		const label = current ?? initializeRootContextLabel(
+			element,
+			ownerDocument,
+			() => {
+				const rootId = interactions.resolveRootId?.(layoutNode.id);
+
+				if (rootId) {
+					interactions.onRootContextClick?.(rootId);
+				}
+			},
+		);
 
 		if (!current) {
 			rootContextLabels.set(layoutNode.id, label);
@@ -247,10 +289,9 @@ export function initializeGraphRenderer(
 		if (backlinkTargetRootId) {
 			backlinkClickCleanups.set(
 				layoutNode.id,
-				initializeBacklinkClick(
+				initializeBacklink(
 					element,
 					backlinkTargetRootId,
-					interactions,
 				),
 			);
 		}
@@ -273,6 +314,7 @@ export function initializeGraphRenderer(
 				graphState,
 				interactions,
 				rootNodeIds,
+				initializeBacklink,
 			);
 
 			content.render(graphState.getFileGroupPage(layoutNode.id));
@@ -549,6 +591,24 @@ export function initializeGraphRenderer(
 				renderEdge(edge);
 			}
 		},
+		getBacklinkClientCenter(targetRootId) {
+			if (disposed) {
+				return undefined;
+			}
+
+			const element = backlinkElements.get(targetRootId);
+
+			if (!element) {
+				return undefined;
+			}
+
+			const bounds = element.getBoundingClientRect();
+
+			return {
+				clientX: bounds.left + bounds.width / 2,
+				clientY: bounds.top + bounds.height / 2,
+			};
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -566,6 +626,7 @@ export function initializeGraphRenderer(
 			}
 
 			edgesByNodeId.clear();
+			backlinkElements.clear();
 		},
 	};
 }
@@ -574,11 +635,17 @@ export function initializeGraphRenderer(
 function initializeRootContextLabel(
 	rootNode: HTMLElement,
 	ownerDocument: Document,
+	onClick: () => void,
 ): RootContextLabelRenderer {
 	const label = ownerDocument.createElement('span');
-	const blockGraphInteraction = (event: Event): void => {
+	const handlePointerDown = (event: Event): void => {
 		event.preventDefault();
 		event.stopPropagation();
+	};
+	const handleClick = (event: Event): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		onClick();
 	};
 
 	label.className = 'graph-root-context-label';
@@ -586,8 +653,8 @@ function initializeRootContextLabel(
 	label.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	label.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	label.style.left = '0px';
-	label.addEventListener('pointerdown', blockGraphInteraction);
-	label.addEventListener('click', blockGraphInteraction);
+	label.addEventListener('pointerdown', handlePointerDown);
+	label.addEventListener('click', handleClick);
 	rootNode.append(label);
 
 	return {
@@ -608,8 +675,8 @@ function initializeRootContextLabel(
 			label.style.maxWidth = `${maxWidth}px`;
 		},
 		dispose(): void {
-			label.removeEventListener('pointerdown', blockGraphInteraction);
-			label.removeEventListener('click', blockGraphInteraction);
+			label.removeEventListener('pointerdown', handlePointerDown);
+			label.removeEventListener('click', handleClick);
 			label.remove();
 		},
 	};
@@ -789,6 +856,7 @@ function initializeFileGroupContent(
 	graphState: GraphStateStore,
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
+	initializeBacklink: BacklinkInitializer,
 ): FileGroupContentRenderer {
 	let content: FileGroupContentElements = { elements: [], cleanups: [] };
 	let disposed = false;
@@ -826,6 +894,7 @@ function initializeFileGroupContent(
 					ownerDocument,
 					interactions,
 					rootNodeIds,
+					initializeBacklink,
 				);
 
 				list.append(row.element);
@@ -899,6 +968,7 @@ function createFileRow(
 	ownerDocument: Document,
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
+	initializeBacklink: BacklinkInitializer,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
@@ -908,7 +978,7 @@ function createFileRow(
 	applyFileBacklinkAttributes(item, file);
 	appendFileContent(item, file, ownerDocument);
 	const disposeBacklinkClick = file.presentation === 'backlink' && file.targetRootId
-		? initializeBacklinkClick(item, file.targetRootId, interactions)
+		? initializeBacklink(item, file.targetRootId)
 		: undefined;
 	const detachDrag = file.presentation === 'backlink' || rootNodeIds.has(file.id)
 		? undefined

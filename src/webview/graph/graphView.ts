@@ -144,6 +144,29 @@ export function focusGraphRoot(
 	return true;
 }
 
+/** Backlink DOM의 client 중심을 Viewport local과 World 좌표로 변환해 Focus한다. */
+export function focusGraphBacklink(
+	renderer: Pick<GraphRenderer, 'getBacklinkClientCenter'>,
+	viewport: HTMLElement,
+	camera: Pick<GraphCamera, 'viewportToWorld' | 'focusOn'>,
+	targetRootId: string,
+): boolean {
+	const backlinkCenter = renderer.getBacklinkClientCenter(targetRootId);
+
+	if (!backlinkCenter) {
+		return false;
+	}
+
+	const viewportBounds = viewport.getBoundingClientRect();
+	const worldPoint = camera.viewportToWorld({
+		x: backlinkCenter.clientX - viewportBounds.left,
+		y: backlinkCenter.clientY - viewportBounds.top,
+	});
+
+	camera.focusOn(worldPoint);
+	return true;
+}
+
 /**
  * Graph가 렌더링될 Viewport, World, Edge/Node/Overlay Layer를 생성하고
  * Mock Project 기반 Layout, Renderer, Camera, Navigator를 초기화한다.
@@ -216,6 +239,9 @@ export function initializeGraphView(
 			targetRootId,
 		);
 	};
+	const handleRootContextClick = (rootId: string): void => {
+		focusGraphBacklink(renderer, viewport, camera, rootId);
+	};
 
 	renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -228,6 +254,10 @@ export function initializeGraphView(
 			},
 			onDetachDrop: handleDetachDrop,
 			onBacklinkClick: handleBacklinkClick,
+			onRootContextClick: handleRootContextClick,
+			resolveRootId: (rootNodeId) => currentGraph.roots.find(
+				(root) => root.nodeId === rootNodeId,
+			)?.id,
 		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);

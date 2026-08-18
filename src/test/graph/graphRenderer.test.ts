@@ -115,12 +115,15 @@ suite('Graph Renderer / Node Drag', () => {
 	test('Root Label은 Node 이동을 함께 따르며 Graph interaction을 시작하지 않는다', () => {
 		const folderClicks: string[] = [];
 		const detachDrops: string[] = [];
+		const rootContextClicks: string[] = [];
 		const fixture = createRendererFixture(
 			1,
 			undefined,
 			{
 				onFolderClick: (folderId) => folderClicks.push(folderId),
 				onDetachDrop: (request) => detachDrops.push(request.nodeId),
+				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
+				resolveRootId: () => 'root:context-project',
 			},
 			GRAPH_MOCK_PROJECT,
 			{ relativePath: 'src/webview/graph' },
@@ -137,6 +140,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(pointerDown.propagationStopped, true);
 		assert.deepStrictEqual(folderClicks, []);
 		assert.deepStrictEqual(detachDrops, []);
+		assert.deepStrictEqual(rootContextClicks, ['root:context-project']);
 		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
 		assert.strictEqual(root.hasClass('is-dragging'), false);
 
@@ -520,6 +524,7 @@ suite('Graph Renderer / Node Drag', () => {
 		});
 		const fileClicks: string[] = [];
 		const backlinkClicks: string[] = [];
+		const rootContextClicks: string[] = [];
 		const renderer = initializeGraphRenderer(
 			edgeLayer.asSvgElement(),
 			nodeLayer.asHtmlElement(),
@@ -528,6 +533,10 @@ suite('Graph Renderer / Node Drag', () => {
 			{
 				onFileClick: (fileId) => fileClicks.push(fileId),
 				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
+				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
+				resolveRootId: (rootNodeId) => addition.graph.roots.find(
+					(root) => root.nodeId === rootNodeId,
+				)?.id,
 			},
 		);
 		const fileGroup = getDescendantByAttribute(
@@ -566,6 +575,14 @@ suite('Graph Renderer / Node Drag', () => {
 			undefined,
 		);
 		assert.ok(getText(backlinkRow).includes('↗'));
+		backlinkRow.boundsLeft = 120;
+		backlinkRow.boundsTop = 80;
+		backlinkRow.clientWidth = 160;
+		backlinkRow.clientHeight = 30;
+		assert.deepStrictEqual(
+			renderer.getBacklinkClientCenter(addition.root.id),
+			{ clientX: 200, clientY: 95 },
+		);
 		backlinkRow.dispatch('pointerdown', createPointerEvent(backlinkRow, 10, 10));
 		backlinkRow.dispatch('pointermove', createPointerEvent(backlinkRow, 50, 60));
 		backlinkRow.dispatch('pointerup', createPointerEvent(backlinkRow, 50, 60));
@@ -592,6 +609,26 @@ suite('Graph Renderer / Node Drag', () => {
 				'graph-root-context-label',
 			).textContent,
 			'pagination/pagination-0/',
+		);
+		getDescendantByClass(actualRoot, 'graph-root-context-label').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				actualRoot,
+				'graph-root-context-label',
+			)),
+		);
+		assert.deepStrictEqual(rootContextClicks, [addition.root.id]);
+
+		renderer.applyLayout(createGraphLayout(
+			createSingleRootGraph(project, 'root:project'),
+			{
+				fileGroupPages: graphState.getState().fileGroupPages,
+				openedFolders: graphState.getState().openedFolders,
+			},
+		));
+		assert.strictEqual(
+			renderer.getBacklinkClientCenter(addition.root.id),
+			undefined,
 		);
 
 		renderer.dispose();
@@ -638,6 +675,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const folderClicks: string[] = [];
 		const fileClicks: string[] = [];
 		const backlinkClicks: string[] = [];
+		const rootContextClicks: string[] = [];
 		const renderer = initializeGraphRenderer(
 			edgeLayer.asSvgElement(),
 			nodeLayer.asHtmlElement(),
@@ -647,6 +685,10 @@ suite('Graph Renderer / Node Drag', () => {
 				onFolderClick: (folderId) => folderClicks.push(folderId),
 				onFileClick: (fileId) => fileClicks.push(fileId),
 				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
+				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
+				resolveRootId: (rootNodeId) => fileAddition.graph.roots.find(
+					(root) => root.nodeId === rootNodeId,
+				)?.id,
 			},
 		);
 		const folderBacklink = getDescendantByAttribute(
@@ -661,6 +703,23 @@ suite('Graph Renderer / Node Drag', () => {
 		);
 		const folderEvent = createClickEvent(folderBacklink);
 		const fileEvent = createClickEvent(fileBacklink);
+
+		folderBacklink.boundsLeft = 40;
+		folderBacklink.boundsTop = 60;
+		folderBacklink.clientWidth = 200;
+		folderBacklink.clientHeight = 42;
+		fileBacklink.boundsLeft = 310;
+		fileBacklink.boundsTop = 180;
+		fileBacklink.clientWidth = 200;
+		fileBacklink.clientHeight = 42;
+		assert.deepStrictEqual(
+			renderer.getBacklinkClientCenter(folderAddition.root.id),
+			{ clientX: 140, clientY: 81 },
+		);
+		assert.deepStrictEqual(
+			renderer.getBacklinkClientCenter(fileAddition.root.id),
+			{ clientX: 410, clientY: 201 },
+		);
 
 		folderBacklink.dispatch('click', folderEvent);
 		fileBacklink.dispatch('click', fileEvent);
@@ -682,6 +741,40 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(
 			fileBacklink.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
 			true,
+		);
+		const folderRoot = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			folder.id,
+		);
+		const fileRoot = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			file.id,
+		);
+
+		for (const root of [folderRoot, fileRoot]) {
+			const label = getDescendantByClass(root, 'graph-root-context-label');
+
+			label.dispatch('click', createClickEvent(label));
+		}
+
+		assert.deepStrictEqual(rootContextClicks, [
+			folderAddition.root.id,
+			fileAddition.root.id,
+		]);
+
+		renderer.applyLayout(createGraphLayout(
+			createSingleRootGraph(project, 'root:project'),
+			{ openedFolders: graphState.getState().openedFolders },
+		));
+		assert.strictEqual(
+			renderer.getBacklinkClientCenter(folderAddition.root.id),
+			undefined,
+		);
+		assert.strictEqual(
+			renderer.getBacklinkClientCenter(fileAddition.root.id),
+			undefined,
 		);
 
 		renderer.dispose();
@@ -1974,6 +2067,10 @@ class FakeElement {
 	className = '';
 	textContent = '';
 	type = '';
+	clientWidth: number;
+	clientHeight: number;
+	boundsLeft = 0;
+	boundsTop = 0;
 	private readonly attributes = new Map<string, string>();
 	private readonly attributeWriteCounts = new Map<string, number>();
 	private readonly classNames = new Set<string>();
@@ -1984,9 +2081,12 @@ class FakeElement {
 	constructor(
 		readonly ownerDocument: FakeDocument,
 		readonly tagName: string,
-		readonly clientWidth = 0,
-		readonly clientHeight = 0,
-	) {}
+		clientWidth = 0,
+		clientHeight = 0,
+	) {
+		this.clientWidth = clientWidth;
+		this.clientHeight = clientHeight;
+	}
 
 	asHtmlElement(): HTMLElement {
 		return this as unknown as HTMLElement;
@@ -2095,12 +2195,12 @@ class FakeElement {
 
 	getBoundingClientRect(): DOMRect {
 		return {
-			x: 0,
-			y: 0,
-			left: 0,
-			top: 0,
-			right: this.clientWidth,
-			bottom: this.clientHeight,
+			x: this.boundsLeft,
+			y: this.boundsTop,
+			left: this.boundsLeft,
+			top: this.boundsTop,
+			right: this.boundsLeft + this.clientWidth,
+			bottom: this.boundsTop + this.clientHeight,
 			width: this.clientWidth,
 			height: this.clientHeight,
 			toJSON: () => ({}),

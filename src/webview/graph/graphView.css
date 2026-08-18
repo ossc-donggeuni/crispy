@@ -126,7 +126,8 @@
 	white-space: nowrap;
 	touch-action: none;
 	user-select: none;
-	cursor: default;
+	pointer-events: auto;
+	cursor: pointer;
 }
 
 .graph-project-node,
