@@ -59,6 +59,10 @@ async function main() {
 			platform: 'browser',
 			outdir: 'dist/webview',
 			outbase: 'src/webview',
+			assetNames: '[dir]/[name]',
+			loader: {
+				'.svg': 'copy',
+			},
 			logLevel: 'silent',
 			plugins: [
 				/* add to the end of plugins array */

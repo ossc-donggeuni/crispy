@@ -4,6 +4,7 @@
   "description": "Project structure visualization & Working with AI agents",
   "version": "0.0.1",
   "packageManager": "pnpm@11.18.0",
+  "license": "MIT",
   "engines": {
     "node": "24.x",
     "vscode": "^1.125.0"

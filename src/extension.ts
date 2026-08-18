@@ -13,10 +13,10 @@ import {
 } from './agent/host/terminal/terminalRuntimeCleanup';
 import type { ExtensionToWebviewMessage } from './messages';
 import {
-	getPanelLayoutStateFromMessage,
-	serializePanelLayoutState,
-	type PanelLayoutState,
-} from './webview/panel/panelState';
+	parseWebviewState,
+	serializeWebviewState,
+	type PersistedWebviewState,
+} from './webview/webviewState';
 
 /**
  * Panel 하나가 소유하는 Terminal runtime과 Webview 구독의 정리 경계다.
@@ -34,7 +34,7 @@ interface CanvasRuntime {
 }
 
 let currentRuntime: CanvasRuntime | undefined;
-let lastLayoutState: PanelLayoutState | undefined;
+let lastWebviewState: PersistedWebviewState | undefined;
 
 /** 검증된 terminal 메시지를 실제 TerminalHost 경계로 전달하는 최소 계약이다. */
 export interface TerminalMessageHost {
@@ -114,18 +114,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
 		);
 
-		/**
-		 * Webview 메시지 중 레이아웃 상태를 기존 경계에서 먼저 처리하고,
-		 * 나머지 메시지만 Host protocol 수신 경계로 전달한다.
-		 */
+		/** Webview snapshot과 Agent protocol을 각 validation boundary로 전달한다. */
 		const messageSubscription = panel.webview.onDidReceiveMessage(
 			(message: unknown) => {
-				const layoutState = getPanelLayoutStateFromMessage(message);
-				if (layoutState) {
-					lastLayoutState = layoutState;
-					return;
-				}
-
 				handleWebviewMessage(panel.webview, message, terminalHost);
 			},
 		);
@@ -134,7 +125,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			panel.webview,
 			stylesUri,
 			scriptUri,
-			lastLayoutState,
+			lastWebviewState,
 		);
 
 		const runtime = createCanvasRuntime(panel, terminalHost, [
@@ -211,6 +202,20 @@ export function handleWebviewMessage(
 	message: unknown,
 	terminalHost?: TerminalMessageHost,
 ): Thenable<boolean> | undefined {
+	if (message && typeof message === 'object') {
+		const candidate = message as Record<string, unknown>;
+
+		if (candidate.type === 'webview.stateChanged') {
+			const state = parseWebviewState(candidate.state);
+
+			if (state) {
+				lastWebviewState = state;
+			}
+
+			return undefined;
+		}
+	}
+
 	const parseResult = parseWebviewToHostMessage(message);
 	if (!parseResult.ok) {
 		return undefined;
@@ -301,6 +306,7 @@ function handleTerminalMessage(
 export async function deactivate(): Promise<void> {
 	const runtime = currentRuntime;
 	currentRuntime = undefined;
+	lastWebviewState = undefined;
 	if (runtime === undefined) {
 		return;
 	}
@@ -322,16 +328,16 @@ export async function deactivate(): Promise<void> {
  * @param webview Content Security Policy에 사용할 Webview 인스턴스
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
- * @param initialLayoutState 새 Panel에 전달할 마지막 Webview Layout 상태
+ * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
 	webview: vscode.Webview,
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
-	initialLayoutState: PanelLayoutState | undefined,
+	initialWebviewState: PersistedWebviewState | undefined,
 ): string {
-	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
+	const serializedWebviewState = serializeWebviewState(initialWebviewState);
 
 	/** xterm DOM renderer가 팔레트용 <style>과 truecolor용 style attribute를 생성한다. */
 	/** 두 style 경계만 inline을 허용하고 script와 외부 stylesheet는 Webview source로 제한한다. */
@@ -340,7 +346,7 @@ function getWebviewHtml(
 			<head>
 				<meta charset="UTF-8">
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
-				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; style-src-elem ${webview.cspSource} 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src ${webview.cspSource};">
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; style-src-elem ${webview.cspSource} 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src ${webview.cspSource};">
 				<link rel="stylesheet" href="${stylesUri}">
 				<title>Crispy</title>
 			</head>
@@ -361,7 +367,7 @@ function getWebviewHtml(
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-layout-state="${serializedLayoutState}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}"></script>
 			</body>
 			</html>`;
 }

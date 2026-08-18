@@ -1,9 +1,11 @@
 import * as assert from 'assert';
 import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
+	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
 	initializeGraphCamera,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
+	type GraphAnimationFrameScheduler,
 } from '../../webview/graph/graphCamera';
 import { createGraphState } from '../../webview/graph/graphState';
 
@@ -48,7 +50,10 @@ suite('Graph Camera', () => {
 
 	test('viewport 좌표와 world 좌표를 Camera 상태 기준으로 상호 변환한다', () => {
 		const fixture = createCameraFixture();
-		fixture.graphState.setState({ camera: { x: 100, y: -40, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: 100, y: -40, scale: 2 },
+			nodePositions: {},
+		});
 
 		assert.deepStrictEqual(
 			fixture.camera.worldToViewport({ x: 25, y: 30 }),
@@ -118,6 +123,35 @@ suite('Graph Camera', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
+	test('Pan 전용 차단 요소에서는 Pointer Pan을 막고 Wheel Zoom은 허용한다', () => {
+		const fixture = createCameraFixture();
+		const interactiveElement = new FakeElement();
+		interactiveElement.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE);
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(10, 10, 1, 0, interactiveElement.asEventTarget()),
+		);
+		fixture.viewport.dispatch('pointermove', createPointerEvent(30, 40));
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
+
+		const cursor = { x: 100, y: 100 };
+		const before = fixture.camera.viewportToWorld(cursor);
+		const wheelEvent = createWheelEvent(
+			cursor.x,
+			cursor.y,
+			-120,
+			interactiveElement.asEventTarget(),
+		);
+		fixture.viewport.dispatch('wheel', wheelEvent);
+
+		assert.ok(fixture.camera.getState().scale > 1);
+		assertPointAlmostEqual(fixture.camera.viewportToWorld(cursor), before);
+		assert.strictEqual(wheelEvent.defaultPrevented, true);
+	});
+
 	test('Camera 입력 차단 요소의 자식에서 발생한 Pointer와 Wheel 입력을 처리하지 않는다', () => {
 		const fixture = createCameraFixture();
 		const interactiveElement = new FakeElement();
@@ -179,7 +213,10 @@ suite('Graph Camera', () => {
 	test('외부 Graph State 변경을 World transform과 Grid에 즉시 반영한다', () => {
 		const fixture = createCameraFixture();
 
-		fixture.graphState.setState({ camera: { x: -80, y: 65, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: -80, y: 65, scale: 2 },
+			nodePositions: {},
+		});
 
 		assert.strictEqual(
 			fixture.world.style.transform,
@@ -187,6 +224,106 @@ suite('Graph Camera', () => {
 		);
 		assert.strictEqual(fixture.viewport.style.backgroundPosition, '-80px 65px');
 		assert.strictEqual(fixture.viewport.style.backgroundSize, '40px 40px');
+	});
+
+	test('focusOn은 scale을 유지하고 Root 중심을 향해 ease-out 보간한 뒤 정확히 완료한다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createCameraFixture(1000, 800, 0, 0, scheduler);
+
+		fixture.camera.setState({ x: 10, y: 20, scale: 2 });
+		fixture.camera.focusOn({ x: 100, y: 200 }, { duration: 300 });
+		assert.strictEqual(scheduler.pendingCount, 1);
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 10, y: 20, scale: 2 });
+
+		scheduler.runNext(0);
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 10, y: 20, scale: 2 });
+		assert.strictEqual(scheduler.pendingCount, 1);
+
+		scheduler.runNext(150);
+		const intermediate = fixture.camera.getState();
+
+		assert.ok(intermediate.x > 10 && intermediate.x < 300);
+		assert.ok(intermediate.y < 20 && intermediate.y > 0);
+		assert.ok(intermediate.x > 155);
+		assert.strictEqual(intermediate.scale, 2);
+		assert.strictEqual(scheduler.pendingCount, 1);
+
+		scheduler.runNext(300);
+		assert.deepStrictEqual(fixture.camera.getState(), {
+			x: 300,
+			y: 0,
+			scale: 2,
+		});
+		assert.strictEqual(scheduler.pendingCount, 0);
+	});
+
+	test('새 focusOn은 기존 Frame을 취소하고 현재 Camera 상태에서 단일 Animation을 시작한다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createCameraFixture(1000, 800, 0, 0, scheduler);
+
+		fixture.camera.focusOn({ x: 100, y: 100 }, { duration: 300 });
+		scheduler.runNext(0);
+		scheduler.runNext(100);
+		const interruptedState = fixture.camera.getState();
+		const cancelCount = scheduler.cancelCount;
+
+		fixture.camera.focusOn({ x: 800, y: 600 }, { duration: 300 });
+		assert.strictEqual(scheduler.cancelCount, cancelCount + 1);
+		assert.strictEqual(scheduler.pendingCount, 1);
+		scheduler.runNext(100);
+		assert.deepStrictEqual(fixture.camera.getState(), interruptedState);
+		scheduler.runNext(400);
+
+		assert.deepStrictEqual(fixture.camera.getState(), {
+			x: -300,
+			y: -200,
+			scale: 1,
+		});
+		assert.strictEqual(scheduler.pendingCount, 0);
+		assert.ok(scheduler.maxPendingCount <= 1);
+	});
+
+	test('Focus Animation 중 사용자 Pan과 Wheel Zoom은 예약 Frame을 취소한다', () => {
+		const panScheduler = new FakeAnimationFrameScheduler();
+		const panFixture = createCameraFixture(1000, 800, 0, 0, panScheduler);
+
+		panFixture.camera.focusOn({ x: 900, y: 700 });
+		panScheduler.runNext(0);
+		panScheduler.runNext(100);
+		const beforePan = panFixture.camera.getState();
+
+		panFixture.viewport.dispatch('pointerdown', createPointerEvent(10, 10));
+		panFixture.viewport.dispatch('pointermove', createPointerEvent(40, 50));
+		assert.strictEqual(panScheduler.pendingCount, 0);
+		assert.deepStrictEqual(panFixture.camera.getState(), {
+			x: beforePan.x + 30,
+			y: beforePan.y + 40,
+			scale: beforePan.scale,
+		});
+
+		const zoomScheduler = new FakeAnimationFrameScheduler();
+		const zoomFixture = createCameraFixture(1000, 800, 0, 0, zoomScheduler);
+
+		zoomFixture.camera.focusOn({ x: 900, y: 700 });
+		zoomScheduler.runNext(0);
+		zoomFixture.viewport.dispatch('wheel', createWheelEvent(200, 160, -120));
+		assert.strictEqual(zoomScheduler.pendingCount, 0);
+		assert.ok(zoomFixture.camera.getState().scale > 1);
+	});
+
+	test('dispose는 Focus Animation을 취소하고 이후 Focus 갱신을 막는다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createCameraFixture(1000, 800, 0, 0, scheduler);
+
+		fixture.camera.focusOn({ x: 400, y: 300 });
+		assert.strictEqual(scheduler.pendingCount, 1);
+		fixture.camera.dispose();
+		assert.strictEqual(scheduler.pendingCount, 0);
+		const disposedState = fixture.camera.getState();
+
+		fixture.camera.focusOn({ x: 900, y: 700 });
+		assert.strictEqual(scheduler.pendingCount, 0);
+		assert.deepStrictEqual(fixture.camera.getState(), disposedState);
 	});
 
 	test('Wheel Zoom Out과 Zoom In을 scale 범위에서 제한한다', () => {
@@ -234,7 +371,10 @@ suite('Graph Camera', () => {
 		fixture.viewport.dispatch('wheel', createWheelEvent(100, 100, -120));
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
 
-		fixture.graphState.setState({ camera: { x: 90, y: 70, scale: 2 } });
+		fixture.graphState.setState({
+			camera: { x: 90, y: 70, scale: 2 },
+			nodePositions: {},
+		});
 		assert.strictEqual(
 			fixture.world.style.transform,
 			'translate(0px, 0px) scale(1)',
@@ -247,6 +387,7 @@ function createCameraFixture(
 	height = 800,
 	left = 0,
 	top = 0,
+	animationFrameScheduler?: GraphAnimationFrameScheduler,
 ) {
 	const viewport = new FakeElement(width, height, left, top);
 	const world = new FakeElement();
@@ -255,9 +396,48 @@ function createCameraFixture(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),
 		graphState,
+		{ animationFrameScheduler },
 	);
 
 	return { viewport, world, camera, graphState };
+}
+
+class FakeAnimationFrameScheduler implements GraphAnimationFrameScheduler {
+	private nextRequestId = 1;
+	private readonly callbacks = new Map<number, FrameRequestCallback>();
+	cancelCount = 0;
+	maxPendingCount = 0;
+
+	get pendingCount(): number {
+		return this.callbacks.size;
+	}
+
+	request(callback: FrameRequestCallback): number {
+		const requestId = this.nextRequestId;
+
+		this.nextRequestId += 1;
+		this.callbacks.set(requestId, callback);
+		this.maxPendingCount = Math.max(this.maxPendingCount, this.callbacks.size);
+		return requestId;
+	}
+
+	cancel(requestId: number): void {
+		if (this.callbacks.delete(requestId)) {
+			this.cancelCount += 1;
+		}
+	}
+
+	runNext(timestamp: number): void {
+		const next = this.callbacks.entries().next().value as
+			| [number, FrameRequestCallback]
+			| undefined;
+
+		assert.ok(next, '실행할 Animation Frame이 있어야 한다.');
+		const [requestId, callback] = next;
+
+		this.callbacks.delete(requestId);
+		callback(timestamp);
+	}
 }
 
 function createPointerEvent(

@@ -49,9 +49,610 @@
 	z-index: 1;
 }
 
+.graph-node {
+	--graph-node-outline-color: #a3a3a3;
+
+	position: absolute;
+	top: 0;
+	left: 0;
+	display: flex;
+	box-sizing: border-box;
+	min-width: 0;
+	color: #fcfcfc;
+	background: #1a1b1c;
+	border: 2px solid var(--graph-node-outline-color);
+	border-radius: 6px;
+	font-family: Inter, var(--vscode-font-family);
+	font-size: 16px;
+	font-weight: 400;
+	line-height: normal;
+	transform-origin: 0 0;
+	touch-action: none;
+	user-select: none;
+	cursor: grab;
+}
+
+.graph-node.is-dragging {
+	z-index: 1;
+	cursor: grabbing;
+}
+
+.graph-project-node:hover,
+.graph-folder-node:hover,
+.graph-file-group-node:hover {
+	--graph-node-outline-color: #c4c4c4;
+
+	background: #222324;
+	cursor: pointer;
+}
+
+.graph-project-node:active,
+.graph-folder-node:active,
+.graph-file-group-node:active:not(:has(.graph-file-item:active, .graph-file-control:active)) {
+	--graph-node-outline-color: #d6d6d6;
+
+	background: #28292a;
+}
+
+.graph-node.is-dragging,
+.graph-node.is-dragging:hover {
+	cursor: grabbing;
+}
+
+.graph-folder-backlink-node,
+.graph-folder-backlink-node:hover,
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink,
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink:hover {
+	cursor: pointer;
+}
+
+.graph-folder-backlink-node {
+	opacity: 0.72;
+}
+
+.graph-root-context-label {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	left: 0;
+	display: block;
+	width: max-content;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-family: Inter, var(--vscode-font-family);
+	font-size: 12px;
+	font-weight: 400;
+	line-height: 16px;
+	text-align: left;
+	white-space: nowrap;
+	touch-action: none;
+	user-select: none;
+	pointer-events: auto;
+	cursor: pointer;
+}
+
+.graph-project-node,
+.graph-folder-node,
+.graph-file-group-node[data-file-group-presentation='standalone'] {
+	align-items: center;
+	gap: 11px;
+	padding: 0 14px;
+}
+
+.graph-node-icon {
+	flex: none;
+	color: var(--vscode-symbolIcon-fileForeground, var(--vscode-descriptionForeground));
+}
+
+.graph-folder-icon {
+	display: block;
+	width: 20px;
+	height: 20px;
+	flex: none;
+	background-color: var(--graph-node-outline-color);
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-project-node[data-folder-icon='folder-open.svg'] .graph-folder-icon,
+.graph-folder-node[data-folder-icon='folder-open.svg'] .graph-folder-icon {
+	mask-image: url('./assets/file-icons/folder-open.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-open.svg');
+}
+
+.graph-project-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon,
+.graph-folder-node[data-folder-icon='folder-closed.svg'] .graph-folder-icon {
+	mask-image: url('./assets/file-icons/folder-closed.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
+}
+
+.graph-folder-name,
+.graph-file-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-detach-handle {
+	display: flex;
+	width: 20px;
+	height: 20px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	margin-left: auto;
+	padding: 0;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	background: transparent;
+	border: 0;
+	border-radius: 3px;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	touch-action: none;
+	cursor: grab;
+}
+
+.graph-folder-node:hover > .graph-detach-handle,
+.graph-file-group-node[data-file-group-presentation='standalone']:hover > .graph-detach-handle,
+.graph-file-item:hover > .graph-detach-handle,
+.graph-detach-handle.is-detach-active {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.graph-detach-handle:hover {
+	color: #fcfcfc;
+	background: #3a3b3c;
+}
+
+.graph-detach-handle.is-detach-dragging {
+	cursor: grabbing;
+}
+
+.graph-detach-icon {
+	display: block;
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
+}
+
+.graph-file-group-node[data-file-group-presentation='grouped'] {
+	flex-direction: column;
+	justify-content: flex-start;
+	padding: 9px;
+}
+
+.graph-file-list {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.graph-file-item {
+	display: flex;
+	min-height: 30px;
+	box-sizing: border-box;
+	gap: 8px;
+	align-items: center;
+	padding: 0 4px;
+	border-radius: 4px;
+}
+
+.graph-file-item:hover {
+	background: #303132;
+	cursor: pointer;
+}
+
+.graph-file-item.is-backlink {
+	opacity: 0.55;
+	cursor: pointer;
+}
+
+.graph-file-item.is-backlink:hover {
+	background: transparent;
+}
+
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink {
+	opacity: 0.55;
+}
+
+.graph-folder-backlink-node.is-reattach-target,
+.graph-file-group-node.is-backlink.is-reattach-target,
+.graph-file-item.is-backlink.is-reattach-target {
+	--graph-node-outline-color: #a8a8a8;
+
+	opacity: 1;
+	background: #343536;
+	box-shadow: 0 0 0 2px rgb(168 168 168 / 55%);
+}
+
+.graph-backlink-indicator {
+	flex: none;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	font-size: 14px;
+	line-height: 1;
+}
+
+.graph-file-item:active {
+	background: #38393a;
+}
+
+.graph-file-item.is-backlink:active {
+	background: transparent;
+}
+
+.graph-file-item.is-file-clicking {
+	animation: graph-file-item-click 180ms ease-out;
+}
+
+@keyframes graph-file-item-click {
+	0% {
+		background: #454647;
+		box-shadow: inset 0 0 0 1px rgba(214, 214, 214, 0.45);
+		transform: scale(0.98);
+	}
+
+	55% {
+		background: #38393a;
+		box-shadow: inset 0 0 0 1px rgba(214, 214, 214, 0.2);
+		transform: scale(1);
+	}
+
+	100% {
+		background: transparent;
+		box-shadow: inset 0 0 0 1px transparent;
+		transform: scale(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.graph-file-item.is-file-clicking {
+		animation-duration: 1ms;
+	}
+}
+
+.graph-file-icon {
+	display: block;
+	width: 22px;
+	height: 22px;
+	flex: none;
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: contain;
+}
+
+.graph-file-icon[data-file-icon='c'] {
+	background-image: url('./assets/file-icons/c.svg');
+}
+
+.graph-file-icon[data-file-icon='console'] {
+	background-image: url('./assets/file-icons/console.svg');
+}
+
+.graph-file-icon[data-file-icon='cpp'] {
+	background-image: url('./assets/file-icons/cpp.svg');
+}
+
+.graph-file-icon[data-file-icon='css'] {
+	background-image: url('./assets/file-icons/css.svg');
+}
+
+.graph-file-icon[data-file-icon='database'] {
+	background-image: url('./assets/file-icons/database.svg');
+}
+
+.graph-file-icon[data-file-icon='file-unknown'] {
+	background-image: url('./assets/file-icons/file-unknown.svg');
+}
+
+.graph-file-icon[data-file-icon='go'] {
+	background-image: url('./assets/file-icons/go.svg');
+}
+
+.graph-file-icon[data-file-icon='h'] {
+	background-image: url('./assets/file-icons/h.svg');
+}
+
+.graph-file-icon[data-file-icon='html'] {
+	background-image: url('./assets/file-icons/html.svg');
+}
+
+.graph-file-icon[data-file-icon='image'] {
+	background-image: url('./assets/file-icons/image.svg');
+}
+
+.graph-file-icon[data-file-icon='java'] {
+	background-image: url('./assets/file-icons/java.svg');
+}
+
+.graph-file-icon[data-file-icon='javascript'] {
+	background-image: url('./assets/file-icons/javascript.svg');
+}
+
+.graph-file-icon[data-file-icon='json'] {
+	background-image: url('./assets/file-icons/json.svg');
+}
+
+.graph-file-icon[data-file-icon='markdown'] {
+	background-image: url('./assets/file-icons/markdown.svg');
+}
+
+.graph-file-icon[data-file-icon='python'] {
+	background-image: url('./assets/file-icons/python.svg');
+}
+
+.graph-file-icon[data-file-icon='react'] {
+	background-image: url('./assets/file-icons/react.svg');
+}
+
+.graph-file-icon[data-file-icon='react_ts'] {
+	background-image: url('./assets/file-icons/react_ts.svg');
+}
+
+.graph-file-icon[data-file-icon='rust'] {
+	background-image: url('./assets/file-icons/rust.svg');
+}
+
+.graph-file-icon[data-file-icon='sass'] {
+	background-image: url('./assets/file-icons/sass.svg');
+}
+
+.graph-file-icon[data-file-icon='svg'] {
+	background-image: url('./assets/file-icons/svg.svg');
+}
+
+.graph-file-icon[data-file-icon='toml'] {
+	background-image: url('./assets/file-icons/toml.svg');
+}
+
+.graph-file-icon[data-file-icon='typescript'] {
+	background-image: url('./assets/file-icons/typescript.svg');
+}
+
+.graph-file-icon[data-file-icon='xml'] {
+	background-image: url('./assets/file-icons/xml.svg');
+}
+
+.graph-file-icon[data-file-icon='yaml'] {
+	background-image: url('./assets/file-icons/yaml.svg');
+}
+
+.graph-file-icon[data-file-icon='vue'] {
+	background-image: url('./assets/file-icons/vue.svg');
+}
+
+.graph-file-icon[data-file-icon='svelte'] {
+	background-image: url('./assets/file-icons/svelte.svg');
+}
+
+.graph-file-icon[data-file-icon='astro'] {
+	background-image: url('./assets/file-icons/astro.svg');
+}
+
+.graph-file-icon[data-file-icon='php'] {
+	background-image: url('./assets/file-icons/php.svg');
+}
+
+.graph-file-icon[data-file-icon='ruby'] {
+	background-image: url('./assets/file-icons/ruby.svg');
+}
+
+.graph-file-icon[data-file-icon='kotlin'] {
+	background-image: url('./assets/file-icons/kotlin.svg');
+}
+
+.graph-file-icon[data-file-icon='swift'] {
+	background-image: url('./assets/file-icons/swift.svg');
+}
+
+.graph-file-icon[data-file-icon='csharp'] {
+	background-image: url('./assets/file-icons/csharp.svg');
+}
+
+.graph-file-icon[data-file-icon='dart'] {
+	background-image: url('./assets/file-icons/dart.svg');
+}
+
+.graph-file-icon[data-file-icon='lua'] {
+	background-image: url('./assets/file-icons/lua.svg');
+}
+
+.graph-file-icon[data-file-icon='r'] {
+	background-image: url('./assets/file-icons/r.svg');
+}
+
+.graph-file-icon[data-file-icon='pdf'] {
+	background-image: url('./assets/file-icons/pdf.svg');
+}
+
+.graph-file-icon[data-file-icon='table'] {
+	background-image: url('./assets/file-icons/table.svg');
+}
+
+.graph-file-icon[data-file-icon='typescript-def'] {
+	background-image: url('./assets/file-icons/typescript-def.svg');
+}
+
+.graph-file-icon[data-file-icon='npm'] {
+	background-image: url('./assets/file-icons/npm.svg');
+}
+
+.graph-file-icon[data-file-icon='pnpm'] {
+	background-image: url('./assets/file-icons/pnpm.svg');
+}
+
+.graph-file-icon[data-file-icon='yarn'] {
+	background-image: url('./assets/file-icons/yarn.svg');
+}
+
+.graph-file-icon[data-file-icon='tsconfig'] {
+	background-image: url('./assets/file-icons/tsconfig.svg');
+}
+
+.graph-file-icon[data-file-icon='git'] {
+	background-image: url('./assets/file-icons/git.svg');
+}
+
+.graph-file-icon[data-file-icon='docker'] {
+	background-image: url('./assets/file-icons/docker.svg');
+}
+
+.graph-file-icon[data-file-icon='readme'] {
+	background-image: url('./assets/file-icons/readme.svg');
+}
+
+.graph-file-icon[data-file-icon='license'] {
+	background-image: url('./assets/file-icons/license.svg');
+}
+
+.graph-file-controls {
+	display: flex;
+	height: 26px;
+	flex: none;
+	gap: 5px;
+	align-items: center;
+	justify-content: flex-end;
+}
+
+.graph-file-control {
+	appearance: none;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 0;
+	color: #9a9a9a;
+	border: 0;
+	border-radius: 5px;
+	font-family: inherit;
+	font-size: 11px;
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.graph-file-control:focus-visible {
+	outline: 1px solid #a3a3a3;
+	outline-offset: 1px;
+}
+
+.graph-file-more {
+	display: flex;
+	min-width: 0;
+	flex: 1;
+	align-items: center;
+	justify-content: center;
+	background: #282828;
+}
+
+.graph-file-more:hover {
+	color: #b9b9b9;
+	background: #323232;
+}
+
+.graph-file-collapse {
+	display: flex;
+	width: 26px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	color: #a3a3a3;
+	background: rgba(40, 40, 40, 0.55);
+	opacity: 0.6;
+}
+
+.graph-file-collapse:hover {
+	color: #d0d0d0;
+	background: #323232;
+	opacity: 1;
+}
+
+.graph-file-collapse-icon {
+	display: block;
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
+}
+
+.graph-edge {
+	fill: none;
+	stroke: #a3a3a3;
+	stroke-width: 0.5;
+	stroke-linecap: round;
+	vector-effect: non-scaling-stroke;
+}
+
 .graph-overlay-layer {
 	position: absolute;
 	inset: 0;
 	z-index: 2;
 	pointer-events: none;
+}
+
+.graph-navigator {
+	position: absolute;
+	right: 16px;
+	bottom: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	align-items: center;
+	pointer-events: none;
+	user-select: none;
+}
+
+.graph-navigator-coordinate {
+	color: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
+	font-size: 0.9em;
+	line-height: 1.2;
+	pointer-events: none;
+}
+
+.graph-navigator-controls {
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 6px;
+	pointer-events: auto;
+}
+
+.graph-navigator-button {
+	display: grid;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	place-items: center;
+	color: inherit;
+	background: transparent;
+	border: 0;
+	font: inherit;
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.graph-navigator-button:hover {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.graph-navigator-button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+}
+
+.graph-navigator-scale {
+	min-width: 64px;
+	padding: 0 12px;
+	font-weight: 600;
+	text-align: center;
 }

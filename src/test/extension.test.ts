@@ -3,14 +3,15 @@ import type {
 	CrispyExtensionApi,
 	TerminalMessageHost,
 } from '../extension';
-import type { ExtensionToWebviewMessage } from '../messages';
+import type {
+	ExtensionToWebviewMessage,
+	WebviewToExtensionMessage,
+} from '../messages';
 import {
-	getPanelLayoutStateFromMessage,
-	PANEL_LAYOUT_STATE_MESSAGE,
-	serializePanelLayoutState,
-	type PanelLayoutState,
-	type PanelLayoutStateMessage,
-} from '../webview/panel/panelState';
+	parseWebviewState,
+	serializeWebviewState,
+	type PersistedWebviewState,
+} from '../webview/webviewState';
 
 import * as vscode from 'vscode';
 
@@ -136,7 +137,7 @@ suite('Crispy Extension Host', () => {
 		);
 		assert.match(
 			panel.webview.html,
-			/default-src 'none'; style-src [^;]+; style-src-elem [^;]+ 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src [^;]+;/,
+			/default-src 'none'; img-src [^;]+; style-src [^;]+; style-src-elem [^;]+ 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src [^;]+;/,
 		);
 		assert.doesNotMatch(
 			panel.webview.html,
@@ -154,6 +155,9 @@ suite('Crispy Extension Host', () => {
 			panel.webview.html.includes('<div id="agent-provider-picker-host" hidden></div>'),
 		);
 		assert.ok(!panel.webview.html.includes('agent-provider-bar'));
+		assert.ok(
+			panel.webview.html.includes(`img-src ${panel.webview.cspSource};`),
+		);
 	});
 
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {
@@ -215,24 +219,32 @@ suite('Crispy Extension Host', () => {
 		assert.notStrictEqual(recreatedPanel, panel);
 	});
 
-	test('deactivate가 저장된 Layout state를 유지한다', async () => {
-		const changedState: PanelLayoutState = {
-			preferredDock: 'left',
-			sideSize: 480,
-			verticalSize: 260,
+	test('Panel dispose 후 전체 Webview state를 복원하고 deactivate 시 초기화한다', async () => {
+		const changedState: PersistedWebviewState = {
+			panel: {
+				preferredDock: 'left',
+				sideSize: 480,
+				verticalSize: 260,
+			},
+			graph: {
+				camera: { x: 120, y: -45, scale: 1.5 },
+				nodePositions: {},
+				fileGroupPages: {},
+				openedFolders: { 'folder:src': true },
+			},
 		};
 		const initialPanel = await openCanvas();
 
-		await sendLayoutState(initialPanel, changedState);
+		await sendWebviewState(initialPanel, changedState);
 		await disposePanel(initialPanel);
 
 		const restoredPanel = await openCanvas();
 		assert.strictEqual(
-			getSerializedInitialLayoutState(restoredPanel),
-			serializePanelLayoutState(changedState),
+			getSerializedInitialWebviewState(restoredPanel),
+			serializeWebviewState(changedState),
 		);
 
-		await sendLayoutState(restoredPanel, changedState);
+		await sendWebviewState(restoredPanel, changedState);
 		const disposed = onceDisposed(restoredPanel);
 		const deactivation = extensionModule.deactivate();
 		await disposed;
@@ -240,8 +252,41 @@ suite('Crispy Extension Host', () => {
 
 		const panelAfterDeactivate = await openCanvas();
 		assert.strictEqual(
-			getSerializedInitialLayoutState(panelAfterDeactivate),
-			serializePanelLayoutState(changedState),
+			getSerializedInitialWebviewState(panelAfterDeactivate),
+			serializeWebviewState(undefined),
+		);
+	});
+
+	test('잘못된 webview.stateChanged snapshot은 마지막 유효 상태를 덮어쓰지 않는다', async () => {
+		const changedState: PersistedWebviewState = {
+			panel: {
+				preferredDock: 'bottom',
+				sideSize: 410,
+				verticalSize: 290,
+			},
+			graph: {
+				camera: { x: -80, y: 65, scale: 2 },
+				nodePositions: {},
+				fileGroupPages: {},
+				openedFolders: {},
+			},
+		};
+		const panel = await openCanvas();
+
+		await sendWebviewState(panel, changedState);
+		extensionModule.handleWebviewMessage(panel.webview, {
+			type: 'webview.stateChanged',
+			state: {
+				panel: changedState.panel,
+				graph: { camera: { x: 0, y: 0, scale: Number.NaN } },
+			},
+		});
+		await disposePanel(panel);
+
+		const restoredPanel = await openCanvas();
+		assert.strictEqual(
+			getSerializedInitialWebviewState(restoredPanel),
+			serializeWebviewState(changedState),
 		);
 	});
 
@@ -495,25 +540,39 @@ async function disposePanel(panel: vscode.WebviewPanel): Promise<void> {
 	await disposed;
 }
 
-async function sendLayoutState(
+async function sendWebviewState(
 	panel: vscode.WebviewPanel,
-	state: PanelLayoutState,
+	state: PersistedWebviewState,
 ): Promise<void> {
-	const message: PanelLayoutStateMessage = {
-		type: PANEL_LAYOUT_STATE_MESSAGE,
+	const message: WebviewToExtensionMessage = {
+		type: 'webview.stateChanged',
 		state,
 	};
 	const received = onceWebviewMessage(
 		panel.webview,
-		(candidate) => getPanelLayoutStateFromMessage(candidate) !== undefined,
+		(candidate) => getWebviewStateFromMessage(candidate) !== undefined,
 	);
 
 	panel.webview.html = createMessagePostingHtml(message);
 
 	assert.deepStrictEqual(
-		getPanelLayoutStateFromMessage(await received),
+		getWebviewStateFromMessage(await received),
 		state,
 	);
+}
+
+function getWebviewStateFromMessage(
+	message: unknown,
+): PersistedWebviewState | undefined {
+	if (!message || typeof message !== 'object') {
+		return undefined;
+	}
+
+	const candidate = message as Record<string, unknown>;
+
+	return candidate.type === 'webview.stateChanged'
+		? parseWebviewState(candidate.state)
+		: undefined;
 }
 
 function onceWebviewMessage(
@@ -532,7 +591,7 @@ function onceWebviewMessage(
 	});
 }
 
-function createMessagePostingHtml(message: PanelLayoutStateMessage): string {
+function createMessagePostingHtml(message: WebviewToExtensionMessage): string {
 	const serializedMessage = JSON.stringify(message).replaceAll('<', '\\u003c');
 
 	return `<!DOCTYPE html>
@@ -545,8 +604,8 @@ function createMessagePostingHtml(message: PanelLayoutStateMessage): string {
 		</html>`;
 }
 
-function getSerializedInitialLayoutState(panel: vscode.WebviewPanel): string {
-	const match = panel.webview.html.match(/data-layout-state="([^"]*)"/);
-	assert.ok(match, 'Webview 초기 HTML에 serialized Layout state가 있어야 한다.');
+function getSerializedInitialWebviewState(panel: vscode.WebviewPanel): string {
+	const match = panel.webview.html.match(/data-webview-state="([^"]*)"/);
+	assert.ok(match, 'Webview 초기 HTML에 serialized Webview state가 있어야 한다.');
 	return match[1];
 }

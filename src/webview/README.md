@@ -8,11 +8,55 @@ Graph와 Agent Chat은 각각 별도의 VS Code Panel이 아니며, 하나의 We
 
 ```text
 src/webview/
+├── graph/
 ├── panel/
 ├── README.md
+├── webview.css
 ├── webview.ts
-└── webview.css
+└── webviewState.ts
 ```
+
+### `graph/`
+
+> Project Tree Graph의 Model, Layout, Renderer, Runtime State와 Camera 및 View lifecycle을 담당합니다.
+
+- 안정적인 ID 기반 Project / Folder / File 모델과 공통 Multi-Root Graph
+- Root별 subtree를 독립 배치하는 deterministic Tree Layout
+- Project / Folder / File Root와 Folder별 File Group 및 직접 관계 Edge 렌더링
+- File 하나는 `standalone`, 둘 이상은 `grouped` presentation으로 처리
+- File Group별 5개 단위 더보기와 최초 page로 접기
+- File Group page 변경에 따른 Group 높이, Sibling 위치 및 Edge Reflow
+- Folder/File Detach Handle과 immutable Graph Root Promotion
+- 원래 Tree 위치의 Folder/File Backlink 및 부모 경로 Context Label
+- Backlink → Root와 Context Label → Backlink 양방향 Camera Focus
+- Promoted Root를 자신의 Backlink에 Drop하는 Reattach
+- Folder, File Group 및 File Row Click interaction 구분
+- Camera, Node 위치 및 File Group page State 조회, 변경 및 구독
+- Camera Pan / Zoom, Viewport / World 좌표 변환 및 ease-out Focus Animation
+- Camera scale을 고려한 Node 자유 이동
+- Drag 중 Node / Edge DOM 갱신과 종료 시 최종 World 위치 저장
+- Camera, 이동한 Node, File Group page와 열린 Folder를 저장하고 나머지는 기본 Layout 상태 사용
+- 세부 구조와 동작은 `graph/README.md` 참고
+
+### `panel/`
+
+> Agent Chat Panel의 Runtime Layout 상태와 조정 동작을 담당합니다.
+
+- `left`, `right`, `top`, `bottom` Dock 이동 및 Preview 처리
+- Graph와 Agent Chat 사이의 가로·세로 Resize 처리
+- 세부 구조와 동작은 `panel/README.md` 참고
+
+### `webviewState.ts`
+
+> Panel 및 Graph 상태를 하나의 저장 가능한 Webview snapshot으로 다룹니다.
+
+- 전체 snapshot 검증 및 독립 객체 복사
+- Camera, 사용자가 이동한 Node의 World 위치, File Group page 및 열린 Folder 저장
+- VS Code Webview `getState()` / `setState()` 연결
+- Extension Host가 HTML로 전달하는 초기 상태 직렬화 및 복원
+- 저장 상태가 없거나 잘못된 경우 Panel 및 Graph 기본값 적용
+- `nodePositions`, `fileGroupPages` 또는 `openedFolders`가 없는 Graph 상태를 빈 값으로 복원
+- 새 Store와 Graph View를 사용한 Camera, 일부 Node 위치, File Group page 및 opened 상태 복원
 
 ### `webview.ts`
 
@@ -20,14 +64,12 @@ src/webview/
 
 - VS Code Webview API 단일 획득
 - 필요한 DOM 요소 조회
-- 저장된 Layout 상태 복원
+- `restoreWebviewState()`로 전체 초기 상태 복원
+- `initialState.panel`을 Panel Runtime State로 분리
+- `initialState.graph`의 Camera, Node 위치, File Group page 및 opened 상태로 Graph View와 Store 초기화
+- Mock Project Layout, Renderer, Camera 및 Navigator 조합
+- Graph State 변경 시 Panel 상태와 함께 기존 Webview State 저장
+- `webview.stateChanged` 메시지로 같은 전체 snapshot을 Extension Host에 전달
 - Dock과 Resize 기능 초기화
+- unload 시 Graph State subscription과 Graph View 정리
 - 로드 후 ready 메시지 전송
-
-### `panel/`
-
-> Agent Chat Panel의 Layout 조정 및 상태 관리를 담당합니다.
-
-- `left`, `right`, `top`, `bottom` Dock 이동 및 Preview 처리
-- Graph와 Agent Chat 사이의 가로·세로 Resize 처리
-- 세부 구조와 동작은 `panel/README.md` 참고

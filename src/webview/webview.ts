@@ -10,10 +10,11 @@ import { initializePanelDock } from './panel/panelDock';
 import { initializePanelResize } from './panel/panelResize';
 
 import {
-	restorePanelLayoutState,
-	savePanelLayoutState,
+	restoreWebviewState,
+	saveWebviewState,
+	type PersistedWebviewState,
 	type WebviewStateApi,
-} from './panel/panelState';
+} from './webviewState';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
@@ -37,10 +38,10 @@ function getRequiredElement<T extends HTMLElement>(selector: string): T {
 }
 
 const vscodeApi = acquireVsCodeApi();
-
-const serializedInitialState = document.currentScript?.getAttribute('data-layout-state')
+const serializedInitialState = document.currentScript?.getAttribute('data-webview-state')
 	?? undefined;
-const state = restorePanelLayoutState(vscodeApi, serializedInitialState);
+const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
+const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
 const graphArea = getRequiredElement<HTMLElement>('#graph-area');
@@ -49,13 +50,30 @@ const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
-const graphView = initializeGraphView(graphArea);
+const graphView = initializeGraphView(graphArea, initialState.graph);
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
 	terminalArea,
 	(message) => vscodeApi.postMessage(message),
 );
+
+/** Panel과 Graph의 현재 상태를 하나의 저장 가능한 snapshot으로 읽는다. */
+const getCurrentWebviewState = (): PersistedWebviewState => ({
+	panel: panelState,
+	graph: graphView.state.getState(),
+});
+
+/** VS Code Webview state와 Extension Host snapshot을 함께 갱신한다. */
+const persistWebviewState = () => {
+	const state = getCurrentWebviewState();
+
+	saveWebviewState(vscodeApi, state);
+	vscodeApi.postMessage({
+		type: 'webview.stateChanged',
+		state,
+	});
+};
 
 /**
  * Agent UI 동작을 Host protocol로 연결하며, 전송 실패가 Graph, Dock, Layout이나
@@ -136,21 +154,24 @@ const refreshDock = initializePanelDock(
 	layout,
 	dragHandle,
 	dockPreview,
-	state,
-	() => savePanelLayoutState(vscodeApi, state),
+	panelState,
+	persistWebviewState,
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
 /** Resize 초기화 */
 initializePanelResize(
 	layout,
 	resizeHandle,
-	state,
+	panelState,
 	refreshDock,
-	() => savePanelLayoutState(vscodeApi, state),
+	persistWebviewState,
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
 
+const unsubscribeGraphState = graphView.state.subscribe(persistWebviewState);
+
 window.addEventListener('unload', () => {
+	unsubscribeGraphState();
 	graphView.dispose();
 	terminalPool.dispose();
 	agentPanelUi?.dispose();
