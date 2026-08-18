@@ -15,6 +15,19 @@ src/
 └── messages.ts
 ```
 
+### `webview/`
+
+> Webview의 화면 구성과 사용자 상호작용을 담당합니다.
+
+- Webview 진입점과 스타일 관리
+- Graph와 Agent Chat 영역 구성
+- Project / Folder / File Multi-Root Graph와 Root Promotion / Reattach 처리
+- Backlink 및 Context Label 기반 양방향 Camera Focus
+- Panel과 Graph Runtime State 관리
+- Panel과 Graph를 포함하는 Webview snapshot 저장 및 복원
+- Agent Chat Panel의 Dock 및 Resize 처리
+- 세부 구조와 동작은 `webview/README.md` 참고
+
 ### `extension.ts`
 
 > Extension의 활성화와 비활성화 및 WebviewPanel의 생명 주기를 관리합니다.
@@ -31,14 +44,3 @@ src/
 ### `messages.ts`
 
 > Extension Host와 Webview 사이에서 사용하는 메시지 타입을 정의합니다.
-
-### `webview/`
-
-> Webview의 화면 구성과 사용자 상호작용을 담당합니다.
-
-- Webview 진입점과 스타일 관리
-- Graph와 Agent Chat 영역 구성
-- Panel과 Graph Runtime State 관리
-- Panel과 Graph를 포함하는 Webview snapshot 저장 및 복원
-- Agent Chat Panel의 Dock 및 Resize 처리
-- 세부 구조와 동작은 `webview/README.md` 참고

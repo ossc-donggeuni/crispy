@@ -1,4 +1,6 @@
-# 대응하는 테스트 목록
+# 테스트 범위
+
+`pnpm test`는 TypeScript와 ESLint 검사, 번들 빌드 후 아래 VS Code Extension Test Suite를 실행한다.
 
 ## `extension.test.ts`
 
@@ -75,8 +77,17 @@
 
 ## `graph/graphLayout.test.ts`
 
+- Graph Root 모델이 Project / Folder / File Node를 모두 표현한다
+- Context가 있는 Root만 Layout `rootContexts`로 전달한다
+- File Root를 edge 없는 `standalone` File Group으로 배치한다
+- Folder의 File 수에 따라 `standalone` / `grouped` presentation을 선택한다
+- 승격된 Folder는 원래 Parent 아래 Backlink로, 자신의 Root에서는 실제 subtree로 배치한다
+- 승격된 grouped File은 기존 순서와 item 수를 유지한 Backlink Row와 standalone Root로 배치한다
+- singleton File Backlink Group은 실제 File Root와 충돌하지 않는 ID를 사용한다
+- 기존 Project 하나를 Root 하나인 Graph Layout으로 호환 처리한다
+- 여러 Root와 각 subtree를 하나의 World에 독립 배치한다
 - 실제 Graph Mock이 중첩 Folder와 Folder별 여러 File을 포함한다
-- 기본 상태는 모든 Folder를 닫고 Project Root는 항상 연다
+- Project Root도 `openedFolders`에 없으면 children을 제외한다
 - 열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다
 - Folder를 닫으면 sibling을 남은 구조 기준으로 재배치한다
 - opened 상태를 제거하면 닫히고 다시 추가하면 전체 Layout을 복원한다
@@ -92,8 +103,42 @@
 - Folder와 File Group을 동일한 폭과 조밀한 Depth 간격으로 배치한다
 - 30px File Row와 pagination control 높이를 File Group Layout 높이에 반영한다
 
+## `graph/graphRootPromotion.test.ts`
+
+- Source Root 종류와 관계없이 Context, Root 이름과 Parent segment를 조합한다
+- Node ID 문자열 대신 실제 Tree 관계로 Folder/File과 소속 Root를 찾는다
+- Folder/File을 같은 immutable `addGraphRoot()` 경로로 추가한다
+- Target 이름을 제외한 최초 Graph 기준 부모 경로를 Context로 저장한다
+- Promoted Root 내부의 재차 Promotion에서 기존 Context와 Source Root 이름을 한 번만 연결한다
+- 깊은 중첩과 Source Root 바로 아래 Target의 trailing slash 규칙을 유지한다
+- Project, 기존 Root와 잘못된 Node ID의 Promotion을 안전하게 거부한다
+- `removeGraphRoot()`가 Root 목록과 직접 Root 참조만 immutable하게 제거한다
+
+## `graph/graphRootContext.test.ts`
+
+- 허용 최대 폭 안의 Context 경로는 원문을 유지한다
+- 최대 폭을 넘으면 상위 segment부터 제거하고 `…/`를 적용한다
+- trailing slash 부모 경로도 같은 축약 규칙을 유지한다
+- 마지막 segment도 넘치면 문자 단위 trailing ellipsis를 적용한다
+- 문자 수가 아닌 제공된 실제 글리프 폭을 사용한다
+- separator 정규화, 극단적으로 작은 폭과 결정적 결과를 검증한다
+
 ## `graph/graphRenderer.test.ts`
 
+- Context가 있는 Folder/File Root에만 좌측 정렬 Label을 렌더링한다
+- Context Label이 Root 이동을 따르며 Node Move, Detach, Camera Pan과 일반 Click을 시작하지 않는다
+- `applyLayout()`에서 Context Label을 추가·갱신·제거한다
+- File Root와 singleton File을 기존 standalone File Group 경로로 렌더링한다
+- Root가 아닌 Folder와 standalone/grouped File에만 Detach Handle을 표시한다
+- Folder와 grouped File Detach Drag가 올바른 Node와 client Drop 좌표를 전달한다
+- Detach Handle이 Folder/File Click, Node Move와 Camera Pan을 시작하지 않는다
+- 승격된 grouped File을 순서·pagination을 유지하는 Backlink Row로 렌더링한다
+- Folder 및 singleton File Backlink가 정확한 `targetRootId`를 전달한다
+- Folder/grouped/singleton Backlink DOM을 registry에 등록하고 실제 client 중심을 조회한다
+- Layout 변경으로 Backlink가 제거되면 registry에서도 제거한다
+- Root Context Label이 현재 Root ID를 전달한다
+- Root Drag가 자기 Backlink에 진입·이탈할 때 Reattach Target 상태를 갱신한다
+- cancel, capture 상실, Layout 변경과 dispose에서 Reattach Target을 정리한다
 - Project Root, Folder, File Group과 Edge를 지정된 Layer에 렌더링한다
 - File Row에 파일명 규칙과 확장자별 공통 SVG icon 식별값을 렌더링한다
 - File이 5개 이하이면 pagination control을 렌더링하지 않는다
@@ -128,8 +173,19 @@
 
 ## `graph/graphView.test.ts`
 
+- 여러 Root의 저장 위치를 같은 Graph World에서 독립적으로 적용한다
+- 저장 위치를 우선하고 Layout 크기를 fallback으로 Folder/File Root 중심을 계산한다
+- Folder/File Backlink가 전달한 Root ID를 공통 Root Focus 경로로 처리한다
+- Folder/grouped/singleton Root Context 클릭을 실제 Backlink client 중심의 World 좌표 Focus로 변환한다
+- Backlink DOM이 없으면 Context Focus를 안전하게 무시한다
+- Folder/File Detach Drop을 공통 Root Promotion과 Drop World 위치 저장으로 연결한다
+- Promotion 직후 실제 Root, Folder/File Backlink와 자동 Context Label을 같은 갱신에 반영한다
+- Promoted Folder/grouped/singleton Root를 자신의 Backlink Drop으로 Reattach한다
+- 다른 Root Backlink, 일반 Drop, 숨겨진 Backlink와 기본 Project Root는 Reattach하지 않는다
+- Reattach 시 대상의 독립 위치만 제거하고 Camera, Open, Pagination 및 다른 Node 위치를 유지한다
+- Reattach 후 Folder/File을 원래 Tree presentation으로 복원한다
 - 초기 Graph Camera 상태를 Store와 World transform에 복원한다
-- 초기 Folder는 닫혀 있고 클릭으로 subtree와 icon 상태를 열고 닫는다
+- Project Root와 Folder를 같은 Open/Close interaction으로 처리한다
 - 복원된 File Group page를 최초 Layout 높이와 Renderer contents에 반영한다
 - 더보기와 접기가 File Group size, sibling 위치와 Edge를 함께 Reflow한다
 - Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛴다
@@ -156,6 +212,10 @@
 - Camera 입력 차단 속성이 없는 일반 요소에서는 Pan과 Zoom이 동작한다
 - Wheel Zoom 전후 Cursor 아래 World 위치를 고정한다
 - 외부 Graph State 변경을 World transform과 Grid에 즉시 반영한다
+- `focusOn()`이 scale을 유지하며 ease-out으로 목표 World 지점을 Viewport 중앙에 배치한다
+- 새 Focus 요청이 기존 Frame을 취소하고 현재 Camera 상태에서 다시 시작한다
+- Focus Animation 중 사용자 Pan / Zoom이 Animation을 취소한다
+- `dispose()`가 Focus Animation을 취소하고 이후 갱신을 막는다
 - Wheel Zoom Out과 Zoom In을 scale 범위에서 제한한다
 - Camera 입력 차단 속성이 지정된 요소에서 Wheel로 Zoom하지 않는다
 - `lostpointercapture`와 `dispose()`가 진행 상태 및 등록한 이벤트를 정리한다

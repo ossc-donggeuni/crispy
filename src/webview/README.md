@@ -11,26 +11,31 @@ src/webview/
 ├── graph/
 ├── panel/
 ├── README.md
-└── webview.css
+├── webview.css
 ├── webview.ts
-├── webviewState.ts
+└── webviewState.ts
 ```
 
 ### `graph/`
 
 > Project Tree Graph의 Model, Layout, Renderer, Runtime State와 Camera 및 View lifecycle을 담당합니다.
 
-- 안정적인 ID 기반 Project / Folder / File 모델과 고정 Mock Data
-- 왼쪽에서 오른쪽으로 배치하는 deterministic Tree Layout
-- Root / Folder Card와 Folder별 File Group 및 직접 관계 Edge 렌더링
+- 안정적인 ID 기반 Project / Folder / File 모델과 공통 Multi-Root Graph
+- Root별 subtree를 독립 배치하는 deterministic Tree Layout
+- Project / Folder / File Root와 Folder별 File Group 및 직접 관계 Edge 렌더링
+- File 하나는 `standalone`, 둘 이상은 `grouped` presentation으로 처리
 - File Group별 5개 단위 더보기와 최초 page로 접기
 - File Group page 변경에 따른 Group 높이, Sibling 위치 및 Edge Reflow
+- Folder/File Detach Handle과 immutable Graph Root Promotion
+- 원래 Tree 위치의 Folder/File Backlink 및 부모 경로 Context Label
+- Backlink → Root와 Context Label → Backlink 양방향 Camera Focus
+- Promoted Root를 자신의 Backlink에 Drop하는 Reattach
 - Folder, File Group 및 File Row Click interaction 구분
 - Camera, Node 위치 및 File Group page State 조회, 변경 및 구독
-- Camera Pan / Zoom과 Viewport / World 좌표 변환
+- Camera Pan / Zoom, Viewport / World 좌표 변환 및 ease-out Focus Animation
 - Camera scale을 고려한 Node 자유 이동
 - Drag 중 Node / Edge DOM 갱신과 종료 시 최종 World 위치 저장
-- 이동한 Node와 File Group page만 저장하고 나머지는 기본 Layout 상태 사용
+- Camera, 이동한 Node, File Group page와 열린 Folder를 저장하고 나머지는 기본 Layout 상태 사용
 - 세부 구조와 동작은 `graph/README.md` 참고
 
 ### `panel/`
