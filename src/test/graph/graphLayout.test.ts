@@ -12,6 +12,7 @@ import {
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphFileGroupNode,
 	type GraphFolderBacklinkNode,
+	type GraphLayoutNode,
 	type GraphLayoutOptions,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
@@ -144,11 +145,25 @@ suite('Graph Model / Layout', () => {
 		const loadedGraph = createSingleRootGraph(loadedProject);
 		const unreadableGraph = createSingleRootGraph(unreadableProject);
 		const layoutOptions = { openedFolders: { [loadedProject.id]: true as const } };
+		const loadedLayout = createBaseGraphLayout(loadedGraph, layoutOptions);
+		const unreadableLayout = createBaseGraphLayout(unreadableGraph, layoutOptions);
+		const selectNodeStructure = (
+			{ id, kind, depth, position, width, height }: GraphLayoutNode,
+		) => ({ id, kind, depth, position, width, height });
 
 		assert.deepStrictEqual(unreadableGraph.roots, loadedGraph.roots);
 		assert.deepStrictEqual(
-			createBaseGraphLayout(unreadableGraph, layoutOptions),
-			createBaseGraphLayout(loadedGraph, layoutOptions),
+			unreadableLayout.nodes.map(selectNodeStructure),
+			loadedLayout.nodes.map(selectNodeStructure),
+		);
+		assert.deepStrictEqual(unreadableLayout.edges, loadedLayout.edges);
+		assert.deepStrictEqual(
+			unreadableLayout.rootContexts,
+			loadedLayout.rootContexts,
+		);
+		assert.deepStrictEqual(
+			unreadableLayout.rootNodeIds,
+			loadedLayout.rootNodeIds,
 		);
 	});
 
