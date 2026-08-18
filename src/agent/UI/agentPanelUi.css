@@ -1,5 +1,5 @@
 /*
- * Agent 영역의 상단 bar, 탭 strip과 하단 provider bar 전용 스타일이며
+ * Agent 영역의 상단 bar, 탭 strip과 중앙 provider 선택기 전용 스타일이며
  * 기존 Terminal 영역은 건드리지 않는다.
  */
 
@@ -24,119 +24,144 @@
 	gap: 6px;
 }
 
-#agent-provider-bar {
-	display: flex;
-	align-items: center;
-	grid-area: provider;
-	gap: 6px;
+#agent-provider-picker-host {
+	position: absolute;
+	inset: 0;
+	z-index: 4;
+	display: grid;
 	min-width: 0;
-	padding: 6px 8px;
-	border-top: 1px solid var(--vscode-panel-border);
+	min-height: 0;
+	padding: 8px;
+	place-items: center;
+	background-color: var(--vscode-terminal-background, var(--vscode-editor-background));
 }
 
-/* 하단 bar를 혼자 쓰므로 폭을 제한하지 않고 내용에 맞춘다. */
-.agent-provider-picker {
-	position: relative;
-	flex: 0 1 auto;
-	min-width: 0;
-	max-width: 100%;
+#agent-provider-picker-host[hidden] {
+	display: none;
 }
 
-.agent-provider-select {
+.agent-provider-picker-panel {
+	display: grid;
+	width: min(420px, 100%);
+	max-height: 100%;
+	overflow: hidden;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 6px;
+	box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.32));
+}
+
+.agent-provider-picker-heading {
+	display: grid;
+	gap: 4px;
+	padding: 12px 12px 8px;
+}
+
+.agent-provider-picker-title,
+.agent-provider-picker-description {
+	margin: 0;
+}
+
+.agent-provider-picker-title {
+	font-weight: 600;
+}
+
+.agent-provider-picker-description {
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.agent-provider-list {
+	display: grid;
+	gap: 6px;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 12px 12px;
+}
+
+.agent-provider-option {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 12px;
 	width: 100%;
-	min-width: 0;
-	padding: 2px 6px;
-	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
-	background-color: var(--vscode-dropdown-background, transparent);
-	border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
-	border-radius: 2px;
+	min-height: 44px;
+	padding: 6px 10px;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-input-background, transparent);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
+	transition: background-color 80ms ease-out;
 }
 
-.agent-provider-select:hover:not(:disabled) {
-	background-color: var(--vscode-list-hoverBackground, var(--vscode-dropdown-background));
+.agent-provider-option:hover {
+	color: var(--vscode-list-hoverForeground, var(--vscode-foreground));
+	background-color: var(--vscode-list-hoverBackground, transparent);
 }
 
-.agent-provider-select:focus-visible {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: 1px;
+.agent-provider-option[data-focused='true'] {
+	color: var(--vscode-list-focusForeground, var(--vscode-foreground));
+	background-color: var(--vscode-list-focusBackground, var(--vscode-input-background));
+	border-color: var(--vscode-panel-border);
+	box-shadow: inset 3px 0 0 currentColor;
 }
 
-.agent-provider-value {
-	flex: 1 1 auto;
+.agent-provider-option:focus {
+	outline: none;
+}
+
+.agent-provider-option:focus-visible {
+	outline: none;
+}
+
+.agent-provider-option[data-focused='true'] .agent-provider-mark {
+	border-color: currentColor;
+}
+
+.agent-provider-option[data-focused='true'] .agent-provider-option-label {
+	font-weight: 600;
+}
+
+.agent-provider-mark {
+	display: grid;
+	flex: 0 0 auto;
+	width: 32px;
+	height: 32px;
+	place-items: center;
+	color: var(--vscode-terminal-foreground, var(--vscode-foreground));
+	background-color: var(--vscode-terminal-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.agent-provider-option-label {
 	min-width: 0;
 	overflow: hidden;
+	font-weight: 500;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-/*
- * 목록이 펼쳐지는 방향을 가리키는 삼각형이다.
- * 화살표 글리프는 폰트마다 기준선 위치가 달라 세로 정렬이 어긋나므로
- * 문자를 쓰지 않고 border로 직접 그린다.
- */
-.agent-provider-caret {
-	flex: 0 0 auto;
-	width: 0;
-	height: 0;
-	border-right: 4px solid transparent;
-	border-bottom: 5px solid currentColor;
-	border-left: 4px solid transparent;
-	opacity: 0.8;
+.agent-provider-picker-hints {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+	padding: 8px 12px;
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+	border-top: 1px solid var(--vscode-panel-border);
+	font-size: 0.9em;
 }
 
-.agent-provider-menu {
-	position: absolute;
-	z-index: 6;
-	/* 하단 bar에서는 목록을 위로 펼쳐야 터미널 밖으로 나가지 않는다. */
-	bottom: calc(100% + 2px);
-	left: 0;
-	display: grid;
-	min-width: 100%;
-	max-height: 240px;
-	overflow-y: auto;
-	padding: 2px;
-	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
-	background-color: var(--vscode-dropdown-background, var(--vscode-editor-background));
-	border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
-	border-radius: 2px;
-	box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
-}
-
-.agent-provider-menu[hidden] {
-	display: none;
-}
-
-.agent-provider-option {
-	padding: 4px 8px;
-	color: inherit;
-	background: transparent;
-	border: 0;
-	border-radius: 2px;
-	font: inherit;
-	text-align: left;
-	white-space: nowrap;
-	cursor: pointer;
-}
-
-.agent-provider-option:hover {
-	color: var(--vscode-list-hoverForeground, inherit);
-	background-color: var(--vscode-list-hoverBackground, transparent);
-}
-
-.agent-provider-option[aria-selected='true'] {
-	color: var(--vscode-list-activeSelectionForeground, inherit);
-	background-color: var(--vscode-list-activeSelectionBackground, transparent);
-}
-
-.agent-provider-option:focus-visible {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: -1px;
+@media (forced-colors: active) {
+	.agent-provider-option[data-focused='true'] {
+		outline: 1px solid CanvasText;
+		outline-offset: -1px;
+	}
 }
 
 .agent-top-bar-actions {
@@ -174,8 +199,7 @@
 }
 
 .agent-create-tab:disabled,
-.agent-restart-session:disabled,
-.agent-provider-select:disabled {
+.agent-restart-session:disabled {
 	opacity: 0.5;
 	cursor: default;
 }

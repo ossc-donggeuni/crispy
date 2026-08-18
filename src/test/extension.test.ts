@@ -147,7 +147,11 @@ suite('Crispy Extension Host', () => {
 		assert.doesNotMatch(panel.webview.html, /'unsafe-eval'/);
 		assert.ok(panel.webview.html.includes('<section id="agent-chat-area">'));
 		/* 탭별 Terminal 표면은 Webview가 탭마다 만들어 이 컨테이너 안에 넣는다. */
-		assert.ok(panel.webview.html.includes('<div id="agent-terminal-area"></div>'));
+		assert.ok(panel.webview.html.includes('<div id="agent-terminal-area">'));
+		assert.ok(
+			panel.webview.html.includes('<div id="agent-provider-picker-host" hidden></div>'),
+		);
+		assert.ok(!panel.webview.html.includes('agent-provider-bar'));
 	});
 
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {

@@ -20,7 +20,10 @@ export class FakeAgentElement {
 	/** `remove()`가 자신을 떼어낼 수 있도록 유지하는 부모 참조다. */
 	parent: FakeAgentElement | undefined;
 
-	private readonly listeners = new Map<string, Array<() => void>>();
+	private readonly listeners = new Map<
+		string,
+		Array<(event: Event) => void>
+	>();
 
 	constructor(readonly tagName: string = 'div') {}
 
@@ -57,7 +60,7 @@ export class FakeAgentElement {
 		this.parent = undefined;
 	}
 
-	addEventListener(type: string, listener: () => void): void {
+	addEventListener(type: string, listener: (event: Event) => void): void {
 		const registered = this.listeners.get(type) ?? [];
 		registered.push(listener);
 		this.listeners.set(type, registered);
@@ -89,9 +92,9 @@ export class FakeAgentElement {
 	}
 
 	/** 등록된 listener를 순서대로 실행한다. */
-	dispatch(type: string): void {
+	dispatch(type: string, event: Record<string, unknown> = {}): void {
 		for (const listener of this.listeners.get(type) ?? []) {
-			listener();
+			listener(event as unknown as Event);
 		}
 	}
 

@@ -2,7 +2,9 @@ import * as assert from 'assert';
 import {
 	AGENT_CONFIRM_ACCEPT_LABEL,
 	AGENT_CONFIRM_CANCEL_LABEL,
+	AGENT_RESTART_ACCEPT_LABEL,
 	createAgentConfirmDialog,
+	formatSessionRestartConfirmMessage,
 	formatTabCloseConfirmMessage,
 } from '../../agent/UI/agentConfirmDialog';
 import {
@@ -67,6 +69,24 @@ suite('Agent Confirm Dialog', () => {
 		host.find('agent-confirm-cancel')?.click();
 		assert.strictEqual(await cancelled, false);
 		assert.strictEqual(host.hidden, true);
+	});
+
+	test('재시작 요청은 영향 문구와 Restart 확인 버튼을 표시한다', () => {
+		const { host, dialog } = createDialogFixture();
+
+		void dialog.confirm(
+			formatSessionRestartConfirmMessage('Claude Code #1'),
+			AGENT_RESTART_ACCEPT_LABEL,
+		);
+
+		assert.strictEqual(
+			host.find('agent-confirm-message')?.textContent,
+			'Restart Claude Code #1? The current CLI session will be terminated.',
+		);
+		assert.strictEqual(
+			host.find('agent-confirm-accept')?.textContent,
+			AGENT_RESTART_ACCEPT_LABEL,
+		);
 	});
 
 	test('이미 열려 있는 동안의 추가 요청은 취소로 처리한다', async () => {

@@ -349,8 +349,9 @@ function getWebviewHtml(
 							<div id="agent-top-bar"></div>
 							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
 						</div>
-						<div id="agent-terminal-area"></div>
-						<div id="agent-provider-bar"></div>
+						<div id="agent-terminal-area">
+							<div id="agent-provider-picker-host" hidden></div>
+						</div>
 						<div id="agent-dialog-host" hidden></div>
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>

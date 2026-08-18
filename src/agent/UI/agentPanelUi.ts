@@ -1,6 +1,8 @@
 import {
 	createAgentConfirmDialog,
+	formatSessionRestartConfirmMessage,
 	formatTabCloseConfirmMessage,
+	AGENT_RESTART_ACCEPT_LABEL,
 	type AgentConfirmDialog,
 } from './agentConfirmDialog';
 import type { ProviderId } from '../protocol';
@@ -10,7 +12,7 @@ import {
 	type AgentTabModel,
 	type AgentTabModelSnapshot,
 } from './agentTabModel';
-import { initializeAgentProviderBar } from './agentProviderBar';
+import { initializeAgentProviderPicker } from './agentProviderPicker';
 import { initializeAgentTabStrip } from './agentTabStrip';
 import { initializeAgentTopBar } from './agentTopBar';
 import {
@@ -26,8 +28,8 @@ export interface AgentPanelUiElements {
 	/** 탭 목록을 담는 strip이다. */
 	readonly tabStrip: HTMLElement;
 
-	/** 활성 탭의 provider 드롭다운을 담는 하단 bar다. */
-	readonly providerBar: HTMLElement;
+	/** provider 미선택 탭에서 xterm 중앙 선택기를 표시할 host다. */
+	readonly providerPicker: HTMLElement;
 
 	/** 탭 닫기 확인 다이얼로그를 표시하는 컨테이너다. */
 	readonly dialogHost: HTMLElement;
@@ -46,7 +48,7 @@ export interface AgentPanelUiCallbacks {
 	/** 활성 탭이 다른 탭으로 바뀌었다. */
 	onTabActivated?(tabId: AgentTabId): void;
 
-	/** 드롭다운으로 탭의 provider가 정해졌다. */
+	/** 중앙 선택기로 탭의 provider가 정해졌다. */
 	onProviderSelected?(tabId: AgentTabId, providerId: ProviderId): void;
 
 	/**
@@ -92,9 +94,9 @@ const defaultPanelDependencies: AgentPanelUiDependencies = {
 };
 
 /**
- * Agent 영역에 상단 bar, 탭 strip과 하단 provider bar를 얹고 탭 상태와 연결한다.
+ * Agent 영역에 상단 bar, 탭 strip과 중앙 provider 선택기를 얹고 탭 상태와 연결한다.
  *
- * 탭을 다루는 동작은 위쪽에, 활성 탭의 provider 선택은 아래쪽에 둔다.
+ * 탭을 다루는 동작은 위쪽에, 활성 탭의 provider 선택은 xterm 중앙에 둔다.
  * 이 단계는 UI 뼈대만 다루므로 상태 전이는 Webview 안에서만 일어나고
  * 기존 xterm 영역의 DOM 구조나 Terminal 세션 동작에는 관여하지 않는다.
  * 콜백 실패는 이 경계 안에서 격리하여 Graph, Dock, Layout으로 전파하지 않는다.
@@ -139,8 +141,8 @@ export function initializeAgentPanelUi(
 		return snapshot.tabs.find((tab) => tab.id === snapshot.activeTabId);
 	};
 
-	const providerBar = initializeAgentProviderBar(
-		elements.providerBar,
+	const providerPicker = initializeAgentProviderPicker(
+		elements.providerPicker,
 		{
 			onProviderSelect(providerId): void {
 				const activeTab = getActiveTab();
@@ -171,10 +173,21 @@ export function initializeAgentPanelUi(
 					return;
 				}
 
-				notify(() => callbacks.onSessionRestartRequested?.(
-					activeTab.id,
-					providerId,
-				));
+				void confirmDialog.confirm(
+					formatSessionRestartConfirmMessage(activeTab.label),
+					AGENT_RESTART_ACCEPT_LABEL,
+				).then((confirmed) => {
+					if (!confirmed || disposed) {
+						return;
+					}
+
+					notify(() => callbacks.onSessionRestartRequested?.(
+						activeTab.id,
+						providerId,
+					));
+				}).catch(() => {
+					/** 확인 다이얼로그 실패 시 현재 세션을 유지한다. */
+				});
 			},
 		},
 		dependencies,
@@ -220,11 +233,11 @@ export function initializeAgentPanelUi(
 	const unsubscribe = model.subscribe((snapshot) => {
 		topBar.render(snapshot);
 		tabStrip.render(snapshot);
-		providerBar.render(snapshot);
+		providerPicker.render(snapshot);
 		notify(() => callbacks.onLayoutChange?.());
 	});
 
-	/** 첫 탭은 provider 미선택 상태로 시작하며 기존 Terminal 영역과 나란히 표시된다. */
+	/** 첫 탭은 provider 미선택 상태로 시작하며 xterm 중앙 선택기를 표시한다. */
 	const initialTabId = model.createTab();
 	notify(() => callbacks.onTabCreated?.(initialTabId));
 
@@ -242,7 +255,7 @@ export function initializeAgentPanelUi(
 				() => confirmDialog.dispose(),
 				() => topBar.dispose(),
 				() => tabStrip.dispose(),
-				() => providerBar.dispose(),
+				() => providerPicker.dispose(),
 			];
 			for (const cleanup of cleanupActions) {
 				try {

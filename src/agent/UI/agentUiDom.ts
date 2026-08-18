@@ -8,7 +8,7 @@ export interface AgentUiDependencies {
 	): HTMLElementTagNameMap[K];
 
 	/**
-	 * 드롭다운 바깥 클릭처럼 요소 밖에서 발생하는 이벤트를 구독한다.
+	 * UI 경계 밖에서 발생하는 문서 수준 이벤트를 구독한다.
 	 *
 	 * @returns 구독을 해제하는 함수
 	 */

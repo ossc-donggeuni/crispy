@@ -85,7 +85,9 @@ try {
 		{
 			topBar: getRequiredElement<HTMLElement>('#agent-top-bar'),
 			tabStrip: getRequiredElement<HTMLElement>('#agent-tab-strip'),
-			providerBar: getRequiredElement<HTMLElement>('#agent-provider-bar'),
+			providerPicker: getRequiredElement<HTMLElement>(
+				'#agent-provider-picker-host',
+			),
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
 		},
 		{

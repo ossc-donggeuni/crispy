@@ -9,6 +9,9 @@ export const AGENT_CONFIRM_ACCEPT_LABEL = 'Close';
 /** 취소 버튼에 표시하는 고정 문구다. */
 export const AGENT_CONFIRM_CANCEL_LABEL = 'Cancel';
 
+/** 재시작 확인 요청에 사용하는 확인 버튼 문구다. */
+export const AGENT_RESTART_ACCEPT_LABEL = 'Restart';
+
 /**
  * 탭 닫기 확인 문구를 만든다.
  * 이 단계에서는 프로세스 실행 여부를 알 수 없으므로 항상 같은 문구를 사용한다.
@@ -20,13 +23,23 @@ export function formatTabCloseConfirmMessage(tabLabel: string): string {
 	return `Close ${tabLabel}?`;
 }
 
+/**
+ * 현재 CLI 세션을 종료하고 다시 시작하기 전에 표시할 문구를 만든다.
+ *
+ * @param tabLabel 재시작할 탭의 표시 라벨
+ * @returns 현재 세션 종료 영향을 밝히는 확인 문구
+ */
+export function formatSessionRestartConfirmMessage(tabLabel: string): string {
+	return `Restart ${tabLabel}? The current CLI session will be terminated.`;
+}
+
 /** 탭 닫기처럼 되돌릴 수 없는 동작 전에 사용자 확인을 받는 경계다. */
 export interface AgentConfirmDialog {
 	/**
 	 * 확인 다이얼로그를 표시하고 사용자의 선택을 반환한다.
 	 * 이미 다이얼로그가 열려 있으면 새 요청은 취소로 처리한다.
 	 */
-	confirm(message: string): Promise<boolean>;
+	confirm(message: string, acceptLabel?: string): Promise<boolean>;
 
 	/** 열려 있는 다이얼로그를 닫고 대기 중인 요청을 취소로 마무리한다. */
 	dispose(): void;
@@ -98,7 +111,7 @@ export function createAgentConfirmDialog(
 	host.hidden = true;
 
 	return {
-		confirm(message): Promise<boolean> {
+		confirm(message, acceptLabel = AGENT_CONFIRM_ACCEPT_LABEL): Promise<boolean> {
 			if (disposed || resolveActive !== undefined) {
 				return Promise.resolve(false);
 			}
@@ -108,6 +121,7 @@ export function createAgentConfirmDialog(
 
 				try {
 					messageElement.textContent = message;
+					acceptButton.textContent = acceptLabel;
 					host.replaceChildren(panel);
 					host.setAttribute('role', 'alertdialog');
 					host.hidden = false;

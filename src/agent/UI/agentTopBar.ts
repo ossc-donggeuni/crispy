@@ -20,7 +20,7 @@ export const AGENT_RESTART_TITLE = 'Restart current agent session';
  * 상단 bar가 상위 계층으로 전달하는 사용자 동작이다.
  *
  * 상단 bar는 탭 자체를 다루는 동작만 담당한다.
- * 활성 탭의 provider 선택은 하단 bar가 별도로 담당한다.
+	 * 활성 탭의 provider 선택은 xterm 중앙 선택기가 별도로 담당한다.
  */
 export interface AgentTopBarCallbacks {
 	/** `+` 버튼으로 provider 미선택 상태의 새 탭을 요청한 경우다. */
@@ -42,8 +42,7 @@ export interface AgentTopBarView {
 /**
  * Agent 영역 상단 bar에 새 탭과 재시작 버튼을 만든다.
  *
- * provider 드롭다운은 하단 bar가 소유한다. 목록이 아래로 펼쳐지면
- * 탭 strip과 터미널 상단을 가리기 때문에 선택 UI를 반대편에 두었다.
+ * provider 선택은 미선택 탭의 xterm 중앙 선택기가 소유한다.
  *
  * @param container 상단 bar를 렌더링할 컨테이너
  * @param callbacks 새 탭과 재시작 동작을 전달받는 콜백

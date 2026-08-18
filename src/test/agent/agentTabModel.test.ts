@@ -41,7 +41,7 @@ suite('Agent Tab Model', () => {
 		const tab = model.getSnapshot().tabs[0];
 		assert.strictEqual(tab.providerId, 'claude');
 		assert.strictEqual(tab.sequence, 1);
-		assert.strictEqual(tab.label, 'Claude #1');
+		assert.strictEqual(tab.label, 'Claude Code #1');
 	});
 
 	test('번호는 같은 provider 안에서만 순차 증가한다', () => {

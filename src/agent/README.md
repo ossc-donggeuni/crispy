@@ -332,7 +332,7 @@ src/agent/
 
 ### `UI/`
 
-> 상단 bar, 탭 strip과 하단 provider bar 등 Agent 영역 UI를 구성합니다.
+> 상단 bar, 탭 strip과 xterm 중앙 provider 선택기 등 Agent 영역 UI를 구성합니다.
 
 ### `webview/`
 
@@ -344,7 +344,8 @@ src/agent/
 | --- | --- | --- |
 | `+` 버튼 | `tab.create` | 탭만 등록하고 세션은 만들지 않는다 |
 | 탭 전환 | `tab.switch` | 활성 탭만 기록한다 |
-| provider 선택 / `⟳` | `agent.switch` | provider를 기록하고 세션을 시작 또는 재시작한다 |
+| 중앙 목록의 provider 선택 | `agent.switch` | provider를 기록하고 세션을 시작한다 |
+| `⟳` 후 재시작 확인 | `agent.switch` | 확인 후 현재 provider로 세션을 재시작한다 |
 | 탭 닫기 확인 | `tab.close` | 세션을 정리하고 탭 등록을 해제한다 |
 | 표면 준비 | `terminal.ready` | 크기를 기록하고 provider가 있으면 세션을 시작한다 |
 
