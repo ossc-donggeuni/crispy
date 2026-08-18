@@ -338,6 +338,278 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Promoted Folder/grouped/singleton Root는 자신의 Backlink Drop에서만 상태를 보존해 복원된다', () => {
+		const folderChild = {
+			kind: 'file' as const,
+			id: 'file:reattach-folder/child.ts',
+			name: 'child.ts',
+		};
+		const folderTarget = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-target',
+			name: 'reattach-target',
+			children: [folderChild],
+		};
+		const groupedFiles = Array.from({ length: 7 }, (_, index) => ({
+			kind: 'file' as const,
+			id: `file:reattach-group/file-${index + 1}.ts`,
+			name: `file-${index + 1}.ts`,
+		}));
+		const groupedTarget = groupedFiles[5];
+
+		assert.ok(groupedTarget);
+		const groupedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-group',
+			name: 'reattach-group',
+			children: groupedFiles,
+		};
+		const singletonTarget = {
+			kind: 'file' as const,
+			id: 'file:reattach-singleton/index.ts',
+			name: 'index.ts',
+		};
+		const singletonFolder = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-singleton',
+			name: 'reattach-singleton',
+			children: [singletonTarget],
+		};
+		const positionedSibling = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-positioned-sibling',
+			name: 'positioned-sibling',
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:reattach',
+			name: 'reattach',
+			children: [
+				folderTarget,
+				groupedFolder,
+				singletonFolder,
+				positionedSibling,
+			],
+		};
+		const folderAddition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folderTarget.id,
+		);
+
+		assert.ok(folderAddition);
+		const groupedAddition = addGraphRoot(
+			folderAddition.graph,
+			groupedTarget.id,
+		);
+
+		assert.ok(groupedAddition);
+		const singletonAddition = addGraphRoot(
+			groupedAddition.graph,
+			singletonTarget.id,
+		);
+
+		assert.ok(singletonAddition);
+		const fileGroupId = createFileGroupId(groupedFolder.id);
+		const siblingPosition = { x: 910, y: 440 };
+		const initialCamera = { x: 35, y: -15, scale: 1.5 };
+		const initialOpenedFolders = {
+			[project.id]: true as const,
+			[folderTarget.id]: true as const,
+			[groupedFolder.id]: true as const,
+			[singletonFolder.id]: true as const,
+		};
+		const initialFileGroupPages = { [fileGroupId]: 2 };
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				camera: initialCamera,
+				nodePositions: {
+					[folderTarget.id]: { x: 520, y: 180 },
+					[groupedTarget.id]: { x: 670, y: 260 },
+					[singletonTarget.id]: { x: 820, y: 340 },
+					[positionedSibling.id]: siblingPosition,
+				},
+				openedFolders: initialOpenedFolders,
+				fileGroupPages: initialFileGroupPages,
+			},
+			singletonAddition.graph,
+		);
+		const getFolderBacklink = () => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(folderAddition.root.id),
+		);
+		const getGroupedBacklink = () => getDescendantByAttribute(
+			getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				fileGroupId,
+			),
+			'data-file-id',
+			groupedTarget.id,
+		);
+		const getSingletonBacklink = () => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFileBacklinkGroupId(singletonAddition.root.id),
+		);
+		const setBacklinkBounds = (): {
+			folder: FakeElement;
+			grouped: FakeElement;
+			singleton: FakeElement;
+		} => {
+			const folder = getFolderBacklink();
+			const grouped = getGroupedBacklink();
+			const singleton = getSingletonBacklink();
+
+			setClientBounds(folder, 200, 100, 200, 42);
+			setClientBounds(grouped, 460, 220, 180, 30);
+			setClientBounds(singleton, 720, 340, 200, 42);
+			return { folder, grouped, singleton };
+		};
+		let backlinks = setBacklinkBounds();
+		const folderRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderTarget.id,
+		);
+		const groupedRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			groupedTarget.id,
+		);
+		const singletonRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			singletonTarget.id,
+		);
+		const projectRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			project.id,
+		);
+
+		performNodeDrop(projectRoot, 300, 121);
+		assert.ok(graphView.state.getState().nodePositions[project.id]);
+		assert.strictEqual(backlinks.folder.hasClass('is-reattach-target'), false);
+
+		performNodeDrop(folderRoot, 550, 235);
+		assert.ok(findDescendantByClass(folderRoot, 'graph-root-context-label'));
+		assert.ok(graphView.state.getState().nodePositions[folderTarget.id]);
+		assert.strictEqual(backlinks.grouped.hasClass('is-reattach-target'), false);
+
+		graphView.state.toggleFolder(project.id);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				createFolderBacklinkId(folderAddition.root.id),
+			),
+			undefined,
+		);
+		performNodeDrop(folderRoot, 300, 121);
+		assert.ok(graphView.state.getState().nodePositions[folderTarget.id]);
+		assert.ok(findDescendantByClass(folderRoot, 'graph-root-context-label'));
+
+		graphView.state.toggleFolder(project.id);
+		backlinks = setBacklinkBounds();
+		beginNodeDrag(folderRoot, 300, 121);
+		assert.strictEqual(backlinks.folder.hasClass('is-reattach-target'), true);
+		folderRoot.dispatch('pointerup', createPointerEvent(folderRoot, 300, 121));
+		assert.strictEqual(backlinks.folder.hasClass('is-reattach-target'), false);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				createFolderBacklinkId(folderAddition.root.id),
+			),
+			undefined,
+		);
+		const restoredFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderTarget.id,
+		);
+
+		assert.strictEqual(
+			findDescendantByClass(restoredFolder, 'graph-root-context-label'),
+			undefined,
+		);
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderChild.id,
+		));
+		assert.strictEqual(
+			graphView.state.getState().nodePositions[folderTarget.id],
+			undefined,
+		);
+		assert.ok(findDescendantByClass(groupedRoot, 'graph-root-context-label'));
+
+		backlinks.grouped = getGroupedBacklink();
+		setClientBounds(backlinks.grouped, 460, 220, 180, 30);
+		beginNodeDrag(groupedRoot, 550, 235);
+		assert.strictEqual(backlinks.grouped.hasClass('is-reattach-target'), true);
+		groupedRoot.dispatch('pointerup', createPointerEvent(groupedRoot, 550, 235));
+		const restoredGroupedRow = getDescendantByAttribute(
+			getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				fileGroupId,
+			),
+			'data-file-id',
+			groupedTarget.id,
+		);
+
+		assert.strictEqual(restoredGroupedRow.hasClass('is-backlink'), false);
+		assert.strictEqual(
+			findDescendantByClass(restoredGroupedRow, 'graph-root-context-label'),
+			undefined,
+		);
+		assert.strictEqual(
+			graphView.state.getState().nodePositions[groupedTarget.id],
+			undefined,
+		);
+		assert.ok(findDescendantByClass(singletonRoot, 'graph-root-context-label'));
+
+		backlinks.singleton = getSingletonBacklink();
+		setClientBounds(backlinks.singleton, 720, 340, 200, 42);
+		beginNodeDrag(singletonRoot, 820, 361);
+		assert.strictEqual(backlinks.singleton.hasClass('is-reattach-target'), true);
+		singletonRoot.dispatch(
+			'pointerup',
+			createPointerEvent(singletonRoot, 820, 361),
+		);
+		const restoredSingleton = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			singletonTarget.id,
+		);
+
+		assert.strictEqual(restoredSingleton.hasClass('is-backlink'), false);
+		assert.strictEqual(
+			findDescendantByClass(restoredSingleton, 'graph-root-context-label'),
+			undefined,
+		);
+		const finalState = graphView.state.getState();
+
+		assert.strictEqual(finalState.nodePositions[folderTarget.id], undefined);
+		assert.strictEqual(finalState.nodePositions[groupedTarget.id], undefined);
+		assert.strictEqual(finalState.nodePositions[singletonTarget.id], undefined);
+		assert.deepStrictEqual(
+			finalState.nodePositions[positionedSibling.id],
+			siblingPosition,
+		);
+		assert.ok(finalState.nodePositions[project.id]);
+		assert.deepStrictEqual(finalState.openedFolders, initialOpenedFolders);
+		assert.deepStrictEqual(finalState.fileGroupPages, initialFileGroupPages);
+		assert.deepStrictEqual(finalState.camera, initialCamera);
+		graphView.dispose();
+	});
+
 	test('File Detach Drop을 Root/Backlink로 승격하고 기존 Root를 Detach 대상에서 제외한다', () => {
 		const childFolder = {
 			kind: 'folder' as const,
@@ -1161,6 +1433,24 @@ function setClientBounds(
 	element.boundsTop = top;
 	element.clientWidth = width;
 	element.clientHeight = height;
+}
+
+function beginNodeDrag(
+	node: FakeElement,
+	clientX: number,
+	clientY: number,
+): void {
+	node.dispatch('pointerdown', createPointerEvent(node, 0, 0));
+	node.dispatch('pointermove', createPointerEvent(node, clientX, clientY));
+}
+
+function performNodeDrop(
+	node: FakeElement,
+	clientX: number,
+	clientY: number,
+): void {
+	beginNodeDrag(node, clientX, clientY);
+	node.dispatch('pointerup', createPointerEvent(node, clientX, clientY));
 }
 
 function readTranslateY(transform: string): number {

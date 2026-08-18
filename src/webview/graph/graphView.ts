@@ -5,11 +5,12 @@ import {
 import { createGraphLayout, type GraphLayout } from './graphLayout';
 import { GRAPH_MOCK } from './graphMockData';
 import type { Graph } from './graphModel';
-import { addGraphRoot } from './graphRootPromotion';
+import { addGraphRoot, removeGraphRoot } from './graphRootPromotion';
 import { initializeGraphNavigator } from './graphNavigator';
 import {
 	initializeGraphRenderer,
 	type GraphRenderer,
+	type GraphRootReattachRequest,
 } from './graphRenderer';
 import type { GraphDetachDropRequest } from './graphDetachDrag';
 import {
@@ -242,6 +243,38 @@ export function initializeGraphView(
 	const handleRootContextClick = (rootId: string): void => {
 		focusGraphBacklink(renderer, viewport, camera, rootId);
 	};
+	const handleRootReattach = ({
+		rootId,
+		nodeId,
+	}: GraphRootReattachRequest): boolean => {
+		const targetRoot = currentGraph.roots.find(
+			(root) => root.id === rootId && root.nodeId === nodeId,
+		);
+
+		if (!targetRoot) {
+			return false;
+		}
+
+		const nextGraph = removeGraphRoot(currentGraph, rootId);
+
+		if (nextGraph === currentGraph) {
+			return false;
+		}
+
+		currentGraph = nextGraph;
+		const snapshot = state.getState();
+		const nodePositions = { ...snapshot.nodePositions };
+
+		delete nodePositions[nodeId];
+		state.setState({
+			camera: snapshot.camera,
+			nodePositions,
+			fileGroupPages: snapshot.fileGroupPages,
+			openedFolders: snapshot.openedFolders,
+		});
+		renderer.applyLayout(createCurrentLayout(state.getState()));
+		return true;
+	};
 
 	renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -255,6 +288,7 @@ export function initializeGraphView(
 			onDetachDrop: handleDetachDrop,
 			onBacklinkClick: handleBacklinkClick,
 			onRootContextClick: handleRootContextClick,
+			onRootReattach: handleRootReattach,
 			resolveRootId: (rootNodeId) => currentGraph.roots.find(
 				(root) => root.nodeId === rootNodeId,
 			)?.id,

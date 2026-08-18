@@ -266,6 +266,16 @@
 	opacity: 0.55;
 }
 
+.graph-folder-backlink-node.is-reattach-target,
+.graph-file-group-node.is-backlink.is-reattach-target,
+.graph-file-item.is-backlink.is-reattach-target {
+	--graph-node-outline-color: #a8a8a8;
+
+	opacity: 1;
+	background: #343536;
+	box-shadow: 0 0 0 2px rgb(168 168 168 / 55%);
+}
+
 .graph-backlink-indicator {
 	flex: none;
 	color: var(--vscode-descriptionForeground, #c4c4c4);

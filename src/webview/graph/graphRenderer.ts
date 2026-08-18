@@ -58,6 +58,8 @@ interface RootContextLabelRenderer {
 export interface GraphRenderer {
 	/** 기존 Node/Edge DOM을 새로운 Layout geometry와 동기화한다. */
 	applyLayout(layout: GraphLayout): void;
+	/** 현재 렌더링된 Backlink DOM의 client rect를 반환한다. */
+	getBacklinkClientRect(targetRootId: string): DOMRect | undefined;
 	/** 현재 렌더링된 Backlink DOM의 client 좌표계 중심을 반환한다. */
 	getBacklinkClientCenter(targetRootId: string): {
 		readonly clientX: number;
@@ -83,6 +85,14 @@ export interface GraphRendererInteractions {
 	onRootContextClick?: (rootId: string) => void;
 	/** Layout Root Node ID를 최신 Graph Root ID로 해석한다. */
 	resolveRootId?: (rootNodeId: string) => string | undefined;
+	/** 자신의 Backlink Target에 Drop된 Root의 제거를 상위 View에 요청한다. */
+	onRootReattach?: (request: GraphRootReattachRequest) => boolean;
+}
+
+/** Reattach가 확인된 Root와 실제 Node를 최신 Graph 변경 경로에 전달한다. */
+export interface GraphRootReattachRequest {
+	readonly rootId: string;
+	readonly nodeId: string;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -91,6 +101,8 @@ const FOLDER_CLOSED_ICON = 'folder-closed.svg';
 const COLLAPSE_CHEVRON_PATH = 'm4.5 10 3.5-3.5 3.5 3.5';
 const DETACH_ARROW_PATH = 'M4 12 12 4 M7 4h5v5';
 const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
+const REATTACH_TARGET_CLASS = 'is-reattach-target';
+const REATTACH_TARGET_MARGIN = 8;
 const ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER = 1.5;
 
 /**
@@ -134,6 +146,50 @@ export function initializeGraphRenderer(
 	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
 	let rootNodeIds = layout.rootNodeIds;
 	let disposed = false;
+	let activeReattachTarget: {
+		readonly rootId: string;
+		readonly element: HTMLElement;
+	} | undefined;
+	/** 현재 Backlink Target 표시를 즉시 제거한다. */
+	const clearReattachTarget = (): void => {
+		activeReattachTarget?.element.classList.remove(REATTACH_TARGET_CLASS);
+		activeReattachTarget = undefined;
+	};
+	/** Root 자신의 Backlink rect와 Pointer client 좌표를 비교해 표시를 동기화한다. */
+	const updateReattachTarget = (
+		nodeId: string,
+		clientX: number,
+		clientY: number,
+	): string | undefined => {
+		const rootId = rootNodeIds.has(nodeId)
+			? interactions.resolveRootId?.(nodeId)
+			: undefined;
+		const element = rootId ? backlinkElements.get(rootId) : undefined;
+		const isTarget = element
+			? isPointInsideExpandedRect(
+				clientX,
+				clientY,
+				element.getBoundingClientRect(),
+				REATTACH_TARGET_MARGIN,
+			)
+			: false;
+
+		if (!rootId || !element || !isTarget) {
+			clearReattachTarget();
+			return undefined;
+		}
+
+		if (
+			activeReattachTarget?.rootId !== rootId
+			|| activeReattachTarget.element !== element
+		) {
+			clearReattachTarget();
+			element.classList.add(REATTACH_TARGET_CLASS);
+			activeReattachTarget = { rootId, element };
+		}
+
+		return rootId;
+	};
 	/** Backlink Click listener와 target Root별 최신 DOM registry를 함께 관리한다. */
 	const initializeBacklink: BacklinkInitializer = (element, targetRootId) => {
 		backlinkElements.set(targetRootId, element);
@@ -145,6 +201,10 @@ export function initializeGraphRenderer(
 
 		return () => {
 			disposeClick();
+
+			if (activeReattachTarget?.element === element) {
+				clearReattachTarget();
+			}
 
 			if (backlinkElements.get(targetRootId) === element) {
 				backlinkElements.delete(targetRootId);
@@ -345,6 +405,24 @@ export function initializeGraphRenderer(
 					onPositionChange: (position) => {
 						updateNodePosition(layoutNode.id, position);
 					},
+					onDragMove: ({ clientX, clientY }) => {
+						updateReattachTarget(layoutNode.id, clientX, clientY);
+					},
+					onDragEnd: ({ clientX, clientY }) => {
+						const rootId = updateReattachTarget(
+							layoutNode.id,
+							clientX,
+							clientY,
+						);
+
+						clearReattachTarget();
+						return rootId !== undefined
+							&& interactions.onRootReattach?.({
+								rootId,
+								nodeId: layoutNode.id,
+							}) === true;
+					},
+					onDragCancel: clearReattachTarget,
 				},
 			));
 		}
@@ -467,6 +545,7 @@ export function initializeGraphRenderer(
 			if (disposed) {
 				return;
 			}
+			clearReattachTarget();
 
 			const previousNodesById = nodesById;
 			const previousEdgesById = new Map(
@@ -591,18 +670,21 @@ export function initializeGraphRenderer(
 				renderEdge(edge);
 			}
 		},
-		getBacklinkClientCenter(targetRootId) {
+		getBacklinkClientRect(targetRootId) {
 			if (disposed) {
 				return undefined;
 			}
 
-			const element = backlinkElements.get(targetRootId);
+			return backlinkElements.get(targetRootId)?.getBoundingClientRect();
+		},
+		getBacklinkClientCenter(targetRootId) {
+			const bounds = disposed
+				? undefined
+				: backlinkElements.get(targetRootId)?.getBoundingClientRect();
 
-			if (!element) {
+			if (!bounds) {
 				return undefined;
 			}
-
-			const bounds = element.getBoundingClientRect();
 
 			return {
 				clientX: bounds.left + bounds.width / 2,
@@ -615,6 +697,7 @@ export function initializeGraphRenderer(
 			}
 
 			disposed = true;
+			clearReattachTarget();
 			unsubscribeState();
 
 			for (const nodeId of [...nodeElements.keys()]) {
@@ -629,6 +712,19 @@ export function initializeGraphRenderer(
 			backlinkElements.clear();
 		},
 	};
+}
+
+/** 고정 margin을 포함한 DOM rect 안에 client pointer가 있는지 판별한다. */
+function isPointInsideExpandedRect(
+	clientX: number,
+	clientY: number,
+	rect: DOMRect,
+	margin: number,
+): boolean {
+	return clientX >= rect.left - margin
+		&& clientX <= rect.right + margin
+		&& clientY >= rect.top - margin
+		&& clientY <= rect.bottom + margin;
 }
 
 /** Root 카드에 Layout 비참여 absolute Context Label과 입력 차단 정책을 추가한다. */

@@ -780,6 +780,107 @@ suite('Graph Renderer / Node Drag', () => {
 		renderer.dispose();
 	});
 
+	test('Root Drag의 자기 Backlink Target은 진입/이탈하고 cancel·layout·dispose에서 정리된다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-lifecycle',
+			name: 'reattach-lifecycle',
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:reattach-lifecycle',
+			name: 'reattach-lifecycle',
+			children: [folder],
+		};
+		const addition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(addition);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [folder.id]: { x: 600, y: 300 } },
+			openedFolders: { [project.id]: true },
+		});
+		const layout = createGraphLayout(addition.graph, {
+			openedFolders: graphState.getState().openedFolders,
+		});
+		const reattachRequests: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			layout,
+			graphState,
+			{
+				resolveRootId: (nodeId) => addition.graph.roots.find(
+					(root) => root.nodeId === nodeId,
+				)?.id,
+				onRootReattach: ({ rootId }) => {
+					reattachRequests.push(rootId);
+					return true;
+				},
+			},
+		);
+		const rootNode = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			folder.id,
+		);
+		const backlink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFolderBacklinkId(addition.root.id),
+		);
+
+		backlink.boundsLeft = 200;
+		backlink.boundsTop = 100;
+		backlink.clientWidth = 200;
+		backlink.clientHeight = 42;
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 500, 300));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		rootNode.dispatch('pointercancel', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(reattachRequests, []);
+
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		rootNode.releasePointerCapture(1);
+		rootNode.dispatch(
+			'lostpointercapture',
+			createPointerEvent(rootNode, 300, 121),
+		);
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(reattachRequests, []);
+
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		renderer.applyLayout(layout);
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		rootNode.dispatch('pointercancel', createPointerEvent(rootNode, 300, 121));
+
+		rootNode.dispatch('pointerdown', createPointerEvent(rootNode, 0, 0));
+		rootNode.dispatch('pointermove', createPointerEvent(rootNode, 300, 121));
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		renderer.dispose();
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(reattachRequests, []);
+		assert.deepStrictEqual(
+			graphState.getState().nodePositions[folder.id],
+			{ x: 600, y: 300 },
+		);
+	});
+
 	for (const eventType of ['pointercancel', 'lostpointercapture'] as const) {
 		test(`${eventType}은 Detach 요청 없이 Handle session을 정리한다`, () => {
 			const detachDrops: string[] = [];

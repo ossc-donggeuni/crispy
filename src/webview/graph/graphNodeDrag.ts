@@ -16,6 +16,18 @@ export interface GraphNodeDragOptions {
 	onClick?: () => void;
 	/** Drag 중 임시 World 위치가 바뀌거나 취소로 복원될 때 호출된다. */
 	onPositionChange?: (position: GraphLayoutPosition) => void;
+	/** Threshold 이후 Pointer의 최신 client 위치를 관찰한다. */
+	onDragMove?: (point: GraphNodeDragClientPoint) => void;
+	/** Pointer up을 별도 동작으로 소비하면 true를 반환해 위치 저장을 건너뛴다. */
+	onDragEnd?: (point: GraphNodeDragClientPoint) => boolean;
+	/** Cancel, capture 상실 또는 dispose 시 외부 Drag 상태를 정리한다. */
+	onDragCancel?: () => void;
+}
+
+/** Node Drag 관찰 callback에 전달하는 client 좌표다. */
+export interface GraphNodeDragClientPoint {
+	readonly clientX: number;
+	readonly clientY: number;
 }
 
 /** Pointer Capture 동안 유지하는 시작 좌표와 임시 World 위치다. */
@@ -126,6 +138,10 @@ export function initializeGraphNodeDrag(
 			y: session.startPosition.y + deltaY,
 		};
 		options.onPositionChange?.(session.currentPosition);
+		options.onDragMove?.({
+			clientX: event.clientX,
+			clientY: event.clientY,
+		});
 	};
 
 	/** 실제 Drag가 발생했다면 최종 World 위치를 Graph State에 한 번 저장한다. */
@@ -137,8 +153,14 @@ export function initializeGraphNodeDrag(
 		const completedSession = session;
 
 		suppressNextClick = completedSession.didDrag;
+		const dragConsumed = completedSession.didDrag
+			? options.onDragEnd?.({
+				clientX: event.clientX,
+				clientY: event.clientY,
+			}) === true
+			: false;
 
-		if (completedSession.didDrag) {
+		if (completedSession.didDrag && !dragConsumed) {
 			const state = graphState.getState();
 
 			graphState.setState({
@@ -164,6 +186,7 @@ export function initializeGraphNodeDrag(
 		if (session.didDrag) {
 			options.onPositionChange?.(session.startPosition);
 		}
+		options.onDragCancel?.();
 
 		stopDragging(event.pointerId, true);
 	};
@@ -177,6 +200,7 @@ export function initializeGraphNodeDrag(
 		if (session.didDrag) {
 			options.onPositionChange?.(session.startPosition);
 		}
+		options.onDragCancel?.();
 
 		stopDragging(event.pointerId, false);
 	};
@@ -223,6 +247,7 @@ export function initializeGraphNodeDrag(
 				if (session.didDrag) {
 					options.onPositionChange?.(session.startPosition);
 				}
+				options.onDragCancel?.();
 
 				stopDragging(session.pointerId, true);
 			}
