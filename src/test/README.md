@@ -24,7 +24,7 @@
 - 저장 시 Panel과 Graph를 함께 독립적인 snapshot으로 `setState()`에 전달한다
 - Graph snapshot을 저장하고 새 Store로 Round Trip한다
 - serialize 후 restore해도 File Group page와 열린 Folder 상태를 유지한다
-- Graph와 Panel 변경을 전체 Webview snapshot 저장 및 Host 메시지로 연결한다
+- Graph, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다
 
 ## `panel/panelState.test.ts`
 

@@ -3,8 +3,10 @@
   "displayName": "Crispy",
   "description": "Project structure visualization & Working with AI agents",
   "version": "0.0.1",
+  "packageManager": "pnpm@11.18.0",
   "license": "MIT",
   "engines": {
+    "node": "24.x",
     "vscode": "^1.125.0"
   },
   "categories": [
@@ -18,36 +20,75 @@
         "command": "crispy.openCanvas",
         "title": "Crispy: Open Canvas"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Crispy",
+      "properties": {
+        "crispy.codexCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Optional Codex CLI executable path. When empty, Windows tries `codex`, `codex.cmd`, and `codex.exe` in order."
+        },
+        "crispy.claudeCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Optional Claude CLI executable path. When empty, Windows tries `claude`, `claude.cmd`, and `claude.exe` in order."
+        },
+        "crispy.antigravityCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Optional Antigravity CLI executable path. When empty, Windows tries `agy`, `agy.cmd`, and `agy.exe` in order."
+        }
+      }
+    }
   },
   "scripts": {
-    "vscode:prepublish": "pnpm run package",
+    "postinstall": "node scripts/prepare-node-pty.js",
+    "vscode:prepublish": "pnpm run package && pnpm run stage:node-pty && pnpm run verify:node-pty",
     "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "package:vsix": "node scripts/package-vsix.js",
+    "inspect:vsix": "node scripts/inspect-vsix.js",
+    "smoke:installed-vsix": "node scripts/smoke-installed-vsix.js",
+    "stage:node-pty": "node scripts/stage-node-pty.js",
+    "verify:node-pty": "node scripts/verify-node-pty.js",
+    "verify:linux-abi": "node scripts/verify-linux-abi.js",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
+    "smoke:pty-kill": "pnpm run compile-tests && node out/test/smoke/ptyKillProcessTree.smoke.js",
+    "test:process-tree-cleanup": "pnpm run compile-tests && node out/test/agent/processTreeCleanup.test.js && node out/test/agent/processTreeControllerFactory.test.js",
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.125.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "typescript-eslint": "^8.61.1",
-    "eslint": "^10.5.0",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "3.9.2",
     "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
-    "@vscode/test-cli": "^0.0.15",
-    "@vscode/test-electron": "^3.0.0"
+    "typescript-eslint": "^8.61.1",
+    "yauzl": "3.2.1"
   },
   "overrides": {
     "diff": "^8.0.4",
     "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "1.2.0-beta.14"
   }
 }

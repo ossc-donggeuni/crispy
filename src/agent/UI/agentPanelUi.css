@@ -1,0 +1,316 @@
+/*
+ * Agent 영역의 상단 bar, 탭 strip과 중앙 provider 선택기 전용 스타일이며
+ * 기존 Terminal 영역은 건드리지 않는다.
+ */
+
+/*
+ * 탭 목록, 액션 버튼과 Dock Drag Handle을 한 줄에 나란히 놓는다.
+ * 탭만 남는 폭을 차지하고 나머지는 오른쪽에 고정되므로,
+ * 탭이 많아져도 액션 버튼과 Handle이 밀려나지 않는다.
+ */
+#agent-panel-header {
+	display: flex;
+	align-items: center;
+	grid-area: header;
+	gap: 6px;
+	min-width: 0;
+	padding: 6px 8px;
+}
+
+#agent-top-bar {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 6px;
+}
+
+#agent-provider-picker-host {
+	position: absolute;
+	inset: 0;
+	z-index: 4;
+	display: grid;
+	min-width: 0;
+	min-height: 0;
+	padding: 8px;
+	place-items: center;
+	background-color: var(--vscode-terminal-background, var(--vscode-editor-background));
+}
+
+#agent-provider-picker-host[hidden] {
+	display: none;
+}
+
+.agent-provider-picker-panel {
+	display: grid;
+	width: min(420px, 100%);
+	max-height: 100%;
+	overflow: hidden;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 6px;
+	box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.32));
+}
+
+.agent-provider-picker-heading {
+	display: grid;
+	gap: 4px;
+	padding: 12px 12px 8px;
+}
+
+.agent-provider-picker-title,
+.agent-provider-picker-description {
+	margin: 0;
+}
+
+.agent-provider-picker-title {
+	font-weight: 600;
+}
+
+.agent-provider-picker-description {
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.agent-provider-list {
+	display: grid;
+	gap: 6px;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 12px 12px;
+}
+
+.agent-provider-option {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 44px;
+	padding: 6px 10px;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-input-background, transparent);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background-color 80ms ease-out;
+}
+
+.agent-provider-option:hover {
+	color: var(--vscode-list-hoverForeground, var(--vscode-foreground));
+	background-color: var(--vscode-list-hoverBackground, transparent);
+}
+
+.agent-provider-option:focus-visible {
+	color: var(--vscode-list-focusForeground, var(--vscode-foreground));
+	background-color: var(--vscode-list-focusBackground, var(--vscode-input-background));
+	border-color: var(--vscode-panel-border);
+	box-shadow: inset 3px 0 0 currentColor;
+	outline: none;
+}
+
+.agent-provider-option:focus:not(:focus-visible) {
+	outline: none;
+}
+
+.agent-provider-option:focus-visible .agent-provider-mark {
+	border-color: currentColor;
+}
+
+.agent-provider-option:focus-visible .agent-provider-option-label {
+	font-weight: 600;
+}
+
+.agent-provider-mark {
+	display: grid;
+	flex: 0 0 auto;
+	width: 32px;
+	height: 32px;
+	place-items: center;
+	color: var(--vscode-terminal-foreground, var(--vscode-foreground));
+	background-color: var(--vscode-terminal-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.agent-provider-option-label {
+	min-width: 0;
+	overflow: hidden;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+@media (forced-colors: active) {
+	.agent-provider-option:focus-visible {
+		outline: 1px solid CanvasText;
+		outline-offset: -1px;
+	}
+}
+
+.agent-top-bar-actions {
+	display: flex;
+	margin-left: auto;
+	gap: 2px;
+}
+
+.agent-create-tab,
+.agent-restart-session {
+	display: grid;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	place-items: center;
+	color: var(--vscode-foreground);
+	background: transparent;
+	border: 0;
+	border-radius: 2px;
+	font: inherit;
+	font-size: 14px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.agent-create-tab:hover:not(:disabled),
+.agent-restart-session:hover:not(:disabled) {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.agent-create-tab:focus-visible,
+.agent-restart-session:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.agent-create-tab:disabled,
+.agent-restart-session:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+#agent-tab-strip {
+	display: flex;
+	/* 탭 줄만 남는 폭을 쓰고, 넘치면 이 안에서만 가로로 스크롤한다. */
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-x: auto;
+	gap: 2px;
+}
+
+#agent-tab-strip:empty {
+	display: none;
+}
+
+.agent-tab {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	border: 1px solid transparent;
+	border-radius: 3px 3px 0 0;
+	background-color: var(--vscode-tab-inactiveBackground, transparent);
+}
+
+.agent-tab[data-active='true'] {
+	border-color: var(--vscode-panel-border);
+	background-color: var(--vscode-tab-activeBackground, transparent);
+}
+
+.agent-tab-select {
+	max-width: 160px;
+	padding: 3px 6px;
+	overflow: hidden;
+	color: var(--vscode-tab-inactiveForeground, var(--vscode-foreground));
+	background: transparent;
+	border: 0;
+	font: inherit;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.agent-tab[data-active='true'] .agent-tab-select {
+	color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+}
+
+.agent-tab-close {
+	padding: 0 6px 0 0;
+	color: inherit;
+	background: transparent;
+	border: 0;
+	font: inherit;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.agent-tab-select:focus-visible,
+.agent-tab-close:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+#agent-dialog-host {
+	position: absolute;
+	inset: 0;
+	z-index: 5;
+	display: grid;
+	padding: 24px;
+	place-items: center;
+	background-color: rgba(0, 0, 0, 0.35);
+}
+
+#agent-dialog-host[hidden] {
+	display: none;
+}
+
+.agent-confirm-panel {
+	display: grid;
+	gap: 12px;
+	max-width: 100%;
+	padding: 16px;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+}
+
+.agent-confirm-message {
+	margin: 0;
+	overflow-wrap: anywhere;
+	text-align: center;
+}
+
+.agent-confirm-actions {
+	display: flex;
+	justify-content: center;
+	gap: 8px;
+}
+
+.agent-confirm-accept,
+.agent-confirm-cancel {
+	padding: 4px 14px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	font: inherit;
+	cursor: pointer;
+}
+
+.agent-confirm-accept {
+	color: var(--vscode-button-foreground);
+	background-color: var(--vscode-button-background);
+}
+
+.agent-confirm-accept:hover {
+	background-color: var(--vscode-button-hoverBackground);
+}
+
+.agent-confirm-cancel {
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background-color: var(--vscode-button-secondaryBackground, transparent);
+}
+
+.agent-confirm-cancel:hover {
+	background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}

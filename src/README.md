@@ -2,12 +2,13 @@
 
 VS Code Extension Host와 Webview에서 실행되는 소스 코드를 관리한다.
 
-Extension Host는 `WebviewPanel`의 생명 주기와 마지막 Webview snapshot을 관리한다. 
+Extension Host는 `WebviewPanel`의 생명 주기와 마지막 Webview snapshot을 관리한다.
 
 ## 구조
 
 ```text
 src/
+├── agent/
 ├── test/
 ├── webview/
 ├── README.md
@@ -44,3 +45,15 @@ src/
 ### `messages.ts`
 
 > Extension Host와 Webview 사이에서 사용하는 메시지 타입을 정의합니다.
+
+- Webview snapshot 메시지와 Agent / Terminal wire protocol 타입 통합
+- Webview state와 Agent / Terminal validation boundary 분리
+- `webview.ready`와 `extension.ready` handshake 계약 관리
+
+### `agent/`
+
+> Agent 탭과 Terminal 세션의 프로토콜, 실행 정책과 UI를 담당합니다.
+
+- Host와 Webview가 공유하는 메시지 계약 및 runtime validator
+- 탭별 Terminal 세션 lifecycle과 provider 자동 실행 정책
+- 세부 구조와 동작은 `agent/README.md` 참고

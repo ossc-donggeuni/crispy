@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import { createAgentTabModel } from '../agent/UI/agentTabModel';
 import type { WebviewToExtensionMessage } from '../messages';
 import {
 	createGraphState,
@@ -274,7 +275,7 @@ suite('Webview State', () => {
 });
 
 suite('Webview State Wiring', () => {
-	test('Graph와 Panel 변경을 전체 Webview snapshot 저장 및 Host 메시지로 연결한다', () => {
+	test('Graph, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다', () => {
 		const initialState = createWebviewState('left', 35, -25, 1.25);
 		const nextGraphState = {
 			camera: { x: 120, y: -60, scale: 2 },
@@ -282,8 +283,11 @@ suite('Webview State Wiring', () => {
 			fileGroupPages: {},
 			openedFolders: { 'folder:src': true as const },
 		};
+		const agentTabId = 'agent-tab-test';
 		const savedStates: PersistedWebviewState[] = [];
 		const postedMessages: WebviewToExtensionMessage[] = [];
+		const ensuredTabs: string[] = [];
+		const activeTabs: string[] = [];
 		let currentGraphState: GraphStateSnapshot = {
 			camera: initialState.graph.camera,
 			nodePositions: initialState.graph.nodePositions,
@@ -293,17 +297,41 @@ suite('Webview State Wiring', () => {
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
 		let panelState: PanelLayoutState | undefined;
 		let persistPanelState: (() => void) | undefined;
+		let dockFit: (() => void) | undefined;
+		let persistResizeState: (() => void) | undefined;
+		let resizeFit: (() => void) | undefined;
+		let agentUiLayoutChange: (() => void) | undefined;
+		let unloadHandler: (() => void) | undefined;
+		let graphUnsubscribed = false;
+		let graphDisposed = false;
+		let agentPanelUiInitialized = false;
+		let agentPanelUiDisposed = false;
+		let terminalPoolDisposed = false;
+		let terminalFitCount = 0;
 
 		const graphViewModulePath = require.resolve('../webview/graph/graphView');
 		const panelDockModulePath = require.resolve('../webview/panel/panelDock');
 		const panelResizeModulePath = require.resolve('../webview/panel/panelResize');
+		const agentPanelUiModulePath = require.resolve('../agent/UI/agentPanelUi');
+		const agentTerminalPoolModulePath = require.resolve(
+			'../agent/webview/agentTerminalPool',
+		);
 		const webviewModulePath = require.resolve('../webview/webview');
 		const graphViewModule = require(graphViewModulePath) as GraphViewModule;
 		const panelDockModule = require(panelDockModulePath) as PanelDockModule;
 		const panelResizeModule = require(panelResizeModulePath) as PanelResizeModule;
+		const agentPanelUiModule = require(
+			agentPanelUiModulePath,
+		) as AgentPanelUiModule;
+		const agentTerminalPoolModule = require(
+			agentTerminalPoolModulePath,
+		) as AgentTerminalPoolModule;
 		const originalInitializeGraphView = graphViewModule.initializeGraphView;
 		const originalInitializePanelDock = panelDockModule.initializePanelDock;
 		const originalInitializePanelResize = panelResizeModule.initializePanelResize;
+		const originalInitializeAgentPanelUi = agentPanelUiModule.initializeAgentPanelUi;
+		const originalCreateDefaultAgentTerminalPool =
+			agentTerminalPoolModule.createDefaultAgentTerminalPool;
 		const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 		const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 		const originalAcquireVsCodeApi = Object.getOwnPropertyDescriptor(
@@ -351,13 +379,16 @@ suite('Webview State Wiring', () => {
 
 						return () => {
 							graphSubscriber = undefined;
+							graphUnsubscribed = true;
 						};
 					},
 				},
 				camera: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['camera'],
-				dispose: () => undefined,
+				dispose: () => {
+					graphDisposed = true;
+				},
 			};
 		}) as typeof graphViewModule.initializeGraphView;
 
@@ -367,16 +398,74 @@ suite('Webview State Wiring', () => {
 			_dockPreview,
 			state,
 			onPreferredDockChange,
+			onDockChange,
 		) => {
 			panelState = state;
 			persistPanelState = onPreferredDockChange;
+			dockFit = onDockChange;
 
 			return () => undefined;
 		}) as typeof panelDockModule.initializePanelDock;
 
-		panelResizeModule.initializePanelResize = (() => undefined) as (
-			typeof panelResizeModule.initializePanelResize
-		);
+		panelResizeModule.initializePanelResize = ((
+			_layout,
+			_resizeHandle,
+			_state,
+			_onSizeChange,
+			onResizeEnd,
+			onLayoutResize,
+		) => {
+			persistResizeState = onResizeEnd;
+			resizeFit = onLayoutResize;
+		}) as typeof panelResizeModule.initializePanelResize;
+
+		/** 실제 xterm 없이 Webview entrypoint가 호출하는 Terminal Pool API만 관찰한다. */
+		agentTerminalPoolModule.createDefaultAgentTerminalPool = ((
+			_container,
+			_postMessage,
+		) => ({
+			ensureTab(tabId): void {
+				ensuredTabs.push(tabId);
+			},
+
+			setActiveTab(tabId): void {
+				activeTabs.push(tabId);
+			},
+
+			closeTab: () => undefined,
+
+			resetTab: () => undefined,
+
+			handleHostMessage: () => undefined,
+
+			scheduleActiveTerminalFit(): void {
+				terminalFitCount += 1;
+			},
+
+			dispose(): void {
+				terminalPoolDisposed = true;
+			},
+		})) as typeof agentTerminalPoolModule.createDefaultAgentTerminalPool;
+
+		/**
+		 * 실제 Agent DOM 대신 초기화 여부와 Webview로 전달되는 콜백만 노출한다.
+		 * 실제 구현과 같이 초기 탭을 만들고 `onTabCreated`를 호출해 wiring을 재현한다.
+		 */
+		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks) => {
+			agentPanelUiInitialized = true;
+			agentUiLayoutChange = callbacks?.onLayoutChange;
+
+			const model = createAgentTabModel(() => agentTabId);
+			callbacks?.onTabCreated?.(model.createTab());
+
+			return {
+				model,
+				getSnapshot: () => model.getSnapshot(),
+				dispose(): void {
+					agentPanelUiDisposed = true;
+				},
+			};
+		}) as typeof agentPanelUiModule.initializeAgentPanelUi;
 
 		const vscodeApi: WebviewStateApi & {
 			postMessage(message: WebviewToExtensionMessage): void;
@@ -395,6 +484,11 @@ suite('Webview State Wiring', () => {
 			['#chat-drag-handle', {} as HTMLElement],
 			['#panel-resize-handle', {} as HTMLElement],
 			['#dock-preview', {} as HTMLElement],
+			['#agent-terminal-area', {} as HTMLElement],
+			['#agent-top-bar', {} as HTMLElement],
+			['#agent-tab-strip', {} as HTMLElement],
+			['#agent-provider-picker-host', {} as HTMLElement],
+			['#agent-dialog-host', {} as HTMLElement],
 		]);
 		const documentMock = {
 			currentScript: {
@@ -403,7 +497,14 @@ suite('Webview State Wiring', () => {
 			querySelector: (selector: string) => elements.get(selector) ?? null,
 		};
 		const windowMock = {
-			addEventListener: () => undefined,
+			addEventListener: (
+				type: string,
+				listener: EventListenerOrEventListenerObject,
+			) => {
+				if (type === 'unload' && typeof listener === 'function') {
+					unloadHandler = listener as () => void;
+				}
+			},
 		};
 
 		Object.defineProperty(globalThis, 'document', {
@@ -423,6 +524,20 @@ suite('Webview State Wiring', () => {
 
 		try {
 			require(webviewModulePath);
+
+			/** Agent UI 초기화 실패가 조용히 무시되지 않았음을 먼저 확인한다. */
+			assert.strictEqual(agentPanelUiInitialized, true);
+			assert.ok(agentUiLayoutChange);
+			assert.deepStrictEqual(getTabCreateMessages(postedMessages), [
+				{ type: 'tab.create', tabId: agentTabId },
+			]);
+			assert.deepStrictEqual(ensuredTabs, [agentTabId]);
+			assert.deepStrictEqual(activeTabs, [agentTabId]);
+
+			const fitCountBeforeLayoutChange = terminalFitCount;
+			agentUiLayoutChange();
+
+			assert.strictEqual(terminalFitCount, fitCountBeforeLayoutChange + 1);
 
 			assert.ok(graphSubscriber);
 			currentGraphState = nextGraphState;
@@ -467,11 +582,58 @@ suite('Webview State Wiring', () => {
 				type: 'webview.stateChanged',
 				state: savedStates[1],
 			});
+
+			assert.ok(dockFit);
+			const fitCountBeforeDock = terminalFitCount;
+			dockFit();
+
+			assert.strictEqual(terminalFitCount, fitCountBeforeDock + 1);
+
+			assert.ok(persistResizeState);
+			assert.ok(resizeFit);
+			panelState.sideSize = 500;
+			persistResizeState();
+
+			assert.strictEqual(savedStates.length, 3);
+			assert.deepStrictEqual(savedStates[2], {
+				panel: {
+					...initialState.panel,
+					preferredDock: 'bottom',
+					sideSize: 500,
+					verticalSize: 320,
+				},
+				graph: nextGraphState,
+			});
+
+			const resizeMessages = getStateChangedMessages(postedMessages);
+			assert.strictEqual(resizeMessages.length, 3);
+			const resizeMessage = resizeMessages[2];
+			assert.ok(resizeMessage);
+			assert.deepStrictEqual(resizeMessage, {
+				type: 'webview.stateChanged',
+				state: savedStates[2],
+			});
+
+			const fitCountBeforeResize = terminalFitCount;
+			resizeFit();
+
+			assert.strictEqual(terminalFitCount, fitCountBeforeResize + 1);
+
+			assert.ok(unloadHandler);
+			unloadHandler();
+
+			assert.strictEqual(graphUnsubscribed, true);
+			assert.strictEqual(graphDisposed, true);
+			assert.strictEqual(terminalPoolDisposed, true);
+			assert.strictEqual(agentPanelUiDisposed, true);
 		} finally {
 			delete require.cache[webviewModulePath];
 			graphViewModule.initializeGraphView = originalInitializeGraphView;
 			panelDockModule.initializePanelDock = originalInitializePanelDock;
 			panelResizeModule.initializePanelResize = originalInitializePanelResize;
+			agentPanelUiModule.initializeAgentPanelUi = originalInitializeAgentPanelUi;
+			agentTerminalPoolModule.createDefaultAgentTerminalPool =
+				originalCreateDefaultAgentTerminalPool;
 			restoreGlobalProperty('document', originalDocument);
 			restoreGlobalProperty('window', originalWindow);
 			restoreGlobalProperty('acquireVsCodeApi', originalAcquireVsCodeApi);
@@ -491,6 +653,15 @@ interface PanelResizeModule {
 	initializePanelResize: typeof import('../webview/panel/panelResize').initializePanelResize;
 }
 
+interface AgentPanelUiModule {
+	initializeAgentPanelUi: typeof import('../agent/UI/agentPanelUi').initializeAgentPanelUi;
+}
+
+interface AgentTerminalPoolModule {
+	createDefaultAgentTerminalPool:
+		typeof import('../agent/webview/agentTerminalPool').createDefaultAgentTerminalPool;
+}
+
 function getStateChangedMessages(
 	messages: WebviewToExtensionMessage[],
 ): Array<Extract<WebviewToExtensionMessage, { type: 'webview.stateChanged' }>> {
@@ -499,6 +670,17 @@ function getStateChangedMessages(
 			WebviewToExtensionMessage,
 			{ type: 'webview.stateChanged' }
 		> => message.type === 'webview.stateChanged',
+	);
+}
+
+function getTabCreateMessages(
+	messages: WebviewToExtensionMessage[],
+): Array<Extract<WebviewToExtensionMessage, { type: 'tab.create' }>> {
+	return messages.filter(
+		(message): message is Extract<
+			WebviewToExtensionMessage,
+			{ type: 'tab.create' }
+		> => message.type === 'tab.create',
 	);
 }
 

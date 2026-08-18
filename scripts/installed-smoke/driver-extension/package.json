@@ -1,0 +1,11 @@
+{
+  "name": "crispy-installed-smoke-driver",
+  "displayName": "Crispy Installed Smoke Driver",
+  "publisher": "crispy-tests",
+  "version": "0.0.0",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": []
+}
