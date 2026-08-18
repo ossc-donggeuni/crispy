@@ -179,6 +179,7 @@ suite('Crispy Extension Host', () => {
 			});
 			assert.ok(project && project.kind === 'project');
 			assert.strictEqual(project.name, workspaceFolder.name);
+			assert.strictEqual(project.status, 'loaded');
 		}
 	});
 

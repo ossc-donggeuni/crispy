@@ -15,18 +15,22 @@ const PROJECT: Project = {
 	kind: 'project',
 	id: 'project:workspace',
 	name: 'crispy',
+	status: 'loaded',
 	children: [{
 		kind: 'folder',
 		id: 'folder:src',
 		name: 'src',
+		status: 'loaded',
 		children: [{
 			kind: 'folder',
 			id: 'folder:webview',
 			name: 'webview',
+			status: 'loaded',
 			children: [{
 				kind: 'folder',
 				id: 'folder:graph',
 				name: 'graph',
+				status: 'loaded',
 				children: [{
 					kind: 'file',
 					id: 'file:graphView',
@@ -41,39 +45,48 @@ const NESTED_PROJECT: Project = {
 	kind: 'project',
 	id: 'project:nested-workspace',
 	name: 'crispy',
+	status: 'loaded',
 	children: [{
 		kind: 'folder',
 		id: 'folder:packages',
 		name: 'packages',
+		status: 'loaded',
 		children: [{
 			kind: 'folder',
 			id: 'folder:demo',
 			name: 'demo',
+			status: 'loaded',
 			children: [{
 				kind: 'folder',
 				id: 'folder:package-src',
 				name: 'src',
+				status: 'loaded',
 				children: [{
 					kind: 'folder',
 					id: 'folder:multi-root-demo',
 					name: 'multi-root-demo',
+					status: 'loaded',
 					children: [{
 						kind: 'folder',
 						id: 'folder:single-file',
 						name: 'single-file',
+						status: 'loaded',
 						children: [],
 					}, {
 						kind: 'folder',
 						id: 'folder:a',
 						name: 'a',
+						status: 'loaded',
 						children: [{
 							kind: 'folder',
 							id: 'folder:b',
 							name: 'b',
+							status: 'loaded',
 							children: [{
 								kind: 'folder',
 								id: 'folder:deep-target',
 								name: 'target',
+								status: 'loaded',
 								children: [],
 							}],
 						}],
@@ -85,10 +98,12 @@ const NESTED_PROJECT: Project = {
 		kind: 'folder',
 		id: 'folder:top-src',
 		name: 'src',
+		status: 'loaded',
 		children: [{
 			kind: 'folder',
 			id: 'folder:top-webview',
 			name: 'webview',
+			status: 'loaded',
 			children: [{
 				kind: 'file',
 				id: 'file:top-graph-view',

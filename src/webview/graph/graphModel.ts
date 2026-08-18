@@ -1,7 +1,14 @@
+import type { WorkspaceDirectoryStatus } from '../../workspace/workspaceModel';
+
 /** 프로젝트 Tree 항목이 공통으로 가지는 안정적인 식별 정보다. */
 interface ProjectItemBase {
 	readonly id: string;
 	readonly name: string;
+}
+
+/** Project와 Folder가 공통으로 유지하는 Workspace Directory 탐색 상태다. */
+interface ProjectDirectoryBase extends ProjectItemBase {
+	readonly status: WorkspaceDirectoryStatus;
 }
 
 /** 원래 Graph Root를 기준으로 한 선택적 표시 Context다. */
@@ -37,13 +44,13 @@ export function createSingleRootGraph(
 }
 
 /** Graph의 최상위 Project Root와 직접 포함 항목을 나타낸다. */
-export interface Project extends ProjectItemBase {
+export interface Project extends ProjectDirectoryBase {
 	readonly kind: 'project';
 	readonly children: readonly ProjectEntry[];
 }
 
 /** 중첩 가능하며 Folder 또는 File을 직접 포함하는 프로젝트 Folder다. */
-export interface Folder extends ProjectItemBase {
+export interface Folder extends ProjectDirectoryBase {
 	readonly kind: 'folder';
 	readonly children: readonly ProjectEntry[];
 }

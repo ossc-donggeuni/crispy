@@ -46,6 +46,7 @@ suite('Graph Renderer / Node Drag', () => {
 			kind: 'folder' as const,
 			id: 'folder:context-root',
 			name: 'context-root',
+			status: 'loaded' as const,
 			children: [{
 				kind: 'file' as const,
 				id: 'file:context-root/child.ts',
@@ -310,6 +311,7 @@ suite('Graph Renderer / Node Drag', () => {
 			kind: 'project',
 			id: 'project:detach-standalone',
 			name: 'detach-standalone',
+			status: 'loaded',
 			children: [standaloneFile],
 		};
 		const standalone = createRendererFixture(
@@ -349,6 +351,7 @@ suite('Graph Renderer / Node Drag', () => {
 			kind: 'folder' as const,
 			id: 'folder:detach-root',
 			name: 'detach-root',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const folderRoot = createRendererFixture(1, undefined, {}, rootFolder);
@@ -639,6 +642,7 @@ suite('Graph Renderer / Node Drag', () => {
 			kind: 'folder' as const,
 			id: 'folder:backlink-target',
 			name: 'backlink-target',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const file = {
@@ -650,6 +654,7 @@ suite('Graph Renderer / Node Drag', () => {
 			kind: 'project',
 			id: 'project:backlink-click',
 			name: 'backlink-click',
+			status: 'loaded',
 			children: [folder, file],
 		};
 		const folderAddition = addGraphRoot(
@@ -785,12 +790,14 @@ suite('Graph Renderer / Node Drag', () => {
 			kind: 'folder' as const,
 			id: 'folder:reattach-lifecycle',
 			name: 'reattach-lifecycle',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const project: Project = {
 			kind: 'project',
 			id: 'project:reattach-lifecycle',
 			name: 'reattach-lifecycle',
+			status: 'loaded',
 			children: [folder],
 		};
 		const addition = addGraphRoot(
@@ -1880,10 +1887,12 @@ function createPaginationProject(fileCounts: readonly number[]): Project {
 		kind: 'project',
 		id: 'project:pagination',
 		name: 'pagination',
+		status: 'loaded',
 		children: fileCounts.map((fileCount, groupIndex) => ({
 			kind: 'folder' as const,
 			id: `folder:pagination-${groupIndex}`,
 			name: `pagination-${groupIndex}`,
+			status: 'loaded' as const,
 			children: Array.from({ length: fileCount }, (_, fileIndex) => ({
 				kind: 'file' as const,
 				id: `file:pagination-${groupIndex}/file-${fileIndex + 1}.ts`,

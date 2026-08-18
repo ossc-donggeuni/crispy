@@ -34,6 +34,7 @@ suite('Graph View', () => {
 			kind: 'project',
 			id: 'project:secondary',
 			name: 'secondary',
+			status: 'loaded',
 			children: [{
 				kind: 'file',
 				id: 'file:secondary/index.ts',
@@ -114,6 +115,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:focus-target',
 			name: 'focus-target',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const file = {
@@ -125,6 +127,7 @@ suite('Graph View', () => {
 			kind: 'project',
 			id: 'project:focus',
 			name: 'focus',
+			status: 'loaded',
 			children: [folder, file],
 		};
 		const folderAddition = addGraphRoot(
@@ -192,6 +195,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:context-focus-target',
 			name: 'context-focus-target',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const groupedTarget = {
@@ -203,6 +207,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:grouped-context',
 			name: 'grouped-context',
+			status: 'loaded' as const,
 			children: [groupedTarget, {
 				kind: 'file' as const,
 				id: 'file:grouped/sibling.ts',
@@ -218,12 +223,14 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:singleton-context',
 			name: 'singleton-context',
+			status: 'loaded' as const,
 			children: [singletonTarget],
 		};
 		const project: Project = {
 			kind: 'project',
 			id: 'project:context-focus',
 			name: 'context-focus',
+			status: 'loaded',
 			children: [folderTarget, groupedFolder, singletonFolder],
 		};
 		const folderAddition = addGraphRoot(
@@ -354,6 +361,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:reattach-target',
 			name: 'reattach-target',
+			status: 'loaded' as const,
 			children: [folderChild],
 		};
 		const groupedFiles = Array.from({ length: 7 }, (_, index) => ({
@@ -368,6 +376,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:reattach-group',
 			name: 'reattach-group',
+			status: 'loaded' as const,
 			children: groupedFiles,
 		};
 		const singletonTarget = {
@@ -379,18 +388,21 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:reattach-singleton',
 			name: 'reattach-singleton',
+			status: 'loaded' as const,
 			children: [singletonTarget],
 		};
 		const positionedSibling = {
 			kind: 'folder' as const,
 			id: 'folder:reattach-positioned-sibling',
 			name: 'positioned-sibling',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const project: Project = {
 			kind: 'project',
 			id: 'project:reattach',
 			name: 'reattach',
+			status: 'loaded',
 			children: [
 				folderTarget,
 				groupedFolder,
@@ -621,6 +633,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:detach-child',
 			name: 'detach-child',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const childFile = {
@@ -632,6 +645,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:detach-root',
 			name: 'detach-root',
+			status: 'loaded' as const,
 			children: [childFolder, childFile],
 		};
 		const rootFile = {
@@ -744,6 +758,7 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:src',
 			name: 'src',
+			status: 'loaded' as const,
 			children: [{
 				kind: 'file' as const,
 				id: 'file:src/index.ts',
@@ -754,12 +769,14 @@ suite('Graph View', () => {
 			kind: 'folder' as const,
 			id: 'folder:docs',
 			name: 'docs',
+			status: 'loaded' as const,
 			children: [],
 		};
 		const project: Project = {
 			kind: 'project',
 			id: 'project:promotion',
 			name: 'crispy',
+			status: 'loaded',
 			children: [promotedFolder, sibling],
 		};
 		const graph = createSingleRootGraph(project, 'root:project');
