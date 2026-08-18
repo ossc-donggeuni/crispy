@@ -147,10 +147,20 @@ suite('Graph Model / Layout', () => {
 		const layoutOptions = { openedFolders: { [loadedProject.id]: true as const } };
 		const loadedLayout = createBaseGraphLayout(loadedGraph, layoutOptions);
 		const unreadableLayout = createBaseGraphLayout(unreadableGraph, layoutOptions);
+		const loadedFolderNode = loadedLayout.nodes.find(
+			(node) => node.id === loadedFolder.id,
+		);
+		const unreadableFolderNode = unreadableLayout.nodes.find(
+			(node) => node.id === loadedFolder.id,
+		);
 		const selectNodeStructure = (
 			{ id, kind, depth, position, width, height }: GraphLayoutNode,
 		) => ({ id, kind, depth, position, width, height });
 
+		assert.ok(loadedFolderNode && loadedFolderNode.kind === 'folder');
+		assert.ok(unreadableFolderNode && unreadableFolderNode.kind === 'folder');
+		assert.strictEqual(loadedFolderNode.status, 'loaded');
+		assert.strictEqual(unreadableFolderNode.status, 'unreadable');
 		assert.deepStrictEqual(unreadableGraph.roots, loadedGraph.roots);
 		assert.deepStrictEqual(
 			unreadableLayout.nodes.map(selectNodeStructure),

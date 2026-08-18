@@ -41,6 +41,153 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Renderer / Node Drag', () => {
+	test('unreadable Project와 Folder에만 상태 Class를 적용한다', () => {
+		const loadedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:loaded',
+			name: 'loaded',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const unreadableFolder = {
+			kind: 'folder' as const,
+			id: 'folder:unreadable',
+			name: 'unreadable',
+			status: 'unreadable' as const,
+			children: [],
+		};
+		const file = {
+			kind: 'file' as const,
+			id: 'file:index.ts',
+			name: 'index.ts',
+		};
+		const loadedProject: Project = {
+			kind: 'project',
+			id: 'project:loaded',
+			name: 'loaded',
+			status: 'loaded',
+			children: [loadedFolder, unreadableFolder, file],
+		};
+		const loadedFixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			loadedProject,
+		);
+
+		assert.strictEqual(
+			loadedFixture.getNode(loadedProject.id).hasClass('is-unreadable'),
+			false,
+		);
+		assert.strictEqual(
+			loadedFixture.getNode(loadedFolder.id).hasClass('is-unreadable'),
+			false,
+		);
+		assert.strictEqual(
+			loadedFixture.getNode(unreadableFolder.id).hasClass('is-unreadable'),
+			true,
+		);
+		assert.strictEqual(
+			loadedFixture.getNode(file.id).hasClass('is-unreadable'),
+			false,
+		);
+		loadedFixture.renderer.dispose();
+
+		const unreadableProject: Project = {
+			kind: 'project',
+			id: 'project:unreadable',
+			name: 'unreadable',
+			status: 'unreadable',
+			children: [],
+		};
+		const unreadableFixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			unreadableProject,
+		);
+
+		assert.strictEqual(
+			unreadableFixture.getNode(unreadableProject.id).hasClass('is-unreadable'),
+			true,
+		);
+		unreadableFixture.renderer.dispose();
+	});
+
+	test('applyLayout은 유지된 Project/Folder DOM의 상태 Class를 동기화한다', () => {
+		const projectId = 'project:status';
+		const folderId = 'folder:status/child';
+		const createStatusProject = (
+			projectStatus: Project['status'],
+			folderStatus: Project['status'],
+		): Project => ({
+			kind: 'project',
+			id: projectId,
+			name: 'status',
+			status: projectStatus,
+			children: [{
+				kind: 'folder',
+				id: folderId,
+				name: 'child',
+				status: folderStatus,
+				children: [{
+					kind: 'file',
+					id: 'file:status/child/index.ts',
+					name: 'index.ts',
+				}],
+			}],
+		});
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			createStatusProject('loaded', 'loaded'),
+		);
+		const applyStatus = (
+			projectStatus: Project['status'],
+			folderStatus: Project['status'],
+		): void => {
+			fixture.renderer.applyLayout(createGraphLayout(
+				createSingleRootGraph(createStatusProject(projectStatus, folderStatus)),
+				{
+					fileGroupPages: fixture.graphState.getState().fileGroupPages,
+					openedFolders: fixture.graphState.getState().openedFolders,
+				},
+			));
+		};
+		const projectNode = fixture.getNode(projectId);
+		const folderNode = fixture.getNode(folderId);
+		const folderEdge = fixture.getConnectedEdge(folderId);
+		const folderTransform = folderNode.style.transform;
+		const folderEdgePath = folderEdge.getAttribute('d');
+		const nodeCount = fixture.nodeLayer.children.length;
+		const edgeCount = fixture.edgeLayer.children.length;
+
+		assert.strictEqual(projectNode.hasClass('is-unreadable'), false);
+		assert.strictEqual(folderNode.hasClass('is-unreadable'), false);
+
+		applyStatus('unreadable', 'unreadable');
+
+		assert.strictEqual(fixture.getNode(projectId), projectNode);
+		assert.strictEqual(fixture.getNode(folderId), folderNode);
+		assert.strictEqual(projectNode.hasClass('is-unreadable'), true);
+		assert.strictEqual(folderNode.hasClass('is-unreadable'), true);
+		assert.strictEqual(fixture.getConnectedEdge(folderId), folderEdge);
+		assert.strictEqual(folderEdge.getAttribute('d'), folderEdgePath);
+		assert.strictEqual(folderNode.style.transform, folderTransform);
+		assert.strictEqual(folderNode.getAttribute('aria-expanded'), 'true');
+		assert.strictEqual(fixture.nodeLayer.children.length, nodeCount);
+		assert.strictEqual(fixture.edgeLayer.children.length, edgeCount);
+
+		applyStatus('loaded', 'loaded');
+
+		assert.strictEqual(fixture.getNode(projectId), projectNode);
+		assert.strictEqual(fixture.getNode(folderId), folderNode);
+		assert.strictEqual(projectNode.hasClass('is-unreadable'), false);
+		assert.strictEqual(folderNode.hasClass('is-unreadable'), false);
+		fixture.renderer.dispose();
+	});
+
 	test('Context가 있는 Folder/File Root에만 좌측 정렬 Label을 렌더링한다', () => {
 		const folder = {
 			kind: 'folder' as const,

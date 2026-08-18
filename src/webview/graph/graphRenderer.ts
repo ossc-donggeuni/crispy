@@ -620,6 +620,7 @@ export function initializeGraphRenderer(
 
 				if (element) {
 					syncDetachDrag(nextNode, element);
+					updateContainerStatusState(element, nextNode);
 				}
 
 				if (
@@ -827,6 +828,8 @@ function createNodeElement(
 	element.className = node.kind === 'folder-backlink'
 		? 'graph-node graph-folder-node graph-folder-backlink-node'
 		: `graph-node graph-${node.kind}-node`;
+
+	updateContainerStatusState(element, node);
 	element.setAttribute('data-graph-node-id', node.id);
 	element.style.width = `${node.width}px`;
 	element.style.height = `${node.height}px`;
@@ -930,6 +933,25 @@ function createFolderIcon(ownerDocument: Document): HTMLElement {
 	icon.setAttribute('aria-hidden', 'true');
 
 	return icon;
+}
+
+/**
+ * 기존 Project/Folder DOM의 Directory 상태 Class를 최신 Layout 상태와 맞춘다.
+ * Project/Folder가 아닌 Node에는 Directory 상태를 적용하지 않는다.
+ */
+function updateContainerStatusState(
+	element: HTMLElement,
+	node: GraphLayoutNode,
+): void {
+	if (node.kind !== 'project' && node.kind !== 'folder') {
+		return;
+	}
+
+	if (node.status === 'unreadable') {
+		element.classList.add('is-unreadable');
+	} else {
+		element.classList.remove('is-unreadable');
+	}
 }
 
 /** 기존 Project/Folder DOM에서 icon asset 선택과 접근성 상태만 갱신한다. */
