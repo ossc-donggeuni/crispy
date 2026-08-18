@@ -6,6 +6,7 @@ import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import type { WebviewToExtensionMessage } from '../messages';
 import { initializeGraphView } from './graph/graphView';
+import { deserializeGraphFromWebview } from './graph/graphTransport';
 import { initializePanelDock } from './panel/panelDock';
 import { initializePanelResize } from './panel/panelResize';
 
@@ -38,9 +39,13 @@ function getRequiredElement<T extends HTMLElement>(selector: string): T {
 }
 
 const vscodeApi = acquireVsCodeApi();
-const serializedInitialState = document.currentScript?.getAttribute('data-webview-state')
+const currentScript = document.currentScript;
+const serializedInitialState = currentScript?.getAttribute('data-webview-state')
+	?? undefined;
+const serializedWorkspaceGraph = currentScript?.getAttribute('data-workspace-graph')
 	?? undefined;
 const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
+const workspaceGraph = deserializeGraphFromWebview(serializedWorkspaceGraph);
 const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
@@ -50,7 +55,7 @@ const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
-const graphView = initializeGraphView(graphArea, initialState.graph);
+const graphView = initializeGraphView(graphArea, initialState.graph, workspaceGraph);
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(

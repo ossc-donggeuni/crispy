@@ -3,13 +3,19 @@ import {
 	createFileGroupId,
 	createGraphLayout,
 } from '../../webview/graph/graphLayout';
-import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
+import {
+	GRAPH_MOCK,
+	GRAPH_MOCK_PROJECT,
+} from '../../webview/graph/graphMockData';
 import {
 	createSingleRootGraph,
 	type Graph,
 	type Project,
 } from '../../webview/graph/graphModel';
-import { createGraphState } from '../../webview/graph/graphState';
+import {
+	createGraphState,
+	INITIAL_GRAPH_STATE,
+} from '../../webview/graph/graphState';
 import {
 	addGraphRoot,
 	createFileBacklinkGroupId,
@@ -850,6 +856,7 @@ suite('Graph View', () => {
 				camera: { x: 120, y: -45, scale: 1.5 },
 				nodePositions: {},
 			},
+			GRAPH_MOCK,
 		);
 
 		assert.deepStrictEqual(graphView.state.getState(), {
@@ -889,7 +896,11 @@ suite('Graph View', () => {
 		const childId = 'folder:app/src';
 		const rootEdgeId = `${GRAPH_MOCK_PROJECT.id}->${folderId}`;
 		const edgeId = `${folderId}->${childId}`;
-		const graphView = initializeGraphView(root.asHtmlElement());
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
 		const project = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -1001,7 +1012,7 @@ suite('Graph View', () => {
 				'folder:pagination-samples': true,
 				'folder:pagination-samples/seventeen-files': true,
 			},
-		});
+		}, GRAPH_MOCK);
 		const fileGroup = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -1034,7 +1045,7 @@ suite('Graph View', () => {
 				'folder:pagination-samples': true,
 				[parentId]: true,
 			},
-		});
+		}, GRAPH_MOCK);
 		const fileGroup = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',

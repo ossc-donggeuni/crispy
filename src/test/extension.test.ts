@@ -12,6 +12,8 @@ import {
 	serializeWebviewState,
 	type PersistedWebviewState,
 } from '../webview/webviewState';
+import { deserializeGraphFromWebview } from '../webview/graph/graphTransport';
+import type { Graph } from '../webview/graph/graphModel';
 
 import * as vscode from 'vscode';
 
@@ -158,6 +160,26 @@ suite('Crispy Extension Host', () => {
 		assert.ok(
 			panel.webview.html.includes(`img-src ${panel.webview.cspSource};`),
 		);
+	});
+
+	test('Canvas command가 현재 Workspace Root를 Graph 초기 데이터로 전달한다', async () => {
+		const panel = await openCanvas();
+		const graph = getInitialWorkspaceGraph(panel);
+		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+
+		assert.strictEqual(graph.roots.length, workspaceFolders.length);
+		for (const [index, workspaceFolder] of workspaceFolders.entries()) {
+			const projectId = `workspace-root:${workspaceFolder.uri.toString()}`;
+			const graphRoot = graph.roots[index];
+			const project = graph.rootNodes[projectId];
+
+			assert.deepStrictEqual(graphRoot, {
+				id: `root:${projectId}`,
+				nodeId: projectId,
+			});
+			assert.ok(project && project.kind === 'project');
+			assert.strictEqual(project.name, workspaceFolder.name);
+		}
 	});
 
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {
@@ -608,4 +630,10 @@ function getSerializedInitialWebviewState(panel: vscode.WebviewPanel): string {
 	const match = panel.webview.html.match(/data-webview-state="([^"]*)"/);
 	assert.ok(match, 'Webview 초기 HTML에 serialized Webview state가 있어야 한다.');
 	return match[1];
+}
+
+function getInitialWorkspaceGraph(panel: vscode.WebviewPanel): Graph {
+	const match = panel.webview.html.match(/data-workspace-graph="([^"]*)"/);
+	assert.ok(match, 'Webview 초기 HTML에 serialized Workspace Graph가 있어야 한다.');
+	return deserializeGraphFromWebview(match[1]);
 }

@@ -6,6 +6,8 @@ import {
 	INITIAL_GRAPH_STATE,
 	type GraphStateSnapshot,
 } from '../webview/graph/graphState';
+import type { Graph } from '../webview/graph/graphModel';
+import { serializeGraphForWebview } from '../webview/graph/graphTransport';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
@@ -277,6 +279,30 @@ suite('Webview State', () => {
 suite('Webview State Wiring', () => {
 	test('Graph, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다', () => {
 		const initialState = createWebviewState('left', 35, -25, 1.25);
+		const initialWorkspaceGraph: Graph = {
+			roots: [
+				{ id: 'root:app', nodeId: 'project:app' },
+				{ id: 'root:api', nodeId: 'project:api' },
+			],
+			rootNodes: {
+				'project:app': {
+					kind: 'project',
+					id: 'project:app',
+					name: 'app',
+					children: [{
+						kind: 'file',
+						id: 'file:app/index.ts',
+						name: 'index.ts',
+					}],
+				},
+				'project:api': {
+					kind: 'project',
+					id: 'project:api',
+					name: 'api',
+					children: [],
+				},
+			},
+		};
 		const nextGraphState = {
 			camera: { x: 120, y: -60, scale: 2 },
 			nodePositions: { 'folder:src': { x: 800, y: 240 } },
@@ -339,8 +365,9 @@ suite('Webview State Wiring', () => {
 			'acquireVsCodeApi',
 		);
 
-		graphViewModule.initializeGraphView = ((_root, restoredGraphState) => {
+		graphViewModule.initializeGraphView = ((_root, restoredGraphState, graph) => {
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
+			assert.deepStrictEqual(graph, initialWorkspaceGraph);
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
 			currentGraphState = {
 				camera: { ...graphState.camera },
@@ -492,7 +519,11 @@ suite('Webview State Wiring', () => {
 		]);
 		const documentMock = {
 			currentScript: {
-				getAttribute: () => null,
+				getAttribute: (attribute: string) => (
+					attribute === 'data-workspace-graph'
+						? serializeGraphForWebview(initialWorkspaceGraph)
+						: null
+				),
 			},
 			querySelector: (selector: string) => elements.get(selector) ?? null,
 		};
@@ -539,6 +570,7 @@ suite('Webview State Wiring', () => {
 
 			assert.strictEqual(terminalFitCount, fitCountBeforeLayoutChange + 1);
 
+			assert.ok(postedMessages.some(({ type }) => type === 'webview.ready'));
 			assert.ok(graphSubscriber);
 			currentGraphState = nextGraphState;
 			graphSubscriber(nextGraphState);

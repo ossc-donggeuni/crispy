@@ -3,7 +3,6 @@ import {
 	type GraphCamera,
 } from './graphCamera';
 import { createGraphLayout, type GraphLayout } from './graphLayout';
-import { GRAPH_MOCK } from './graphMockData';
 import type { Graph } from './graphModel';
 import { addGraphRoot, removeGraphRoot } from './graphRootPromotion';
 import { initializeGraphNavigator } from './graphNavigator';
@@ -15,7 +14,6 @@ import {
 import type { GraphDetachDropRequest } from './graphDetachDrag';
 import {
 	createGraphState,
-	INITIAL_GRAPH_STATE,
 	type GraphState,
 	type GraphStateSnapshot,
 	type GraphStateStore,
@@ -170,7 +168,7 @@ export function focusGraphBacklink(
 
 /**
  * Graph가 렌더링될 Viewport, World, Edge/Node/Overlay Layer를 생성하고
- * Mock Project 기반 Layout, Renderer, Camera, Navigator를 초기화한다.
+ * 전달받은 Graph 기반 Layout, Renderer, Camera, Navigator를 초기화한다.
  *
  * @param root Graph View를 마운트할 요소
  * @param initialState 복원할 초기 Graph 상태
@@ -180,8 +178,8 @@ export function focusGraphBacklink(
  */
 export function initializeGraphView(
 	root: HTMLElement,
-	initialState: GraphState = INITIAL_GRAPH_STATE,
-	graph: Graph = GRAPH_MOCK,
+	initialState: GraphState,
+	graph: Graph,
 	interactions: GraphViewInteractions = {},
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
