@@ -43,6 +43,9 @@ export interface AgentTerminalPool {
 	/** 탭의 Terminal 표면과 xterm을 정리한다. */
 	closeTab(tabId: TabId): void;
 
+	/** 탭은 유지하면서 기존 xterm을 정리하고 빈 Terminal 표면으로 교체한다. */
+	resetTab(tabId: TabId): void;
+
 	/** 검증된 Host 메시지를 해당 `tabId`의 Terminal로만 전달한다. */
 	handleHostMessage(message: HostToWebviewMessage): void;
 
@@ -93,35 +96,55 @@ export function createAgentTerminalPool(
 		}
 	};
 
+	/** 탭 하나의 새 Terminal 표면과 controller를 만들고 pool에 등록한다. */
+	const createEntry = (tabId: TabId): AgentTerminalEntry => {
+		const surface = dependencies.createElement('div');
+		surface.className = 'terminal-surface';
+		surface.dataset.state = 'ready';
+		surface.hidden = activeTabId !== undefined && activeTabId !== tabId;
+
+		const mount = dependencies.createElement('div');
+		mount.className = 'terminal-mount';
+
+		const overlay = dependencies.createElement('div');
+		overlay.className = 'terminal-overlay';
+		overlay.setAttribute('aria-live', 'polite');
+		overlay.hidden = true;
+
+		surface.append(mount, overlay);
+		container.append(surface);
+
+		const controller = dependencies.createShellTerminal(
+			tabId,
+			surface,
+			mount,
+			overlay,
+		);
+		const entry = { surface, controller };
+		entries.set(tabId, entry);
+		return entry;
+	};
+
+	/** 등록된 탭의 Terminal controller와 표면만 제거한다. */
+	const removeEntry = (tabId: TabId): AgentTerminalEntry | undefined => {
+		const entry = entries.get(tabId);
+		if (entry === undefined) {
+			return undefined;
+		}
+
+		entries.delete(tabId);
+		isolate(() => entry.controller.dispose());
+		isolate(() => entry.surface.remove());
+		return entry;
+	};
+
 	return {
 		ensureTab(tabId): void {
 			if (disposed || entries.has(tabId)) {
 				return;
 			}
 
-			const surface = dependencies.createElement('div');
-			surface.className = 'terminal-surface';
-			surface.dataset.state = 'ready';
-			surface.hidden = activeTabId !== undefined && activeTabId !== tabId;
-
-			const mount = dependencies.createElement('div');
-			mount.className = 'terminal-mount';
-
-			const overlay = dependencies.createElement('div');
-			overlay.className = 'terminal-overlay';
-			overlay.setAttribute('aria-live', 'polite');
-			overlay.hidden = true;
-
-			surface.append(mount, overlay);
-			container.append(surface);
-
-			const controller = dependencies.createShellTerminal(
-				tabId,
-				surface,
-				mount,
-				overlay,
-			);
-			entries.set(tabId, { surface, controller });
+			createEntry(tabId);
 		},
 
 		setActiveTab(tabId): void {
@@ -139,17 +162,28 @@ export function createAgentTerminalPool(
 		},
 
 		closeTab(tabId): void {
-			const entry = entries.get(tabId);
-			if (entry === undefined) {
+			if (!entries.has(tabId)) {
 				return;
 			}
 
-			entries.delete(tabId);
 			if (activeTabId === tabId) {
 				activeTabId = undefined;
 			}
-			isolate(() => entry.controller.dispose());
-			isolate(() => entry.surface.remove());
+			removeEntry(tabId);
+		},
+
+		resetTab(tabId): void {
+			if (disposed || !entries.has(tabId)) {
+				return;
+			}
+
+			const wasActive = activeTabId === tabId;
+			removeEntry(tabId);
+			const replacement = createEntry(tabId);
+			if (wasActive) {
+				replacement.surface.hidden = false;
+				isolate(() => replacement.controller.scheduleTerminalFit());
+			}
 		},
 
 		handleHostMessage(message): void {

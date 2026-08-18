@@ -98,6 +98,10 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 		},
 		requiredFields: ['tabId', 'providerId'],
 	},
+	{
+		message: { type: 'agent.reset', tabId: TAB_ID },
+		requiredFields: ['tabId'],
+	},
 ];
 
 const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [

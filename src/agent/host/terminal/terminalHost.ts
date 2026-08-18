@@ -219,6 +219,38 @@ export class TerminalHost {
 	}
 
 	/**
+	 * 검증된 `agent.reset`으로 탭 등록은 유지하면서 현재 CLI와 provider 배정을 지운다.
+	 * 새 xterm의 `terminal.ready`를 다시 받아야 하므로 이전 표면 크기도 함께 버린다.
+	 *
+	 * @param tabId provider 선택 화면으로 되돌릴 Webview 소유 탭 식별자
+	 */
+	resetAgent(tabId: TabId): void {
+		if (!this.lifecycleActive) {
+			return;
+		}
+		if (!this.registeredTabs.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'session_not_found',
+				START_ERROR_MESSAGES.unknownTab,
+				false,
+			);
+			return;
+		}
+
+		const session = this.getActiveSession(tabId);
+		if (session !== undefined) {
+			this.disposeSessionProcess(session);
+			this.removeSession(session.sessionId);
+		}
+
+		this.providerByTab.delete(tabId);
+		this.lastDimensionsByTab.delete(tabId);
+		this.activeSessionByTab.delete(tabId);
+	}
+
+	/**
 	 * 검증된 `agent.switch`로 탭의 provider를 정하고 세션을 그 provider로 다시 시작한다.
 	 * provider를 바꾸는 선택과 같은 provider를 유지하는 재시작이 같은 경로를 사용하므로
 	 * 실행 중 세션이 있으면 항상 기존 세션을 정리한 뒤 새 세션을 시작한다.

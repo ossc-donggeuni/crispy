@@ -54,6 +54,9 @@ export interface AgentTabModel {
 	 */
 	assignProvider(tabId: AgentTabId, providerId: ProviderId): void;
 
+	/** 탭을 유지한 채 provider 배정을 지워 다시 선택할 수 있는 상태로 되돌린다. */
+	clearProvider(tabId: AgentTabId): void;
+
 	/** 탭을 닫고 필요하면 이웃 탭으로 활성 탭을 옮긴다. */
 	closeTab(tabId: AgentTabId): void;
 }
@@ -178,6 +181,17 @@ export function createAgentTabModel(
 			sequenceCounters.set(providerId, nextSequence);
 			tab.providerId = providerId;
 			tab.sequence = nextSequence;
+			notify();
+		},
+
+		clearProvider(tabId): void {
+			const tab = findTab(tabId);
+			if (tab === undefined || tab.providerId === undefined) {
+				return;
+			}
+
+			delete tab.providerId;
+			delete tab.sequence;
 			notify();
 		},
 

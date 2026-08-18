@@ -217,6 +217,21 @@ suite('Host session state validator', () => {
 		});
 	});
 
+	suite('agent.reset', () => {
+		test('알려진 tab은 session lifecycle과 무관하게 reset할 수 있다', () => {
+			const message = parseMessage({ type: 'agent.reset', tabId: TAB_ID });
+			assertSuccess(
+				validateWebviewToHostMessageState(message, createSnapshot('running')),
+				message,
+			);
+			assertStateFailure(
+				validateWebviewToHostMessageState(message, { tabs: [], sessions: [] }),
+				'unknown_tab',
+				'tabId',
+			);
+		});
+	});
+
 	test('입력 메시지와 readonly snapshot을 변경하지 않는다', () => {
 		const message = Object.freeze(inputMessage('immutable input'));
 		const session = Object.freeze(createSession('running'));

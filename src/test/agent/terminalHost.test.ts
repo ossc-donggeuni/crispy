@@ -159,6 +159,31 @@ suite('TerminalHost public session behavior', () => {
 		assert.notStrictEqual(after.sessionId, before.sessionId);
 		assert.strictEqual(adapter.spawnCalls.length, 2);
 	});
+
+	test('Agent reset은 탭을 유지하면서 현재 CLI와 provider 배정을 정리한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+
+		host.createTab('tab-agent-reset');
+		await host.handleTerminalReady('tab-agent-reset', 80, 24);
+		await host.switchAgent('tab-agent-reset', 'codex');
+		const session = host.getActiveSession('tab-agent-reset');
+		assert.ok(session);
+
+		host.resetAgent('tab-agent-reset');
+
+		assert.strictEqual(host.hasTab('tab-agent-reset'), true);
+		assert.strictEqual(host.getActiveTabId(), 'tab-agent-reset');
+		assert.strictEqual(host.getTabProvider('tab-agent-reset'), undefined);
+		assert.strictEqual(host.getActiveSession('tab-agent-reset'), undefined);
+		assert.strictEqual(host.getSession(session.sessionId), undefined);
+		assert.strictEqual(adapter.handles[0].killCallCount, 1);
+		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
+		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+	});
 });
 
 suite('TerminalHost start orchestration', () => {

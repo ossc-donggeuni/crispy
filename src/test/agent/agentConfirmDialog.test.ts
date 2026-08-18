@@ -81,7 +81,7 @@ suite('Agent Confirm Dialog', () => {
 
 		assert.strictEqual(
 			host.find('agent-confirm-message')?.textContent,
-			'Restart Claude Code #1? The current CLI session will be terminated.',
+			"Restart Claude Code #1? The current CLI session will be terminated and you'll return to agent selection.",
 		);
 		assert.strictEqual(
 			host.find('agent-confirm-accept')?.textContent,

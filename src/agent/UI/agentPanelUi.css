@@ -101,26 +101,23 @@
 	background-color: var(--vscode-list-hoverBackground, transparent);
 }
 
-.agent-provider-option[data-focused='true'] {
+.agent-provider-option:focus-visible {
 	color: var(--vscode-list-focusForeground, var(--vscode-foreground));
 	background-color: var(--vscode-list-focusBackground, var(--vscode-input-background));
 	border-color: var(--vscode-panel-border);
 	box-shadow: inset 3px 0 0 currentColor;
-}
-
-.agent-provider-option:focus {
 	outline: none;
 }
 
-.agent-provider-option:focus-visible {
+.agent-provider-option:focus:not(:focus-visible) {
 	outline: none;
 }
 
-.agent-provider-option[data-focused='true'] .agent-provider-mark {
+.agent-provider-option:focus-visible .agent-provider-mark {
 	border-color: currentColor;
 }
 
-.agent-provider-option[data-focused='true'] .agent-provider-option-label {
+.agent-provider-option:focus-visible .agent-provider-option-label {
 	font-weight: 600;
 }
 
@@ -147,18 +144,8 @@
 	white-space: nowrap;
 }
 
-.agent-provider-picker-hints {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 16px;
-	padding: 8px 12px;
-	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
-	border-top: 1px solid var(--vscode-panel-border);
-	font-size: 0.9em;
-}
-
 @media (forced-colors: active) {
-	.agent-provider-option[data-focused='true'] {
+	.agent-provider-option:focus-visible {
 		outline: 1px solid CanvasText;
 		outline-offset: -1px;
 	}

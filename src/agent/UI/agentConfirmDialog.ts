@@ -30,7 +30,7 @@ export function formatTabCloseConfirmMessage(tabLabel: string): string {
  * @returns 현재 세션 종료 영향을 밝히는 확인 문구
  */
 export function formatSessionRestartConfirmMessage(tabLabel: string): string {
-	return `Restart ${tabLabel}? The current CLI session will be terminated.`;
+	return `Restart ${tabLabel}? The current CLI session will be terminated and you'll return to agent selection.`;
 }
 
 /** 탭 닫기처럼 되돌릴 수 없는 동작 전에 사용자 확인을 받는 경계다. */

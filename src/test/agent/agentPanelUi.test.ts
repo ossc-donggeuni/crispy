@@ -150,27 +150,30 @@ suite('Agent Panel UI', () => {
 				.map((mark) => mark.textContent),
 			['>_', '>_', '>_'],
 		);
+		assert.strictEqual(
+			fixture.providerPicker.find('agent-provider-picker-hints'),
+			undefined,
+		);
 	});
 
-	test('방향키로 목록 포커스를 순환한다', () => {
+	test('provider는 초기 포커스와 방향키 탐색 없이 직접 선택한다', () => {
 		const fixture = createFixture();
 		const list = requireElement(fixture.providerPicker, 'agent-provider-list');
 		const options = fixture.providerPicker.findAll('agent-provider-option');
 		let prevented = false;
 
-		assert.strictEqual(options[0].dataset.focused, 'true');
 		list.dispatch('keydown', {
 			key: 'ArrowDown',
 			preventDefault: () => prevented = true,
 		});
 
-		assert.strictEqual(prevented, true);
-		assert.strictEqual(options[0].dataset.focused, undefined);
-		assert.strictEqual(options[1].dataset.focused, 'true');
-		assert.strictEqual(options[1].focusCount, 1);
-
-		list.dispatch('keydown', { key: 'ArrowUp', preventDefault: () => undefined });
-		assert.strictEqual(options[0].dataset.focused, 'true');
+		assert.strictEqual(prevented, false);
+		assert.deepStrictEqual(options.map((option) => option.dataset.focused), [
+			undefined,
+			undefined,
+			undefined,
+		]);
+		assert.deepStrictEqual(options.map((option) => option.focusCount), [0, 0, 0]);
 	});
 
 	test('provider 선택은 탭에 배정한 뒤 중앙 선택기를 숨긴다', () => {
@@ -224,14 +227,13 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.providerPicker.hidden, false);
 	});
 
-	test('재시작은 확인 후에만 현재 provider 세션을 다시 요청한다', async () => {
-		const restarts: Array<{ tabId: string; providerId: string }> = [];
+	test('재시작은 확인 후 현재 CLI를 정리하고 Agent 선택 화면으로 돌아간다', async () => {
+		const reselections: string[] = [];
 		const providerSelections: string[] = [];
 		const fixture = createFixture({
 			onProviderSelected: (_tabId, providerId) =>
 				providerSelections.push(providerId),
-			onSessionRestartRequested: (tabId, providerId) =>
-				restarts.push({ tabId, providerId }),
+			onAgentReselectionRequested: (tabId) => reselections.push(tabId),
 		});
 
 		selectProvider(fixture.providerPicker, 'codex');
@@ -239,22 +241,28 @@ suite('Agent Panel UI', () => {
 
 		const tab = fixture.controller.getSnapshot().tabs[0];
 		assert.deepStrictEqual(fixture.dialog.requests, [{
-			message: 'Restart Codex #1? The current CLI session will be terminated.',
+			message: "Restart Codex #1? The current CLI session will be terminated and you'll return to agent selection.",
 			acceptLabel: 'Restart',
 		}]);
-		assert.deepStrictEqual(restarts, []);
+		assert.deepStrictEqual(reselections, []);
 
 		fixture.dialog.answer(true);
 		await flushMicrotasks();
 
-		assert.deepStrictEqual(restarts, [{ tabId: tab.id, providerId: 'codex' }]);
+		assert.deepStrictEqual(reselections, [tab.id]);
 		assert.deepStrictEqual(providerSelections, ['codex']);
+		assert.strictEqual(fixture.providerPicker.hidden, false);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, undefined);
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs[0].label,
+			UNSELECTED_TAB_LABEL,
+		);
 	});
 
 	test('재시작 확인을 취소하면 현재 세션을 유지한다', async () => {
 		const restarts: string[] = [];
 		const fixture = createFixture({
-			onSessionRestartRequested: (tabId) => restarts.push(tabId),
+			onAgentReselectionRequested: (tabId) => restarts.push(tabId),
 		});
 
 		selectProvider(fixture.providerPicker, 'antigravity');
@@ -263,6 +271,11 @@ suite('Agent Panel UI', () => {
 		await flushMicrotasks();
 
 		assert.deepStrictEqual(restarts, []);
+		assert.strictEqual(fixture.providerPicker.hidden, true);
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs[0].providerId,
+			'antigravity',
+		);
 	});
 
 	test('provider 미선택 탭에서는 재시작 버튼이 비활성이다', () => {

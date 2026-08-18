@@ -13,8 +13,8 @@ export const AGENT_RESTART_LABEL = '⟳';
 /** 새 탭 생성 버튼의 접근성 이름이다. */
 export const AGENT_CREATE_TAB_TITLE = 'New agent tab';
 
-/** 재시작 버튼의 접근성 이름이며 provider 전환과 구분되는 동작임을 밝힌다. */
-export const AGENT_RESTART_TITLE = 'Restart current agent session';
+/** 재시작 버튼의 접근성 이름이며 Agent 선택 화면으로 돌아가는 동작임을 밝힌다. */
+export const AGENT_RESTART_TITLE = 'Restart and choose an agent';
 
 /**
  * 상단 bar가 상위 계층으로 전달하는 사용자 동작이다.
@@ -26,7 +26,7 @@ export interface AgentTopBarCallbacks {
 	/** `+` 버튼으로 provider 미선택 상태의 새 탭을 요청한 경우다. */
 	onCreateTab(): void;
 
-	/** 재시작 버튼으로 현재 활성 탭의 세션 재시작을 요청한 경우다. */
+	/** 재시작 버튼으로 현재 CLI 종료와 provider 재선택을 요청한 경우다. */
 	onRestartActiveTab(): void;
 }
 

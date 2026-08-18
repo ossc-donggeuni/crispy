@@ -106,9 +106,10 @@ try {
 				postAgentMessage({ type: 'agent.switch', tabId, providerId });
 			},
 
-			onSessionRestartRequested(tabId, providerId): void {
-				/** 같은 provider를 다시 지정하는 것이 곧 해당 provider로의 재시작이다. */
-				postAgentMessage({ type: 'agent.switch', tabId, providerId });
+			onAgentReselectionRequested(tabId): void {
+				/** Host PTY와 기존 xterm을 정리한 뒤 같은 탭에 빈 표면을 다시 만든다. */
+				postAgentMessage({ type: 'agent.reset', tabId });
+				terminalPool.resetTab(tabId);
 			},
 
 			onTabClosed(tabId): void {

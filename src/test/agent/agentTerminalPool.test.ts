@@ -156,6 +156,25 @@ suite('Agent 탭별 Terminal 표면 pool', () => {
 		assert.strictEqual(terminals.get('tab-two')?.received.length, 0);
 	});
 
+	test('탭 reset은 기존 xterm을 정리하고 같은 tabId의 빈 표면으로 교체한다', () => {
+		const { container, pool, terminals } = createPool();
+
+		pool.ensureTab('tab-reset');
+		pool.setActiveTab('tab-reset');
+		const previous = terminals.get('tab-reset');
+		const previousSurface = surfaces(container)[0];
+
+		pool.resetTab('tab-reset');
+
+		const replacement = terminals.get('tab-reset');
+		assert.strictEqual(previous?.disposeCallCount, 1);
+		assert.notStrictEqual(replacement, previous);
+		assert.strictEqual(surfaces(container).length, 1);
+		assert.notStrictEqual(surfaces(container)[0], previousSurface);
+		assert.strictEqual(surfaces(container)[0].hidden, false);
+		assert.strictEqual(replacement?.fitCallCount, 1);
+	});
+
 	test('pool dispose는 모든 탭 Terminal과 표면을 정리한다', () => {
 		const { container, pool, terminals } = createPool();
 

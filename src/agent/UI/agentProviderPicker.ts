@@ -11,10 +11,6 @@ export const AGENT_PROVIDER_PICKER_TITLE = 'Choose an agent';
 export const AGENT_PROVIDER_PICKER_DESCRIPTION =
 	'Select a CLI to start this terminal';
 
-/** 키보드 조작 안내에 표시하는 고정 문구다. */
-export const AGENT_PROVIDER_NAVIGATE_HINT = '↑↓ Navigate';
-export const AGENT_PROVIDER_SELECT_HINT = 'Enter Select';
-
 /** 상표 자산을 대신해 모든 CLI 항목에 공통으로 쓰는 터미널 표식이다. */
 export const AGENT_PROVIDER_MARK = '>_';
 
@@ -36,9 +32,8 @@ export interface AgentProviderPickerView {
 /**
  * xterm 영역 중앙에 세로형 provider 선택기를 만든다.
  *
- * 선택기는 활성 탭에 provider가 없을 때만 표시되며, 선택이 끝나면 탭 모델 변경을
- * 통해 즉시 숨겨진다. 위·아래 방향키는 순환 이동하고 Enter는 포커스된 버튼의
- * 기본 동작으로 provider 선택을 확정한다.
+ * 선택기는 활성 탭에 provider가 없을 때만 표시되며, 사용자가 provider 버튼을
+ * 직접 누르면 탭 모델 변경을 통해 즉시 숨겨진다.
  *
  * @param container xterm 위에 겹쳐 표시할 선택기 host
  * @param callbacks provider 선택을 전달받는 콜백
@@ -69,39 +64,14 @@ export function initializeAgentProviderPicker(
 
 	const list = dependencies.createElement('div');
 	list.className = 'agent-provider-list';
-	list.setAttribute('role', 'listbox');
+	list.setAttribute('role', 'group');
 	list.setAttribute('aria-label', AGENT_PROVIDER_PICKER_TITLE);
-
-	const optionElements: HTMLButtonElement[] = [];
-	let focusedIndex = 0;
-
-	/** 키보드 포커스 표시와 roving tabindex를 한 provider에 맞춘다. */
-	const focusOption = (index: number): void => {
-		const optionCount = optionElements.length;
-		if (optionCount === 0) {
-			return;
-		}
-
-		focusedIndex = (index + optionCount) % optionCount;
-		for (const [optionIndex, option] of optionElements.entries()) {
-			const focused = optionIndex === focusedIndex;
-			option.setAttribute('tabindex', focused ? '0' : '-1');
-			if (focused) {
-				option.dataset.focused = 'true';
-			} else {
-				delete option.dataset.focused;
-			}
-		}
-		optionElements[focusedIndex]?.focus();
-	};
 
 	for (const providerId of PROVIDER_IDS) {
 		const option = dependencies.createElement('button');
 		option.type = 'button';
 		option.className = 'agent-provider-option';
 		option.dataset.providerId = providerId;
-		option.setAttribute('role', 'option');
-		option.setAttribute('aria-selected', 'false');
 
 		const mark = dependencies.createElement('span');
 		mark.className = 'agent-provider-mark';
@@ -113,47 +83,14 @@ export function initializeAgentProviderPicker(
 		label.textContent = AGENT_PROVIDER_LABELS[providerId];
 
 		option.append(mark, label);
-		option.addEventListener('focus', () => {
-			focusedIndex = optionElements.indexOf(option);
-			for (const entry of optionElements) {
-				if (entry === option) {
-					entry.dataset.focused = 'true';
-				} else {
-					delete entry.dataset.focused;
-				}
-			}
-		});
 		option.addEventListener('click', () => callbacks.onProviderSelect(providerId));
 
-		optionElements.push(option);
 		list.append(option);
 	}
 
-	list.addEventListener('keydown', (event) => {
-		const key = (event as KeyboardEvent).key;
-		if (key !== 'ArrowDown' && key !== 'ArrowUp') {
-			return;
-		}
-
-		event.preventDefault();
-		focusOption(focusedIndex + (key === 'ArrowDown' ? 1 : -1));
-	});
-
-	const hints = dependencies.createElement('div');
-	hints.className = 'agent-provider-picker-hints';
-
-	const navigateHint = dependencies.createElement('span');
-	navigateHint.textContent = AGENT_PROVIDER_NAVIGATE_HINT;
-
-	const selectHint = dependencies.createElement('span');
-	selectHint.textContent = AGENT_PROVIDER_SELECT_HINT;
-
-	hints.append(navigateHint, selectHint);
-	panel.append(heading, list, hints);
+	panel.append(heading, list);
 	container.replaceChildren(panel);
 	container.hidden = true;
-
-	let visibleTabId: string | undefined;
 
 	return {
 		render(snapshot): void {
@@ -164,19 +101,9 @@ export function initializeAgentProviderPicker(
 				&& activeTab.providerId === undefined;
 
 			container.hidden = !shouldShow;
-			if (!shouldShow) {
-				visibleTabId = undefined;
-				return;
-			}
-
-			if (visibleTabId !== activeTab.id) {
-				visibleTabId = activeTab.id;
-				focusOption(0);
-			}
 		},
 
 		dispose(): void {
-			visibleTabId = undefined;
 			container.hidden = true;
 			container.replaceChildren();
 		},

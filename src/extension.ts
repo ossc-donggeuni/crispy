@@ -48,6 +48,7 @@ export interface TerminalMessageHost {
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
 	switchAgent(tabId: string, providerId: ProviderId): Promise<unknown>;
+	resetAgent(tabId: string): void;
 	routeInput(
 		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
 	): void;
@@ -230,6 +231,7 @@ export function handleWebviewMessage(
 /**
  * 구조 검증을 통과한 terminal 및 tab 메시지를 현재 구현된 Host 경계로 전달한다.
  * ready는 탭 표면 준비로, `agent.switch`는 provider 지정 시작·재시작으로,
+ * `agent.reset`은 현재 CLI 종료와 provider 미선택 상태 복귀로,
  * restart는 같은 provider 재시작으로, input과 resize는 실행 중 PTY routing으로
  * 연결하며 아직 구현하지 않은 lifecycle 메시지는 실행하지 않는다.
  *
@@ -260,6 +262,9 @@ function handleTerminalMessage(
 				message.tabId,
 				message.providerId,
 			).catch(() => undefined);
+			break;
+		case 'agent.reset':
+			terminalHost.resetAgent(message.tabId);
 			break;
 		case 'terminal.ready':
 			void terminalHost.handleTerminalReady(

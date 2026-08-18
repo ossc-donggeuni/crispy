@@ -71,6 +71,20 @@ suite('Agent Tab Model', () => {
 		assert.deepStrictEqual(labels, ['Codex #1', 'Codex #2']);
 	});
 
+	test('provider 배정을 지우면 같은 탭이 미선택 상태로 돌아간다', () => {
+		const model = createModel();
+		const tabId = model.createTab();
+
+		model.assignProvider(tabId, 'codex');
+		model.clearProvider(tabId);
+
+		const tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.id, tabId);
+		assert.strictEqual(tab.providerId, undefined);
+		assert.strictEqual(tab.sequence, undefined);
+		assert.strictEqual(tab.label, UNSELECTED_TAB_LABEL);
+	});
+
 	test('탭을 닫아도 이미 사용한 번호를 재사용하지 않는다', () => {
 		const model = createModel();
 		const first = model.createTab();

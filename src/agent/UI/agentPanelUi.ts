@@ -52,13 +52,9 @@ export interface AgentPanelUiCallbacks {
 	onProviderSelected?(tabId: AgentTabId, providerId: ProviderId): void;
 
 	/**
-	 * 재시작 버튼으로 활성 탭의 세션 재시작을 요청했다.
-	 * provider는 그대로 유지되므로 provider 전환 경로와 구분된다.
+	 * 재시작 버튼으로 현재 CLI를 종료하고 provider 재선택을 요청했다.
 	 */
-	onSessionRestartRequested?(
-		tabId: AgentTabId,
-		providerId: ProviderId,
-	): void;
+	onAgentReselectionRequested?(tabId: AgentTabId): void;
 
 	/** 확인 다이얼로그에서 사용자가 닫기를 확정해 탭이 제거되었다. */
 	onTabClosed?(tabId: AgentTabId): void;
@@ -166,10 +162,9 @@ export function initializeAgentPanelUi(
 			},
 
 			onRestartActiveTab(): void {
-				/** provider 전환과 달리 현재 provider를 유지한 채 세션만 다시 시작한다. */
+				/** 확인 뒤 현재 탭은 유지하면서 CLI와 provider 배정만 초기화한다. */
 				const activeTab = getActiveTab();
-				const providerId = activeTab?.providerId;
-				if (activeTab === undefined || providerId === undefined) {
+				if (activeTab?.providerId === undefined) {
 					return;
 				}
 
@@ -181,10 +176,8 @@ export function initializeAgentPanelUi(
 						return;
 					}
 
-					notify(() => callbacks.onSessionRestartRequested?.(
-						activeTab.id,
-						providerId,
-					));
+					model.clearProvider(activeTab.id);
+					notify(() => callbacks.onAgentReselectionRequested?.(activeTab.id));
 				}).catch(() => {
 					/** 확인 다이얼로그 실패 시 현재 세션을 유지한다. */
 				});

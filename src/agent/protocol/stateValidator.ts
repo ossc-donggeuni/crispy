@@ -61,6 +61,8 @@ export function validateWebviewToHostMessageState(
 		case 'tab.close':
 		/** provider 지정은 세션 상태와 무관하게 항상 해당 provider로의 재시작을 뜻한다. */
 		case 'agent.switch':
+		/** reset도 세션 상태와 무관하게 현재 탭을 미선택 상태로 되돌릴 수 있다. */
+		case 'agent.reset':
 			return findTab(snapshot, message.tabId) === undefined
 				? stateValidationFailure('unknown_tab', 'tabId')
 				: stateValidationSuccess(message);

@@ -31,6 +31,7 @@ interface TerminalHostStub extends TerminalMessageHost {
 		tabId: string,
 		providerId: Parameters<TerminalMessageHost['switchAgent']>[1],
 	): Promise<unknown>;
+	resetAgent(tabId: string): void;
 	routeInput(message: unknown): void;
 	routeResize(message: unknown): void;
 }
@@ -70,6 +71,7 @@ function createTerminalHostStub(): {
 			async switchAgent(tabId, providerId) {
 				record('switchAgent', tabId, providerId);
 			},
+			resetAgent: (tabId) => record('resetAgent', tabId),
 			routeInput: (message) => record('routeInput', message),
 			routeResize: (message) => record('routeResize', message),
 		},
@@ -368,6 +370,7 @@ suite('Crispy Extension Host', () => {
 			{ type: 'tab.create', tabId: 'tab-lifecycle' },
 			{ type: 'tab.switch', tabId: 'tab-lifecycle' },
 			{ type: 'agent.switch', tabId: 'tab-lifecycle', providerId: 'codex' },
+			{ type: 'agent.reset', tabId: 'tab-lifecycle' },
 			{ type: 'tab.close', tabId: 'tab-lifecycle' },
 		];
 
@@ -384,6 +387,7 @@ suite('Crispy Extension Host', () => {
 			{ method: 'createTab', args: ['tab-lifecycle'] },
 			{ method: 'switchTab', args: ['tab-lifecycle'] },
 			{ method: 'switchAgent', args: ['tab-lifecycle', 'codex'] },
+			{ method: 'resetAgent', args: ['tab-lifecycle'] },
 			{ method: 'closeTab', args: ['tab-lifecycle'] },
 		]);
 	});

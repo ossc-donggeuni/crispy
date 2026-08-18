@@ -180,6 +180,10 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		tabId: idSchema,
 		providerId: providerIdSchema,
 	},
+	/** 현재 탭은 유지하면서 provider와 실행 중 CLI를 초기화한다. */
+	'agent.reset': {
+		tabId: idSchema,
+	},
 });
 
 /**
