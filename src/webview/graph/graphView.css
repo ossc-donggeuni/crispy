@@ -94,6 +94,28 @@
 	background: #28292a;
 }
 
+.graph-project-node.is-unreadable,
+.graph-folder-node.is-unreadable {
+	--graph-node-outline-color: #c95f68;
+
+	color: #ffd9dc;
+	background: #351b1f;
+}
+
+.graph-project-node.is-unreadable:hover,
+.graph-folder-node.is-unreadable:hover {
+	--graph-node-outline-color: #e27780;
+
+	background: #432126;
+}
+
+.graph-project-node.is-unreadable:active,
+.graph-folder-node.is-unreadable:active {
+	--graph-node-outline-color: #ef8a92;
+
+	background: #4b252a;
+}
+
 .graph-node.is-dragging,
 .graph-node.is-dragging:hover {
 	cursor: grabbing;

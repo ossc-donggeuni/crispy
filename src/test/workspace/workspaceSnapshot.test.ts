@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { createWorkspaceSnapshot } from '../../workspace/workspaceSnapshot';
 
 type FakeDirectoryEntry = readonly [string, vscode.FileType];
+type FakeDirectory = readonly FakeDirectoryEntry[] | Error;
 
 suite('Workspace Snapshot', () => {
 	test('Workspace가 없으면 FileSystem을 읽지 않고 빈 Root 목록을 반환한다', async () => {
@@ -14,6 +15,33 @@ suite('Workspace Snapshot', () => {
 
 		assert.deepStrictEqual(snapshot.roots, []);
 		assert.deepStrictEqual(fake.readDirectoryCalls, []);
+	});
+
+	test('Workspace Root 탐색 실패를 unreadable Root로 유지한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/app');
+		const readError = new Error('Permission denied');
+		const fake = createFakeFileSystem({
+			[rootUri.toString()]: readError,
+		});
+		const warningRecorder = createWarningRecorder();
+		const snapshot = await createWorkspaceSnapshot(
+			{ workspaceFolders: [createWorkspaceFolder('app', rootUri, 0)] },
+			fake.fileSystem,
+			warningRecorder.logger,
+		);
+		const root = snapshot.roots[0];
+
+		assert.ok(root);
+		assert.strictEqual(root.id, `workspace-root:${rootUri.toString()}`);
+		assert.strictEqual(root.name, 'app');
+		assert.strictEqual(root.uri, rootUri);
+		assert.strictEqual(root.status, 'unreadable');
+		assert.deepStrictEqual(root.children, []);
+		assert.strictEqual(warningRecorder.calls.length, 1);
+		assert.ok(
+			String(warningRecorder.calls[0]?.[0]).includes(rootUri.toString()),
+		);
+		assert.strictEqual(warningRecorder.calls[0]?.[1], readError);
 	});
 
 	test('Root 바로 아래 File을 Tree에 저장한다', async () => {
@@ -32,6 +60,7 @@ suite('Workspace Snapshot', () => {
 		assert.strictEqual(root.id, `workspace-root:${rootUri.toString()}`);
 		assert.strictEqual(root.name, 'app');
 		assert.strictEqual(root.uri, rootUri);
+		assert.strictEqual(root.status, 'loaded');
 		assert.deepStrictEqual(root.children, [{
 			kind: 'file',
 			id: `file:${fileUri.toString()}`,
@@ -40,7 +69,7 @@ suite('Workspace Snapshot', () => {
 		}]);
 	});
 
-	test('Root 바로 아래 Folder를 재귀 탐색해 Tree에 저장한다', async () => {
+	test('정상적인 빈 Folder를 loaded 상태와 빈 children으로 저장한다', async () => {
 		const rootUri = vscode.Uri.file('/workspace/app');
 		const srcUri = vscode.Uri.joinPath(rootUri, 'src');
 		const fake = createFakeFileSystem({
@@ -57,8 +86,81 @@ suite('Workspace Snapshot', () => {
 			id: `folder:${srcUri.toString()}`,
 			name: 'src',
 			uri: srcUri,
+			status: 'loaded',
 			children: [],
 		}]);
+	});
+
+	test('Nested Folder 탐색 실패를 unreadable Folder로 유지한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/app');
+		const srcUri = vscode.Uri.joinPath(rootUri, 'src');
+		const fake = createFakeFileSystem({
+			[rootUri.toString()]: [['src', vscode.FileType.Directory]],
+			[srcUri.toString()]: new Error('Nested Folder read failed'),
+		});
+		const warningRecorder = createWarningRecorder();
+		const snapshot = await createWorkspaceSnapshot(
+			{ workspaceFolders: [createWorkspaceFolder('app', rootUri, 0)] },
+			fake.fileSystem,
+			warningRecorder.logger,
+		);
+		const root = snapshot.roots[0];
+
+		assert.ok(root);
+		assert.strictEqual(root.status, 'loaded');
+		assert.deepStrictEqual(root.children, [{
+			kind: 'folder',
+			id: `folder:${srcUri.toString()}`,
+			name: 'src',
+			uri: srcUri,
+			status: 'unreadable',
+			children: [],
+		}]);
+	});
+
+	test('Folder 하나의 탐색 실패와 관계없이 정상 sibling을 유지한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/app');
+		const privateUri = vscode.Uri.joinPath(rootUri, 'private');
+		const srcUri = vscode.Uri.joinPath(rootUri, 'src');
+		const indexUri = vscode.Uri.joinPath(srcUri, 'index.ts');
+		const fake = createFakeFileSystem({
+			[rootUri.toString()]: [
+				['private', vscode.FileType.Directory],
+				['src', vscode.FileType.Directory],
+			],
+			[privateUri.toString()]: new Error('Private Folder read failed'),
+			[srcUri.toString()]: [['index.ts', vscode.FileType.File]],
+		});
+		const warningRecorder = createWarningRecorder();
+		const snapshot = await createWorkspaceSnapshot(
+			{ workspaceFolders: [createWorkspaceFolder('app', rootUri, 0)] },
+			fake.fileSystem,
+			warningRecorder.logger,
+		);
+
+		assert.deepStrictEqual(snapshot.roots[0]?.children, [
+			{
+				kind: 'folder',
+				id: `folder:${privateUri.toString()}`,
+				name: 'private',
+				uri: privateUri,
+				status: 'unreadable',
+				children: [],
+			},
+			{
+				kind: 'folder',
+				id: `folder:${srcUri.toString()}`,
+				name: 'src',
+				uri: srcUri,
+				status: 'loaded',
+				children: [{
+					kind: 'file',
+					id: `file:${indexUri.toString()}`,
+					name: 'index.ts',
+					uri: indexUri,
+				}],
+			},
+		]);
 	});
 
 	test('Folder 내부 File을 children에 저장한다', async () => {
@@ -81,6 +183,38 @@ suite('Workspace Snapshot', () => {
 			id: `file:${indexUri.toString()}`,
 			name: 'index.ts',
 			uri: indexUri,
+		}]);
+	});
+
+	test('Multi-root 중 Root 하나의 탐색 실패와 관계없이 다른 Root를 탐색한다', async () => {
+		const appUri = vscode.Uri.file('/workspace/app');
+		const apiUri = vscode.Uri.file('/workspace/api');
+		const serverUri = vscode.Uri.joinPath(apiUri, 'server.ts');
+		const fake = createFakeFileSystem({
+			[appUri.toString()]: new Error('App Root read failed'),
+			[apiUri.toString()]: [['server.ts', vscode.FileType.File]],
+		});
+		const warningRecorder = createWarningRecorder();
+		const snapshot = await createWorkspaceSnapshot(
+			{
+				workspaceFolders: [
+					createWorkspaceFolder('app', appUri, 0),
+					createWorkspaceFolder('api', apiUri, 1),
+				],
+			},
+			fake.fileSystem,
+			warningRecorder.logger,
+		);
+
+		assert.strictEqual(snapshot.roots.length, 2);
+		assert.strictEqual(snapshot.roots[0]?.status, 'unreadable');
+		assert.deepStrictEqual(snapshot.roots[0]?.children, []);
+		assert.strictEqual(snapshot.roots[1]?.status, 'loaded');
+		assert.deepStrictEqual(snapshot.roots[1]?.children, [{
+			kind: 'file',
+			id: `file:${serverUri.toString()}`,
+			name: 'server.ts',
+			uri: serverUri,
 		}]);
 	});
 
@@ -138,6 +272,7 @@ suite('Workspace Snapshot', () => {
 				id: `folder:${srcUri.toString()}`,
 				name: 'src',
 				uri: srcUri,
+				status: 'loaded',
 				children: [],
 			},
 			{
@@ -186,6 +321,7 @@ suite('Workspace Snapshot', () => {
 			id: `folder:${apiSrcUri.toString()}`,
 			name: 'src',
 			uri: apiSrcUri,
+			status: 'loaded',
 			children: [{
 				kind: 'file',
 				id: `file:${apiFileUri.toString()}`,
@@ -263,21 +399,36 @@ function createWorkspaceFolder(
 }
 
 function createFakeFileSystem(
-	directories: Readonly<Record<string, readonly FakeDirectoryEntry[]>>,
+	directories: Readonly<Record<string, FakeDirectory>>,
 ) {
 	const readDirectoryCalls: vscode.Uri[] = [];
 	const fileSystem = {
 		async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
 			readDirectoryCalls.push(uri);
-			const entries = directories[uri.toString()];
+			const directory = directories[uri.toString()];
 
-			if (!entries) {
+			if (!directory) {
 				throw new Error(`Fake Directory가 없습니다: ${uri.toString()}`);
 			}
 
-			return entries.map(([name, fileType]) => [name, fileType]);
+			if (directory instanceof Error) {
+				throw directory;
+			}
+
+			return directory.map(([name, fileType]) => [name, fileType]);
 		},
 	};
 
 	return { fileSystem, readDirectoryCalls };
+}
+
+function createWarningRecorder() {
+	const calls: unknown[][] = [];
+	const logger = {
+		warn(...args: unknown[]): void {
+			calls.push(args);
+		},
+	};
+
+	return { logger, calls };
 }

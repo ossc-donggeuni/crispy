@@ -37,11 +37,13 @@ interface GraphLayoutNodeBase {
 /** Project Root를 나타내는 Layout Node다. */
 export interface GraphProjectNode extends GraphLayoutNodeBase {
 	readonly kind: 'project';
+	readonly status: ProjectContainer['status'];
 }
 
 /** Folder를 나타내는 Layout Node다. */
 export interface GraphFolderNode extends GraphLayoutNodeBase {
 	readonly kind: 'folder';
+	readonly status: ProjectContainer['status'];
 }
 
 /** 다른 Graph Root로 승격된 Folder의 원래 Tree 위치를 나타낸다. */
@@ -133,6 +135,7 @@ interface LayoutTreeNode {
 	readonly id: string;
 	readonly name: string;
 	readonly kind: GraphLayoutNode['kind'];
+	readonly status?: ProjectContainer['status'];
 	readonly depth: number;
 	readonly width: number;
 	readonly height: number;
@@ -248,6 +251,7 @@ function createContainerTree(
 		id: container.id,
 		name: container.name,
 		kind: container.kind,
+		status: container.status,
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
@@ -454,9 +458,13 @@ function toGraphLayoutNode(
 		};
 	}
 
-	if (tree.kind === 'folder') {
-		return { ...base, kind: 'folder' };
+	if (!tree.status) {
+		throw new Error(`Directory Layout Node "${tree.id}"의 상태가 없습니다.`);
 	}
 
-	return { ...base, kind: 'project' };
+	if (tree.kind === 'folder') {
+		return { ...base, kind: 'folder', status: tree.status };
+	}
+
+	return { ...base, kind: 'project', status: tree.status };
 }

@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import type { Graph, Project } from '../../webview/graph/graphModel';
+import type { Folder, Graph, Project } from '../../webview/graph/graphModel';
 import {
 	deserializeGraphFromWebview,
 	serializeGraphForWebview,
@@ -28,6 +28,39 @@ suite('Workspace Graph Transport', () => {
 		assert.deepStrictEqual(restored.rootNodes, graph.rootNodes);
 	});
 
+	test('unreadable Directory 상태를 최종 Webview Graph까지 유지한다', () => {
+		const unreadableFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:app/private',
+			name: 'private',
+			status: 'unreadable',
+			children: [],
+		};
+		const unreadableProject: Project = {
+			...createProject('app'),
+			status: 'unreadable',
+		};
+		const loadedProject: Project = {
+			...createProject('api'),
+			children: [unreadableFolder],
+		};
+		const restored = deserializeGraphFromWebview(
+			serializeGraphForWebview(createGraph(unreadableProject, loadedProject)),
+		);
+		const restoredUnreadableProject = restored.rootNodes[unreadableProject.id];
+		const restoredLoadedProject = restored.rootNodes[loadedProject.id];
+
+		assert.ok(
+			restoredUnreadableProject
+				&& restoredUnreadableProject.kind === 'project',
+		);
+		assert.strictEqual(restoredUnreadableProject.status, 'unreadable');
+		assert.ok(restoredLoadedProject && restoredLoadedProject.kind === 'project');
+		const restoredFolder = restoredLoadedProject.children[0];
+		assert.ok(restoredFolder && restoredFolder.kind === 'folder');
+		assert.strictEqual(restoredFolder.status, 'unreadable');
+	});
+
 	test('초기 Workspace Graph가 없으면 Mock으로 대체하지 않고 실패한다', () => {
 		assert.throws(
 			() => deserializeGraphFromWebview(undefined),
@@ -41,6 +74,7 @@ function createProject(name: string): Project {
 		kind: 'project',
 		id: `project:${name}`,
 		name,
+		status: 'loaded',
 		children: [],
 	};
 }

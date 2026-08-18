@@ -7,6 +7,9 @@ interface WorkspaceItemBase {
 	readonly uri: Uri;
 }
 
+/** Workspace Directory의 내부 구조 탐색 결과다. */
+export type WorkspaceDirectoryStatus = 'loaded' | 'unreadable';
+
 /** 현재 열린 모든 Workspace Root의 탐색 결과다. */
 export interface WorkspaceSnapshot {
 	readonly roots: readonly WorkspaceRoot[];
@@ -14,12 +17,14 @@ export interface WorkspaceSnapshot {
 
 /** 하나의 VS Code Workspace Root와 이후 탐색될 직계 항목이다. */
 export interface WorkspaceRoot extends WorkspaceItemBase {
+	readonly status: WorkspaceDirectoryStatus;
 	readonly children: readonly WorkspaceEntry[];
 }
 
 /** 하위 Folder 또는 File을 포함할 수 있는 Workspace Folder다. */
 export interface Folder extends WorkspaceItemBase {
 	readonly kind: 'folder';
+	readonly status: WorkspaceDirectoryStatus;
 	readonly children: readonly WorkspaceEntry[];
 }
 

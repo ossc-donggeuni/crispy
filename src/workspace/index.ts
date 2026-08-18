@@ -2,6 +2,7 @@ export type {
 	File,
 	Folder,
 	WorkspaceEntry,
+	WorkspaceDirectoryStatus,
 	WorkspaceRoot,
 	WorkspaceSnapshot,
 } from './workspaceModel';

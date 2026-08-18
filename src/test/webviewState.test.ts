@@ -289,6 +289,7 @@ suite('Webview State Wiring', () => {
 					kind: 'project',
 					id: 'project:app',
 					name: 'app',
+					status: 'loaded',
 					children: [{
 						kind: 'file',
 						id: 'file:app/index.ts',
@@ -299,6 +300,7 @@ suite('Webview State Wiring', () => {
 					kind: 'project',
 					id: 'project:api',
 					name: 'api',
+					status: 'loaded',
 					children: [],
 				},
 			},

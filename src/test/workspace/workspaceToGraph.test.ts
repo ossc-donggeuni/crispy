@@ -4,6 +4,7 @@ import type { Graph, Project } from '../../webview/graph/graphModel';
 import type {
 	File as WorkspaceFile,
 	Folder as WorkspaceFolder,
+	WorkspaceDirectoryStatus,
 	WorkspaceEntry,
 	WorkspaceRoot,
 	WorkspaceSnapshot,
@@ -29,8 +30,22 @@ suite('Workspace Snapshot to Graph', () => {
 			kind: 'project',
 			id: workspaceRoot.id,
 			name: 'app',
+			status: 'loaded',
 			children: [],
 		});
+	});
+
+	test('unreadable Workspace Root 상태를 Graph Project에 유지한다', () => {
+		const workspaceRoot = createWorkspaceRoot('app', [], 'unreadable');
+		const graph = convertWorkspaceSnapshotToGraph({ roots: [workspaceRoot] });
+		const project = getProject(graph, workspaceRoot.id);
+
+		assert.strictEqual(project.status, 'unreadable');
+		assert.deepStrictEqual(project.children, []);
+		assert.deepStrictEqual(graph.roots, [{
+			id: `root:${workspaceRoot.id}`,
+			nodeId: workspaceRoot.id,
+		}]);
 	});
 
 	test('Multi-root Workspace의 각 Root를 독립적인 Graph Root로 변환한다', () => {
@@ -61,12 +76,15 @@ suite('Workspace Snapshot to Graph', () => {
 		);
 		const workspaceRoot = createWorkspaceRoot('app', [workspaceFile]);
 		const graph = convertWorkspaceSnapshotToGraph({ roots: [workspaceRoot] });
+		const graphFile = getProject(graph, workspaceRoot.id).children[0];
 
 		assert.deepStrictEqual(getProject(graph, workspaceRoot.id).children, [{
 			kind: 'file',
 			id: workspaceFile.id,
 			name: workspaceFile.name,
 		}]);
+		assert.ok(graphFile && graphFile.kind === 'file');
+		assert.ok(!('status' in graphFile));
 	});
 
 	test('Root 바로 아래 Workspace Folder를 Graph Folder로 변환한다', () => {
@@ -81,8 +99,26 @@ suite('Workspace Snapshot to Graph', () => {
 			kind: 'folder',
 			id: workspaceFolder.id,
 			name: workspaceFolder.name,
+			status: 'loaded',
 			children: [],
 		}]);
+	});
+
+	test('unreadable Workspace Folder 상태를 Graph Folder에 유지한다', () => {
+		const workspaceFolder = createWorkspaceFolder(
+			'private',
+			'folder:app/private',
+			[],
+			'unreadable',
+		);
+		const workspaceRoot = createWorkspaceRoot('app', [workspaceFolder]);
+		const graph = convertWorkspaceSnapshotToGraph({ roots: [workspaceRoot] });
+		const folder = getProject(graph, workspaceRoot.id).children[0];
+
+		assert.ok(folder && folder.kind === 'folder');
+		assert.strictEqual(folder.status, 'unreadable');
+		assert.deepStrictEqual(folder.children, []);
+		assert.strictEqual(folder.id, workspaceFolder.id);
 	});
 
 	test('중첩된 Folder와 File Tree를 같은 계층으로 변환한다', () => {
@@ -104,10 +140,12 @@ suite('Workspace Snapshot to Graph', () => {
 			kind: 'folder',
 			id: srcFolder.id,
 			name: 'src',
+			status: 'loaded',
 			children: [{
 				kind: 'folder',
 				id: libFolder.id,
 				name: 'lib',
+				status: 'loaded',
 				children: [{
 					kind: 'file',
 					id: indexFile.id,
@@ -224,6 +262,7 @@ suite('Workspace Snapshot to Graph', () => {
 function createWorkspaceRoot(
 	name: string,
 	children: readonly WorkspaceEntry[] = [],
+	status: WorkspaceDirectoryStatus = 'loaded',
 ): WorkspaceRoot {
 	const uri = vscode.Uri.file(`/workspace/${name}`);
 
@@ -231,6 +270,7 @@ function createWorkspaceRoot(
 		id: `workspace-root:${uri.toString()}`,
 		name,
 		uri,
+		status,
 		children,
 	};
 }
@@ -239,12 +279,14 @@ function createWorkspaceFolder(
 	name: string,
 	id: string,
 	children: readonly WorkspaceEntry[] = [],
+	status: WorkspaceDirectoryStatus = 'loaded',
 ): WorkspaceFolder {
 	return {
 		kind: 'folder',
 		id,
 		name,
 		uri: vscode.Uri.file(`/workspace/${name}`),
+		status,
 		children,
 	};
 }

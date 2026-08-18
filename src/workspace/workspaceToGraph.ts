@@ -39,6 +39,7 @@ function convertWorkspaceRoot(workspaceRoot: WorkspaceRoot): Project {
 		kind: 'project',
 		id: workspaceRoot.id,
 		name: workspaceRoot.name,
+		status: workspaceRoot.status,
 		children: workspaceRoot.children.map(convertWorkspaceEntry),
 	};
 }
@@ -50,6 +51,7 @@ function convertWorkspaceEntry(entry: WorkspaceEntry): ProjectEntry {
 			kind: 'folder',
 			id: entry.id,
 			name: entry.name,
+			status: entry.status,
 			children: entry.children.map(convertWorkspaceEntry),
 		};
 	}

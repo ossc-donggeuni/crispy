@@ -12,6 +12,7 @@ import {
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphFileGroupNode,
 	type GraphFolderBacklinkNode,
+	type GraphLayoutNode,
 	type GraphLayoutOptions,
 } from '../../webview/graph/graphLayout';
 import { GRAPH_MOCK_PROJECT } from '../../webview/graph/graphMockData';
@@ -19,6 +20,7 @@ import {
 	createSingleRootGraph,
 	isFile,
 	isFolder,
+	type Folder,
 	type Graph,
 	type Project,
 } from '../../webview/graph/graphModel';
@@ -34,11 +36,13 @@ const SECOND_PROJECT: Project = {
 	kind: 'project',
 	id: 'project:secondary',
 	name: 'secondary',
+	status: 'loaded',
 	children: [
 		{
 			kind: 'folder',
 			id: 'folder:secondary/src',
 			name: 'src',
+			status: 'loaded',
 			children: [
 				{
 					kind: 'file',
@@ -117,6 +121,60 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(graph.rootNodes[SECOND_PROJECT.id]?.kind, 'project');
 		assert.strictEqual(graph.rootNodes[folder.id]?.kind, 'folder');
 		assert.strictEqual(graph.rootNodes[file.id]?.kind, 'file');
+	});
+
+	test('unreadable 상태가 기존 Root, Node ID와 Edge 계층을 변경하지 않는다', () => {
+		const loadedFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:status-check',
+			name: 'status-check',
+			status: 'loaded',
+			children: [],
+		};
+		const loadedProject: Project = {
+			kind: 'project',
+			id: 'project:status-check',
+			name: 'status-check',
+			status: 'loaded',
+			children: [loadedFolder],
+		};
+		const unreadableProject: Project = {
+			...loadedProject,
+			children: [{ ...loadedFolder, status: 'unreadable' }],
+		};
+		const loadedGraph = createSingleRootGraph(loadedProject);
+		const unreadableGraph = createSingleRootGraph(unreadableProject);
+		const layoutOptions = { openedFolders: { [loadedProject.id]: true as const } };
+		const loadedLayout = createBaseGraphLayout(loadedGraph, layoutOptions);
+		const unreadableLayout = createBaseGraphLayout(unreadableGraph, layoutOptions);
+		const loadedFolderNode = loadedLayout.nodes.find(
+			(node) => node.id === loadedFolder.id,
+		);
+		const unreadableFolderNode = unreadableLayout.nodes.find(
+			(node) => node.id === loadedFolder.id,
+		);
+		const selectNodeStructure = (
+			{ id, kind, depth, position, width, height }: GraphLayoutNode,
+		) => ({ id, kind, depth, position, width, height });
+
+		assert.ok(loadedFolderNode && loadedFolderNode.kind === 'folder');
+		assert.ok(unreadableFolderNode && unreadableFolderNode.kind === 'folder');
+		assert.strictEqual(loadedFolderNode.status, 'loaded');
+		assert.strictEqual(unreadableFolderNode.status, 'unreadable');
+		assert.deepStrictEqual(unreadableGraph.roots, loadedGraph.roots);
+		assert.deepStrictEqual(
+			unreadableLayout.nodes.map(selectNodeStructure),
+			loadedLayout.nodes.map(selectNodeStructure),
+		);
+		assert.deepStrictEqual(unreadableLayout.edges, loadedLayout.edges);
+		assert.deepStrictEqual(
+			unreadableLayout.rootContexts,
+			loadedLayout.rootContexts,
+		);
+		assert.deepStrictEqual(
+			unreadableLayout.rootNodeIds,
+			loadedLayout.rootNodeIds,
+		);
 	});
 
 	test('Context가 있는 Root만 Layout rootContexts로 전달하고 일반 Node는 확장하지 않는다', () => {
@@ -259,6 +317,7 @@ suite('Graph Model / Layout', () => {
 			kind: 'project',
 			id: 'project:file-backlink',
 			name: 'crispy',
+			status: 'loaded',
 			children: [
 				{ kind: 'file', id: 'file:a', name: 'a.ts' },
 				{ kind: 'file', id: 'file:index', name: 'index.ts' },

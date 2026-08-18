@@ -27,21 +27,25 @@ export const GRAPH_MOCK_PROJECT: Project = {
 	kind: 'project',
 	id: 'project:crispy',
 	name: 'crispy',
+	status: 'loaded',
 	children: [
 		{
 			kind: 'folder',
 			id: 'folder:app',
 			name: 'app',
+			status: 'loaded',
 			children: [
 				{
 					kind: 'folder',
 					id: 'folder:app/src',
 					name: 'src',
+					status: 'loaded',
 					children: [
 						{
 							kind: 'folder',
 							id: 'folder:app/src/components',
 							name: 'components',
+							status: 'loaded',
 							children: [
 								{ kind: 'file', id: 'file:app/src/components/Graph.ts', name: 'Graph.ts' },
 								{ kind: 'file', id: 'file:app/src/components/Node.ts', name: 'Node.ts' },
@@ -60,6 +64,7 @@ export const GRAPH_MOCK_PROJECT: Project = {
 					kind: 'folder',
 					id: 'folder:app/docs',
 					name: 'docs',
+					status: 'loaded',
 					children: [
 						{ kind: 'file', id: 'file:app/docs/architecture.md', name: 'architecture.md' },
 						{ kind: 'file', id: 'file:app/docs/testing.md', name: 'testing.md' },
@@ -73,11 +78,13 @@ export const GRAPH_MOCK_PROJECT: Project = {
 			kind: 'folder',
 			id: 'folder:src',
 			name: 'src',
+			status: 'loaded',
 			children: [
 				{
 					kind: 'folder',
 					id: 'folder:src/webview',
 					name: 'webview',
+					status: 'loaded',
 					children: [
 						{ kind: 'file', id: 'file:src/webview/webview.ts', name: 'webview.ts' },
 						{ kind: 'file', id: 'file:src/webview/webview.css', name: 'webview.css' },
@@ -91,11 +98,13 @@ export const GRAPH_MOCK_PROJECT: Project = {
 			kind: 'folder',
 			id: 'folder:pagination-samples',
 			name: 'pagination-samples',
+			status: 'loaded',
 			children: [
 				{
 					kind: 'folder',
 					id: 'folder:pagination-samples/seventeen-files',
 					name: 'seventeen-files',
+					status: 'loaded',
 					children: createPaginationMockFiles(
 						'pagination-samples/seventeen-files',
 						17,
@@ -105,6 +114,7 @@ export const GRAPH_MOCK_PROJECT: Project = {
 					kind: 'folder',
 					id: 'folder:pagination-samples/twenty-one-files',
 					name: 'twenty-one-files',
+					status: 'loaded',
 					children: createPaginationMockFiles(
 						'pagination-samples/twenty-one-files',
 						21,
@@ -123,11 +133,13 @@ export const GRAPH_MOCK_FOLDER_ROOT: Folder = {
 	kind: 'folder',
 	id: 'folder:multi-root-demo',
 	name: 'multi-root-demo',
+	status: 'loaded',
 	children: [
 		{
 			kind: 'folder',
 			id: 'folder:multi-root-demo/single-file',
 			name: 'single-file',
+			status: 'loaded',
 			children: [
 				{
 					kind: 'file',
