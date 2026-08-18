@@ -38,6 +38,23 @@ suite('Graph Root Context', () => {
 		]);
 	});
 
+	test('trailing slash 부모 경로도 기존 상위 segment 축약 규칙을 유지한다', () => {
+		const relativePath = 'packages/demo/src/multi-root-demo/components/internal/';
+		const measuredWidths: Readonly<Record<string, number>> = {
+			[relativePath]: 520,
+			'…/demo/src/multi-root-demo/components/internal/': 430,
+			'…/src/multi-root-demo/components/internal/': 340,
+			'…/multi-root-demo/components/internal/': 270,
+		};
+
+		assert.strictEqual(
+			fitRelativePath(relativePath, 300, (text) => (
+				measuredWidths[text] ?? Number.POSITIVE_INFINITY
+			)),
+			'…/multi-root-demo/components/internal/',
+		);
+	});
+
 	test('마지막 segment도 넘치면 문자 단위 trailing ellipsis로 폭 안에 맞춘다', () => {
 		const relativePath = 'src/extremely-long-file-name-that-cannot-fit.ts';
 		const measureText = (text: string): number => Array.from(text).reduce(

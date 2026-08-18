@@ -8,7 +8,10 @@ import {
 export interface GraphNodeLocation {
 	readonly node: GraphRootNode;
 	readonly root: GraphRoot;
+	/** Source Root부터 대상 Node 자신까지의 기존 상대 경로다. */
 	readonly relativePath: string;
+	/** 실제 Tree 순회에서 얻은 대상 Node의 Parent name segment다. */
+	readonly parentPathSegments: readonly string[];
 }
 
 /** Promotion 결과에 새 Graph snapshot과 추가된 Root를 함께 제공한다. */
@@ -85,12 +88,21 @@ export function addGraphRoot(
 	if (!location || location.node.kind === 'project') {
 		return undefined;
 	}
+	const sourceRootNode = graph.rootNodes[location.root.nodeId];
+
+	if (!sourceRootNode) {
+		return undefined;
+	}
 
 	const root: GraphRoot = {
 		id: createPromotedGraphRootId(nodeId),
 		nodeId,
 		context: {
-			relativePath: location.relativePath,
+			relativePath: createRootContextRelativePath(
+				location.root,
+				sourceRootNode,
+				location.parentPathSegments,
+			),
 		},
 	};
 
@@ -108,6 +120,34 @@ export function addGraphRoot(
 			},
 		},
 	};
+}
+
+/**
+ * Source Root의 기존 Context, Source Root 이름과 실제 Tree Parent segment를 잇는다.
+ * 새 대상 Node 자신의 이름은 제외하고 비어 있지 않으면 `/`로 끝낸다.
+ */
+export function createRootContextRelativePath(
+	sourceRoot: GraphRoot,
+	sourceRootNode: GraphRootNode,
+	parentPathSegments: readonly string[],
+): string {
+	const contextSegments = splitPathSegments(
+		sourceRoot.context?.relativePath ?? '',
+	);
+	const parentSegments = [
+		...contextSegments,
+		sourceRootNode.name,
+		...parentPathSegments,
+	];
+
+	return parentSegments.length === 0
+		? ''
+		: `${parentSegments.join('/')}/`;
+}
+
+/** 기존 Context의 separator와 trailing slash를 조합 가능한 name segment로 정규화한다. */
+function splitPathSegments(path: string): readonly string[] {
+	return path.split(/[\\/]+/).filter((segment) => segment.length > 0);
 }
 
 /** 향후 Reattach가 재사용할 수 있도록 Root 하나를 immutable하게 제거한다. */
@@ -146,6 +186,7 @@ function findNodeInRoot(
 			node,
 			root,
 			relativePath: pathSegments.join('/'),
+			parentPathSegments: pathSegments.slice(0, -1),
 		};
 	}
 

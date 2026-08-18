@@ -172,14 +172,14 @@ export const GRAPH_MOCK: Graph = {
 			id: 'root:folder:multi-root-demo',
 			nodeId: GRAPH_MOCK_FOLDER_ROOT.id,
 			context: {
-				relativePath: 'packages/demo/src/multi-root-demo',
+				relativePath: 'crispy/packages/demo/src/',
 			},
 		},
 		{
 			id: 'root:file:standalone-demo',
 			nodeId: GRAPH_MOCK_FILE_ROOT.id,
 			context: {
-				relativePath: 'src/webview/graph/examples/promoted/standalone/file/standalone-root.ts',
+				relativePath: 'crispy/src/webview/graph/examples/promoted/standalone/file/',
 			},
 		},
 	],

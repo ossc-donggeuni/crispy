@@ -578,7 +578,7 @@ suite('Graph Renderer / Node Drag', () => {
 				actualRoot,
 				'graph-root-context-label',
 			).textContent,
-			'pagination-0/file-4.ts',
+			'pagination/pagination-0/',
 		);
 
 		renderer.dispose();
