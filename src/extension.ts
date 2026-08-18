@@ -95,14 +95,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		const terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
-				getCliPath: (providerId) => {
-					if (providerId === 'antigravity') {
-						return undefined;
-					}
-					return vscode.workspace
-						.getConfiguration('crispy')
-						.get<string>(`${providerId}CliPath`);
-				},
+				getCliPath: (providerId) => vscode.workspace
+					.getConfiguration('crispy')
+					.get<string>(`${providerId}CliPath`),
 			}),
 			emitMessage: (message) => {
 				void Promise.resolve(panel.webview.postMessage(message)).catch(

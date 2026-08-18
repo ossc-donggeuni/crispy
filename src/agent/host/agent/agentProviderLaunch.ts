@@ -28,7 +28,10 @@ const AGENT_PROVIDER_LAUNCH: ProviderRegistry<AgentProviderLaunchDefinition> =
 			autoRunCommand: 'claude',
 			windowsAutoRunCommand: 'claude',
 		}),
-		antigravity: Object.freeze({}),
+		antigravity: Object.freeze({
+			autoRunCommand: 'agy',
+			windowsAutoRunCommand: 'agy',
+		}),
 	});
 
 /** Windows에서 설치 방식별 Codex shim/native executable을 확인하는 순서다. */
@@ -45,12 +48,19 @@ export const WINDOWS_CLAUDE_COMMAND_CANDIDATES = Object.freeze([
 	'claude.exe',
 ] as const);
 
+/** Windows에서 설치 방식별 Antigravity shim/native executable을 확인하는 순서다. */
+export const WINDOWS_ANTIGRAVITY_COMMAND_CANDIDATES = Object.freeze([
+	'agy',
+	'agy.cmd',
+	'agy.exe',
+] as const);
+
 /** Windows 자동 탐색 대상 provider별 후보 registry다. */
 const WINDOWS_AGENT_COMMAND_CANDIDATES: ProviderRegistry<readonly string[]> =
 	Object.freeze({
 		codex: WINDOWS_CODEX_COMMAND_CANDIDATES,
 		claude: WINDOWS_CLAUDE_COMMAND_CANDIDATES,
-		antigravity: Object.freeze([]),
+		antigravity: WINDOWS_ANTIGRAVITY_COMMAND_CANDIDATES,
 	});
 
 /** 자동 실행 커맨드를 확정하기 위해 Shell에 함께 보내는 Enter 입력이다. */
