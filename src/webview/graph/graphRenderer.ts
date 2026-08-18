@@ -59,8 +59,6 @@ export interface GraphRenderer {
 
 /** Graph Node 종류별 Click을 상위 View가 선택적으로 처리하는 callback이다. */
 export interface GraphRendererInteractions {
-	/** 현재 Graph Root여서 Detach 대상에서 제외할 Node ID 집합이다. */
-	rootNodeIds?: ReadonlySet<string>;
 	/** Project Root 또는 Folder가 Click됐을 때 안정적인 Container ID를 전달한다. */
 	onFolderClick?: (folderId: string) => void;
 	/** Grouped File Group이 Click됐을 때 소유 Project 또는 Folder ID를 전달한다. */
@@ -116,7 +114,7 @@ export function initializeGraphRenderer(
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
 	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
-	const rootNodeIds = interactions.rootNodeIds ?? new Set<string>();
+	let rootNodeIds = layout.rootNodeIds;
 	let disposed = false;
 
 	/** 새 Edge path를 생성해 Layer와 ID Map에 등록한다. */
@@ -207,15 +205,21 @@ export function initializeGraphRenderer(
 		label.render(context, getRenderedNodeWidth(element, layoutNode.width));
 	};
 
-	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
-	const addNode = (layoutNode: GraphLayoutNode): void => {
-		const element = createNodeElement(
-			layoutNode,
-			ownerDocument,
-		);
+	/** 최신 Root 목록에 맞춰 Card 자체 Detach Handle을 추가하거나 제거한다. */
+	const syncDetachDrag = (
+		layoutNode: GraphLayoutNode,
+		element: HTMLElement,
+	): void => {
 		const detachNodeId = getDetachNodeId(layoutNode, rootNodeIds);
+		const current = nodeDetachDrags.get(layoutNode.id);
 
-		if (detachNodeId) {
+		if (!detachNodeId) {
+			current?.dispose();
+			nodeDetachDrags.delete(layoutNode.id);
+			return;
+		}
+
+		if (!current) {
 			nodeDetachDrags.set(
 				layoutNode.id,
 				appendDetachHandle(
@@ -226,6 +230,15 @@ export function initializeGraphRenderer(
 				),
 			);
 		}
+	};
+
+	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
+	const addNode = (layoutNode: GraphLayoutNode): void => {
+		const element = createNodeElement(
+			layoutNode,
+			ownerDocument,
+		);
+		syncDetachDrag(layoutNode, element);
 
 		if (layoutNode.kind === 'project' || layoutNode.kind === 'folder') {
 			updateContainerOpenedState(
@@ -263,18 +276,21 @@ export function initializeGraphRenderer(
 
 		renderedPositions.set(layoutNode.id, position);
 		element.style.transform = `translate(${position.x}px, ${position.y}px)`;
-		nodeDrags.set(layoutNode.id, initializeGraphNodeDrag(
-			element,
-			layoutNode.id,
-			layoutNode.position,
-			graphState,
-			{
-				onClick: createNodeClickHandler(layoutNode, interactions),
-				onPositionChange: (position) => {
-					updateNodePosition(layoutNode.id, position);
+
+		if (isMovableLayoutNode(layoutNode)) {
+			nodeDrags.set(layoutNode.id, initializeGraphNodeDrag(
+				element,
+				layoutNode.id,
+				layoutNode.position,
+				graphState,
+				{
+					onClick: createNodeClickHandler(layoutNode, interactions),
+					onPositionChange: (position) => {
+						updateNodePosition(layoutNode.id, position);
+					},
 				},
-			},
-		));
+			));
+		}
 	};
 
 	/** 제거할 Node의 interaction과 content를 정리한 뒤 DOM과 Map에서 제외한다. */
@@ -405,6 +421,8 @@ export function initializeGraphRenderer(
 			);
 			const pendingEdges = new Map<string, GraphLayoutEdge>();
 
+			rootNodeIds = nextLayout.rootNodeIds;
+
 			for (const nodeId of previousNodesById.keys()) {
 				if (!nextNodesById.has(nodeId)) {
 					removeNode(nodeId);
@@ -421,7 +439,12 @@ export function initializeGraphRenderer(
 			nodesById = nextNodesById;
 
 			for (const nextNode of nextLayout.nodes) {
-				if (!previousNodesById.has(nextNode.id)) {
+				const previousNode = previousNodesById.get(nextNode.id);
+
+				if (!previousNode) {
+					addNode(nextNode);
+				} else if (!hasSameNodePresentation(previousNode, nextNode)) {
+					removeNode(nextNode.id);
 					addNode(nextNode);
 				}
 			}
@@ -456,6 +479,10 @@ export function initializeGraphRenderer(
 				const nodeDrag = nodeDrags.get(nextNode.id);
 
 				nodeDrag?.updateDefaultPosition(nextNode.position);
+
+				if (element) {
+					syncDetachDrag(nextNode, element);
+				}
 
 				if (
 					element
@@ -617,7 +644,9 @@ function createNodeElement(
 ): HTMLElement {
 	const element = ownerDocument.createElement('div');
 
-	element.className = `graph-node graph-${node.kind}-node`;
+	element.className = node.kind === 'folder-backlink'
+		? 'graph-node graph-folder-node graph-folder-backlink-node'
+		: `graph-node graph-${node.kind}-node`;
 	element.setAttribute('data-graph-node-id', node.id);
 	element.style.width = `${node.width}px`;
 	element.style.height = `${node.height}px`;
@@ -630,6 +659,7 @@ function createNodeElement(
 
 			if (file) {
 				element.setAttribute('data-file-id', file.id);
+				applyFileBacklinkAttributes(element, file);
 				appendFileContent(element, file, ownerDocument);
 			}
 		}
@@ -637,10 +667,23 @@ function createNodeElement(
 		const icon = createFolderIcon(ownerDocument);
 		const name = ownerDocument.createElement('span');
 
-		element.setAttribute('data-folder-icon', FOLDER_OPEN_ICON);
+		element.setAttribute(
+			'data-folder-icon',
+			node.kind === 'folder-backlink'
+				? FOLDER_CLOSED_ICON
+				: FOLDER_OPEN_ICON,
+		);
 		name.className = 'graph-folder-name';
 		name.textContent = `${node.name}/`;
 		element.append(icon, name);
+
+		if (node.kind === 'folder-backlink') {
+			element.setAttribute('data-graph-backlink', 'folder');
+			element.setAttribute('data-target-root-id', node.targetRootId);
+			element.setAttribute('data-target-node-id', node.targetNodeId);
+			element.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+			element.append(createBacklinkIndicator(ownerDocument));
+		}
 	}
 
 	return element;
@@ -661,6 +704,37 @@ function appendFileContent(
 	name.className = 'graph-file-name';
 	name.textContent = file.name;
 	element.append(icon, name);
+
+	if (file.presentation === 'backlink') {
+		element.append(createBacklinkIndicator(ownerDocument));
+	}
+}
+
+/** Backlink 대상 Root를 DOM 식별값과 최소 시각 상태로 반영한다. */
+function applyFileBacklinkAttributes(
+	element: HTMLElement,
+	file: GraphFileNode,
+): void {
+	if (file.presentation !== 'backlink' || !file.targetRootId) {
+		return;
+	}
+
+	element.classList.add('is-backlink');
+	element.setAttribute('data-graph-backlink', 'file');
+	element.setAttribute('data-target-root-id', file.targetRootId);
+	element.setAttribute('data-target-node-id', file.id);
+	element.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+}
+
+/** 기존 Node content 끝에 공통 북동쪽 화살표 상태만 추가한다. */
+function createBacklinkIndicator(ownerDocument: Document): HTMLElement {
+	const indicator = ownerDocument.createElement('span');
+
+	indicator.className = 'graph-backlink-indicator';
+	indicator.setAttribute('aria-hidden', 'true');
+	indicator.textContent = '↗';
+
+	return indicator;
 }
 
 /**
@@ -814,8 +888,9 @@ function createFileRow(
 	item.className = 'graph-file-item';
 	item.setAttribute('data-file-id', file.id);
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	applyFileBacklinkAttributes(item, file);
 	appendFileContent(item, file, ownerDocument);
-	const detachDrag = rootNodeIds.has(file.id)
+	const detachDrag = file.presentation === 'backlink' || rootNodeIds.has(file.id)
 		? undefined
 		: appendDetachHandle(item, file.id, ownerDocument, interactions);
 	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
@@ -826,6 +901,11 @@ function createFileRow(
 	};
 	const handleFileClick = (event: MouseEvent): void => {
 		event.stopPropagation();
+
+		if (file.presentation === 'backlink') {
+			return;
+		}
+
 		animateFileClick();
 		interactions.onFileClick?.(file.id);
 	};
@@ -864,7 +944,11 @@ function getDetachNodeId(
 
 	const file = node.children[0];
 
-	return file && !rootNodeIds.has(file.id) ? file.id : undefined;
+	return file
+		&& file.presentation !== 'backlink'
+		&& !rootNodeIds.has(file.id)
+		? file.id
+		: undefined;
 }
 
 /** 대상 끝에 고정 공간의 Handle을 추가하고 독립 Detach Drag를 초기화한다. */
@@ -877,10 +961,16 @@ function appendDetachHandle(
 	const handle = createDetachHandle(ownerDocument);
 
 	target.append(handle);
-
-	return initializeGraphDetachDrag(handle, nodeId, {
+	const detachDrag = initializeGraphDetachDrag(handle, nodeId, {
 		onDetachDrop: interactions.onDetachDrop,
 	});
+
+	return {
+		dispose(): void {
+			detachDrag.dispose();
+			handle.remove();
+		},
+	};
 }
 
 /** 현재 Node 스타일에 맞는 북동쪽 화살표 inline SVG Handle을 만든다. */
@@ -938,7 +1028,9 @@ function createNodeClickHandler(
 		if (node.presentation === 'standalone') {
 			const file = node.children[0];
 
-			return file && interactions.onFileClick
+			return file
+				&& file.presentation !== 'backlink'
+				&& interactions.onFileClick
 				? () => interactions.onFileClick?.(file.id)
 				: undefined;
 		}
@@ -950,9 +1042,55 @@ function createNodeClickHandler(
 			: undefined;
 	}
 
+	if (node.kind === 'folder-backlink') {
+		return undefined;
+	}
+
 	return interactions.onFolderClick
 		? () => interactions.onFolderClick?.(node.id)
 		: undefined;
+}
+
+/** Backlink는 원래 위치를 나타내는 정적 presentation이므로 Node Move 대상에서 뺀다. */
+function isMovableLayoutNode(node: GraphLayoutNode): boolean {
+	if (node.kind === 'folder-backlink') {
+		return false;
+	}
+
+	return node.kind !== 'file-group'
+		|| node.presentation !== 'standalone'
+		|| node.children[0]?.presentation !== 'backlink';
+}
+
+/** DOM/Row interaction을 재생성해야 하는 Layout presentation 변경을 판별한다. */
+function hasSameNodePresentation(
+	previous: GraphLayoutNode,
+	next: GraphLayoutNode,
+): boolean {
+	if (previous.kind !== next.kind || previous.name !== next.name) {
+		return false;
+	}
+
+	if (previous.kind === 'folder-backlink' && next.kind === 'folder-backlink') {
+		return previous.targetRootId === next.targetRootId
+			&& previous.targetNodeId === next.targetNodeId;
+	}
+
+	if (previous.kind !== 'file-group' || next.kind !== 'file-group') {
+		return true;
+	}
+
+	return previous.presentation === next.presentation
+		&& previous.parentId === next.parentId
+		&& previous.children.length === next.children.length
+		&& previous.children.every((file, index) => {
+			const nextFile = next.children[index];
+
+			return nextFile?.id === file.id
+				&& nextFile.name === file.name
+				&& nextFile.presentation === file.presentation
+				&& nextFile.targetRootId === file.targetRootId;
+		});
 }
 
 /** Renderer의 임시/저장 위치가 없을 때 Layout 기본 위치로 해석한다. */

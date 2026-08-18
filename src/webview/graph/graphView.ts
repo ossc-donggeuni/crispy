@@ -5,6 +5,7 @@ import {
 import { createGraphLayout, type GraphLayout } from './graphLayout';
 import { GRAPH_MOCK } from './graphMockData';
 import type { Graph } from './graphModel';
+import { addGraphRoot } from './graphRootPromotion';
 import { initializeGraphNavigator } from './graphNavigator';
 import {
 	initializeGraphRenderer,
@@ -31,7 +32,7 @@ export interface GraphView {
 
 /** Graph View가 Renderer의 향후 Root Promotion 요청을 전달할 상위 계약이다. */
 export interface GraphViewInteractions {
-	/** Detach Handle Drag 완료 시 대상 ID와 client 좌표만 전달한다. */
+	/** 내부 Promotion 처리 뒤 Detach 완료 요청을 관찰하는 선택적 callback이다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 }
 
@@ -73,6 +74,43 @@ export function initializeGraphLayoutReflow(
 }
 
 /**
+ * Folder/File Detach 요청을 공통 Root 추가와 위치 저장으로 처리한다.
+ * client 좌표는 Viewport local 좌표를 거쳐 기존 Camera 역변환을 사용한다.
+ */
+export function promoteToGraphRoot(
+	graph: Graph,
+	request: GraphDetachDropRequest,
+	viewport: HTMLElement,
+	camera: GraphCamera,
+	state: GraphStateStore,
+): Graph | undefined {
+	const addition = addGraphRoot(graph, request.nodeId);
+
+	if (!addition) {
+		return undefined;
+	}
+
+	const bounds = viewport.getBoundingClientRect();
+	const worldPosition = camera.viewportToWorld({
+		x: request.clientX - bounds.left,
+		y: request.clientY - bounds.top,
+	});
+	const snapshot = state.getState();
+
+	state.setState({
+		camera: snapshot.camera,
+		nodePositions: {
+			...snapshot.nodePositions,
+			[request.nodeId]: worldPosition,
+		},
+		fileGroupPages: snapshot.fileGroupPages,
+		openedFolders: snapshot.openedFolders,
+	});
+
+	return addition.graph;
+}
+
+/**
  * Graph가 렌더링될 Viewport, World, Edge/Node/Overlay Layer를 생성하고
  * Mock Project 기반 Layout, Renderer, Camera, Navigator를 초기화한다.
  *
@@ -107,22 +145,42 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
-	const rootNodeIds = new Set(graph.roots.map((graphRoot) => graphRoot.nodeId));
+	let currentGraph = graph;
 	const camera = initializeGraphCamera(viewport, world, state);
-	const renderer = initializeGraphRenderer(
+	let renderer: GraphRenderer;
+	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => (
+		createGraphLayout(currentGraph, {
+			fileGroupPages: snapshot.fileGroupPages,
+			openedFolders: snapshot.openedFolders,
+		})
+	);
+	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
+		const nextGraph = promoteToGraphRoot(
+			currentGraph,
+			request,
+			viewport,
+			camera,
+			state,
+		);
+
+		if (nextGraph) {
+			currentGraph = nextGraph;
+			renderer.applyLayout(createCurrentLayout(state.getState()));
+		}
+
+		interactions.onDetachDrop?.(request);
+	};
+
+	renderer = initializeGraphRenderer(
 		edgeLayer,
 		nodeLayer,
-		createGraphLayout(graph, {
-			fileGroupPages: initialGraphState.fileGroupPages,
-			openedFolders: initialGraphState.openedFolders,
-		}),
+		createCurrentLayout(initialGraphState),
 		state,
 		{
-			rootNodeIds,
 			onFolderClick: (folderId) => {
 				state.toggleFolder(folderId);
 			},
-			onDetachDrop: interactions.onDetachDrop,
+			onDetachDrop: handleDetachDrop,
 		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
@@ -130,10 +188,7 @@ export function initializeGraphView(
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
 		renderer,
-		(nextState) => createGraphLayout(graph, {
-			fileGroupPages: nextState.fileGroupPages,
-			openedFolders: nextState.openedFolders,
-		}),
+		createCurrentLayout,
 	);
 
 	return {

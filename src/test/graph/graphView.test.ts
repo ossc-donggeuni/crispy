@@ -11,6 +11,11 @@ import {
 } from '../../webview/graph/graphModel';
 import { createGraphState } from '../../webview/graph/graphState';
 import {
+	createFileBacklinkGroupId,
+	createFolderBacklinkId,
+	createPromotedGraphRootId,
+} from '../../webview/graph/graphRootPromotion';
+import {
 	initializeGraphLayoutReflow,
 	initializeGraphView,
 } from '../../webview/graph/graphView';
@@ -96,7 +101,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('Graph Root ID를 Detach 대상에서 제외하고 Drop 요청을 client 좌표로 전달한다', () => {
+	test('File Detach Drop을 Root/Backlink로 승격하고 기존 Root를 Detach 대상에서 제외한다', () => {
 		const childFolder = {
 			kind: 'folder' as const,
 			id: 'folder:detach-child',
@@ -188,7 +193,141 @@ suite('Graph View', () => {
 			clientX: 64,
 			clientY: 72,
 		}]);
-		assert.deepStrictEqual(graphView.state.getState().nodePositions, {});
+		assert.deepStrictEqual(graphView.state.getState().nodePositions, {
+			[childFile.id]: { x: 64, y: 72 },
+		});
+		assert.strictEqual(
+			findDescendantByClass(childFileNode, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.strictEqual(
+			childFileNode.style.transform,
+			'translate(64px, 72px)',
+		);
+		const backlinkGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFileBacklinkGroupId(createPromotedGraphRootId(childFile.id)),
+		);
+
+		assert.strictEqual(backlinkGroup.hasClass('is-backlink'), true);
+		assert.strictEqual(
+			backlinkGroup.getAttribute('data-target-root-id'),
+			createPromotedGraphRootId(childFile.id),
+		);
+		assert.strictEqual(
+			findDescendantByClass(backlinkGroup, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.strictEqual(graph.roots.length, 2);
+
+		graphView.dispose();
+	});
+
+	test('Folder Detach 좌표를 viewport-local에서 world로 변환하고 상태를 유지한 채 Backlink를 만든다', () => {
+		const promotedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:src',
+			name: 'src',
+			children: [{
+				kind: 'file' as const,
+				id: 'file:src/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const sibling = {
+			kind: 'folder' as const,
+			id: 'folder:docs',
+			name: 'docs',
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:promotion',
+			name: 'crispy',
+			children: [promotedFolder, sibling],
+		};
+		const graph = createSingleRootGraph(project, 'root:project');
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const siblingPosition = { x: 700, y: 240 };
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 100, y: 50, scale: 2 },
+			nodePositions: { [sibling.id]: siblingPosition },
+			openedFolders: {
+				[project.id]: true,
+				[promotedFolder.id]: true,
+			},
+			fileGroupPages: { [`${promotedFolder.id}:files`]: 3 },
+		}, graph);
+		const viewport = root.children[0];
+
+		assert.ok(viewport);
+		viewport.boundsLeft = 20;
+		viewport.boundsTop = 30;
+		const folder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			promotedFolder.id,
+		);
+		const handle = getDescendantByClass(folder, 'graph-detach-handle');
+
+		handle.dispatch('pointerdown', createPointerEvent(handle, 380, 290));
+		handle.dispatch('pointermove', createPointerEvent(handle, 400, 310));
+		handle.dispatch('pointerup', createPointerEvent(handle, 420, 330));
+
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[promotedFolder.id],
+			{ x: 150, y: 125 },
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[sibling.id],
+			siblingPosition,
+		);
+		assert.deepStrictEqual(graphView.state.getState().openedFolders, {
+			[project.id]: true,
+			[promotedFolder.id]: true,
+		});
+		assert.deepStrictEqual(graphView.state.getState().fileGroupPages, {
+			[`${promotedFolder.id}:files`]: 3,
+		});
+		assert.strictEqual(
+			findDescendantByClass(folder, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.strictEqual(folder.style.transform, 'translate(150px, 125px)');
+		assert.ok(findDescendantByClass(folder, 'graph-root-context-label'));
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			promotedFolder.children[0].id,
+		));
+		const targetRootId = createPromotedGraphRootId(promotedFolder.id);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(targetRootId),
+		);
+
+		assert.strictEqual(backlink.hasClass('graph-folder-backlink-node'), true);
+		assert.strictEqual(backlink.getAttribute('data-target-root-id'), targetRootId);
+		assert.strictEqual(backlink.getAttribute('data-target-node-id'), promotedFolder.id);
+		assert.ok(getText(backlink).includes('src/'));
+		assert.ok(getText(backlink).includes('↗'));
+		assert.strictEqual(
+			findDescendantByClass(backlink, 'graph-detach-handle'),
+			undefined,
+		);
+		const backlinkPosition = backlink.style.transform;
+
+		backlink.dispatch('pointerdown', createPointerEvent(backlink, 100, 100));
+		backlink.dispatch('pointermove', createPointerEvent(backlink, 180, 160));
+		backlink.dispatch('pointerup', createPointerEvent(backlink, 180, 160));
+		backlink.dispatch('click', createClickEvent(backlink));
+		assert.strictEqual(backlink.hasPointerCapture(1), false);
+		assert.strictEqual(backlink.style.transform, backlinkPosition);
+		assert.strictEqual(graphView.state.isFolderOpened(promotedFolder.id), true);
+		assert.strictEqual(graph.roots.length, 1);
 
 		graphView.dispose();
 	});
@@ -530,6 +669,8 @@ class FakeElement {
 	type = '';
 	clientWidth = 1000;
 	clientHeight = 800;
+	boundsLeft = 0;
+	boundsTop = 0;
 	private readonly classNames = new Set<string>();
 	private readonly attributes = new Map<string, string>();
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
@@ -622,12 +763,12 @@ class FakeElement {
 
 	getBoundingClientRect(): DOMRect {
 		return {
-			x: 0,
-			y: 0,
-			left: 0,
-			top: 0,
-			right: this.clientWidth,
-			bottom: this.clientHeight,
+			x: this.boundsLeft,
+			y: this.boundsTop,
+			left: this.boundsLeft,
+			top: this.boundsTop,
+			right: this.boundsLeft + this.clientWidth,
+			bottom: this.boundsTop + this.clientHeight,
 			width: this.clientWidth,
 			height: this.clientHeight,
 			toJSON: () => ({}),

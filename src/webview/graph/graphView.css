@@ -99,6 +99,17 @@
 	cursor: grabbing;
 }
 
+.graph-folder-backlink-node,
+.graph-folder-backlink-node:hover,
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink,
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink:hover {
+	cursor: default;
+}
+
+.graph-folder-backlink-node {
+	opacity: 0.72;
+}
+
 .graph-root-context-label {
 	position: absolute;
 	bottom: calc(100% + 6px);
@@ -241,8 +252,32 @@
 	cursor: pointer;
 }
 
+.graph-file-item.is-backlink {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.graph-file-item.is-backlink:hover {
+	background: transparent;
+}
+
+.graph-file-group-node[data-file-group-presentation='standalone'].is-backlink {
+	opacity: 0.55;
+}
+
+.graph-backlink-indicator {
+	flex: none;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	font-size: 14px;
+	line-height: 1;
+}
+
 .graph-file-item:active {
 	background: #38393a;
+}
+
+.graph-file-item.is-backlink:active {
+	background: transparent;
 }
 
 .graph-file-item.is-file-clicking {
