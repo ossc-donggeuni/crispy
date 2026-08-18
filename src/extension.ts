@@ -17,6 +17,12 @@ import {
 	serializeWebviewState,
 	type PersistedWebviewState,
 } from './webview/webviewState';
+import { serializeGraphForWebview } from './webview/graph/graphTransport';
+import type { Graph } from './webview/graph/graphModel';
+import {
+	convertWorkspaceSnapshotToGraph,
+	createWorkspaceSnapshot,
+} from './workspace';
 
 /**
  * Panel 하나가 소유하는 Terminal runtime과 Webview 구독의 정리 경계다.
@@ -76,7 +82,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
-	const openCanvas = (): vscode.WebviewPanel => {
+	const openCanvas = async (): Promise<vscode.WebviewPanel> => {
 		if (currentRuntime) {
 			/** 기존 Panel을 다시 표시하는 것은 dispose가 아니므로 세션을 그대로 유지한다. */
 			currentRuntime.panel.reveal();
@@ -120,12 +126,16 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				handleWebviewMessage(panel.webview, message, terminalHost);
 			},
 		);
+		
+		const snapshot = await createWorkspaceSnapshot();
+		const graph = convertWorkspaceSnapshotToGraph(snapshot);
 
 		panel.webview.html = getWebviewHtml(
 			panel.webview,
 			stylesUri,
 			scriptUri,
 			lastWebviewState,
+			graph,
 		);
 
 		const runtime = createCanvasRuntime(panel, terminalHost, [
@@ -329,6 +339,7 @@ export async function deactivate(): Promise<void> {
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
  * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
+ * @param graph 실제 Workspace Snapshot에서 생성한 초기 Graph
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
@@ -336,8 +347,10 @@ function getWebviewHtml(
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
 	initialWebviewState: PersistedWebviewState | undefined,
+	graph: Graph,
 ): string {
 	const serializedWebviewState = serializeWebviewState(initialWebviewState);
+	const serializedGraph = serializeGraphForWebview(graph);
 
 	/** xterm DOM renderer가 팔레트용 <style>과 truecolor용 style attribute를 생성한다. */
 	/** 두 style 경계만 inline을 허용하고 script와 외부 stylesheet는 Webview source로 제한한다. */
@@ -367,7 +380,7 @@ function getWebviewHtml(
 					</section>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}"></script>
 			</body>
 			</html>`;
 }
