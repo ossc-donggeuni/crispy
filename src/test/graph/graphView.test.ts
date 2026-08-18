@@ -11,11 +11,13 @@ import {
 } from '../../webview/graph/graphModel';
 import { createGraphState } from '../../webview/graph/graphState';
 import {
+	addGraphRoot,
 	createFileBacklinkGroupId,
 	createFolderBacklinkId,
 	createPromotedGraphRootId,
 } from '../../webview/graph/graphRootPromotion';
 import {
+	focusGraphRoot,
 	initializeGraphLayoutReflow,
 	initializeGraphView,
 } from '../../webview/graph/graphView';
@@ -99,6 +101,84 @@ suite('Graph View', () => {
 			secondaryPosition,
 		);
 		graphView.dispose();
+	});
+
+	test('Root Focus는 저장 위치를 우선하고 Layout 크기로 Folder/File 중심을 공통 계산한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:focus-target',
+			name: 'focus-target',
+			children: [],
+		};
+		const file = {
+			kind: 'file' as const,
+			id: 'file:focus-target.ts',
+			name: 'focus-target.ts',
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:focus',
+			name: 'focus',
+			children: [folder, file],
+		};
+		const folderAddition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(folderAddition);
+		const fileAddition = addGraphRoot(folderAddition.graph, file.id);
+
+		assert.ok(fileAddition);
+		const state = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [folder.id]: { x: 700, y: 300 } },
+			openedFolders: { [project.id]: true },
+		});
+		const layout = createGraphLayout(fileAddition.graph, {
+			openedFolders: state.getState().openedFolders,
+		});
+		const folderLayout = layout.nodes.find((node) => node.id === folder.id);
+		const fileLayout = layout.nodes.find((node) => node.id === file.id);
+		const focusPoints: Array<{ x: number; y: number }> = [];
+		const camera = { focusOn: (point: { x: number; y: number }) => {
+			focusPoints.push(point);
+		} };
+
+		assert.ok(folderLayout);
+		assert.ok(fileLayout);
+		assert.strictEqual(focusGraphRoot(
+			fileAddition.graph,
+			layout,
+			state,
+			camera,
+			folderAddition.root.id,
+		), true);
+		assert.strictEqual(focusGraphRoot(
+			fileAddition.graph,
+			layout,
+			state,
+			camera,
+			fileAddition.root.id,
+		), true);
+		assert.deepStrictEqual(focusPoints, [
+			{
+				x: 700 + folderLayout.width / 2,
+				y: 300 + folderLayout.height / 2,
+			},
+			{
+				x: fileLayout.position.x + fileLayout.width / 2,
+				y: fileLayout.position.y + fileLayout.height / 2,
+			},
+		]);
+		assert.strictEqual(focusGraphRoot(
+			fileAddition.graph,
+			layout,
+			state,
+			camera,
+			'root:missing',
+		), false);
+		assert.strictEqual(focusPoints.length, 2);
 	});
 
 	test('File Detach Drop을 Root/Backlink로 승격하고 기존 Root를 Detach 대상에서 제외한다', () => {

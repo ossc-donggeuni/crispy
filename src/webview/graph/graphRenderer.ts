@@ -67,6 +67,8 @@ export interface GraphRendererInteractions {
 	onFileClick?: (fileId: string) => void;
 	/** Handle Drag가 완료됐을 때 대상 ID와 client 좌표를 상위로 전달한다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
+	/** Folder/File Backlink Click 시 연결된 Graph Root ID를 전달한다. */
+	onBacklinkClick?: (targetRootId: string) => void;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -112,6 +114,7 @@ export function initializeGraphRenderer(
 	);
 	const nodeDrags = new Map<string, GraphNodeDrag>();
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
+	const backlinkClickCleanups = new Map<string, () => void>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
 	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
 	let rootNodeIds = layout.rootNodeIds;
@@ -239,6 +242,18 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 		syncDetachDrag(layoutNode, element);
+		const backlinkTargetRootId = getNodeBacklinkTargetRootId(layoutNode);
+
+		if (backlinkTargetRootId) {
+			backlinkClickCleanups.set(
+				layoutNode.id,
+				initializeBacklinkClick(
+					element,
+					backlinkTargetRootId,
+					interactions,
+				),
+			);
+		}
 
 		if (layoutNode.kind === 'project' || layoutNode.kind === 'folder') {
 			updateContainerOpenedState(
@@ -299,6 +314,8 @@ export function initializeGraphRenderer(
 		nodeDrags.delete(nodeId);
 		nodeDetachDrags.get(nodeId)?.dispose();
 		nodeDetachDrags.delete(nodeId);
+		backlinkClickCleanups.get(nodeId)?.();
+		backlinkClickCleanups.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
 		fileGroupContents.delete(nodeId);
 		rootContextLabels.get(nodeId)?.dispose();
@@ -890,6 +907,9 @@ function createFileRow(
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	applyFileBacklinkAttributes(item, file);
 	appendFileContent(item, file, ownerDocument);
+	const disposeBacklinkClick = file.presentation === 'backlink' && file.targetRootId
+		? initializeBacklinkClick(item, file.targetRootId, interactions)
+		: undefined;
 	const detachDrag = file.presentation === 'backlink' || rootNodeIds.has(file.id)
 		? undefined
 		: appendDetachHandle(item, file.id, ownerDocument, interactions);
@@ -921,11 +941,49 @@ function createFileRow(
 	return {
 		element: item,
 		dispose: () => {
+			disposeBacklinkClick?.();
 			detachDrag?.dispose();
 			item.removeEventListener('click', handleFileClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
 		},
+	};
+}
+
+/** Folder/standalone File Card에서 사용할 Backlink 대상 Root ID를 찾는다. */
+function getNodeBacklinkTargetRootId(
+	node: GraphLayoutNode,
+): string | undefined {
+	if (node.kind === 'folder-backlink') {
+		return node.targetRootId;
+	}
+
+	if (node.kind !== 'file-group' || node.presentation !== 'standalone') {
+		return undefined;
+	}
+
+	const file = node.children[0];
+
+	return file?.presentation === 'backlink' ? file.targetRootId : undefined;
+}
+
+/** Backlink Click만 소비하고 Camera Pan 및 일반 Node/File interaction을 차단한다. */
+function initializeBacklinkClick(
+	element: HTMLElement,
+	targetRootId: string,
+	interactions: GraphRendererInteractions,
+): () => void {
+	const handleClick = (event: MouseEvent): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		interactions.onBacklinkClick?.(targetRootId);
+	};
+
+	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	element.addEventListener('click', handleClick);
+
+	return () => {
+		element.removeEventListener('click', handleClick);
 	};
 }
 

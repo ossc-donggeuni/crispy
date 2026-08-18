@@ -103,7 +103,7 @@
 .graph-folder-backlink-node:hover,
 .graph-file-group-node[data-file-group-presentation='standalone'].is-backlink,
 .graph-file-group-node[data-file-group-presentation='standalone'].is-backlink:hover {
-	cursor: default;
+	cursor: pointer;
 }
 
 .graph-folder-backlink-node {
@@ -254,7 +254,7 @@
 
 .graph-file-item.is-backlink {
 	opacity: 0.55;
-	cursor: default;
+	cursor: pointer;
 }
 
 .graph-file-item.is-backlink:hover {

@@ -18,7 +18,11 @@ import {
 	type GraphRootNode,
 	type Project,
 } from '../../webview/graph/graphModel';
-import { addGraphRoot } from '../../webview/graph/graphRootPromotion';
+import {
+	addGraphRoot,
+	createFileBacklinkGroupId,
+	createFolderBacklinkId,
+} from '../../webview/graph/graphRootPromotion';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import {
 	initializeGraphRenderer,
@@ -515,12 +519,16 @@ suite('Graph Renderer / Node Drag', () => {
 			openedFolders: graphState.getState().openedFolders,
 		});
 		const fileClicks: string[] = [];
+		const backlinkClicks: string[] = [];
 		const renderer = initializeGraphRenderer(
 			edgeLayer.asSvgElement(),
 			nodeLayer.asHtmlElement(),
 			layout,
 			graphState,
-			{ onFileClick: (fileId) => fileClicks.push(fileId) },
+			{
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
+			},
 		);
 		const fileGroup = getDescendantByAttribute(
 			nodeLayer,
@@ -565,6 +573,11 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(fileGroup.hasPointerCapture(1), false);
 		assert.deepStrictEqual(graphState.getState().nodePositions, {});
 		assert.deepStrictEqual(fileClicks, []);
+		assert.deepStrictEqual(backlinkClicks, [addition.root.id]);
+		assert.strictEqual(
+			backlinkRow.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
+		);
 		assert.strictEqual(
 			actualRoot.getAttribute('data-file-group-presentation'),
 			'standalone',
@@ -579,6 +592,96 @@ suite('Graph Renderer / Node Drag', () => {
 				'graph-root-context-label',
 			).textContent,
 			'pagination/pagination-0/',
+		);
+
+		renderer.dispose();
+	});
+
+	test('Folder와 singleton File Backlink은 일반 Click을 막고 각 targetRootId를 전달한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:backlink-target',
+			name: 'backlink-target',
+			children: [],
+		};
+		const file = {
+			kind: 'file' as const,
+			id: 'file:singleton-target.ts',
+			name: 'singleton-target.ts',
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:backlink-click',
+			name: 'backlink-click',
+			children: [folder, file],
+		};
+		const folderAddition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(folderAddition);
+		const fileAddition = addGraphRoot(folderAddition.graph, file.id);
+
+		assert.ok(fileAddition);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true },
+		});
+		const layout = createGraphLayout(fileAddition.graph, {
+			openedFolders: graphState.getState().openedFolders,
+		});
+		const folderClicks: string[] = [];
+		const fileClicks: string[] = [];
+		const backlinkClicks: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			layout,
+			graphState,
+			{
+				onFolderClick: (folderId) => folderClicks.push(folderId),
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
+			},
+		);
+		const folderBacklink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFolderBacklinkId(folderAddition.root.id),
+		);
+		const fileBacklink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFileBacklinkGroupId(fileAddition.root.id),
+		);
+		const folderEvent = createClickEvent(folderBacklink);
+		const fileEvent = createClickEvent(fileBacklink);
+
+		folderBacklink.dispatch('click', folderEvent);
+		fileBacklink.dispatch('click', fileEvent);
+
+		assert.deepStrictEqual(backlinkClicks, [
+			folderAddition.root.id,
+			fileAddition.root.id,
+		]);
+		assert.deepStrictEqual(folderClicks, []);
+		assert.deepStrictEqual(fileClicks, []);
+		assert.strictEqual(folderEvent.defaultPrevented, true);
+		assert.strictEqual(fileEvent.defaultPrevented, true);
+		assert.strictEqual(folderEvent.propagationStopped, true);
+		assert.strictEqual(fileEvent.propagationStopped, true);
+		assert.strictEqual(
+			folderBacklink.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.strictEqual(
+			fileBacklink.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
 		);
 
 		renderer.dispose();

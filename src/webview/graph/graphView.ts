@@ -111,6 +111,40 @@ export function promoteToGraphRoot(
 }
 
 /**
+ * 최신 Graph/Layout/State에서 Root 중심을 구해 공통 Camera Focus를 요청한다.
+ * 저장 위치가 없을 때만 현재 Layout 기본 위치를 사용한다.
+ */
+export function focusGraphRoot(
+	graph: Graph,
+	layout: GraphLayout,
+	state: Pick<GraphStateStore, 'getState'>,
+	camera: Pick<GraphCamera, 'focusOn'>,
+	targetRootId: string,
+): boolean {
+	const targetRoot = graph.roots.find((root) => root.id === targetRootId);
+
+	if (!targetRoot) {
+		return false;
+	}
+
+	const rootNode = layout.nodes.find((node) => node.id === targetRoot.nodeId);
+
+	if (!rootNode) {
+		return false;
+	}
+
+	const rootPosition = state.getState().nodePositions[targetRoot.nodeId]
+		?? rootNode.position;
+
+	camera.focusOn({
+		x: rootPosition.x + rootNode.width / 2,
+		y: rootPosition.y + rootNode.height / 2,
+	});
+
+	return true;
+}
+
+/**
  * Graph가 렌더링될 Viewport, World, Edge/Node/Overlay Layer를 생성하고
  * Mock Project 기반 Layout, Renderer, Camera, Navigator를 초기화한다.
  *
@@ -148,12 +182,15 @@ export function initializeGraphView(
 	let currentGraph = graph;
 	const camera = initializeGraphCamera(viewport, world, state);
 	let renderer: GraphRenderer;
-	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => (
-		createGraphLayout(currentGraph, {
+	let currentLayout: GraphLayout;
+	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => {
+		currentLayout = createGraphLayout(currentGraph, {
 			fileGroupPages: snapshot.fileGroupPages,
 			openedFolders: snapshot.openedFolders,
-		})
-	);
+		});
+
+		return currentLayout;
+	};
 	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
 		const nextGraph = promoteToGraphRoot(
 			currentGraph,
@@ -170,6 +207,15 @@ export function initializeGraphView(
 
 		interactions.onDetachDrop?.(request);
 	};
+	const handleBacklinkClick = (targetRootId: string): void => {
+		focusGraphRoot(
+			currentGraph,
+			currentLayout,
+			state,
+			camera,
+			targetRootId,
+		);
+	};
 
 	renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -181,6 +227,7 @@ export function initializeGraphView(
 				state.toggleFolder(folderId);
 			},
 			onDetachDrop: handleDetachDrop,
+			onBacklinkClick: handleBacklinkClick,
 		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
