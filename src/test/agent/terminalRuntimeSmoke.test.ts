@@ -369,6 +369,21 @@ suite('Terminal end-to-end smoke', function () {
 			type: 'terminal.input',
 			tabId,
 			sessionId,
+			data: 'printf \'\\033[38;2;215;119;87mTC\\033[0m\\n\'\r',
+		});
+		assert.strictEqual(
+			await pollUntil(
+				() => log.outputFor(sessionId).includes(
+					'\u001b[38;2;215;119;87mTC\u001b[0m',
+				),
+			),
+			true,
+		);
+
+		host.routeInput({
+			type: 'terminal.input',
+			tabId,
+			sessionId,
 			data: 'printf \'\\355\\225\\234\\352\\270\\200\\n\'\r',
 		});
 		assert.strictEqual(

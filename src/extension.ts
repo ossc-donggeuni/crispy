@@ -328,14 +328,14 @@ function getWebviewHtml(
 ): string {
 	const serializedLayoutState = serializePanelLayoutState(initialLayoutState);
 
-	/** xterm DOM renderer가 ANSI 팔레트용 <style>을 생성하므로 element만 inline을 허용한다. */
-	/** script-src와 style attribute fallback은 Webview source로 계속 제한한다. */
+	/** xterm DOM renderer가 팔레트용 <style>과 truecolor용 style attribute를 생성한다. */
+	/** 두 style 경계만 inline을 허용하고 script와 외부 stylesheet는 Webview source로 제한한다. */
 	return `<!DOCTYPE html>
 			<html lang="en">
 			<head>
 				<meta charset="UTF-8">
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
-				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; style-src-elem ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};">
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; style-src-elem ${webview.cspSource} 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src ${webview.cspSource};">
 				<link rel="stylesheet" href="${stylesUri}">
 				<title>Crispy</title>
 			</head>

@@ -134,7 +134,11 @@ suite('Crispy Extension Host', () => {
 		);
 		assert.match(
 			panel.webview.html,
-			/default-src 'none'; style-src [^;]+; style-src-elem [^;]+ 'unsafe-inline'; script-src [^;]+;/,
+			/default-src 'none'; style-src [^;]+; style-src-elem [^;]+ 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src [^;]+;/,
+		);
+		assert.doesNotMatch(
+			panel.webview.html,
+			/style-src [^;]*'unsafe-inline'/,
 		);
 		assert.doesNotMatch(
 			panel.webview.html,

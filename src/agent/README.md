@@ -369,20 +369,19 @@ restart와 process-tree cleanup을 포함한 같은 Terminal lifecycle을 사용
 
 터미널 색은 기여자 환경에 따라 달라지면 안 되므로 양쪽 끝을 모두 고정한다.
 
-**PTY 쪽** — `host/shell/shellResolver.ts`의 `buildShellEnv`가 `TERM`과 `FORCE_COLOR`를
-256색으로 고정하고, `COLORTERM`과 `TERM_PROGRAM`은 상속하지 않는다. 이 값들을 상속하면
-VS Code를 Dock에서 띄웠는지, 터미널에서 `code .`로 띄웠는지, tmux 안에서 띄웠는지에 따라
-CLI가 감지하는 색 단계가 달라진다. `NO_COLOR`와 `CLICOLOR=0`처럼 색을 끄는 상속 설정도
-제거한다.
-
-`COLORTERM`을 지우는 이유는 별도다. 이 값이 있으면 CLI가 24bit 출력으로 올라가는데,
-현재 Terminal은 그 출력을 색 없이 흰색으로만 그린다. 실제로 그릴 수 있는 수준만
-광고한다는 뜻이며, 24bit 렌더링이 해결되면 `COLORTERM=truecolor`와 `FORCE_COLOR=3`을
-함께 되돌리면 된다.
+**PTY 쪽** — `host/shell/shellResolver.ts`의 `buildShellEnv`가 `TERM=xterm-256color`,
+`COLORTERM=truecolor`, `FORCE_COLOR=3`으로 고정한다. `TERM`은 널리 호환되는 xterm 이름을
+유지하고, 나머지 두 값으로 xterm.js가 실제 렌더링하는 24bit 색상을 광고한다. 이 값들을
+상속에 맡기면 VS Code를 Dock에서 띄웠는지, 터미널에서 `code .`로 띄웠는지, tmux 안에서
+띄웠는지에 따라 CLI가 감지하는 색 단계가 달라진다. `NO_COLOR`와 `CLICOLOR=0`처럼 색을
+끄는 상속 설정은 제거하고 `TERM_PROGRAM`도 상속하지 않는다.
 
 **팔레트 쪽** — `webview/shellTerminal.ts`의 `readVsCodeAnsiTheme`가 `--vscode-terminal-ansi*`
 변수를 `body` → `documentElement` 순서로 조회한다. CSS 변수는 아래로만 상속되므로 VS Code가
 주입한 요소와 다른 쪽만 조회하면 값을 전부 놓치고 xterm 기본 팔레트로 조용히 떨어진다.
+xterm DOM renderer가 기본 팔레트용 동적 `<style>`과 truecolor용 `style` attribute를 만들기
+때문에 Webview CSP는 이 두 style 경계만 inline으로 허용하고 script는 Webview source로
+계속 제한한다.
 
 색이 이상할 때는 Crispy 터미널에서 `echo $TERM; echo "[$COLORTERM]"; tput colors`로 PTY 쪽을,
 `Developer: Open Webview Developer Tools` 콘솔에서
