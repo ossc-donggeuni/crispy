@@ -32,6 +32,7 @@ suite('Workspace Snapshot', () => {
 		assert.strictEqual(root.id, `workspace-root:${rootUri.toString()}`);
 		assert.strictEqual(root.name, 'app');
 		assert.strictEqual(root.uri, rootUri);
+		assert.strictEqual(root.status, 'loaded');
 		assert.deepStrictEqual(root.children, [{
 			kind: 'file',
 			id: `file:${fileUri.toString()}`,
@@ -57,6 +58,7 @@ suite('Workspace Snapshot', () => {
 			id: `folder:${srcUri.toString()}`,
 			name: 'src',
 			uri: srcUri,
+			status: 'loaded',
 			children: [],
 		}]);
 	});
@@ -138,6 +140,7 @@ suite('Workspace Snapshot', () => {
 				id: `folder:${srcUri.toString()}`,
 				name: 'src',
 				uri: srcUri,
+				status: 'loaded',
 				children: [],
 			},
 			{
@@ -186,6 +189,7 @@ suite('Workspace Snapshot', () => {
 			id: `folder:${apiSrcUri.toString()}`,
 			name: 'src',
 			uri: apiSrcUri,
+			status: 'loaded',
 			children: [{
 				kind: 'file',
 				id: `file:${apiFileUri.toString()}`,

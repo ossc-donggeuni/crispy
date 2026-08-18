@@ -231,6 +231,7 @@ function createWorkspaceRoot(
 		id: `workspace-root:${uri.toString()}`,
 		name,
 		uri,
+		status: 'loaded',
 		children,
 	};
 }
@@ -245,6 +246,7 @@ function createWorkspaceFolder(
 		id,
 		name,
 		uri: vscode.Uri.file(`/workspace/${name}`),
+		status: 'loaded',
 		children,
 	};
 }

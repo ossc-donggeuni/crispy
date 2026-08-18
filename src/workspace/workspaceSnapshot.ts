@@ -39,6 +39,7 @@ async function createWorkspaceRoot(
 		id: `workspace-root:${workspaceFolder.uri.toString()}`,
 		name: workspaceFolder.name,
 		uri: workspaceFolder.uri,
+		status: 'loaded',
 		children: await readWorkspaceEntries(workspaceFolder.uri, fileSystem),
 	};
 }
@@ -81,6 +82,7 @@ async function createFolder(
 		id: `folder:${uri.toString()}`,
 		name,
 		uri,
+		status: 'loaded',
 		children: await readWorkspaceEntries(uri, fileSystem),
 	};
 }
