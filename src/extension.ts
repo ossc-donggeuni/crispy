@@ -333,11 +333,11 @@ export async function deactivate(): Promise<void> {
 }
 
 /**
- * Graph와 Agent Chat 영역 및 Webview 리소스 참조를 포함하는 HTML 문서를 생성한다.
+ * 전체 영역 Graph 위에 Floating Agent Chat을 얹는 구조와 Webview 리소스 참조를 포함하는 HTML 문서를 생성한다.
  *
  * @param webview Content Security Policy에 사용할 Webview 인스턴스
  * @param stylesUri Webview 전용 CSS 리소스 URI
- * @param scriptUri Dock 및 Resize 동작을 실행하는 Webview 스크립트 URI
+ * @param scriptUri Dock, Resize 및 Collapse 동작을 실행하는 Webview 스크립트 URI
  * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
  * @param graph 실제 Workspace Snapshot에서 생성한 초기 Graph
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
@@ -372,12 +372,14 @@ function getWebviewHtml(
 							<div id="agent-tab-strip"></div>
 							<div id="agent-top-bar"></div>
 							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
+							<button id="chat-collapse-toggle" type="button" aria-label="Hide Agent Chat" title="Hide Agent Chat">›</button>
 						</div>
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
 						<div id="agent-dialog-host" hidden></div>
 					</section>
+					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" hidden>‹</button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
 				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}"></script>

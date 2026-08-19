@@ -1,24 +1,53 @@
-import type { DockPosition, PanelLayoutState } from './panelState';
-
-const MIN_SIDE_SIZE = 240;
-const MIN_VERTICAL_SIZE = 180;
-const RESIZE_HANDLE_SIZE = 5;
+import {
+	clampPanelSize,
+	MIN_SIDE_SIZE,
+	MIN_VERTICAL_SIZE,
+	type DockPosition,
+	type PanelLayoutState,
+} from './panelState';
 
 interface ResizeSession {
 	pointerId: number;
 	dock: DockPosition;
 	startX: number;
 	startY: number;
+
+	/** Pointer 이동량의 기준이 되는 Resize 시작 시점의 표시 크기다. */
 	startSize: number;
+
+	/** 취소 시 되돌릴 사용자가 저장해 둔 크기다. */
+	restoreSize: number;
 }
 
 /**
- * Agent Chat 경계의 Pointer 이벤트를 등록하고 Dock 방향에 맞는 크기 조절을 초기화한다.
+ * 저장된 Panel 크기를 현재 Webview에서 표시 가능한 크기로 제한해 Layout에 반영한다.
+ * Graph는 Chat Panel과 독립적으로 전체 영역을 사용하므로 이 크기는 Floating Panel에만 적용된다.
  *
- * @param layout Graph와 Agent Chat을 포함하는 전체 Layout 요소
- * @param resizeHandle Graph와 Agent Chat 사이의 Resize Handle 요소
+ * @param layout Graph 위에 Agent Chat을 띄우는 전체 Layout 요소
+ * @param state 사용자가 저장한 가로·세로 크기를 담는 Layout 상태
+ */
+export function applyPanelSize(
+	layout: HTMLElement,
+	state: PanelLayoutState,
+): void {
+	layout.style.setProperty(
+		'--chat-side-size',
+		`${clampPanelSize(state.sideSize, layout.clientWidth, MIN_SIDE_SIZE)}px`,
+	);
+	layout.style.setProperty(
+		'--chat-vertical-size',
+		`${clampPanelSize(state.verticalSize, layout.clientHeight, MIN_VERTICAL_SIZE)}px`,
+	);
+}
+
+/**
+ * Floating Chat Panel 안쪽 경계의 Pointer 이벤트를 등록하고 Dock 방향에 맞는 크기 조절을 초기화한다.
+ * Webview 크기가 변하면 저장된 크기는 유지한 채 표시 크기만 다시 제한한다.
+ *
+ * @param layout Graph 위에 Agent Chat을 띄우는 전체 Layout 요소
+ * @param resizeHandle Chat Panel의 Graph를 향하는 경계에 있는 Resize Handle 요소
  * @param state 사용자가 선택한 Dock 위치와 가로·세로 크기를 담는 Layout 상태
- * @param onSizeChange 크기 변경 후 반응형 Dock 위치를 다시 계산하는 콜백
+ * @param onSizeChange 크기 변경 후 Layout 표시를 다시 계산하는 콜백
  * @param onResizeEnd Resize가 완료된 뒤 최종 크기를 저장하는 콜백
  * @param onLayoutResize Resize 완료 뒤 layout 의존 기능을 갱신하는 콜백
  */
@@ -32,8 +61,7 @@ export function initializePanelResize(
 ): void {
 	let session: ResizeSession | undefined;
 
-	layout.style.setProperty('--chat-side-size', `${state.sideSize}px`);
-	layout.style.setProperty('--chat-vertical-size', `${state.verticalSize}px`);
+	applyPanelSize(layout, state);
 
 	/**
 	 * 진행 중인 Resize 세션을 종료하고 Resize Handle의 Pointer Capture를 해제한다.
@@ -62,13 +90,12 @@ export function initializePanelResize(
 		const isSideDock = session.dock === 'left' || session.dock === 'right';
 
 		if (isSideDock) {
-			state.sideSize = session.startSize;
-			layout.style.setProperty('--chat-side-size', `${session.startSize}px`);
+			state.sideSize = session.restoreSize;
 		} else {
-			state.verticalSize = session.startSize;
-			layout.style.setProperty('--chat-vertical-size', `${session.startSize}px`);
+			state.verticalSize = session.restoreSize;
 		}
 
+		applyPanelSize(layout, state);
 		onSizeChange();
 		stopResizing(pointerId);
 	};
@@ -96,13 +123,18 @@ export function initializePanelResize(
 
 		event.preventDefault();
 		const isSideDock = dock === 'left' || dock === 'right';
+		const restoreSize = isSideDock ? state.sideSize : state.verticalSize;
 
 		session = {
 			pointerId: event.pointerId,
 			dock,
 			startX: event.clientX,
 			startY: event.clientY,
-			startSize: isSideDock ? state.sideSize : state.verticalSize,
+			/** 좁은 Webview에서 표시 중인 크기를 기준으로 이동량을 적용한다. */
+			startSize: isSideDock
+				? clampPanelSize(restoreSize, layout.clientWidth, MIN_SIDE_SIZE)
+				: clampPanelSize(restoreSize, layout.clientHeight, MIN_VERTICAL_SIZE),
+			restoreSize,
 		};
 
 		layout.classList.add('is-resizing');
@@ -125,12 +157,11 @@ export function initializePanelResize(
 
 		if (isSideDock) {
 			state.sideSize = nextSize;
-			layout.style.setProperty('--chat-side-size', `${nextSize}px`);
 		} else {
 			state.verticalSize = nextSize;
-			layout.style.setProperty('--chat-vertical-size', `${nextSize}px`);
 		}
 
+		applyPanelSize(layout, state);
 		onSizeChange();
 	};
 
@@ -180,17 +211,21 @@ export function initializePanelResize(
 	resizeHandle.addEventListener('pointerup', handleResizeEnd);
 	resizeHandle.addEventListener('pointercancel', handleResizeCancel);
 	resizeHandle.addEventListener('lostpointercapture', handleLostPointerCapture);
+
+	/** Webview가 좁아져도 Floating Panel이 화면 밖으로 나가지 않도록 표시 크기만 다시 제한한다. */
+	const resizeObserver = new ResizeObserver(() => applyPanelSize(layout, state));
+	resizeObserver.observe(layout);
 }
 
 /**
  * Resize 시작점부터 현재 Pointer까지의 이동량을 Dock 방향에 맞게 적용하고 허용 범위로 제한한다.
- * 좌우 Dock은 너비를, 상하 Dock은 높이를 계산한다.
+ * 좌우 Dock은 너비를, 상하 Dock은 높이를 계산하며 최대 크기는 Floating Panel의 외곽 여백을 제외한다.
  *
  * @param layout 최대 크기를 결정할 전체 Layout 요소
  * @param session Resize 시작 시점의 Pointer, Dock 방향 및 크기 정보
  * @param clientX Webview viewport 기준 현재 Pointer의 가로 좌표
  * @param clientY Webview viewport 기준 현재 Pointer의 세로 좌표
- * @returns 최소 크기와 Webview 가용 크기 사이로 제한된 다음 Agent Chat 크기
+ * @returns 최소 크기와 여백을 제외한 최대 크기 사이로 제한된 다음 Agent Chat 크기
  */
 function getNextSize(
 	layout: HTMLElement,
@@ -200,35 +235,31 @@ function getNextSize(
 ): number {
 	const horizontalDelta = clientX - session.startX;
 	const verticalDelta = clientY - session.startY;
-	let rawSize: number;
-	let minimumSize: number;
-	let availableSize: number;
 
 	switch (session.dock) {
 		case 'left':
-			rawSize = session.startSize + horizontalDelta;
-			minimumSize = MIN_SIDE_SIZE;
-			availableSize = layout.clientWidth - RESIZE_HANDLE_SIZE;
-			break;
+			return clampPanelSize(
+				session.startSize + horizontalDelta,
+				layout.clientWidth,
+				MIN_SIDE_SIZE,
+			);
 		case 'right':
-			rawSize = session.startSize - horizontalDelta;
-			minimumSize = MIN_SIDE_SIZE;
-			availableSize = layout.clientWidth - RESIZE_HANDLE_SIZE;
-			break;
+			return clampPanelSize(
+				session.startSize - horizontalDelta,
+				layout.clientWidth,
+				MIN_SIDE_SIZE,
+			);
 		case 'top':
-			rawSize = session.startSize + verticalDelta;
-			minimumSize = MIN_VERTICAL_SIZE;
-			availableSize = layout.clientHeight - RESIZE_HANDLE_SIZE;
-			break;
+			return clampPanelSize(
+				session.startSize + verticalDelta,
+				layout.clientHeight,
+				MIN_VERTICAL_SIZE,
+			);
 		case 'bottom':
-			rawSize = session.startSize - verticalDelta;
-			minimumSize = MIN_VERTICAL_SIZE;
-			availableSize = layout.clientHeight - RESIZE_HANDLE_SIZE;
-			break;
+			return clampPanelSize(
+				session.startSize - verticalDelta,
+				layout.clientHeight,
+				MIN_VERTICAL_SIZE,
+			);
 	}
-
-	const maximumSize = Math.max(0, availableSize);
-	const effectiveMinimum = Math.min(minimumSize, maximumSize);
-
-	return Math.min(Math.max(rawSize, effectiveMinimum), maximumSize);
 }

@@ -94,6 +94,37 @@ suite('Webview State', () => {
 		);
 	});
 
+	test('Panel 접힘 상태를 저장하고 복원한다', () => {
+		const collapsedState = createWebviewState('bottom', 12, 24, 1, true);
+
+		const restored = restoreWebviewState(createStateApi(collapsedState));
+
+		assert.strictEqual(restored.panel.collapsed, true);
+		assert.deepStrictEqual(restored.panel, collapsedState.panel);
+		assert.notStrictEqual(restored.panel, collapsedState.panel);
+	});
+
+	test('이전 저장 상태에 collapsed가 없어도 Dock과 크기를 유지해 복원한다', () => {
+		const previousState = {
+			panel: {
+				preferredDock: 'left',
+				sideSize: 360,
+				verticalSize: 300,
+			},
+			graph: INITIAL_GRAPH_STATE,
+		};
+
+		const restored = restoreWebviewState(createStateApi(previousState));
+
+		assert.deepStrictEqual(restored.panel, {
+			preferredDock: 'left',
+			sideSize: 360,
+			verticalSize: 300,
+			collapsed: false,
+		});
+		assert.deepStrictEqual(restored.graph, INITIAL_GRAPH_STATE);
+	});
+
 	test('이전 저장 상태에 부가 Graph 필드가 없어도 빈 상태로 호환 복원한다', () => {
 		const previousState = {
 			panel: DEFAULT_PANEL_LAYOUT_STATE,
@@ -326,6 +357,9 @@ suite('Webview State Wiring', () => {
 		let panelState: PanelLayoutState | undefined;
 		let persistPanelState: (() => void) | undefined;
 		let dockFit: (() => void) | undefined;
+		let persistCollapsedState: (() => void) | undefined;
+		let collapseFit: (() => void) | undefined;
+		let collapseRefreshCount = 0;
 		let persistResizeState: (() => void) | undefined;
 		let resizeFit: (() => void) | undefined;
 		let agentUiLayoutChange: (() => void) | undefined;
@@ -340,6 +374,9 @@ suite('Webview State Wiring', () => {
 		const graphViewModulePath = require.resolve('../webview/graph/graphView');
 		const panelDockModulePath = require.resolve('../webview/panel/panelDock');
 		const panelResizeModulePath = require.resolve('../webview/panel/panelResize');
+		const panelCollapseModulePath = require.resolve(
+			'../webview/panel/panelCollapse',
+		);
 		const agentPanelUiModulePath = require.resolve('../agent/UI/agentPanelUi');
 		const agentTerminalPoolModulePath = require.resolve(
 			'../agent/webview/agentTerminalPool',
@@ -348,6 +385,9 @@ suite('Webview State Wiring', () => {
 		const graphViewModule = require(graphViewModulePath) as GraphViewModule;
 		const panelDockModule = require(panelDockModulePath) as PanelDockModule;
 		const panelResizeModule = require(panelResizeModulePath) as PanelResizeModule;
+		const panelCollapseModule = require(
+			panelCollapseModulePath,
+		) as PanelCollapseModule;
 		const agentPanelUiModule = require(
 			agentPanelUiModulePath,
 		) as AgentPanelUiModule;
@@ -357,6 +397,8 @@ suite('Webview State Wiring', () => {
 		const originalInitializeGraphView = graphViewModule.initializeGraphView;
 		const originalInitializePanelDock = panelDockModule.initializePanelDock;
 		const originalInitializePanelResize = panelResizeModule.initializePanelResize;
+		const originalInitializePanelCollapse =
+			panelCollapseModule.initializePanelCollapse;
 		const originalInitializeAgentPanelUi = agentPanelUiModule.initializeAgentPanelUi;
 		const originalCreateDefaultAgentTerminalPool =
 			agentTerminalPoolModule.createDefaultAgentTerminalPool;
@@ -448,6 +490,20 @@ suite('Webview State Wiring', () => {
 			resizeFit = onLayoutResize;
 		}) as typeof panelResizeModule.initializePanelResize;
 
+		panelCollapseModule.initializePanelCollapse = ((
+			_elements,
+			_state,
+			onCollapsedChange,
+			onExpand,
+		) => {
+			persistCollapsedState = onCollapsedChange;
+			collapseFit = onExpand;
+
+			return () => {
+				collapseRefreshCount += 1;
+			};
+		}) as typeof panelCollapseModule.initializePanelCollapse;
+
 		/** 실제 xterm 없이 Webview entrypoint가 호출하는 Terminal Pool API만 관찰한다. */
 		agentTerminalPoolModule.createDefaultAgentTerminalPool = ((
 			_container,
@@ -507,10 +563,20 @@ suite('Webview State Wiring', () => {
 				postedMessages.push(message);
 			},
 		};
+		/** Dock 변경 뒤 실제 표시 크기 재계산이 실행되므로 최소한의 크기와 style만 제공한다. */
+		const layoutElement = {
+			dataset: {},
+			style: { setProperty: () => undefined },
+			clientWidth: 1000,
+			clientHeight: 800,
+		} as unknown as HTMLElement;
 		const elements = new Map<string, HTMLElement>([
-			['.crispy-layout', {} as HTMLElement],
+			['.crispy-layout', layoutElement],
 			['#graph-area', {} as HTMLElement],
+			['#agent-chat-area', {} as HTMLElement],
 			['#chat-drag-handle', {} as HTMLElement],
+			['#chat-collapse-toggle', {} as HTMLElement],
+			['#chat-sticker-opener', {} as HTMLElement],
 			['#panel-resize-handle', {} as HTMLElement],
 			['#dock-preview', {} as HTMLElement],
 			['#agent-terminal-area', {} as HTMLElement],
@@ -619,9 +685,11 @@ suite('Webview State Wiring', () => {
 
 			assert.ok(dockFit);
 			const fitCountBeforeDock = terminalFitCount;
+			const collapseRefreshBeforeDock = collapseRefreshCount;
 			dockFit();
 
 			assert.strictEqual(terminalFitCount, fitCountBeforeDock + 1);
+			assert.strictEqual(collapseRefreshCount, collapseRefreshBeforeDock + 1);
 
 			assert.ok(persistResizeState);
 			assert.ok(resizeFit);
@@ -653,6 +721,35 @@ suite('Webview State Wiring', () => {
 
 			assert.strictEqual(terminalFitCount, fitCountBeforeResize + 1);
 
+			assert.ok(persistCollapsedState);
+			assert.ok(collapseFit);
+			panelState.collapsed = true;
+			persistCollapsedState();
+
+			assert.strictEqual(savedStates.length, 4);
+			assert.deepStrictEqual(savedStates[3], {
+				panel: {
+					...initialState.panel,
+					preferredDock: 'bottom',
+					sideSize: 500,
+					verticalSize: 320,
+					collapsed: true,
+				},
+				graph: nextGraphState,
+			});
+
+			const collapseMessages = getStateChangedMessages(postedMessages);
+			assert.strictEqual(collapseMessages.length, 4);
+			assert.deepStrictEqual(collapseMessages[3], {
+				type: 'webview.stateChanged',
+				state: savedStates[3],
+			});
+
+			const fitCountBeforeExpand = terminalFitCount;
+			collapseFit();
+
+			assert.strictEqual(terminalFitCount, fitCountBeforeExpand + 1);
+
 			assert.ok(unloadHandler);
 			unloadHandler();
 
@@ -665,6 +762,7 @@ suite('Webview State Wiring', () => {
 			graphViewModule.initializeGraphView = originalInitializeGraphView;
 			panelDockModule.initializePanelDock = originalInitializePanelDock;
 			panelResizeModule.initializePanelResize = originalInitializePanelResize;
+			panelCollapseModule.initializePanelCollapse = originalInitializePanelCollapse;
 			agentPanelUiModule.initializeAgentPanelUi = originalInitializeAgentPanelUi;
 			agentTerminalPoolModule.createDefaultAgentTerminalPool =
 				originalCreateDefaultAgentTerminalPool;
@@ -685,6 +783,11 @@ interface PanelDockModule {
 
 interface PanelResizeModule {
 	initializePanelResize: typeof import('../webview/panel/panelResize').initializePanelResize;
+}
+
+interface PanelCollapseModule {
+	initializePanelCollapse:
+		typeof import('../webview/panel/panelCollapse').initializePanelCollapse;
 }
 
 interface AgentPanelUiModule {
@@ -742,12 +845,14 @@ function createWebviewState(
 	x: number,
 	y: number,
 	scale: number,
+	collapsed = false,
 ): PersistedWebviewState {
 	return {
 		panel: {
 			preferredDock,
 			sideSize: 440,
 			verticalSize: 260,
+			collapsed,
 		},
 		graph: {
 			camera: { x, y, scale },
