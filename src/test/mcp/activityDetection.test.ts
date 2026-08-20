@@ -1,8 +1,9 @@
 import * as assert from 'assert';
 import {
 	hasMatchingSuccessResult,
+	MCP_ACTIVITY_RESPONSE_MAX_BYTES,
 	responseProvesMcpActivity,
-} from '../../mcp/activity';
+} from '../../mcp/activityDetection';
 
 const request = {
 	jsonrpc: '2.0' as const,
@@ -96,5 +97,46 @@ suite('MCP activity 판정', () => {
 			{ headers: { 'Content-Type': 'text/event-stream' } },
 		);
 		assert.strictEqual(await responseProvesMcpActivity(request, response), true);
+	});
+
+	test('장시간 SSE는 matching result를 찾으면 stream 종료를 기다리지 않는다', async () => {
+		let cancelled = false;
+		let pullCount = 0;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			pull: (controller) => {
+				pullCount += 1;
+				controller.enqueue(Buffer.from(pullCount === 1
+					? 'data: {"jsonrpc":"2.0","id":7,"result":{"tools":[]}}\n\n'
+					: ': keepalive\n\n'));
+			},
+			cancel: () => {
+				cancelled = true;
+			},
+		}), { headers: { 'Content-Type': 'text/event-stream' } });
+
+		assert.strictEqual(await responseProvesMcpActivity(request, response), true);
+		await Promise.resolve();
+		assert.strictEqual(cancelled, true);
+		assert.ok(pullCount <= 2);
+	});
+
+	test('qualifying result 없는 SSE는 byte 상한에서 즉시 취소한다', async () => {
+		let cancelled = false;
+		let emittedBytes = 0;
+		const chunk = Buffer.from(`: ${'x'.repeat(32 * 1024)}\n\n`);
+		const response = new Response(new ReadableStream<Uint8Array>({
+			pull: (controller) => {
+				emittedBytes += chunk.byteLength;
+				controller.enqueue(chunk);
+			},
+			cancel: () => {
+				cancelled = true;
+			},
+		}), { headers: { 'Content-Type': 'text/event-stream' } });
+
+		assert.strictEqual(await responseProvesMcpActivity(request, response), false);
+		await Promise.resolve();
+		assert.strictEqual(cancelled, true);
+		assert.ok(emittedBytes <= MCP_ACTIVITY_RESPONSE_MAX_BYTES + chunk.byteLength * 2);
 	});
 });

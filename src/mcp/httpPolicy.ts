@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { TextDecoder } from 'node:util';
 
 export const MCP_LOOPBACK_HOST = '127.0.0.1';
 export const MCP_REQUEST_BODY_MAX_BYTES = 64 * 1024;
@@ -71,9 +72,12 @@ export async function readBoundedJsonBody(
 	}
 
 	try {
+		const bodyText = new TextDecoder('utf-8', { fatal: true }).decode(
+			Buffer.concat(chunks, length),
+		);
 		return {
 			ok: true,
-			parsedBody: JSON.parse(Buffer.concat(chunks, length).toString('utf8')) as unknown,
+			parsedBody: JSON.parse(bodyText) as unknown,
 		};
 	} catch {
 		return { ok: false, status: 400 };

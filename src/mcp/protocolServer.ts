@@ -14,7 +14,7 @@ import {
 	type McpHttpHandler,
 } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { responseProvesMcpActivity } from './activity';
+import { responseProvesMcpActivity } from './activityDetection';
 import {
 	isAllowedMcpContentType,
 	MCP_LOOPBACK_HOST,
@@ -50,7 +50,7 @@ export interface RegisteredMcpSession {
 	readonly url: string;
 }
 
-type ServerLifecycle = 'idle' | 'running' | 'stopping' | 'stopped';
+type ServerLifecycle = 'idle' | 'starting' | 'running' | 'stopping' | 'stopped';
 
 interface ActiveRegistration extends McpSessionCredentials {
 	revoked: boolean;
@@ -68,6 +68,7 @@ export class CrispyMcpProtocolServer {
 	) => void;
 	private readonly sdkHandler: McpHttpHandler;
 	private lifecycle: ServerLifecycle = 'idle';
+	private startPromise: Promise<McpServerReady> | undefined;
 	private httpServer: HttpServer | undefined;
 	private ready: McpServerReady | undefined;
 	private registration: ActiveRegistration | undefined;
@@ -91,14 +92,23 @@ export class CrispyMcpProtocolServer {
 	}
 
 	/** Child가 직접 listen(0, 127.0.0.1)하고 실제 port를 반환한다. */
-	async start(): Promise<McpServerReady> {
+	start(): Promise<McpServerReady> {
+		if (this.lifecycle === 'starting' && this.startPromise !== undefined) {
+			return this.startPromise;
+		}
 		if (this.lifecycle === 'running' && this.ready !== undefined) {
-			return this.ready;
+			return this.startPromise ?? Promise.resolve(this.ready);
 		}
 		if (this.lifecycle !== 'idle') {
-			throw new Error('MCP server cannot be started.');
+			return Promise.reject(new Error('MCP server cannot be started.'));
 		}
 
+		this.lifecycle = 'starting';
+		this.startPromise = this.performStart();
+		return this.startPromise;
+	}
+
+	private async performStart(): Promise<McpServerReady> {
 		const server = createServer((request, response) => {
 			void this.handleNodeRequest(request, response).catch(() => {
 				writeSafeHttpResponse(response, 500, 'Internal server error.');
@@ -114,6 +124,9 @@ export class CrispyMcpProtocolServer {
 
 		try {
 			await listenOnLoopback(server);
+			if (this.lifecycle !== 'starting' || this.httpServer !== server) {
+				throw new Error('MCP server start was cancelled.');
+			}
 			const address = server.address();
 			if (
 				address === null
@@ -131,7 +144,12 @@ export class CrispyMcpProtocolServer {
 			this.lifecycle = 'running';
 			return this.ready;
 		} catch {
-			this.lifecycle = 'stopped';
+			if (this.httpServer === server) {
+				this.httpServer = undefined;
+			}
+			if (this.lifecycle === 'starting') {
+				this.lifecycle = 'stopped';
+			}
 			await closeHttpServer(server);
 			throw new Error('MCP server failed to start.');
 		}
@@ -186,6 +204,9 @@ export class CrispyMcpProtocolServer {
 		if (this.lifecycle === 'stopped') {
 			return;
 		}
+		const pendingStart = this.lifecycle === 'starting'
+			? this.startPromise
+			: undefined;
 		this.lifecycle = 'stopping';
 		if (this.registration !== undefined) {
 			this.registration.revoked = true;
@@ -194,8 +215,10 @@ export class CrispyMcpProtocolServer {
 		this.httpServer = undefined;
 		await Promise.allSettled([
 			this.sdkHandler.close(),
-			server === undefined ? Promise.resolve() : closeHttpServer(server),
+			server === undefined ? Promise.resolve() : closeHttpServer(server, true),
+			pendingStart ?? Promise.resolve(),
 		]);
+		this.ready = undefined;
 		this.lifecycle = 'stopped';
 	}
 
@@ -254,11 +277,16 @@ export class CrispyMcpProtocolServer {
 		const nodeHandler = toNodeHandler({
 			fetch: async (webRequest, options) => {
 				const sdkResponse = await this.sdkHandler.fetch(webRequest, options);
-				void this.observeActivity(
-					registration,
-					body.parsedBody,
-					sdkResponse,
-				).catch(() => undefined);
+				try {
+					const observationResponse = sdkResponse.clone();
+					void this.observeActivity(
+						registration,
+						body.parsedBody,
+						observationResponse,
+					).catch(() => undefined);
+				} catch {
+					/** Response clone 실패는 실제 MCP response 전달을 막지 않는다. */
+				}
 				return sdkResponse;
 			},
 		}, { onerror: () => undefined });
@@ -320,13 +348,20 @@ function listenOnLoopback(server: HttpServer): Promise<void> {
 	});
 }
 
-function closeHttpServer(server: HttpServer): Promise<void> {
+function closeHttpServer(
+	server: HttpServer,
+	terminateActiveConnections = false,
+): Promise<void> {
 	return new Promise((resolve) => {
 		if (!server.listening) {
 			resolve();
 			return;
 		}
 		server.close(() => resolve());
+		if (terminateActiveConnections) {
+			/** Dedicated loopback child이므로 shutdown 중인 active upload/response도 즉시 회수한다. */
+			server.closeAllConnections();
+		}
 	});
 }
 

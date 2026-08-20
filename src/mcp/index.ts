@@ -1,7 +1,8 @@
 export {
 	hasMatchingSuccessResult,
+	MCP_ACTIVITY_RESPONSE_MAX_BYTES,
 	responseProvesMcpActivity,
-} from './activity';
+} from './activityDetection';
 export {
 	isAllowedMcpContentType,
 	MCP_LOOPBACK_HOST,

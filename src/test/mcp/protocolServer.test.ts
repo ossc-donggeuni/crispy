@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type ClientRequest } from 'node:http';
 import {
 	Client,
 	StreamableHTTPClientTransport,
@@ -47,6 +47,41 @@ suite('Crispy MCP protocol server', () => {
 		assert.strictEqual(parsed.search, '');
 		assert.strictEqual(parsed.hash, '');
 		assert.strictEqual(fixture.url.includes(fixture.token), false);
+	});
+
+	test('동시 start 호출은 하나의 Promise와 listener를 공유한다', async () => {
+		const server = new CrispyMcpProtocolServer({
+			generation: 'generation-concurrent-start',
+		});
+		runningServers.add(server);
+
+		const first = server.start();
+		const second = server.start();
+		assert.strictEqual(first, second);
+
+		const [firstReady, secondReady] = await Promise.all([first, second]);
+		assert.strictEqual(firstReady, secondReady);
+		assert.strictEqual(await server.start(), firstReady);
+	});
+
+	test('start 진행 중 shutdown은 listener가 running으로 되살아나지 않게 한다', async () => {
+		const server = new CrispyMcpProtocolServer({
+			generation: 'generation-start-shutdown',
+		});
+		runningServers.add(server);
+
+		const pendingStart = server.start();
+		const startRejected = assert.rejects(
+			pendingStart,
+			/MCP server failed to start/,
+		);
+		await Promise.all([server.shutdown(), startRejected]);
+		runningServers.delete(server);
+
+		await assert.rejects(
+			server.start(),
+			/MCP server cannot be started/,
+		);
 	});
 
 	test('missing/wrong token을 401로 거부하고 credential을 응답에 반사하지 않는다', async () => {
@@ -107,7 +142,7 @@ suite('Crispy MCP protocol server', () => {
 		assert.deepStrictEqual(fixture.activity, []);
 	});
 
-	test('content type, body size와 malformed JSON을 SDK dispatch 전에 거부한다', async () => {
+	test('content type, body size, UTF-8과 malformed JSON을 SDK dispatch 전에 거부한다', async () => {
 		const fixture = await startFixture();
 		const wrongType = await rawRequest(fixture.url, {
 			Authorization: `Bearer ${fixture.token}`,
@@ -125,11 +160,17 @@ suite('Crispy MCP protocol server', () => {
 			Authorization: `Bearer ${fixture.token}`,
 			'Content-Type': 'application/json',
 		}, JSON.stringify({ value: 'x'.repeat(MCP_REQUEST_BODY_MAX_BYTES) }));
+		const malformedUtf8 = await rawRequest(fixture.url, {
+			Authorization: `Bearer ${fixture.token}`,
+			'Content-Type': 'application/json; charset=utf-8',
+			Accept: 'application/json, text/event-stream',
+		}, malformedUtf8InitializeBody());
 
 		assert.strictEqual(wrongType.status, 415);
 		assert.strictEqual(wrongCharset.status, 415);
 		assert.strictEqual(malformed.status, 400);
 		assert.strictEqual(oversized.status, 413);
+		assert.strictEqual(malformedUtf8.status, 400);
 		assert.deepStrictEqual(fixture.activity, []);
 	});
 
@@ -371,6 +412,19 @@ suite('Crispy MCP protocol server', () => {
 			fetch(fixture.url, { signal: AbortSignal.timeout(500) }),
 		);
 	});
+
+	test('slow chunked upload가 active여도 shutdown을 지연하지 않는다', async () => {
+		const fixture = await startFixture();
+		const slowRequest = await openSlowUpload(fixture);
+
+		try {
+			await settlesWithin(fixture.server.shutdown(), 1_000);
+			runningServers.delete(fixture.server);
+			assert.deepStrictEqual(fixture.activity, []);
+		} finally {
+			slowRequest.destroy();
+		}
+	});
 });
 
 async function startFixture(
@@ -398,6 +452,18 @@ async function startFixture(
 
 function toolsListRequest(id: number): Record<string, unknown> {
 	return { jsonrpc: '2.0', id, method: 'tools/list', params: {} };
+}
+
+function malformedUtf8InitializeBody(): Buffer {
+	return Buffer.concat([
+		Buffer.from(
+			'{"jsonrpc":"2.0","id":30,"method":"initialize","params":'
+			+ '{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":'
+			+ '{"name":"',
+		),
+		Buffer.from([0xc3, 0x28]),
+		Buffer.from('","version":"1.0.0"}}}'),
+	]);
 }
 
 function parseMcpResponseBody(body: string): {
@@ -448,7 +514,7 @@ function postJson(
 function rawRequest(
 	url: string,
 	headers: Readonly<Record<string, string>>,
-	body: string,
+	body: string | Uint8Array,
 ): Promise<RawHttpResponse> {
 	const target = new URL(url);
 	return new Promise((resolve, reject) => {
@@ -471,4 +537,55 @@ function rawRequest(
 		request.once('error', reject);
 		request.end(body);
 	});
+}
+
+function openSlowUpload(fixture: StartedFixture): Promise<ClientRequest> {
+	const target = new URL(fixture.url);
+	return new Promise((resolve, reject) => {
+		let connected = false;
+		const request = httpRequest({
+			hostname: target.hostname,
+			port: Number(target.port),
+			path: target.pathname,
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${fixture.token}`,
+				'Content-Type': 'application/json',
+				Accept: 'application/json, text/event-stream',
+				Expect: '100-continue',
+			},
+		}, (response) => response.resume());
+		request.on('error', (error) => {
+			if (!connected) {
+				reject(error);
+			}
+		});
+		request.once('continue', () => {
+			request.write('{"jsonrpc":"2.0",');
+			setImmediate(() => {
+				connected = true;
+				resolve(request);
+			});
+		});
+		request.flushHeaders();
+	});
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			promise,
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error('Operation exceeded its shutdown deadline.')),
+					timeoutMs,
+				);
+			}),
+		]);
+	} finally {
+		if (timeout !== undefined) {
+			clearTimeout(timeout);
+		}
+	}
 }
