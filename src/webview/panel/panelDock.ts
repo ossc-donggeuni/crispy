@@ -5,15 +5,17 @@ import {
 } from './panelState';
 
 /**
- * Agent Chat의 Dock 이동, Preview 표시, 반응형 bottom 전환을 초기화한다.
+ * Agent Chat의 Dock 이동과 Preview 표시를 초기화한다.
+ * Floating Chat Panel은 Graph 영역을 밀어내지 않으므로 좁은 Webview에서도
+ * 사용자가 선택한 Dock 방향을 그대로 유지하고 크기만 별도로 제한한다.
  *
- * @param layout Graph와 Agent Chat을 포함하는 전체 Layout 요소
+ * @param layout Graph 위에 Agent Chat을 띄우는 전체 Layout 요소
  * @param dragHandle Agent Chat 이동을 시작하는 전용 Drag Handle 요소
- * @param dockPreview 드래그 중 배치 후보 영역을 표시하는 단일 Preview 요소
+ * @param dockPreview 드래그 중 배치 후보 위치를 표시하는 단일 Preview 요소
  * @param state 사용자가 선택한 위치와 Panel 크기를 담는 Layout 상태
  * @param onPreferredDockChange 사용자가 선호 Dock 위치를 변경한 뒤 실행할 콜백
  * @param onDockChange Dock 변경 완료 뒤 layout 의존 기능을 갱신하는 콜백
- * @returns Panel 크기나 Webview 너비가 변경됐을 때 실제 Dock 위치를 다시 계산하는 함수
+ * @returns 선호 Dock 위치를 Layout에 다시 반영하는 함수
  */
 export function initializePanelDock(
 	layout: HTMLElement,
@@ -27,17 +29,10 @@ export function initializePanelDock(
 	let candidateDock: DockPosition | undefined;
 
 	/**
-	 * 선호 위치와 현재 가용 너비를 비교하여 실제 Dock 위치를 계산하고 Layout에 반영한다.
-	 * 좌우 공간이 부족한 경우 선호 위치는 보존한 채 실제 위치만 bottom으로 전환한다.
+	 * 사용자가 선택한 Dock 위치를 그대로 Layout에 반영한다.
 	 */
 	const refreshDock = () => {
-		const prefersSide = state.preferredDock === 'left' || state.preferredDock === 'right';
-		const lacksSideSpace = layout.clientWidth < INITIAL_SIDE_SIZE * 2;
-
-		const effectiveDock: DockPosition = prefersSide && lacksSideSpace
-			? 'bottom'
-			: state.preferredDock;
-		layout.dataset.dock = effectiveDock;
+		layout.dataset.dock = state.preferredDock;
 	};
 
 	/**
@@ -115,21 +110,15 @@ export function initializePanelDock(
 
 		const isInsideLayout = getDockCandidate(layout, event.clientX, event.clientY) !== undefined;
 		const isSideCandidate = candidateDock === 'left' || candidateDock === 'right';
-		const prefersSide = state.preferredDock === 'left' || state.preferredDock === 'right';
-		const isAutomaticBottom = layout.dataset.dock === 'bottom' && prefersSide;
-		const movesFromPreferredBottomToSide = layout.dataset.dock === 'bottom'
-			&& state.preferredDock === 'bottom'
-			&& isSideCandidate;
+		const movesFromBottomToSide = state.preferredDock === 'bottom' && isSideCandidate;
 
 		if (
 			candidateDock
 			&& isInsideLayout
 			&& candidateDock !== state.preferredDock
-			&& !(isAutomaticBottom && isSideCandidate)
 		) {
-			if (movesFromPreferredBottomToSide) {
+			if (movesFromBottomToSide) {
 				state.sideSize = INITIAL_SIDE_SIZE;
-				layout.style.setProperty('--chat-side-size', `${INITIAL_SIDE_SIZE}px`);
 			}
 
 			state.preferredDock = candidateDock;
@@ -177,8 +166,6 @@ export function initializePanelDock(
 	dragHandle.addEventListener('pointercancel', handleDragCancel);
 	dragHandle.addEventListener('lostpointercapture', handleLostPointerCapture);
 
-	const resizeObserver = new ResizeObserver(refreshDock);
-	resizeObserver.observe(layout);
 	refreshDock();
 
 	return refreshDock;

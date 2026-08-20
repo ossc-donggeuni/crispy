@@ -7,8 +7,9 @@ import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPo
 import type { WebviewToExtensionMessage } from '../messages';
 import { initializeGraphView } from './graph/graphView';
 import { deserializeGraphFromWebview } from './graph/graphTransport';
+import { initializePanelCollapse } from './panel/panelCollapse';
 import { initializePanelDock } from './panel/panelDock';
-import { initializePanelResize } from './panel/panelResize';
+import { applyPanelSize, initializePanelResize } from './panel/panelResize';
 
 import {
 	restoreWebviewState,
@@ -50,7 +51,10 @@ const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
 const graphArea = getRequiredElement<HTMLElement>('#graph-area');
+const chatPanel = getRequiredElement<HTMLElement>('#agent-chat-area');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
+const collapseButton = getRequiredElement<HTMLButtonElement>('#chat-collapse-toggle');
+const stickerOpener = getRequiredElement<HTMLButtonElement>('#chat-sticker-opener');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
@@ -154,6 +158,18 @@ try {
 	agentPanelUi = undefined;
 }
 
+/** Collapse 초기화 */
+const refreshCollapse = initializePanelCollapse(
+	{
+		chatPanel,
+		resizeHandle,
+		collapseButton,
+		stickerOpener,
+	},
+	panelState,
+	persistWebviewState,
+	() => terminalPool.scheduleActiveTerminalFit(),
+);
 /** Dock 초기화 */
 const refreshDock = initializePanelDock(
 	layout,
@@ -161,7 +177,12 @@ const refreshDock = initializePanelDock(
 	dockPreview,
 	panelState,
 	persistWebviewState,
-	() => terminalPool.scheduleActiveTerminalFit(),
+	() => {
+		/** Dock이 바뀌면 새 방향 기준으로 표시 크기와 Sticker 위치를 다시 맞춘다. */
+		applyPanelSize(layout, panelState);
+		refreshCollapse();
+		terminalPool.scheduleActiveTerminalFit();
+	},
 );
 /** Resize 초기화 */
 initializePanelResize(

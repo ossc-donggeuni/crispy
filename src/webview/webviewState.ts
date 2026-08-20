@@ -119,6 +119,7 @@ function createDefaultWebviewState(): PersistedWebviewState {
 			preferredDock: DEFAULT_PANEL_LAYOUT_STATE.preferredDock,
 			sideSize: DEFAULT_PANEL_LAYOUT_STATE.sideSize,
 			verticalSize: DEFAULT_PANEL_LAYOUT_STATE.verticalSize,
+			collapsed: DEFAULT_PANEL_LAYOUT_STATE.collapsed,
 		},
 		graph: {
 			camera: {

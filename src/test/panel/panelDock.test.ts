@@ -8,47 +8,35 @@ import {
 } from '../../webview/panel/panelState';
 
 suite('Panel Dock', () => {
-	const originalResizeObserver = globalThis.ResizeObserver;
-
-	suiteSetup(() => {
-		globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
-	});
-
-	setup(() => {
-		FakeResizeObserver.reset();
-	});
-
-	suiteTeardown(() => {
-		globalThis.ResizeObserver = originalResizeObserver;
-	});
-
-	test('Side Dock은 좁은 Layout에서 Bottom으로 전환되고 확대하면 preferred Left/Right로 복원된다', () => {
-		for (const preferredDock of ['left', 'right'] as const) {
-			const layout = new FakeElement(INITIAL_SIDE_SIZE * 2 - 1, 800);
+	test('좁은 Webview에서도 선호 Dock 위치를 그대로 유지한다', () => {
+		for (const preferredDock of ['left', 'right', 'top', 'bottom'] as const) {
+			const layout = new FakeElement(320, 240);
 			const state = createState(preferredDock);
 
-			initializeDock(layout, state);
+			const refreshDock = initializeDock(layout, state);
 
-			assert.strictEqual(layout.dataset.dock, 'bottom');
+			assert.strictEqual(layout.dataset.dock, preferredDock);
 
-			layout.setSize(INITIAL_SIDE_SIZE * 2, 800);
-			FakeResizeObserver.trigger(layout);
+			layout.setSize(200, 160);
+			refreshDock();
 
 			assert.strictEqual(layout.dataset.dock, preferredDock);
 			assert.strictEqual(state.preferredDock, preferredDock);
+			assert.strictEqual(state.sideSize, INITIAL_SIDE_SIZE);
+			assert.strictEqual(state.verticalSize, INITIAL_VERTICAL_SIZE);
 		}
 	});
 
-	test('사용자가 직접 Bottom을 선택하면 Layout 확대 후에도 Bottom을 유지한다', () => {
+	test('사용자가 직접 Bottom을 선택하면 Layout 크기가 변해도 Bottom을 유지한다', () => {
 		const fixture = createDockFixture(1000, 'right');
 
 		dragDock(fixture.dragHandle, 500, 799);
 		assert.strictEqual(fixture.state.preferredDock, 'bottom');
 
 		fixture.layout.setSize(600, 800);
-		FakeResizeObserver.trigger(fixture.layout);
+		fixture.refreshDock();
 		fixture.layout.setSize(1400, 800);
-		FakeResizeObserver.trigger(fixture.layout);
+		fixture.refreshDock();
 
 		assert.strictEqual(fixture.layout.dataset.dock, 'bottom');
 		assert.strictEqual(fixture.state.preferredDock, 'bottom');
@@ -79,6 +67,16 @@ suite('Panel Dock', () => {
 			assert.strictEqual(fixture.layout.hasClass('is-dock-dragging'), false);
 			assert.strictEqual(fixture.getChangeCount(), 1);
 		}
+	});
+
+	test('좁은 Webview에서도 좌우 Dock으로 이동할 수 있다', () => {
+		const fixture = createDockFixture(INITIAL_SIDE_SIZE, 'right');
+
+		dragDock(fixture.dragHandle, 1, 400);
+
+		assert.strictEqual(fixture.state.preferredDock, 'left');
+		assert.strictEqual(fixture.layout.dataset.dock, 'left');
+		assert.strictEqual(fixture.getChangeCount(), 1);
 	});
 
 	test('Layout 외부에 Drop하면 기존 Dock을 유지한다', () => {
@@ -140,26 +138,6 @@ suite('Panel Dock', () => {
 		assertDragCleanedUp(fixture);
 	});
 
-	test('큰 sideSize와 무관하게 초기 너비 기준으로 자동 Bottom 전환과 좌우 복귀를 결정한다', () => {
-		const layout = new FakeElement(800);
-		const state: PanelLayoutState = {
-			preferredDock: 'right',
-			sideSize: 700,
-			verticalSize: INITIAL_VERTICAL_SIZE,
-		};
-		initializeDock(layout, state);
-
-		assert.strictEqual(layout.dataset.dock, 'right');
-
-		layout.setSize(INITIAL_SIDE_SIZE * 2 - 1, 800);
-		FakeResizeObserver.trigger(layout);
-		assert.strictEqual(layout.dataset.dock, 'bottom');
-
-		layout.setSize(INITIAL_SIDE_SIZE * 2, 800);
-		FakeResizeObserver.trigger(layout);
-		assert.strictEqual(layout.dataset.dock, 'right');
-	});
-
 	test('Bottom에서 Left로 Dock하면 sideSize를 초기 너비로 복원한다', () => {
 		const fixture = createDockFixture(1000, 'bottom', 640);
 
@@ -167,25 +145,8 @@ suite('Panel Dock', () => {
 
 		assert.strictEqual(fixture.state.preferredDock, 'left');
 		assert.strictEqual(fixture.state.sideSize, INITIAL_SIDE_SIZE);
-		assert.strictEqual(
-			fixture.layout.styleProperties.get('--chat-side-size'),
-			'360px',
-		);
 		assert.strictEqual(fixture.layout.dataset.dock, 'left');
 		assert.strictEqual(fixture.getChangeCount(), 1);
-	});
-
-	test('자동 Bottom에서는 좌우 Drop으로 상태와 크기를 변경하지 않는다', () => {
-		const fixture = createDockFixture(INITIAL_SIDE_SIZE * 2 - 1, 'right', 640);
-
-		assert.strictEqual(fixture.layout.dataset.dock, 'bottom');
-		dragDock(fixture.dragHandle, 1, 400);
-
-		assert.strictEqual(fixture.state.preferredDock, 'right');
-		assert.strictEqual(fixture.state.sideSize, 640);
-		assert.strictEqual(fixture.layout.styleProperties.has('--chat-side-size'), false);
-		assert.strictEqual(fixture.layout.dataset.dock, 'bottom');
-		assert.strictEqual(fixture.getChangeCount(), 0);
 	});
 
 	test('Left에서 Right로 Dock하면 사용자가 조절한 sideSize를 유지한다', () => {
@@ -195,7 +156,6 @@ suite('Panel Dock', () => {
 
 		assert.strictEqual(fixture.state.preferredDock, 'right');
 		assert.strictEqual(fixture.state.sideSize, 520);
-		assert.strictEqual(fixture.layout.styleProperties.has('--chat-side-size'), false);
 		assert.strictEqual(fixture.layout.dataset.dock, 'right');
 	});
 
@@ -215,6 +175,7 @@ interface DockFixture {
 	dragHandle: FakeElement;
 	dockPreview: FakeElement;
 	state: PanelLayoutState;
+	refreshDock(): void;
 	getChangeCount(): number;
 	getDockChangeCount(): number;
 }
@@ -231,7 +192,7 @@ function createDockFixture(
 	let changeCount = 0;
 	let dockChangeCount = 0;
 
-	initializePanelDock(
+	const refreshDock = initializePanelDock(
 		layout.asHtmlElement(),
 		dragHandle.asHtmlElement(),
 		dockPreview.asHtmlElement(),
@@ -245,6 +206,7 @@ function createDockFixture(
 		dragHandle,
 		dockPreview,
 		state,
+		refreshDock,
 		getChangeCount: () => changeCount,
 		getDockChangeCount: () => dockChangeCount,
 	};
@@ -258,11 +220,15 @@ function createState(
 		preferredDock,
 		sideSize,
 		verticalSize: INITIAL_VERTICAL_SIZE,
+		collapsed: false,
 	};
 }
 
-function initializeDock(layout: FakeElement, state: PanelLayoutState): void {
-	initializePanelDock(
+function initializeDock(
+	layout: FakeElement,
+	state: PanelLayoutState,
+): () => void {
+	return initializePanelDock(
 		layout.asHtmlElement(),
 		new FakeElement().asHtmlElement(),
 		new FakeElement().asHtmlElement(),
@@ -396,48 +362,5 @@ class FakeElement {
 			height: this.clientHeight,
 			toJSON: () => ({}),
 		};
-	}
-}
-
-class FakeResizeObserver {
-	private static instances: FakeResizeObserver[] = [];
-	private readonly observedElements = new Set<Element>();
-
-	constructor(private readonly callback: ResizeObserverCallback) {
-		FakeResizeObserver.instances.push(this);
-	}
-
-	static reset(): void {
-		FakeResizeObserver.instances = [];
-	}
-
-	static trigger(target: FakeElement): void {
-		const element = target.asHtmlElement();
-
-		for (const observer of FakeResizeObserver.instances) {
-			if (!observer.observedElements.has(element)) {
-				continue;
-			}
-
-			observer.callback(
-				[{
-					target: element,
-					contentRect: target.getBoundingClientRect(),
-				} as unknown as ResizeObserverEntry],
-				observer as unknown as ResizeObserver,
-			);
-		}
-	}
-
-	observe(target: Element): void {
-		this.observedElements.add(target);
-	}
-
-	disconnect(): void {
-		this.observedElements.clear();
-	}
-
-	unobserve(target: Element): void {
-		this.observedElements.delete(target);
 	}
 }

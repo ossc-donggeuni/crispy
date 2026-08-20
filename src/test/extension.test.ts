@@ -248,6 +248,7 @@ suite('Crispy Extension Host', () => {
 				preferredDock: 'left',
 				sideSize: 480,
 				verticalSize: 260,
+				collapsed: true,
 			},
 			graph: {
 				camera: { x: 120, y: -45, scale: 1.5 },
@@ -286,6 +287,7 @@ suite('Crispy Extension Host', () => {
 				preferredDock: 'bottom',
 				sideSize: 410,
 				verticalSize: 290,
+				collapsed: false,
 			},
 			graph: {
 				camera: { x: -80, y: 65, scale: 2 },

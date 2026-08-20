@@ -24,66 +24,89 @@ body {
 	font-size: var(--vscode-font-size);
 }
 
+/*
+ * Graph는 Webview 전체를 차지하고 Agent Chat은 그 위에 여백을 두고 떠 있다.
+ * Chat 크기는 Floating Panel에만 적용되므로 Graph의 width / height를 바꾸지 않는다.
+ */
 .crispy-layout {
-	--chat-side-size: 360px;
-	--chat-vertical-size: 300px;
+	--chat-side-size: 460px;
+	--chat-vertical-size: 400px;
+	--chat-floating-margin: 12px;
+	--chat-floating-radius: 8px;
 	--resize-handle-size: 5px;
 
+	/* JS clamp가 아직 실행되지 않은 첫 paint에서도 Panel이 화면 밖으로 나가지 않게 한다. */
+	--chat-side-display: min(
+		var(--chat-side-size),
+		calc(100% - var(--chat-floating-margin) * 2)
+	);
+	--chat-vertical-display: min(
+		var(--chat-vertical-size),
+		calc(100% - var(--chat-floating-margin) * 2)
+	);
+
 	position: relative;
-	display: grid;
 	width: 100%;
 	height: 100%;
 	overflow: hidden;
 }
 
-.crispy-layout[data-dock='right'] {
-	grid-template-columns: minmax(0, 1fr) var(--resize-handle-size) var(--chat-side-size);
-	grid-template-rows: minmax(0, 1fr);
-	grid-template-areas: 'graph resize chat';
-}
-
-.crispy-layout[data-dock='left'] {
-	grid-template-columns: var(--chat-side-size) var(--resize-handle-size) minmax(0, 1fr);
-	grid-template-rows: minmax(0, 1fr);
-	grid-template-areas: 'chat resize graph';
-}
-
-.crispy-layout[data-dock='top'] {
-	grid-template-columns: minmax(0, 1fr);
-	grid-template-rows: var(--chat-vertical-size) var(--resize-handle-size) minmax(0, 1fr);
-	grid-template-areas:
-		'chat'
-		'resize'
-		'graph';
-}
-
-.crispy-layout[data-dock='bottom'] {
-	grid-template-columns: minmax(0, 1fr);
-	grid-template-rows: minmax(0, 1fr) var(--resize-handle-size) var(--chat-vertical-size);
-	grid-template-areas:
-		'graph'
-		'resize'
-		'chat';
-}
-
-#agent-chat-area {
-	min-width: 0;
-	min-height: 0;
-	overflow: hidden;
-}
-
 #graph-area {
-	grid-area: graph;
+	position: absolute;
+	inset: 0;
+	z-index: 0;
 }
 
+/* Chat Panel 바깥 여백에서는 Graph가 그대로 보이고 기존 Pointer interaction도 유지된다. */
 #agent-chat-area {
-	position: relative;
+	position: absolute;
+	z-index: 1;
 	display: grid;
-	grid-area: chat;
 	grid-template-rows: auto minmax(0, 1fr);
 	grid-template-areas:
 		'header'
 		'terminal';
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	background-color: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: var(--chat-floating-radius);
+	box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+
+#agent-chat-area[hidden] {
+	display: none;
+}
+
+.crispy-layout[data-dock='left'] #agent-chat-area,
+.crispy-layout[data-dock='right'] #agent-chat-area {
+	top: var(--chat-floating-margin);
+	bottom: var(--chat-floating-margin);
+	width: var(--chat-side-display);
+}
+
+.crispy-layout[data-dock='left'] #agent-chat-area {
+	left: var(--chat-floating-margin);
+}
+
+.crispy-layout[data-dock='right'] #agent-chat-area {
+	right: var(--chat-floating-margin);
+}
+
+.crispy-layout[data-dock='top'] #agent-chat-area,
+.crispy-layout[data-dock='bottom'] #agent-chat-area {
+	right: var(--chat-floating-margin);
+	left: var(--chat-floating-margin);
+	height: var(--chat-vertical-display);
+}
+
+.crispy-layout[data-dock='top'] #agent-chat-area {
+	top: var(--chat-floating-margin);
+}
+
+.crispy-layout[data-dock='bottom'] #agent-chat-area {
+	bottom: var(--chat-floating-margin);
 }
 
 /* 탭마다 자기 표면을 겹쳐 두고 활성 탭 하나만 표시한다. */
@@ -178,24 +201,9 @@ body {
 	display: none;
 }
 
-.crispy-layout[data-dock='right'] #agent-chat-area {
-	border-left: 1px solid var(--vscode-panel-border);
-}
-
-.crispy-layout[data-dock='left'] #agent-chat-area {
-	border-right: 1px solid var(--vscode-panel-border);
-}
-
-.crispy-layout[data-dock='top'] #agent-chat-area {
-	border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.crispy-layout[data-dock='bottom'] #agent-chat-area {
-	border-top: 1px solid var(--vscode-panel-border);
-}
-
 /* Agent 영역 헤더 줄의 마지막 항목이며 탭 개수와 무관하게 오른쪽 끝에 남는다. */
-#chat-drag-handle {
+#chat-drag-handle,
+#chat-collapse-toggle {
 	display: grid;
 	flex: 0 0 auto;
 	width: 22px;
@@ -205,18 +213,29 @@ body {
 	color: var(--vscode-foreground);
 	background: transparent;
 	border: 0;
+	border-radius: 2px;
 	font: inherit;
-	font-size: 18px;
 	line-height: 1;
+}
+
+#chat-drag-handle {
+	font-size: 18px;
 	cursor: grab;
 	touch-action: none;
 }
 
-#chat-drag-handle:hover {
+#chat-collapse-toggle {
+	font-size: 16px;
+	cursor: pointer;
+}
+
+#chat-drag-handle:hover,
+#chat-collapse-toggle:hover {
 	background-color: var(--vscode-toolbar-hoverBackground);
 }
 
-#chat-drag-handle:focus-visible {
+#chat-drag-handle:focus-visible,
+#chat-collapse-toggle:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: 1px;
 }
@@ -225,25 +244,53 @@ body {
 	cursor: grabbing;
 }
 
+/* Resize Handle은 Chat Panel의 Graph를 향하는 안쪽 경계 바로 바깥에 놓인다. */
 #panel-resize-handle {
-	grid-area: resize;
+	position: absolute;
 	z-index: 2;
 	touch-action: none;
 }
 
+#panel-resize-handle[hidden] {
+	display: none;
+}
+
 .crispy-layout[data-dock='left'] #panel-resize-handle,
 .crispy-layout[data-dock='right'] #panel-resize-handle {
+	top: var(--chat-floating-margin);
+	bottom: var(--chat-floating-margin);
+	width: var(--resize-handle-size);
 	cursor: col-resize;
+}
+
+.crispy-layout[data-dock='left'] #panel-resize-handle {
+	left: calc(var(--chat-floating-margin) + var(--chat-side-display));
+}
+
+.crispy-layout[data-dock='right'] #panel-resize-handle {
+	right: calc(var(--chat-floating-margin) + var(--chat-side-display));
 }
 
 .crispy-layout[data-dock='top'] #panel-resize-handle,
 .crispy-layout[data-dock='bottom'] #panel-resize-handle {
+	right: var(--chat-floating-margin);
+	left: var(--chat-floating-margin);
+	height: var(--resize-handle-size);
 	cursor: row-resize;
+}
+
+.crispy-layout[data-dock='top'] #panel-resize-handle {
+	top: calc(var(--chat-floating-margin) + var(--chat-vertical-display));
+}
+
+.crispy-layout[data-dock='bottom'] #panel-resize-handle {
+	bottom: calc(var(--chat-floating-margin) + var(--chat-vertical-display));
 }
 
 #panel-resize-handle:hover,
 .crispy-layout.is-resizing #panel-resize-handle {
 	background-color: var(--vscode-toolbar-hoverBackground);
+	border-radius: var(--resize-handle-size);
 }
 
 .crispy-layout.is-dock-dragging,
@@ -251,6 +298,77 @@ body {
 	user-select: none;
 }
 
+/* 접힘 상태에서 Graph를 거의 가리지 않는 크기로 현재 Dock 가장자리에만 남는 열기 버튼이다. */
+#chat-sticker-opener {
+	position: absolute;
+	z-index: 2;
+	display: grid;
+	padding: 0;
+	place-items: center;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-panel-border);
+	box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+	font: inherit;
+	font-size: 14px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+#chat-sticker-opener[hidden] {
+	display: none;
+}
+
+#chat-sticker-opener:hover {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+#chat-sticker-opener:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+#chat-sticker-opener[data-dock='left'],
+#chat-sticker-opener[data-dock='right'] {
+	top: 50%;
+	width: 18px;
+	height: 48px;
+	transform: translateY(-50%);
+}
+
+#chat-sticker-opener[data-dock='left'] {
+	left: 0;
+	border-left: 0;
+	border-radius: 0 var(--chat-floating-radius) var(--chat-floating-radius) 0;
+}
+
+#chat-sticker-opener[data-dock='right'] {
+	right: 0;
+	border-right: 0;
+	border-radius: var(--chat-floating-radius) 0 0 var(--chat-floating-radius);
+}
+
+#chat-sticker-opener[data-dock='top'],
+#chat-sticker-opener[data-dock='bottom'] {
+	left: 50%;
+	width: 48px;
+	height: 18px;
+	transform: translateX(-50%);
+}
+
+#chat-sticker-opener[data-dock='top'] {
+	top: 0;
+	border-top: 0;
+	border-radius: 0 0 var(--chat-floating-radius) var(--chat-floating-radius);
+}
+
+#chat-sticker-opener[data-dock='bottom'] {
+	bottom: 0;
+	border-bottom: 0;
+	border-radius: var(--chat-floating-radius) var(--chat-floating-radius) 0 0;
+}
+
+/* Preview는 해당 방향의 Graph를 잘라내는 것이 아니라 Floating Panel이 놓일 자리를 나타낸다. */
 #dock-preview {
 	position: absolute;
 	z-index: 10;
@@ -259,6 +377,7 @@ body {
 	color: var(--vscode-foreground);
 	background-color: rgba(128, 128, 128, 0.28);
 	border: 1px solid var(--vscode-panel-border);
+	border-radius: var(--chat-floating-radius);
 	pointer-events: none;
 }
 
@@ -268,32 +387,32 @@ body {
 
 #dock-preview[data-dock='left'],
 #dock-preview[data-dock='right'] {
-	top: 0;
-	bottom: 0;
-	width: min(var(--chat-side-size), 50%);
+	top: var(--chat-floating-margin);
+	bottom: var(--chat-floating-margin);
+	width: var(--chat-side-display);
 }
 
 #dock-preview[data-dock='left'] {
-	left: 0;
+	left: var(--chat-floating-margin);
 }
 
 #dock-preview[data-dock='right'] {
-	right: 0;
+	right: var(--chat-floating-margin);
 }
 
 #dock-preview[data-dock='top'],
 #dock-preview[data-dock='bottom'] {
-	left: 0;
-	width: 100%;
-	height: min(var(--chat-vertical-size), 50%);
+	right: var(--chat-floating-margin);
+	left: var(--chat-floating-margin);
+	height: var(--chat-vertical-display);
 }
 
 #dock-preview[data-dock='top'] {
-	top: 0;
+	top: var(--chat-floating-margin);
 }
 
 #dock-preview[data-dock='bottom'] {
-	bottom: 0;
+	bottom: var(--chat-floating-margin);
 }
 
 #dock-preview[data-dock='left']::after {
