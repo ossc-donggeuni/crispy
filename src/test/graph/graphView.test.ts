@@ -181,6 +181,282 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('새 Workspace Graph를 기존 View와 State에 적용하고 Renderer와 Navigator를 동기화한다', () => {
+		const existingFolder = {
+			kind: 'folder' as const,
+			id: 'folder:refresh-existing',
+			name: 'existing',
+			status: 'loaded' as const,
+			children: Array.from({ length: 7 }, (_, index) => ({
+				kind: 'file' as const,
+				id: `file:refresh-existing/${index}.ts`,
+				name: `${index}.ts`,
+			})),
+		};
+		const removedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:refresh-removed',
+			name: 'removed',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const addedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:refresh-added',
+			name: 'added',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:refresh-added/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const initialProject: Project = {
+			kind: 'project',
+			id: 'project:refresh-primary',
+			name: 'primary',
+			status: 'loaded',
+			children: [existingFolder, removedFolder],
+		};
+		const updatedProject: Project = {
+			...initialProject,
+			children: [existingFolder, addedFolder],
+		};
+		const secondaryProject: Project = {
+			kind: 'project',
+			id: 'project:refresh-secondary',
+			name: 'secondary',
+			status: 'loaded',
+			children: [],
+		};
+		const initialGraph = createSingleRootGraph(
+			initialProject,
+			'root:refresh-primary',
+		);
+		const updatedGraph: Graph = {
+			roots: [
+				{ id: 'root:refresh-primary', nodeId: updatedProject.id },
+				{ id: 'root:refresh-secondary', nodeId: secondaryProject.id },
+			],
+			rootNodes: {
+				[updatedProject.id]: updatedProject,
+				[secondaryProject.id]: secondaryProject,
+			},
+		};
+		const secondaryOnlyGraph = createSingleRootGraph(
+			secondaryProject,
+			'root:refresh-secondary',
+		);
+		const fileGroupId = createFileGroupId(existingFolder.id);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 125, y: -75, scale: 1.5 },
+			nodePositions: {
+				[existingFolder.id]: { x: 320, y: 180 },
+				[addedFolder.id]: { x: 760, y: 420 },
+				'folder:stale': { x: -500, y: -300 },
+			},
+			fileGroupPages: { [fileGroupId]: 2 },
+			openedFolders: {
+				[initialProject.id]: true,
+				[existingFolder.id]: true,
+				[addedFolder.id]: true,
+				'folder:stale': true,
+			},
+			detachedRootNodeIds: {},
+		}, initialGraph);
+		const viewport = root.children[0];
+		const existingNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			existingFolder.id,
+		);
+		const stateStore = graphView.state;
+		const initialState = stateStore.getState();
+		const initialCamera = graphView.camera.getState();
+
+		graphView.updateGraph(updatedGraph);
+
+		assert.strictEqual(root.children[0], viewport);
+		assert.strictEqual(graphView.state, stateStore);
+		assert.strictEqual(graphView.state.getState(), initialState);
+		assert.deepStrictEqual(graphView.camera.getState(), initialCamera);
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			existingFolder.id,
+		), existingNode);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				removedFolder.id,
+			),
+			undefined,
+		);
+		const addedNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			addedFolder.id,
+		);
+
+		assert.strictEqual(addedNode.style.transform, 'translate(760px, 420px)');
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			addedFolder.children[0].id,
+		));
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${updatedProject.id}->${addedFolder.id}`,
+		));
+		assert.strictEqual(
+			findDescendantByAttribute(
+				root,
+				'data-graph-edge-id',
+				`${updatedProject.id}->${removedFolder.id}`,
+			),
+			undefined,
+		);
+		assert.strictEqual(
+			getDescendantsByClass(
+				getDescendantByAttribute(root, 'data-graph-node-id', fileGroupId),
+				'graph-file-item',
+			).length,
+			7,
+		);
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['primary', 'secondary']);
+
+		graphView.updateGraph(secondaryOnlyGraph);
+
+		assert.strictEqual(root.children[0], viewport);
+		assert.strictEqual(graphView.state.getState(), initialState);
+		assert.deepStrictEqual(graphView.camera.getState(), initialCamera);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				updatedProject.id,
+			),
+			undefined,
+		);
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondaryProject.id,
+		));
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['secondary']);
+		assert.deepStrictEqual(initialState.nodePositions, {
+			[existingFolder.id]: { x: 320, y: 180 },
+			[addedFolder.id]: { x: 760, y: 420 },
+			'folder:stale': { x: -500, y: -300 },
+		});
+		assert.deepStrictEqual(initialState.openedFolders, {
+			[initialProject.id]: true,
+			[existingFolder.id]: true,
+			[addedFolder.id]: true,
+			'folder:stale': true,
+		});
+		assert.deepStrictEqual(initialState.fileGroupPages, { [fileGroupId]: 2 });
+		graphView.dispose();
+	});
+
+	test('Graph 갱신마다 persisted Detached Root를 재적용하고 누락 상태는 보존한다', () => {
+		const detachedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:refresh-detached',
+			name: 'detached',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:refresh-detached/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const createWorkspaceGraph = (includeDetachedFolder: boolean): Graph => {
+			const project: Project = {
+				kind: 'project',
+				id: 'project:refresh-detached',
+				name: 'workspace',
+				status: 'loaded',
+				children: includeDetachedFolder ? [detachedFolder] : [],
+			};
+
+			return createSingleRootGraph(project, 'root:workspace');
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [detachedFolder.id]: { x: 900, y: 500 } },
+			openedFolders: { 'project:refresh-detached': true },
+			detachedRootNodeIds: {
+				[detachedFolder.id]: true,
+				'folder:refresh-missing': true,
+			},
+		}, createWorkspaceGraph(false));
+		const detachedRootId = createPromotedGraphRootId(detachedFolder.id);
+		const backlinkId = createFolderBacklinkId(detachedRootId);
+
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace']);
+		graphView.updateGraph(createWorkspaceGraph(true));
+
+		const detachedRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFolder.id,
+		);
+
+		assert.strictEqual(detachedRoot.style.transform, 'translate(900px, 500px)');
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			backlinkId,
+		));
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace', 'detached/']);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[detachedFolder.id]: true,
+			'folder:refresh-missing': true,
+		});
+
+		graphView.updateGraph(createWorkspaceGraph(false));
+
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFolder.id,
+		), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			backlinkId,
+		), undefined);
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace']);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[detachedFolder.id]: true,
+			'folder:refresh-missing': true,
+		});
+		graphView.dispose();
+	});
+
+	test('dispose 이후 Graph 갱신 요청을 무시한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
+
+		graphView.dispose();
+		assert.doesNotThrow(() => graphView.updateGraph(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+		));
+		assert.strictEqual(root.children.length, 0);
+	});
+
 	test('Root Promotion 실패는 Graph와 Detached Root 상태를 변경하지 않는다', () => {
 		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
 		const state = createGraphState({

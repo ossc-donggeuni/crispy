@@ -495,6 +495,7 @@ suite('Webview State Wiring', () => {
 				camera: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['camera'],
+				updateGraph: () => undefined,
 				dispose: () => {
 					graphDisposed = true;
 				},
