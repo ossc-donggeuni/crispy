@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
+import {
+	spawn,
+	type ChildProcess,
+	type SpawnOptions,
+} from 'node:child_process';
 import path from 'node:path';
 import {
 	createMcpFailure,
 	type McpFailure,
 	type McpFailureReason,
 } from './failureReason';
+import { MCP_LOOPBACK_HOST } from './httpPolicy';
 import {
 	parseMcpChildToHostMessage,
 	type HostToMcpChildMessage,
@@ -182,6 +187,14 @@ const SUPPORTED_MCP_HOSTS = new Set([
 	'win32-x64',
 ]);
 
+const BLOCKED_MCP_CHILD_ENVIRONMENT_NAMES = new Set([
+	'CRISPY_MCP_TOKEN',
+	MCP_CHILD_GENERATION_ENV,
+	'ELECTRON_RUN_AS_NODE',
+	'NODE_OPTIONS',
+	'NODE_PATH',
+]);
+
 /** ExtensionContext.extensionUri를 기준으로 production child asset을 찾는 Host API다. */
 export function resolveMcpChildAssetPath(
 	extensionUri: Readonly<{ fsPath: string }>,
@@ -189,7 +202,7 @@ export function resolveMcpChildAssetPath(
 	return path.join(extensionUri.fsPath, 'dist', 'mcp-server.mjs');
 }
 
-/** 대소문자 변형 token env를 제거하고 child 전용 Node mode와 generation만 더한다. */
+/** credential과 외부 Node 실행 제어 변수를 제거하고 child 전용 bootstrap만 더한다. */
 export function createMcpChildEnvironment(
 	parentEnvironment: NodeJS.ProcessEnv,
 	generation: string,
@@ -197,11 +210,7 @@ export function createMcpChildEnvironment(
 	const environment: NodeJS.ProcessEnv = {};
 	for (const [name, value] of Object.entries(parentEnvironment)) {
 		const upperName = name.toUpperCase();
-		if (
-			upperName === 'CRISPY_MCP_TOKEN'
-			|| upperName === MCP_CHILD_GENERATION_ENV
-			|| upperName === 'ELECTRON_RUN_AS_NODE'
-		) {
+		if (BLOCKED_MCP_CHILD_ENVIRONMENT_NAMES.has(upperName)) {
 			continue;
 		}
 		environment[name] = value;
@@ -211,14 +220,26 @@ export function createMcpChildEnvironment(
 	return environment;
 }
 
-/** shell/system Node를 거치지 않고 Extension Host executable을 IPC child로 직접 시작한다. */
-export function spawnMcpChild(request: McpChildSpawnRequest): ChildProcess {
-	return spawn(request.executablePath, [request.childEntryPath], {
+/** Workspace CWD를 상속하지 않고 standalone child asset 디렉터리에 고정한다. */
+export function createMcpChildSpawnOptions(
+	request: McpChildSpawnRequest,
+): SpawnOptions {
+	return {
+		cwd: path.dirname(path.resolve(request.childEntryPath)),
 		env: request.environment,
 		stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
 		shell: false,
 		windowsHide: true,
-	});
+	};
+}
+
+/** shell/system Node를 거치지 않고 Extension Host executable을 IPC child로 직접 시작한다. */
+export function spawnMcpChild(request: McpChildSpawnRequest): ChildProcess {
+	return spawn(
+		request.executablePath,
+		[path.resolve(request.childEntryPath)],
+		createMcpChildSpawnOptions(request),
+	);
 }
 
 export function validateMcpHostRuntime(
@@ -403,7 +424,7 @@ export class McpSessionRuntime {
 			const connection = new McpConnectionDescriptor(
 				this.generation,
 				this.sessionId,
-				`http://127.0.0.1:${port}/mcp/${credentials.routeId}`,
+				`http://${MCP_LOOPBACK_HOST}:${port}/mcp/${credentials.routeId}`,
 				credentials.token,
 			);
 			this.connection = connection;

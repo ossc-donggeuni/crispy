@@ -24,6 +24,7 @@ import {
 } from './httpPolicy';
 import {
 	assertValidMcpSessionCredentials,
+	isValidMcpOpaqueId,
 	type McpSessionCredentials,
 } from './sessionCredentials';
 import { createCrispyToolServer } from './toolServer';
@@ -76,7 +77,7 @@ export class CrispyMcpProtocolServer {
 	private shutdownPromise: Promise<void> | undefined;
 
 	constructor(options: McpProtocolServerOptions) {
-		if (!/^[A-Za-z0-9._:-]{1,128}$/.test(options.generation)) {
+		if (!isValidMcpOpaqueId(options.generation)) {
 			throw new Error('MCP server generation is invalid.');
 		}
 		this.generation = options.generation;

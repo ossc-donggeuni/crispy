@@ -3,7 +3,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { inflateRawSync } = require('node:zlib');
-const { builtinModules } = require('node:module');
+const { isBuiltin } = require('node:module');
+const ts = require('typescript');
 const yauzl = require('yauzl');
 const packageJson = require('../package.json');
 const { verifyNativeBinary } = require('./native-binary');
@@ -212,6 +213,73 @@ function requireEntry(target, vsixPath, entries, entryName) {
 	return record;
 }
 
+function findUnexpectedVsixPayloadEntries(entryNames) {
+	const allowedRootEntries = new Set([
+		'[Content_Types].xml',
+		'extension.vsixmanifest',
+	]);
+	const allowedExtensionRootEntries = new Set([
+		'extension/',
+		'extension/LICENSE.md',
+		'extension/THIRD_PARTY_NOTICES.md',
+		'extension/package.json',
+		'extension/readme.md',
+	]);
+
+	return Object.freeze([...entryNames].filter((entryName) => (
+		!allowedRootEntries.has(entryName)
+		&& !allowedExtensionRootEntries.has(entryName)
+		&& entryName !== 'extension/dist/'
+		&& !entryName.startsWith('extension/dist/')
+	)).sort());
+}
+
+function findUnresolvedMcpRuntimeSpecifiers(source) {
+	const sourceFile = ts.createSourceFile(
+		'mcp-server.mjs',
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.JS,
+	);
+	if (sourceFile.parseDiagnostics.length > 0) {
+		throw new Error('MCP child bundle JavaScript parsing failed.');
+	}
+
+	const specifiers = new Set();
+	function addStringLiteral(node) {
+		if (node !== undefined && ts.isStringLiteralLike(node)) {
+			specifiers.add(node.text);
+		}
+	}
+	function visit(node) {
+		if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+			addStringLiteral(node.moduleSpecifier);
+		} else if (
+			ts.isImportEqualsDeclaration(node)
+			&& ts.isExternalModuleReference(node.moduleReference)
+		) {
+			addStringLiteral(node.moduleReference.expression);
+		} else if (ts.isCallExpression(node)) {
+			const callee = node.expression;
+			const isRuntimeLoader = callee.kind === ts.SyntaxKind.ImportKeyword
+				|| (ts.isIdentifier(callee)
+					&& (callee.text === 'require' || callee.text === '__require'))
+				|| (ts.isPropertyAccessExpression(callee)
+					&& callee.name.text === 'require');
+			if (isRuntimeLoader) {
+				addStringLiteral(node.arguments[0]);
+			}
+		}
+		ts.forEachChild(node, visit);
+	}
+	ts.forEachChild(sourceFile, visit);
+
+	return Object.freeze(
+		[...specifiers].filter((specifier) => !isBuiltin(specifier)).sort(),
+	);
+}
+
 function verifyMcpChildBundle(target, vsixPath, entries) {
 	const entryName = 'extension/dist/mcp-server.mjs';
 	const record = requireEntry(target, vsixPath, entries, entryName);
@@ -247,18 +315,27 @@ function verifyMcpChildBundle(target, vsixPath, entries) {
 	}
 
 	const source = record.buffer.toString('utf8');
-	const nodeBuiltins = new Set(builtinModules);
-	const importPattern = /(?:\bfrom|\bimport)\s*(?:\(\s*)?["']([^"']+)["']/gu;
-	for (const match of source.matchAll(importPattern)) {
-		if (!match[1].startsWith('node:') && !nodeBuiltins.has(match[1])) {
-			throw inspectionError(
-				target,
-				'MCP child has an unresolved non-built-in runtime import',
-				`${vsixPath}:${entryName}`,
-				'Node built-ins only',
-				match[1],
-			);
-		}
+	let unresolvedSpecifiers;
+	try {
+		unresolvedSpecifiers = findUnresolvedMcpRuntimeSpecifiers(source);
+	} catch (error) {
+		throw inspectionError(
+			target,
+			'MCP child bundle could not be parsed',
+			`${vsixPath}:${entryName}`,
+			'valid JavaScript module',
+			'parse failed',
+			error,
+		);
+	}
+	if (unresolvedSpecifiers.length > 0) {
+		throw inspectionError(
+			target,
+			'MCP child has an unresolved non-built-in runtime import',
+			`${vsixPath}:${entryName}`,
+			'Node built-ins only',
+			unresolvedSpecifiers.join(', '),
+		);
 	}
 	if (!source.includes('crispy_ping')) {
 		throw inspectionError(
@@ -329,6 +406,16 @@ async function inspectVsix(target, vsixPath) {
 	}
 
 	const entries = await collectArchive(target, vsixPath);
+	const unexpectedPayloadEntries = findUnexpectedVsixPayloadEntries(entries.keys());
+	if (unexpectedPayloadEntries.length > 0) {
+		throw inspectionError(
+			target,
+			'VSIX contains files outside the production payload allowlist',
+			vsixPath,
+			'extension metadata and dist/** only',
+			unexpectedPayloadEntries.join(', '),
+		);
+	}
 	requireEntry(target, vsixPath, entries, 'extension/dist/extension.js');
 	verifyMcpChildBundle(target, vsixPath, entries);
 	requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/LICENSE');
@@ -381,4 +468,8 @@ if (require.main === module) {
 	});
 }
 
-module.exports = Object.freeze({ inspectVsix });
+module.exports = Object.freeze({
+	findUnresolvedMcpRuntimeSpecifiers,
+	findUnexpectedVsixPayloadEntries,
+	inspectVsix,
+});
