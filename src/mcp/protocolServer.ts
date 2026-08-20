@@ -270,6 +270,7 @@ export class CrispyMcpProtocolServer {
 				response,
 				body.status,
 				body.status === 413 ? 'Request body too large.' : 'Bad request.',
+				body.closeConnection ? { Connection: 'close' } : undefined,
 			);
 			return;
 		}
@@ -277,15 +278,17 @@ export class CrispyMcpProtocolServer {
 		const nodeHandler = toNodeHandler({
 			fetch: async (webRequest, options) => {
 				const sdkResponse = await this.sdkHandler.fetch(webRequest, options);
-				try {
-					const observationResponse = sdkResponse.clone();
-					void this.observeActivity(
-						registration,
-						body.parsedBody,
-						observationResponse,
-					).catch(() => undefined);
-				} catch {
-					/** Response clone 실패는 실제 MCP response 전달을 막지 않는다. */
+				if (this.shouldObserveActivity(registration)) {
+					try {
+						const observationResponse = sdkResponse.clone();
+						void this.observeActivity(
+							registration,
+							body.parsedBody,
+							observationResponse,
+						).catch(() => undefined);
+					} catch {
+						/** Response clone 실패는 실제 MCP response 전달을 막지 않는다. */
+					}
 				}
 				return sdkResponse;
 			},
@@ -298,12 +301,8 @@ export class CrispyMcpProtocolServer {
 		requestBody: unknown,
 		response: Response,
 	): Promise<void> {
-		if (
-			registration.revoked
-			|| registration.activityObserved
-			|| this.registration !== registration
-			|| this.lifecycle !== 'running'
-		) {
+		if (!this.shouldObserveActivity(registration)) {
+			cancelResponseBody(response.body);
 			return;
 		}
 		if (!await responseProvesMcpActivity(requestBody, response)) {
@@ -329,6 +328,19 @@ export class CrispyMcpProtocolServer {
 		} catch {
 			/** Observer 실패가 이미 생성된 MCP result를 오염시키지 않게 한다. */
 		}
+	}
+
+	private shouldObserveActivity(registration: ActiveRegistration): boolean {
+		return !registration.revoked
+			&& !registration.activityObserved
+			&& this.registration === registration
+			&& this.lifecycle === 'running';
+	}
+}
+
+function cancelResponseBody(body: ReadableStream<Uint8Array> | null): void {
+	if (body !== null) {
+		void body.cancel().catch(() => undefined);
 	}
 }
 
