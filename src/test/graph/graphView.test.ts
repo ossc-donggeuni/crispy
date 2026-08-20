@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import {
 	createFileGroupId,
 	createGraphLayout,
+	GRAPH_FOLDER_NODE_HEIGHT,
+	GRAPH_FOLDER_NODE_WIDTH,
 } from '../../webview/graph/graphLayout';
 import {
 	GRAPH_MOCK,
@@ -448,7 +450,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('Promoted Folder/grouped/singleton Root는 자신의 Backlink Drop에서만 상태를 보존해 복원된다', () => {
+	test('Promoted Folder/grouped/singleton Root는 Backlink Reattach 시 Navigator에서 제거된다', () => {
 		const folderChild = {
 			kind: 'file' as const,
 			id: 'file:reattach-folder/child.ts',
@@ -552,6 +554,28 @@ suite('Graph View', () => {
 			},
 			singletonAddition.graph,
 		);
+		const rootListButton = getDescendantByClass(
+			root,
+			'graph-navigator-action-button',
+		);
+		const rootListPanel = getDescendantByClass(
+			root,
+			'graph-navigator-root-list-panel',
+		);
+		const initialNavigatorRootNames = [
+			'reattach',
+			'reattach-target/',
+			'file-6.ts',
+			'index.ts',
+		];
+
+		rootListButton.dispatch('click', createClickEvent(rootListButton));
+		assert.strictEqual(rootListPanel.hidden, false);
+		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			initialNavigatorRootNames,
+		);
 		const getFolderBacklink = () => getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -610,6 +634,10 @@ suite('Graph View', () => {
 		performNodeDrop(projectRoot, 300, 121);
 		assert.ok(graphView.state.getState().nodePositions[project.id]);
 		assert.strictEqual(backlinks.folder.hasClass('is-reattach-target'), false);
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			initialNavigatorRootNames,
+		);
 
 		performNodeDrop(folderRoot, 550, 235);
 		assert.ok(findDescendantByClass(folderRoot, 'graph-root-context-label'));
@@ -628,6 +656,10 @@ suite('Graph View', () => {
 		performNodeDrop(folderRoot, 300, 121);
 		assert.ok(graphView.state.getState().nodePositions[folderTarget.id]);
 		assert.ok(findDescendantByClass(folderRoot, 'graph-root-context-label'));
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			initialNavigatorRootNames,
+		);
 
 		graphView.state.toggleFolder(project.id);
 		backlinks = setBacklinkBounds();
@@ -663,6 +695,10 @@ suite('Graph View', () => {
 			undefined,
 		);
 		assert.ok(findDescendantByClass(groupedRoot, 'graph-root-context-label'));
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			['reattach', 'file-6.ts', 'index.ts'],
+		);
 
 		backlinks.grouped = getGroupedBacklink();
 		setClientBounds(backlinks.grouped, 460, 220, 180, 30);
@@ -689,6 +725,10 @@ suite('Graph View', () => {
 			undefined,
 		);
 		assert.ok(findDescendantByClass(singletonRoot, 'graph-root-context-label'));
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			['reattach', 'index.ts'],
+		);
 
 		backlinks.singleton = getSingletonBacklink();
 		setClientBounds(backlinks.singleton, 720, 340, 200, 42);
@@ -714,6 +754,9 @@ suite('Graph View', () => {
 		assert.strictEqual(finalState.nodePositions[folderTarget.id], undefined);
 		assert.strictEqual(finalState.nodePositions[groupedTarget.id], undefined);
 		assert.strictEqual(finalState.nodePositions[singletonTarget.id], undefined);
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['reattach']);
+		assert.strictEqual(rootListPanel.hidden, false);
+		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
 		assert.deepStrictEqual(
 			finalState.nodePositions[positionedSibling.id],
 			siblingPosition,
@@ -725,7 +768,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('File Detach Drop을 Root/Backlink로 승격하고 기존 Root를 Detach 대상에서 제외한다', () => {
+	test('File Detach Drop은 Root/Backlink 승격 후 Navigator 목록에 즉시 추가된다', () => {
 		const childFolder = {
 			kind: 'folder' as const,
 			id: 'folder:detach-child',
@@ -777,6 +820,16 @@ suite('Graph View', () => {
 			graph,
 			{ onDetachDrop: (request) => detachDrops.push(request) },
 		);
+		const rootListButton = getDescendantByClass(
+			root,
+			'graph-navigator-action-button',
+		);
+
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			['detach-root/', 'detach-root.ts'],
+		);
+		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'false');
 		const rootFolderNode = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -845,12 +898,18 @@ suite('Graph View', () => {
 			findDescendantByClass(backlinkGroup, 'graph-detach-handle'),
 			undefined,
 		);
+		assert.deepStrictEqual(
+			getNavigatorRootNames(root),
+			['detach-root/', 'detach-root.ts', 'index.ts'],
+		);
+		assert.deepStrictEqual(getNavigatorRootPaths(root), ['detach-root/']);
+		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'false');
 		assert.strictEqual(graph.roots.length, 2);
 
 		graphView.dispose();
 	});
 
-	test('Folder Detach 좌표를 viewport-local에서 world로 변환하고 상태를 유지한 채 Backlink를 만든다', () => {
+	test('Folder Detach는 Navigator에 추가되고 Focus 후 Reattach 시 즉시 제거된다', () => {
 		const promotedFolder = {
 			kind: 'folder' as const,
 			id: 'folder:src',
@@ -890,6 +949,18 @@ suite('Graph View', () => {
 			fileGroupPages: { [`${promotedFolder.id}:files`]: 3 },
 		}, graph);
 		const viewport = root.children[0];
+		const rootListButton = getDescendantByClass(
+			root,
+			'graph-navigator-action-button',
+		);
+		const rootListPanel = getDescendantByClass(
+			root,
+			'graph-navigator-root-list-panel',
+		);
+
+		rootListButton.dispatch('click', createClickEvent(rootListButton));
+		assert.strictEqual(rootListPanel.hidden, false);
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy']);
 
 		assert.ok(viewport);
 		viewport.boundsLeft = 20;
@@ -948,6 +1019,20 @@ suite('Graph View', () => {
 			undefined,
 		);
 		const backlinkPosition = backlink.style.transform;
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy', 'src/']);
+		assert.deepStrictEqual(getNavigatorRootPaths(root), ['crispy/']);
+		assert.strictEqual(rootListPanel.hidden, false);
+		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
+		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+		const detachedRootButton = getNavigatorRootButtons(root)[1];
+
+		assert.ok(detachedRootButton);
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		detachedRootButton.dispatch('click', createClickEvent(detachedRootButton));
+		assert.deepStrictEqual(focusPoints, [{
+			x: 150 + GRAPH_FOLDER_NODE_WIDTH / 2,
+			y: 125 + GRAPH_FOLDER_NODE_HEIGHT / 2,
+		}]);
 
 		backlink.dispatch('pointerdown', createPointerEvent(backlink, 100, 100));
 		backlink.dispatch('pointermove', createPointerEvent(backlink, 180, 160));
@@ -957,6 +1042,18 @@ suite('Graph View', () => {
 		assert.strictEqual(backlink.style.transform, backlinkPosition);
 		assert.strictEqual(graphView.state.isFolderOpened(promotedFolder.id), true);
 		assert.strictEqual(graph.roots.length, 1);
+
+		setClientBounds(backlink, 200, 100, 200, 42);
+		beginNodeDrag(folder, 300, 121);
+		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
+		folder.dispatch('pointerup', createPointerEvent(folder, 300, 121));
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy']);
+		assert.strictEqual(rootListPanel.hidden, false);
+		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
+		const focusCountAfterReattach = focusPoints.length;
+
+		detachedRootButton.dispatch('click', createClickEvent(detachedRootButton));
+		assert.strictEqual(focusPoints.length, focusCountAfterReattach);
 
 		graphView.dispose();
 	});
@@ -1299,6 +1396,7 @@ class FakeElement {
 		},
 	};
 	className = '';
+	hidden = false;
 	textContent = '';
 	type = '';
 	clientWidth = 1000;
@@ -1466,6 +1564,27 @@ function getDescendantsByClass(
 		...(child.hasClass(className) ? [child] : []),
 		...getDescendantsByClass(child, className),
 	]);
+}
+
+function getNavigatorRootNames(root: FakeElement): string[] {
+	const rootList = getDescendantByClass(root, 'graph-navigator-root-list');
+
+	return rootList.children.map((item) => (
+		getDescendantByClass(item, 'graph-navigator-root-name').textContent
+	));
+}
+
+function getNavigatorRootPaths(root: FakeElement): string[] {
+	return getDescendantsByClass(root, 'graph-navigator-root-path')
+		.map((path) => path.textContent);
+}
+
+function getNavigatorRootButtons(root: FakeElement): FakeElement[] {
+	const rootList = getDescendantByClass(root, 'graph-navigator-root-list');
+
+	return rootList.children.map((item) => (
+		getDescendantByClass(item, 'graph-navigator-root-button')
+	));
 }
 
 function getDescendantByClass(

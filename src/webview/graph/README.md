@@ -123,7 +123,7 @@ src/webview/graph/
 - Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
 - `dispose()` 시 Action/Zoom Button Listener, State 구독 및 DOM 정리
-- Root 선택 상태와 Detach/Reattach 자동 갱신은 포함하지 않음
+- Root 선택 상태는 포함하지 않음
 
 ### `graphNavigatorRoots.ts`
 
@@ -255,6 +255,7 @@ src/webview/graph/
 - Overlay Navigator 초기화 후 최초 Graph를 `createGraphNavigatorRoots()`로 변환해 Root 목록에 전달
 - Navigator Root 선택 시 저장된 `nodePositions`를 우선하고 현재 Layout 위치로 fallback해 기존 Camera Focus 요청
 - Root Focus는 현재 Camera scale과 기존 ease-out Animation 정책을 유지
-- Detach/Reattach 이후 Navigator Root 목록 실시간 동기화는 아직 포함하지 않음
+- 초기화와 성공한 Detach/Reattach에서 공통 projection으로 최신 `currentGraph.roots`를 Navigator에 동기화
+- 실패한 Promotion/Reattach에서는 Root 목록을 유지하고 Panel Open 상태와 독립적으로 Content만 교체
 - 외부 Graph 기능을 위한 State와 Camera 인터페이스 제공
 - `dispose()` 시 Layout 구독, Navigator, Renderer, Camera와 Graph View DOM 정리
