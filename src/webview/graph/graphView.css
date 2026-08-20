@@ -684,16 +684,38 @@
 }
 
 .graph-navigator-root-item {
+	min-width: 0;
+}
+
+.graph-navigator-root-button {
 	display: flex;
+	box-sizing: border-box;
+	width: 100%;
 	min-width: 0;
 	gap: 8px;
 	align-items: flex-start;
 	padding: 6px;
+	color: inherit;
+	background: transparent;
+	border: 0;
 	border-radius: 4px;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
 }
 
-.graph-navigator-root-item:hover {
+.graph-navigator-root-button:hover {
 	background-color: var(--vscode-list-hoverBackground);
+}
+
+.graph-navigator-root-button:active {
+	background-color: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+}
+
+.graph-navigator-root-button:focus-visible {
+	background-color: var(--vscode-list-focusBackground, var(--vscode-list-hoverBackground));
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
 }
 
 .graph-navigator-root-icon {

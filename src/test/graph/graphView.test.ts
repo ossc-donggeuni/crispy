@@ -5,6 +5,8 @@ import {
 } from '../../webview/graph/graphLayout';
 import {
 	GRAPH_MOCK,
+	GRAPH_MOCK_FILE_ROOT,
+	GRAPH_MOCK_FOLDER_ROOT,
 	GRAPH_MOCK_PROJECT,
 } from '../../webview/graph/graphMockData';
 import {
@@ -55,6 +57,71 @@ suite('Graph View', () => {
 				'crispy/packages/demo/src/',
 				'crispy/src/webview/graph/examples/promoted/standalone/file/',
 			],
+		);
+		graphView.dispose();
+	});
+
+	test('Navigator Root 선택은 저장 위치와 Layout fallback을 Focus하고 Camera scale을 유지한다', () => {
+		const savedFolderPosition = { x: 900, y: 520 };
+		const initialScale = 1.4;
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				camera: { x: 20, y: -30, scale: initialScale },
+				nodePositions: {
+					[GRAPH_MOCK_FOLDER_ROOT.id]: savedFolderPosition,
+				},
+			},
+			GRAPH_MOCK,
+		);
+		const layout = createGraphLayout(GRAPH_MOCK);
+		const folderLayout = layout.nodes.find(
+			(node) => node.id === GRAPH_MOCK_FOLDER_ROOT.id,
+		);
+		const fileLayout = layout.nodes.find(
+			(node) => node.id === GRAPH_MOCK_FILE_ROOT.id,
+		);
+		const viewport = getDescendantByClass(root, 'graph-viewport');
+		const rootButtons = getDescendantsByClass(
+			root,
+			'graph-navigator-root-button',
+		);
+
+		assert.ok(folderLayout);
+		assert.ok(fileLayout);
+		assert.strictEqual(rootButtons.length, 3);
+		assert.notDeepStrictEqual(savedFolderPosition, folderLayout.position);
+		const focusOn = graphView.camera.focusOn;
+
+		graphView.camera.focusOn = (point) => focusOn(point, { duration: 0 });
+		const initialCamera = graphView.camera.getState();
+		const folderButton = rootButtons[1];
+
+		assert.ok(folderButton);
+		folderButton.dispatch('click', createClickEvent(folderButton));
+		assert.notDeepStrictEqual(graphView.camera.getState(), initialCamera);
+		assert.strictEqual(graphView.camera.getState().scale, initialScale);
+		assertPointAlmostEqual(
+			graphView.camera.worldToViewport({
+				x: savedFolderPosition.x + folderLayout.width / 2,
+				y: savedFolderPosition.y + folderLayout.height / 2,
+			}),
+			{ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 },
+		);
+
+		const fileButton = rootButtons[2];
+
+		assert.ok(fileButton);
+		fileButton.dispatch('click', createClickEvent(fileButton));
+		assert.strictEqual(graphView.camera.getState().scale, initialScale);
+		assertPointAlmostEqual(
+			graphView.camera.worldToViewport({
+				x: fileLayout.position.x + fileLayout.width / 2,
+				y: fileLayout.position.y + fileLayout.height / 2,
+			}),
+			{ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 },
 		);
 		graphView.dispose();
 	});
@@ -1491,6 +1558,14 @@ function setClientBounds(
 	element.boundsTop = top;
 	element.clientWidth = width;
 	element.clientHeight = height;
+}
+
+function assertPointAlmostEqual(
+	actual: { readonly x: number; readonly y: number },
+	expected: { readonly x: number; readonly y: number },
+): void {
+	assert.ok(Math.abs(actual.x - expected.x) < 1e-10);
+	assert.ok(Math.abs(actual.y - expected.y) < 1e-10);
 }
 
 function beginNodeDrag(

@@ -239,6 +239,15 @@ export function initializeGraphView(
 			targetRootId,
 		);
 	};
+	const handleNavigatorRootSelect = (rootId: string): void => {
+		focusGraphRoot(
+			currentGraph,
+			currentLayout,
+			state,
+			camera,
+			rootId,
+		);
+	};
 	const handleRootContextClick = (rootId: string): void => {
 		focusGraphBacklink(renderer, viewport, camera, rootId);
 	};
@@ -293,7 +302,13 @@ export function initializeGraphView(
 			)?.id,
 		},
 	);
-	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
+	const navigator = initializeGraphNavigator(
+		overlayLayer,
+		viewport,
+		state,
+		camera,
+		{ onRootSelect: handleNavigatorRootSelect },
+	);
 	navigator.setRoots(createGraphNavigatorRoots(currentGraph));
 	let disposed = false;
 	const unsubscribeLayout = initializeGraphLayoutReflow(

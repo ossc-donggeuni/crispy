@@ -6,7 +6,10 @@ import {
 	MIN_CAMERA_SCALE,
 } from '../../webview/graph/graphCamera';
 import { resolveFileIcon } from '../../webview/graph/fileIconResolver';
-import { initializeGraphNavigator } from '../../webview/graph/graphNavigator';
+import {
+	initializeGraphNavigator,
+	type GraphNavigatorInteractions,
+} from '../../webview/graph/graphNavigator';
 import { createGraphState } from '../../webview/graph/graphState';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../../webview/panel/panelState';
 import {
@@ -104,19 +107,30 @@ suite('Graph Navigator', () => {
 		assert.ok(fileItem);
 		assert.deepStrictEqual(
 			fixture.rootList.children.map((item) => (
-				getChild(getChild(item, 1), 0).textContent
+				getChild(getRootContent(item), 0).textContent
 			)),
 			['crispy', 'docs/', 'webview.css'],
 		);
+		assert.strictEqual(projectItem.tagName, 'LI');
+		assert.strictEqual(getRootButton(projectItem).tagName, 'BUTTON');
+		assert.strictEqual(getRootButton(projectItem).type, 'button');
 		assert.strictEqual(
-			getChild(projectItem, 0).getAttribute('data-folder-icon'),
+			getRootButton(projectItem).getAttribute('aria-label'),
+			'crispy',
+		);
+		assert.strictEqual(
+			getRootButton(folderItem).getAttribute('aria-label'),
+			'docs/',
+		);
+		assert.strictEqual(
+			getRootIcon(projectItem).getAttribute('data-folder-icon'),
 			'folder-open.svg',
 		);
 		assert.strictEqual(
-			getChild(folderItem, 0).getAttribute('data-folder-icon'),
+			getRootIcon(folderItem).getAttribute('data-folder-icon'),
 			'folder-closed.svg',
 		);
-		const fileIcon = getChild(fileItem, 0);
+		const fileIcon = getRootIcon(fileItem);
 
 		assert.strictEqual(fileIcon.hasClass('graph-file-icon'), true);
 		assert.strictEqual(
@@ -124,13 +138,89 @@ suite('Graph Navigator', () => {
 			resolveFileIcon('webview.css'),
 		);
 		assert.strictEqual(
-			getChild(getChild(folderItem, 1), 1).textContent,
+			getChild(getRootContent(folderItem), 1).textContent,
 			'crispy/src/',
 		);
 		assert.strictEqual(
-			getChild(getChild(fileItem, 1), 1).textContent,
+			getChild(getRootContent(fileItem), 1).textContent,
 			'crispy/src/webview/',
 		);
+	});
+
+	test('Project, Folder와 File Root Button은 rootId 선택을 전달하고 Panel을 열린 채 유지한다', () => {
+		const selectedRootIds: string[] = [];
+		const fixture = createNavigatorFixture(
+			undefined,
+			{ onRootSelect: (rootId) => selectedRootIds.push(rootId) },
+		);
+
+		fixture.navigator.setRoots([
+			{
+				rootId: 'root:project',
+				nodeId: 'project:crispy',
+				name: 'crispy',
+				kind: 'project',
+			},
+			{
+				rootId: 'root:folder',
+				nodeId: 'folder:docs',
+				name: 'docs',
+				kind: 'folder',
+			},
+			{
+				rootId: 'root:file',
+				nodeId: 'file:webview.css',
+				name: 'webview.css',
+				kind: 'file',
+			},
+		]);
+		fixture.rootListButton.dispatch('click', {} as Event);
+
+		for (const item of fixture.rootList.children) {
+			getRootButton(item).dispatch('click', {} as Event);
+		}
+
+		assert.deepStrictEqual(
+			selectedRootIds,
+			['root:project', 'root:folder', 'root:file'],
+		);
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'true',
+		);
+	});
+
+	test('setRoots와 dispose는 제거된 Root Button의 선택 Listener를 정리한다', () => {
+		const selectedRootIds: string[] = [];
+		const fixture = createNavigatorFixture(
+			undefined,
+			{ onRootSelect: (rootId) => selectedRootIds.push(rootId) },
+		);
+
+		fixture.navigator.setRoots([{
+			rootId: 'root:a',
+			nodeId: 'project:a',
+			name: 'a',
+			kind: 'project',
+		}]);
+		const removedButton = getRootButton(getChild(fixture.rootList, 0));
+
+		fixture.navigator.setRoots([{
+			rootId: 'root:b',
+			nodeId: 'folder:b',
+			name: 'b',
+			kind: 'folder',
+		}]);
+		const currentButton = getRootButton(getChild(fixture.rootList, 0));
+
+		removedButton.dispatch('click', {} as Event);
+		currentButton.dispatch('click', {} as Event);
+		assert.deepStrictEqual(selectedRootIds, ['root:b']);
+
+		fixture.navigator.dispose();
+		currentButton.dispatch('click', {} as Event);
+		assert.deepStrictEqual(selectedRootIds, ['root:b']);
 	});
 
 	test('relativePath가 없거나 빈 문자열이면 보조 Path Row를 만들지 않는다', () => {
@@ -153,7 +243,7 @@ suite('Graph Navigator', () => {
 		]);
 
 		for (const item of fixture.rootList.children) {
-			assert.strictEqual(getChild(item, 1).children.length, 1);
+			assert.strictEqual(getRootContent(item).children.length, 1);
 		}
 	});
 
@@ -183,7 +273,7 @@ suite('Graph Navigator', () => {
 
 		assert.strictEqual(fixture.rootList.children.length, 1);
 		assert.strictEqual(
-			getChild(getChild(getChild(fixture.rootList, 0), 1), 0).textContent,
+			getChild(getRootContent(getChild(fixture.rootList, 0)), 0).textContent,
 			'webview.css',
 		);
 
@@ -340,8 +430,16 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
-	test('Action Rail과 Root List Panel에서 시작한 Pointer 입력은 Camera Pan을 시작하지 않는다', () => {
+	test('Action Rail과 Root Button에서 시작한 Pointer 입력은 Camera Pan을 시작하지 않는다', () => {
 		const fixture = createNavigatorFixture();
+
+		fixture.navigator.setRoots([{
+			rootId: 'root:project',
+			nodeId: 'project:crispy',
+			name: 'crispy',
+			kind: 'project',
+		}]);
+		const rootButton = getRootButton(getChild(fixture.rootList, 0));
 
 		fixture.viewport.dispatch(
 			'pointerdown',
@@ -354,7 +452,7 @@ suite('Graph Navigator', () => {
 		fixture.rootListButton.dispatch('click', {} as Event);
 		fixture.viewport.dispatch(
 			'pointerdown',
-			createPointerEvent(fixture.rootListPanel.asEventTarget()),
+			createPointerEvent(rootButton.asEventTarget()),
 		);
 
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
@@ -423,6 +521,7 @@ suite('Graph Navigator', () => {
 
 function createNavigatorFixture(
 	initialCamera = { x: 0, y: 0, scale: 1 },
+	interactions: GraphNavigatorInteractions = {},
 ) {
 	const ownerDocument = new FakeDocument();
 	const viewport = ownerDocument.createSizedElement(800, 600);
@@ -442,6 +541,7 @@ function createNavigatorFixture(
 		viewport.asHtmlElement(),
 		graphState,
 		camera,
+		interactions,
 	);
 	const navigatorElement = getChild(overlay, 0);
 	const coordinate = getChild(navigatorElement, 0);
@@ -486,6 +586,18 @@ function getChild(element: FakeElement, index: number): FakeElement {
 	return child;
 }
 
+function getRootButton(item: FakeElement): FakeElement {
+	return getChild(item, 0);
+}
+
+function getRootIcon(item: FakeElement): FakeElement {
+	return getChild(getRootButton(item), 0);
+}
+
+function getRootContent(item: FakeElement): FakeElement {
+	return getChild(getRootButton(item), 1);
+}
+
 function createPointerEvent(
 	target: EventTarget,
 	clientX = 10,
@@ -528,12 +640,12 @@ function assertPointAlmostEqual(
 type GraphEventListener = (event: never) => void;
 
 class FakeDocument {
-	createElement(_tagName?: string): FakeElement {
-		return new FakeElement(this);
+	createElement(tagName = 'div'): FakeElement {
+		return new FakeElement(this, 0, 0, tagName.toUpperCase());
 	}
 
 	createSizedElement(clientWidth: number, clientHeight: number): FakeElement {
-		return new FakeElement(this, clientWidth, clientHeight);
+		return new FakeElement(this, clientWidth, clientHeight, 'DIV');
 	}
 }
 
@@ -572,6 +684,7 @@ class FakeElement {
 		readonly ownerDocument: FakeDocument,
 		readonly clientWidth = 0,
 		readonly clientHeight = 0,
+		readonly tagName = 'DIV',
 	) {}
 
 	asHtmlElement(): HTMLElement {

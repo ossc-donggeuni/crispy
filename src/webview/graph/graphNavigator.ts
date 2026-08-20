@@ -15,6 +15,11 @@ export interface GraphNavigator {
 	dispose(): void;
 }
 
+/** Navigator의 사용자 선택을 Graph 해석 없이 상위 계층에 전달한다. */
+export interface GraphNavigatorInteractions {
+	onRootSelect?: (rootId: string) => void;
+}
+
 const NAVIGATOR_ZOOM_STEP = 0.1;
 const ROOT_LIST_LABEL = '활성화된 루트 목록';
 const ROOT_LIST_PANEL_ID = 'graph-navigator-root-list-panel';
@@ -30,6 +35,12 @@ interface NavigatorActionDefinition {
 	readonly controlsId: string;
 	readonly iconAsset: string;
 	readonly onActivate: () => void;
+}
+
+/** Root Item DOM과 해당 Item에만 연결된 Listener lifecycle이다. */
+interface NavigatorRootListItem {
+	readonly element: HTMLLIElement;
+	dispose(): void;
 }
 
 /** 접근성, Tooltip과 Icon 식별자를 공통으로 적용한 Action Button을 생성한다. */
@@ -65,18 +76,27 @@ function createNavigatorActionButton(
 	};
 }
 
-/** Navigator 표시 데이터 하나를 비대화형 Root List Item DOM으로 만든다. */
+/** Navigator 표시 데이터 하나를 선택 가능한 Root Button으로 만든다. */
 function createRootListItem(
 	ownerDocument: Document,
 	root: GraphNavigatorRoot,
-): HTMLLIElement {
+	onRootSelect: GraphNavigatorInteractions['onRootSelect'],
+): NavigatorRootListItem {
 	const item = ownerDocument.createElement('li');
+	const button = ownerDocument.createElement('button');
 	const icon = ownerDocument.createElement('span');
 	const content = ownerDocument.createElement('div');
 	const name = ownerDocument.createElement('span');
 	const displayName = root.kind === 'folder' ? `${root.name}/` : root.name;
+	const rootId = root.rootId;
+	const handleSelect = (): void => {
+		onRootSelect?.(rootId);
+	};
 
 	item.className = 'graph-navigator-root-item';
+	button.className = 'graph-navigator-root-button';
+	button.type = 'button';
+	button.setAttribute('aria-label', displayName);
 	icon.className = 'graph-navigator-root-icon';
 	icon.setAttribute('aria-hidden', 'true');
 	if (root.kind === 'file') {
@@ -105,8 +125,16 @@ function createRootListItem(
 		content.append(path);
 	}
 
-	item.append(icon, content);
-	return item;
+	button.append(icon, content);
+	item.append(button);
+	button.addEventListener('click', handleSelect);
+
+	return {
+		element: item,
+		dispose: () => {
+			button.removeEventListener('click', handleSelect);
+		},
+	};
 }
 
 /**
@@ -116,6 +144,7 @@ function createRootListItem(
  * @param viewport 중앙 Zoom 기준을 제공하는 Graph Viewport
  * @param graphState Camera 표시를 구독할 기존 Graph State Store
  * @param camera 중앙 기준 Zoom을 수행할 기존 Graph Camera
+ * @param interactions Root 선택을 상위 계층에 전달할 callback
  * @returns Listener, State 구독 및 DOM을 정리할 lifecycle 핸들
  */
 export function initializeGraphNavigator(
@@ -123,6 +152,7 @@ export function initializeGraphNavigator(
 	viewport: HTMLElement,
 	graphState: GraphStateStore,
 	camera: GraphCamera,
+	interactions: GraphNavigatorInteractions = {},
 ): GraphNavigator {
 	const ownerDocument = overlayLayer.ownerDocument;
 	const navigator = ownerDocument.createElement('div');
@@ -192,7 +222,14 @@ export function initializeGraphNavigator(
 		onActivate: handleRootListToggle,
 	});
 	const navigatorActions = [rootListAction];
-	let renderedRootItems: HTMLElement[] = [];
+	let renderedRootItems: NavigatorRootListItem[] = [];
+	const disposeRootItems = (): void => {
+		for (const item of renderedRootItems) {
+			item.dispose();
+			item.element.remove();
+		}
+		renderedRootItems = [];
+	};
 
 	rootListButton = rootListAction.button;
 	actionRail.append(...navigatorActions.map((action) => action.button));
@@ -236,13 +273,11 @@ export function initializeGraphNavigator(
 				return;
 			}
 
-			for (const item of renderedRootItems) {
-				item.remove();
-			}
+			disposeRootItems();
 			renderedRootItems = roots.map((root) => (
-				createRootListItem(ownerDocument, root)
+				createRootListItem(ownerDocument, root, interactions.onRootSelect)
 			));
-			rootList.append(...renderedRootItems);
+			rootList.append(...renderedRootItems.map((item) => item.element));
 			rootList.hidden = renderedRootItems.length === 0;
 			rootListEmpty.hidden = renderedRootItems.length > 0;
 		},
@@ -253,6 +288,7 @@ export function initializeGraphNavigator(
 
 			disposed = true;
 			unsubscribeState();
+			disposeRootItems();
 			for (const action of navigatorActions) {
 				action.dispose();
 			}
