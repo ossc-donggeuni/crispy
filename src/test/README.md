@@ -199,11 +199,17 @@
 - Minimap Container와 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다
 - 초기 Layout을 SVG Line/Rect로 렌더링하며 Text를 생성하지 않는다
 - 0 크기로 투영된 Node도 최소 2px Shape로 표시한다
-- Edge/Node보다 위 Layer에 단일 Viewport Indicator를 Pointer 입력 없이 표시한다
+- Edge/Node보다 위 Layer에 단일 Viewport Indicator Drag Target을 표시한다
 - 갱신 및 Empty Layout Graphic만 교체하면서 Navigator, Minimap과 SVG DOM을 유지한다
 - `nodePositions` 변경은 Graph와 Indicator를 같은 Projection으로 재투영한다
 - Camera Pan/Zoom은 동일 Indicator attribute만 갱신하고 기존 Node/Edge DOM을 유지한다
 - Graph Viewport Resize는 Indicator만 갱신하며 Observer 중복과 dispose 이후 callback을 차단한다
+- CSS/SVG 크기 차이를 반영한 Minimap Click을 World로 역투영해 기존 Camera Focus에 전달한다
+- Empty/Projection 없음, 바깥 좌표와 invalid Click을 안전하게 무시한다
+- Indicator Pointer Capture Drag으로 X/Y/fractional World 이동량을 실시간 Camera State에 반영한다
+- Drag 중 Camera scale과 Node/Edge/Indicator DOM identity를 유지하고 다른 Pointer ID를 무시한다
+- `pointerup`, `pointercancel`, `lostpointercapture`와 dispose가 Capture/session을 정리하고 후속 Move를 차단한다
+- Drag 후 Background Click을 억제하며 Click Focus Animation을 Drag `setState()`가 기존 Camera 정책으로 취소한다
 - Minimap에 기존 Camera 완전 입력 차단 규약을 적용한다
 - Minimap의 Pointer와 Wheel 입력으로 Camera Pan/Zoom을 시작하지 않는다
 - 복원된 Camera 좌표와 scale을 최초 표시한다
@@ -220,6 +226,8 @@
 - Empty, 유효하지 않은 Node와 0 또는 0에 가까운 Bounds를 안전하게 처리한다
 - Padding 안에서 aspect ratio를 유지하고 남는 축을 중앙 정렬한다
 - World → Minimap → World 좌표를 왕복한다
+- Client Point를 SVG 논리 좌표로 변환하고 0-size/invalid 입력을 거부한다
+- 두 Minimap Point를 기존 역투영으로 fractional World 이동량에 변환한다
 - 저장 위치 기반 Node/Edge geometry를 만들고 잘못된 Edge를 제외한다
 - 기본/Pan/Zoom/fractional Camera의 World Viewport Bounds를 기존 Camera API로 계산한다
 - 0-size/유효하지 않은 Viewport를 거부하고 좌표 순서를 normalize한다

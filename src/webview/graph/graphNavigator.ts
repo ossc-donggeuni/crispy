@@ -1,15 +1,22 @@
 import {
+	createCenteredGraphCameraState,
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	type GraphCamera,
+	type GraphCameraState,
+	type GraphViewportSize,
 } from './graphCamera';
 import { resolveFileIcon } from './fileIconResolver';
 import type { GraphLayout } from './graphLayout';
 import {
 	calculateCameraWorldBounds,
+	calculateMinimapWorldDelta,
+	clientToMinimapPoint,
 	createMinimapGraphGeometry,
 	createMinimapViewportGeometry,
+	type MinimapPoint,
 	type MinimapProjection,
 	type MinimapSize,
+	type MinimapViewportGeometry,
 } from './graphNavigatorMinimap';
 import type { GraphNavigatorRoot } from './graphNavigatorRoots';
 import type {
@@ -53,6 +60,18 @@ interface NavigatorActionDefinition {
 interface NavigatorRootListItem {
 	readonly element: HTMLLIElement;
 	dispose(): void;
+}
+
+/** Indicator Pointer Drag 시작 시점의 Camera와 Projection을 고정한 session이다. */
+interface MinimapViewportDragSession {
+	readonly pointerId: number;
+	readonly projection: MinimapProjection;
+	readonly minimapSize: MinimapSize;
+	readonly startMinimapPoint: MinimapPoint;
+	readonly startWorldCenter: MinimapPoint;
+	readonly startCamera: GraphCameraState;
+	readonly viewportSize: GraphViewportSize;
+	didDrag: boolean;
 }
 
 /** 접근성, Tooltip과 Icon 식별자를 공통으로 적용한 Action Button을 생성한다. */
@@ -215,16 +234,24 @@ export function initializeGraphNavigator(
 	bottomRow.className = 'graph-navigator-bottom-row';
 	minimap.className = 'graph-navigator-minimap';
 	minimap.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
-	minimap.setAttribute('aria-hidden', 'true');
+	minimap.setAttribute('role', 'region');
+	minimap.setAttribute('aria-label', 'Graph minimap navigation');
 	minimapSvg.classList.add('graph-navigator-minimap-svg');
-	minimapSvg.setAttribute('aria-hidden', 'true');
+	minimapSvg.setAttribute('focusable', 'false');
+	minimapSvg.setAttribute('pointer-events', 'all');
 	minimapEdgeLayer.classList.add('graph-navigator-minimap-edge-layer');
+	minimapEdgeLayer.setAttribute('aria-hidden', 'true');
 	minimapNodeLayer.classList.add('graph-navigator-minimap-node-layer');
+	minimapNodeLayer.setAttribute('aria-hidden', 'true');
 	minimapViewportLayer.classList.add('graph-navigator-minimap-viewport-layer');
 	minimapViewportIndicator.classList.add(
 		'graph-navigator-minimap-viewport-indicator',
 	);
-	minimapViewportIndicator.setAttribute('pointer-events', 'none');
+	minimapViewportIndicator.setAttribute('pointer-events', 'all');
+	minimapViewportIndicator.setAttribute(
+		'aria-label',
+		'Current graph viewport; drag to pan',
+	);
 	minimapViewportIndicator.setAttribute('visibility', 'hidden');
 	minimapViewportIndicator.setAttribute('rx', '2');
 	minimapViewportLayer.append(minimapViewportIndicator);
@@ -289,11 +316,15 @@ export function initializeGraphNavigator(
 	let renderedCamera = initialGraphState.camera;
 	let currentMinimapProjection: MinimapProjection | undefined;
 	let currentMinimapSize: MinimapSize | undefined;
+	let currentMinimapViewportGeometry: MinimapViewportGeometry | undefined;
+	let viewportDrag: MinimapViewportDragSession | undefined;
+	let suppressNextMinimapClick = false;
 	let disposed = false;
 
 	/** 캐시된 Graph Projection만 사용해 현재 Camera Viewport Rect attribute를 갱신한다. */
 	const renderMinimapViewportIndicator = (): void => {
 		if (disposed || !currentMinimapProjection || !currentMinimapSize) {
+			currentMinimapViewportGeometry = undefined;
 			minimapViewportIndicator.setAttribute('visibility', 'hidden');
 			return;
 		}
@@ -311,10 +342,12 @@ export function initializeGraphNavigator(
 			: undefined;
 
 		if (!geometry) {
+			currentMinimapViewportGeometry = undefined;
 			minimapViewportIndicator.setAttribute('visibility', 'hidden');
 			return;
 		}
 
+		currentMinimapViewportGeometry = geometry;
 		minimapViewportIndicator.setAttribute('x', String(geometry.x));
 		minimapViewportIndicator.setAttribute('y', String(geometry.y));
 		minimapViewportIndicator.setAttribute('width', String(geometry.width));
@@ -330,6 +363,7 @@ export function initializeGraphNavigator(
 		minimapNodeLayer.replaceChildren();
 		currentMinimapProjection = undefined;
 		currentMinimapSize = undefined;
+		currentMinimapViewportGeometry = undefined;
 
 		if (!currentLayout || minimap.clientWidth <= 0 || minimap.clientHeight <= 0) {
 			renderMinimapViewportIndicator();
@@ -388,6 +422,249 @@ export function initializeGraphNavigator(
 		renderMinimapViewportIndicator();
 	};
 
+	/** Pointer client 좌표를 현재 SVG viewBox 기준 Minimap 좌표로 변환한다. */
+	const resolveMinimapPoint = (
+		clientX: number,
+		clientY: number,
+		minimapSize: MinimapSize,
+	): MinimapPoint | undefined => {
+		const bounds = minimapSvg.getBoundingClientRect();
+
+		return clientToMinimapPoint(
+			{ x: clientX, y: clientY },
+			{
+				left: bounds.left,
+				top: bounds.top,
+				width: bounds.width,
+				height: bounds.height,
+			},
+			minimapSize,
+		);
+	};
+
+	/** Minimap 내부 좌표인지 확인해 Background Click의 외부 입력을 거부한다. */
+	const isInsideMinimap = (point: MinimapPoint, size: MinimapSize): boolean => (
+		point.x >= 0
+		&& point.y >= 0
+		&& point.x <= size.width
+		&& point.y <= size.height
+	);
+
+	/** 활성 Indicator Drag와 Pointer Capture 및 표시 상태를 정리한다. */
+	const stopViewportDrag = (pointerId: number, releaseCapture: boolean): void => {
+		viewportDrag = undefined;
+		minimapViewportIndicator.classList.remove('is-dragging');
+
+		if (
+			releaseCapture
+			&& minimapViewportIndicator.hasPointerCapture(pointerId)
+		) {
+			minimapViewportIndicator.releasePointerCapture(pointerId);
+		}
+	};
+
+	/** Minimap Background Click을 World 좌표로 역투영해 기존 Camera Focus에 전달한다. */
+	const handleMinimapClick = (event: MouseEvent): void => {
+		if (suppressNextMinimapClick) {
+			suppressNextMinimapClick = false;
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+
+		if (
+			disposed
+			|| viewportDrag
+			|| event.target === minimapViewportIndicator
+			|| !currentMinimapProjection
+			|| !currentMinimapSize
+		) {
+			return;
+		}
+
+		const point = resolveMinimapPoint(
+			event.clientX,
+			event.clientY,
+			currentMinimapSize,
+		);
+
+		if (!point || !isInsideMinimap(point, currentMinimapSize)) {
+			return;
+		}
+
+		let worldPoint: MinimapPoint;
+
+		try {
+			worldPoint = currentMinimapProjection.minimapToWorld(point);
+		} catch {
+			return;
+		}
+
+		if (!Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.y)) {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		camera.focusOn(worldPoint);
+	};
+
+	/** 새 Background Pointer 입력은 이전 Drag의 Click 억제 표시를 버린다. */
+	const handleMinimapPointerDown = (event: PointerEvent): void => {
+		if (event.target !== minimapViewportIndicator) {
+			suppressNextMinimapClick = false;
+		}
+	};
+
+	/** 유효한 기본 Pointer로 현재 Indicator와 Camera 중심을 고정해 Drag를 시작한다. */
+	const handleViewportPointerDown = (event: PointerEvent): void => {
+		if (
+			disposed
+			|| viewportDrag
+			|| !event.isPrimary
+			|| event.button !== 0
+			|| !currentMinimapProjection
+			|| !currentMinimapSize
+			|| !currentMinimapViewportGeometry
+			|| currentMinimapViewportGeometry.width <= 0
+			|| currentMinimapViewportGeometry.height <= 0
+			|| viewport.clientWidth <= 0
+			|| viewport.clientHeight <= 0
+		) {
+			return;
+		}
+
+		const startMinimapPoint = resolveMinimapPoint(
+			event.clientX,
+			event.clientY,
+			currentMinimapSize,
+		);
+
+		if (!startMinimapPoint) {
+			return;
+		}
+
+		const startWorldCenter = camera.viewportToWorld({
+			x: viewport.clientWidth / 2,
+			y: viewport.clientHeight / 2,
+		});
+
+		if (
+			!Number.isFinite(startWorldCenter.x)
+			|| !Number.isFinite(startWorldCenter.y)
+		) {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		const startCamera = camera.getState();
+
+		viewportDrag = {
+			pointerId: event.pointerId,
+			projection: currentMinimapProjection,
+			minimapSize: currentMinimapSize,
+			startMinimapPoint,
+			startWorldCenter,
+			startCamera,
+			viewportSize: {
+				width: viewport.clientWidth,
+				height: viewport.clientHeight,
+			},
+			didDrag: false,
+		};
+		suppressNextMinimapClick = false;
+		minimapViewportIndicator.classList.add('is-dragging');
+		minimapViewportIndicator.setPointerCapture(event.pointerId);
+		camera.setState(startCamera);
+	};
+
+	/** Pointer의 Minimap World 이동량만큼 Camera 중심을 옮기고 즉시 State에 반영한다. */
+	const handleViewportPointerMove = (event: PointerEvent): void => {
+		const drag = viewportDrag;
+
+		if (!drag || event.pointerId !== drag.pointerId) {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		const point = resolveMinimapPoint(
+			event.clientX,
+			event.clientY,
+			drag.minimapSize,
+		);
+		const delta = point
+			? calculateMinimapWorldDelta(
+				drag.projection,
+				drag.startMinimapPoint,
+				point,
+			)
+			: undefined;
+
+		if (!delta) {
+			return;
+		}
+
+		const nextState = createCenteredGraphCameraState(
+			{
+				x: drag.startWorldCenter.x + delta.x,
+				y: drag.startWorldCenter.y + delta.y,
+			},
+			drag.viewportSize,
+			drag.startCamera.scale,
+		);
+
+		if (!nextState) {
+			return;
+		}
+
+		drag.didDrag = true;
+		camera.setState(nextState);
+	};
+
+	/** Pointer Up은 마지막 Camera 위치를 유지하고 Background Click을 억제한다. */
+	const handleViewportPointerUp = (event: PointerEvent): void => {
+		if (!viewportDrag || event.pointerId !== viewportDrag.pointerId) {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		suppressNextMinimapClick = viewportDrag.didDrag;
+		stopViewportDrag(event.pointerId, true);
+	};
+
+	/** Cancel은 마지막 Camera 위치를 유지한 채 Drag와 Capture만 정리한다. */
+	const handleViewportPointerCancel = (event: PointerEvent): void => {
+		if (!viewportDrag || event.pointerId !== viewportDrag.pointerId) {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		suppressNextMinimapClick = false;
+		stopViewportDrag(event.pointerId, true);
+	};
+
+	/** Capture 상실 시 추가 Camera 갱신 없이 session만 정리한다. */
+	const handleViewportLostPointerCapture = (event: PointerEvent): void => {
+		if (!viewportDrag || event.pointerId !== viewportDrag.pointerId) {
+			return;
+		}
+
+		event.stopPropagation();
+		suppressNextMinimapClick = false;
+		stopViewportDrag(event.pointerId, false);
+	};
+
+	/** Indicator에서 합성된 Click은 Background Navigation으로 전파하지 않는다. */
+	const handleViewportClick = (event: MouseEvent): void => {
+		suppressNextMinimapClick = false;
+		event.preventDefault();
+		event.stopPropagation();
+	};
+
 	const render = (state: GraphStateSnapshot = graphState.getState()): void => {
 		coordinate.textContent = `(${Math.round(state.camera.x)}, ${Math.round(state.camera.y)})`;
 		scale.textContent = `${Math.round(state.camera.scale * 100)}%`;
@@ -423,6 +700,29 @@ export function initializeGraphNavigator(
 
 	zoomOutButton.addEventListener('click', handleZoomOut);
 	zoomInButton.addEventListener('click', handleZoomIn);
+	minimapSvg.addEventListener('pointerdown', handleMinimapPointerDown);
+	minimapSvg.addEventListener('click', handleMinimapClick);
+	minimapViewportIndicator.addEventListener(
+		'pointerdown',
+		handleViewportPointerDown,
+	);
+	minimapViewportIndicator.addEventListener(
+		'pointermove',
+		handleViewportPointerMove,
+	);
+	minimapViewportIndicator.addEventListener(
+		'pointerup',
+		handleViewportPointerUp,
+	);
+	minimapViewportIndicator.addEventListener(
+		'pointercancel',
+		handleViewportPointerCancel,
+	);
+	minimapViewportIndicator.addEventListener(
+		'lostpointercapture',
+		handleViewportLostPointerCapture,
+	);
+	minimapViewportIndicator.addEventListener('click', handleViewportClick);
 	const unsubscribeState = graphState.subscribe(render);
 	const resizeObserver = typeof ResizeObserver === 'function'
 		? new ResizeObserver(() => {
@@ -468,6 +768,8 @@ export function initializeGraphNavigator(
 			currentLayout = undefined;
 			currentMinimapProjection = undefined;
 			currentMinimapSize = undefined;
+			currentMinimapViewportGeometry = undefined;
+			suppressNextMinimapClick = false;
 			resizeObserver?.disconnect();
 			unsubscribeState();
 			disposeRootItems();
@@ -476,6 +778,36 @@ export function initializeGraphNavigator(
 			}
 			zoomOutButton.removeEventListener('click', handleZoomOut);
 			zoomInButton.removeEventListener('click', handleZoomIn);
+			minimapSvg.removeEventListener('pointerdown', handleMinimapPointerDown);
+			minimapSvg.removeEventListener('click', handleMinimapClick);
+			minimapViewportIndicator.removeEventListener(
+				'pointerdown',
+				handleViewportPointerDown,
+			);
+			minimapViewportIndicator.removeEventListener(
+				'pointermove',
+				handleViewportPointerMove,
+			);
+			minimapViewportIndicator.removeEventListener(
+				'pointerup',
+				handleViewportPointerUp,
+			);
+			minimapViewportIndicator.removeEventListener(
+				'pointercancel',
+				handleViewportPointerCancel,
+			);
+			minimapViewportIndicator.removeEventListener(
+				'lostpointercapture',
+				handleViewportLostPointerCapture,
+			);
+			minimapViewportIndicator.removeEventListener(
+				'click',
+				handleViewportClick,
+			);
+
+			if (viewportDrag) {
+				stopViewportDrag(viewportDrag.pointerId, true);
+			}
 			navigator.remove();
 		},
 	};

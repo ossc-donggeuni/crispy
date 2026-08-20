@@ -46,6 +46,7 @@ src/webview/graph/
 - Camera State 변경을 World transform과 Grid에 반영
 - Viewport / World 좌표 상호 변환
 - `focusOn()`으로 현재 scale을 유지한 채 World 지점을 Viewport 중앙으로 이동
+- `focusOn()`과 연속 `setState()`가 공유하는 World Target 중앙 배치 Camera State 계산
 - `requestAnimationFrame` 기반 약 300ms cubic ease-out Focus Animation
 - 새 Focus 요청, 사용자 Pan / Zoom 및 `dispose()`에서 진행 중 Animation 취소
 - `data-graph-camera-ignore`로 Pan과 Wheel Zoom 모두 차단
@@ -122,6 +123,10 @@ src/webview/graph/
 - Graph State의 `nodePositions` reference 변경 시에만 저장 위치를 반영해 Minimap 재투영
 - Camera-only State 변경은 기존 Projection과 Graphic을 유지하고 Indicator attribute만 갱신
 - Graph Viewport `ResizeObserver`는 Indicator만 갱신하며 Navigator `dispose()`에서 해제
+- Minimap Background Click을 현재 Projection으로 World에 역투영해 기존 `camera.focusOn()` 정책으로 이동
+- Viewport Indicator를 Primary Pointer Capture로 Drag하고 Projection 역투영 이동량을 현재 scale의 `camera.setState()`에 실시간 적용
+- Drag 입력은 Camera State만 변경해 기존 Camera-only Indicator fast path를 그대로 재사용
+- `pointerup`, `pointercancel`, `lostpointercapture`에서 session을 정리하고 Drag 후 Background Click을 억제
 - Node Drag 중 transient DOM 위치는 구독하지 않고 pointerup 저장 뒤 Graph와 Indicator 재투영
 - 복원된 Graph State 기준으로 좌표와 scale 최초 표시
 - Camera State 변경 구독 및 표시 갱신
@@ -132,7 +137,7 @@ src/webview/graph/
 - 빈 Root 안내와 제목이 고정된 Scroll 목록 제공
 - Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Minimap Layout/Projection reference, Viewport ResizeObserver, Action/Zoom Button Listener, 공통 State 구독 및 DOM 정리
+- `dispose()` 시 Minimap Layout/Projection reference, 활성 Pointer Capture, Viewport ResizeObserver, Minimap/Action/Zoom Listener, 공통 State 구독 및 DOM 정리
 - Root 선택 상태는 포함하지 않음
 
 ### `graphNavigatorMinimap.ts`
@@ -149,7 +154,9 @@ src/webview/graph/
 - 기존 `camera.viewportToWorld()`로 실제 Graph Viewport 좌상단/우하단의 World Bounds 계산
 - Camera World Bounds를 기존 Graph Projection으로 변환하고 SVG 영역에 안전하게 Clamp
 - Indicator geometry는 계산 결과만 제공하며 Camera 또는 Navigation 상태를 소유하지 않음
-- Minimap → Camera Navigation과 Pointer Interaction은 포함하지 않음
+- Client Point를 실제 SVG 크기와 논리 Minimap 크기 차이를 반영해 변환
+- Drag 시작/현재 Minimap Point를 같은 Projection으로 역투영해 World 이동량 제공
+- Pointer session, Camera 상태와 DOM Listener는 소유하지 않음
 
 ### `graphNavigatorRoots.ts`
 
@@ -238,6 +245,7 @@ src/webview/graph/
 - Root Context Label의 클릭 가능한 회색 부모 경로 표현
 - Detach Drag 및 Reattach Target 최소 활성 상태
 - Floating Root List Panel의 Button Hover/Focus/Active, Ellipsis와 목록 Scroll 스타일
+- Minimap Background 탐색 Cursor와 Viewport Indicator Grab/Grabbing 상태
 
 ### `graphState.ts`
 

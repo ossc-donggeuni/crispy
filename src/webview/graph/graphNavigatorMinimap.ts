@@ -26,6 +26,12 @@ export interface MinimapSize {
 	readonly height: number;
 }
 
+/** Client 좌표를 Minimap SVG 좌표로 바꾸는 데 필요한 화면 Bounds다. */
+export interface MinimapClientBounds extends MinimapSize {
+	readonly left: number;
+	readonly top: number;
+}
+
 /** Aspect ratio를 유지하는 World와 Minimap 좌표 사이의 양방향 Projection이다. */
 export interface MinimapProjection {
 	readonly scale: number;
@@ -258,6 +264,82 @@ export function createMinimapViewportGeometry(
 	return areFiniteNumbers(left, top, width, height)
 		? { x: left, y: top, width, height }
 		: undefined;
+}
+
+/** Client Point를 실제 SVG 화면 크기와 viewBox 크기에 맞춰 Minimap Point로 변환한다. */
+export function clientToMinimapPoint(
+	clientPoint: MinimapPoint,
+	clientBounds: MinimapClientBounds,
+	minimapSize: MinimapSize,
+): MinimapPoint | undefined {
+	if (
+		!areFiniteNumbers(
+			clientPoint.x,
+			clientPoint.y,
+			clientBounds.left,
+			clientBounds.top,
+			clientBounds.width,
+			clientBounds.height,
+			minimapSize.width,
+			minimapSize.height,
+		)
+		|| clientBounds.width <= 0
+		|| clientBounds.height <= 0
+		|| minimapSize.width <= 0
+		|| minimapSize.height <= 0
+	) {
+		return undefined;
+	}
+
+	const point = {
+		x: (clientPoint.x - clientBounds.left)
+			* minimapSize.width / clientBounds.width,
+		y: (clientPoint.y - clientBounds.top)
+			* minimapSize.height / clientBounds.height,
+	};
+
+	return areFiniteNumbers(point.x, point.y) ? point : undefined;
+}
+
+/** 두 Minimap Point를 같은 Projection으로 역변환해 World 이동량을 계산한다. */
+export function calculateMinimapWorldDelta(
+	projection: MinimapProjection,
+	start: MinimapPoint,
+	current: MinimapPoint,
+): MinimapPoint | undefined {
+	if (!areFiniteNumbers(start.x, start.y, current.x, current.y)) {
+		return undefined;
+	}
+
+	let startWorld: MinimapPoint;
+	let currentWorld: MinimapPoint;
+
+	try {
+		startWorld = projection.minimapToWorld(start);
+		currentWorld = projection.minimapToWorld(current);
+	} catch {
+		return undefined;
+	}
+
+	if (
+		!startWorld
+		|| !currentWorld
+		|| !areFiniteNumbers(
+			startWorld.x,
+			startWorld.y,
+			currentWorld.x,
+			currentWorld.y,
+		)
+	) {
+		return undefined;
+	}
+
+	const delta = {
+		x: currentWorld.x - startWorld.x,
+		y: currentWorld.y - startWorld.y,
+	};
+
+	return areFiniteNumbers(delta.x, delta.y) ? delta : undefined;
 }
 
 /** Layout과 저장 위치를 Minimap Node/Edge 좌표로 한 번에 투영한다. */

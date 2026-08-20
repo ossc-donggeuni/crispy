@@ -4,6 +4,7 @@ import {
 	initializeGraphCamera,
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
+	type GraphAnimationFrameScheduler,
 } from '../../webview/graph/graphCamera';
 import { resolveFileIcon } from '../../webview/graph/fileIconResolver';
 import type {
@@ -87,7 +88,7 @@ suite('Graph Navigator', () => {
 		);
 	});
 
-	test('Viewport Indicator를 Node/Edge 위의 고정 Layer에 Pointer 입력 없이 표시한다', () => {
+	test('Viewport Indicator를 Node/Edge 위의 단일 Drag Target으로 표시한다', () => {
 		const fixture = createNavigatorFixture(
 			undefined,
 			{},
@@ -106,7 +107,17 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.minimapViewportIndicator.tagName, 'RECT');
 		assert.strictEqual(
 			fixture.minimapViewportIndicator.getAttribute('pointer-events'),
-			'none',
+			'all',
+		);
+		assert.strictEqual(fixture.minimap.getAttribute('role'), 'region');
+		assert.strictEqual(
+			fixture.minimap.getAttribute('aria-label'),
+			'Graph minimap navigation',
+		);
+		assert.strictEqual(fixture.minimap.hasAttribute('aria-hidden'), false);
+		assert.strictEqual(
+			fixture.minimapViewportIndicator.getAttribute('aria-label'),
+			'Current graph viewport; drag to pan',
 		);
 		assert.strictEqual(
 			fixture.minimapViewportIndicator.getAttribute('visibility'),
@@ -286,6 +297,355 @@ suite('Graph Navigator', () => {
 		fixture.viewport.clientHeight = 150;
 		FakeResizeObserver.trigger(fixture.viewport);
 		assert.deepStrictEqual(readRectAttributes(indicator), resizedAttributes);
+	});
+
+	test('Minimap Click을 SVG 논리 좌표에서 World로 역투영해 기존 focusOn에 전달한다', () => {
+		const fixture = createNavigatorFixture(
+			{ x: 0, y: 0, scale: 1.5 },
+			{},
+			createLargeMinimapLayout(),
+		);
+		const nodes = [...fixture.minimapNodeLayer.children];
+		const edges = [...fixture.minimapEdgeLayer.children];
+		const indicator = fixture.minimapViewportIndicator;
+		const initialIndicator = readRectAttributes(indicator);
+		const focusTargets: Array<{ x: number; y: number }> = [];
+		const focusOn = fixture.camera.focusOn.bind(fixture.camera);
+
+		fixture.camera.focusOn = (point) => {
+			focusTargets.push(point);
+			focusOn(point, { duration: 0 });
+		};
+		fixture.minimapSvg.boundsLeft = 100;
+		fixture.minimapSvg.boundsTop = 50;
+		fixture.minimapSvg.clientWidth = 320;
+		fixture.minimapSvg.clientHeight = 192;
+		const centerClick = createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			260,
+			146,
+		);
+
+		fixture.minimapSvg.dispatch('click', centerClick);
+
+		assert.strictEqual(focusTargets.length, 1);
+		assertPointAlmostEqual(
+			focusTargets[0] ?? assert.fail('Focus Target이 있어야 한다.'),
+			{ x: 1_050, y: 620 },
+		);
+		assertPointAlmostEqual(
+			fixture.camera.worldToViewport(focusTargets[0] ?? { x: 0, y: 0 }),
+			{ x: 400, y: 300 },
+		);
+		assert.strictEqual(fixture.camera.getState().scale, 1.5);
+		assert.strictEqual(centerClick.defaultPrevented, true);
+		assert.strictEqual(centerClick.propagationStopped, true);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+		assert.strictEqual(fixture.minimapViewportIndicator, indicator);
+		assert.notDeepStrictEqual(readRectAttributes(indicator), initialIndicator);
+
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			140,
+			90,
+		));
+		assert.strictEqual(focusTargets.length, 2);
+		assert.notDeepStrictEqual(focusTargets[1], focusTargets[0]);
+		assert.strictEqual(fixture.camera.getState().scale, 1.5);
+	});
+
+	test('Empty Graph와 Minimap 바깥 또는 invalid Click은 Camera Navigation을 무시한다', () => {
+		const fixture = createNavigatorFixture();
+		let focusCount = 0;
+		const focusOn = fixture.camera.focusOn.bind(fixture.camera);
+
+		fixture.camera.focusOn = (point) => {
+			focusCount += 1;
+			focusOn(point, { duration: 0 });
+		};
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			80,
+			48,
+		));
+		assert.strictEqual(focusCount, 0);
+
+		fixture.navigator.setLayout(createLargeMinimapLayout());
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			-1,
+			48,
+		));
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			Number.NaN,
+			48,
+		));
+		assert.strictEqual(focusCount, 0);
+	});
+
+	test('Viewport Indicator Drag은 저장한 Projection으로 Camera 중심을 실시간 이동하고 DOM과 scale을 유지한다', () => {
+		const fixture = createNavigatorFixture(
+			{ x: -100, y: -100, scale: 1.25 },
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		const nodes = [...fixture.minimapNodeLayer.children];
+		const edges = [...fixture.minimapEdgeLayer.children];
+		const initialCenter = fixture.camera.viewportToWorld({ x: 400, y: 300 });
+		const start = readIndicatorCenter(indicator);
+		const pointerDown = createPointerEvent(
+			indicator.asEventTarget(),
+			start.x,
+			start.y,
+			7,
+		);
+
+		indicator.dispatch('pointerdown', pointerDown);
+		fixture.viewport.dispatch('pointerdown', pointerDown);
+		assert.strictEqual(indicator.hasPointerCapture(7), true);
+		assert.strictEqual(indicator.hasClass('is-dragging'), true);
+		assert.strictEqual(pointerDown.defaultPrevented, true);
+		assert.strictEqual(pointerDown.propagationStopped, true);
+		assert.strictEqual(fixture.viewport.hasPointerCapture(7), false);
+		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
+
+		const beforeOtherPointer = fixture.camera.getState();
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(),
+			start.x + 30,
+			start.y + 30,
+			8,
+		));
+		indicator.dispatch('pointerup', createPointerEvent(
+			indicator.asEventTarget(),
+			start.x + 30,
+			start.y + 30,
+			8,
+		));
+		assert.deepStrictEqual(fixture.camera.getState(), beforeOtherPointer);
+		assert.strictEqual(indicator.hasPointerCapture(7), true);
+
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(),
+			start.x + 10.5,
+			start.y + 7.25,
+			7,
+		));
+		const movedCenter = fixture.camera.viewportToWorld({ x: 400, y: 300 });
+
+		assert.ok(movedCenter.x > initialCenter.x);
+		assert.ok(movedCenter.y > initialCenter.y);
+		assert.strictEqual(fixture.camera.getState().scale, 1.25);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+		assert.strictEqual(fixture.minimapViewportIndicator, indicator);
+
+		indicator.dispatch('pointerup', createPointerEvent(
+			indicator.asEventTarget(),
+			start.x + 10.5,
+			start.y + 7.25,
+			7,
+		));
+		assert.strictEqual(indicator.hasPointerCapture(7), false);
+		assert.strictEqual(indicator.hasClass('is-dragging'), false);
+		const completedState = fixture.camera.getState();
+
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(),
+			start.x + 40,
+			start.y + 40,
+			7,
+		));
+		assert.deepStrictEqual(fixture.camera.getState(), completedState);
+
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			indicator.asEventTarget(),
+			start.x + 10.5,
+			start.y + 7.25,
+		));
+		assert.deepStrictEqual(fixture.camera.getState(), completedState);
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			20,
+			20,
+		));
+		assert.notDeepStrictEqual(fixture.camera.getState(), completedState);
+	});
+
+	test('Indicator Drag은 X와 Y 단일 축 이동을 독립적으로 반영하고 유효한 Primary Button만 시작한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		let start = readIndicatorCenter(indicator);
+
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 20, 1,
+		));
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 21, 0, false,
+		));
+		assert.strictEqual(indicator.hasPointerCapture(20), false);
+		assert.strictEqual(indicator.hasPointerCapture(21), false);
+		const beforeIndicatorClick = fixture.camera.getState();
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 24,
+		));
+		indicator.dispatch('pointerup', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 24,
+		));
+		const indicatorClick = createClickEvent(
+			indicator.asEventTarget(), start.x, start.y,
+		);
+		indicator.dispatch('click', indicatorClick);
+		assert.deepStrictEqual(fixture.camera.getState(), beforeIndicatorClick);
+		assert.strictEqual(indicatorClick.defaultPrevented, true);
+		assert.strictEqual(indicatorClick.propagationStopped, true);
+
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 22,
+		));
+		const beforeX = fixture.camera.viewportToWorld({ x: 400, y: 300 });
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x + 7, start.y, 22,
+		));
+		const afterX = fixture.camera.viewportToWorld({ x: 400, y: 300 });
+		assert.ok(afterX.x > beforeX.x);
+		assert.ok(Math.abs(afterX.y - beforeX.y) < 1e-10);
+		indicator.dispatch('pointerup', createPointerEvent(
+			indicator.asEventTarget(), start.x + 7, start.y, 22,
+		));
+
+		start = readIndicatorCenter(indicator);
+		const beforeY = fixture.camera.viewportToWorld({ x: 400, y: 300 });
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 23,
+		));
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y - 5, 23,
+		));
+		const afterY = fixture.camera.viewportToWorld({ x: 400, y: 300 });
+		assert.ok(Math.abs(afterY.x - beforeY.x) < 1e-10);
+		assert.ok(afterY.y < beforeY.y);
+		indicator.dispatch('pointerup', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y - 5, 23,
+		));
+	});
+
+	test('Indicator Drag은 pointercancel과 lostpointercapture에서 종료하고 후속 Move를 무시한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		let start = readIndicatorCenter(indicator);
+
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 3,
+		));
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x + 8, start.y - 6, 3,
+		));
+		indicator.dispatch('pointercancel', createPointerEvent(
+			indicator.asEventTarget(), start.x + 8, start.y - 6, 3,
+		));
+		assert.strictEqual(indicator.hasPointerCapture(3), false);
+		assert.strictEqual(indicator.hasClass('is-dragging'), false);
+		const cancelledState = fixture.camera.getState();
+
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x + 30, start.y + 30, 3,
+		));
+		assert.deepStrictEqual(fixture.camera.getState(), cancelledState);
+
+		start = readIndicatorCenter(indicator);
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 4,
+		));
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x - 9, start.y + 5, 4,
+		));
+		indicator.losePointerCapture(4);
+		assert.strictEqual(indicator.hasPointerCapture(4), false);
+		assert.strictEqual(indicator.hasClass('is-dragging'), false);
+		const lostState = fixture.camera.getState();
+
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x - 30, start.y + 30, 4,
+		));
+		assert.deepStrictEqual(fixture.camera.getState(), lostState);
+	});
+
+	test('Minimap Click Focus Animation 중 Indicator Drag은 기존 setState 정책으로 Animation을 취소한다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+			scheduler,
+		);
+
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			120,
+			70,
+		));
+		assert.strictEqual(scheduler.pendingCount, 1);
+		const start = readIndicatorCenter(fixture.minimapViewportIndicator);
+
+		fixture.minimapViewportIndicator.dispatch('pointerdown', createPointerEvent(
+			fixture.minimapViewportIndicator.asEventTarget(),
+			start.x,
+			start.y,
+			9,
+		));
+		assert.strictEqual(scheduler.pendingCount, 0);
+		assert.strictEqual(scheduler.cancelCount, 1);
+
+		fixture.minimapViewportIndicator.dispatch('pointermove', createPointerEvent(
+			fixture.minimapViewportIndicator.asEventTarget(),
+			start.x + 6,
+			start.y + 4,
+			9,
+		));
+		assert.strictEqual(scheduler.pendingCount, 0);
+	});
+
+	test('Navigator dispose는 활성 Minimap Drag을 정리하고 후속 Interaction을 무시한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		const start = readIndicatorCenter(indicator);
+
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 11,
+		));
+		assert.strictEqual(indicator.hasPointerCapture(11), true);
+		fixture.navigator.dispose();
+		assert.strictEqual(indicator.hasPointerCapture(11), false);
+		assert.strictEqual(indicator.hasClass('is-dragging'), false);
+		const disposedState = fixture.camera.getState();
+
+		indicator.dispatch('pointermove', createPointerEvent(
+			indicator.asEventTarget(), start.x + 20, start.y + 20, 11,
+		));
+		indicator.dispatch('pointerdown', createPointerEvent(
+			indicator.asEventTarget(), start.x, start.y, 12,
+		));
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(), 80, 48,
+		));
+		assert.deepStrictEqual(fixture.camera.getState(), disposedState);
+		assert.strictEqual(indicator.hasPointerCapture(12), false);
 	});
 
 	test('복원된 Camera 좌표를 반올림하고 scale을 퍼센트로 최초 표시한다', () => {
@@ -845,6 +1205,7 @@ function createNavigatorFixture(
 	initialCamera = { x: 0, y: 0, scale: 1 },
 	interactions: GraphNavigatorInteractions = {},
 	initialLayout: GraphLayout = createEmptyLayout(),
+	animationFrameScheduler?: GraphAnimationFrameScheduler,
 ) {
 	const ownerDocument = new FakeDocument();
 	const viewport = ownerDocument.createSizedElement(800, 600);
@@ -858,6 +1219,7 @@ function createNavigatorFixture(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),
 		graphState,
+		{ animationFrameScheduler },
 	);
 	const navigator = initializeGraphNavigator(
 		overlay.asHtmlElement(),
@@ -944,16 +1306,66 @@ function createPointerEvent(
 	target: EventTarget,
 	clientX = 10,
 	clientY = 10,
-): PointerEvent {
+	pointerId = 1,
+	button = 0,
+	isPrimary = true,
+): PointerEvent & { defaultPrevented: boolean; propagationStopped: boolean } {
+	let defaultPrevented = false;
+	let propagationStopped = false;
+
 	return {
-		isPrimary: true,
-		button: 0,
-		pointerId: 1,
+		isPrimary,
+		button,
+		pointerId,
 		clientX,
 		clientY,
 		target,
-		preventDefault: () => undefined,
-	} as PointerEvent;
+		preventDefault: () => {
+			defaultPrevented = true;
+		},
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get defaultPrevented() {
+			return defaultPrevented;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as PointerEvent & {
+		defaultPrevented: boolean;
+		propagationStopped: boolean;
+	};
+}
+
+function createClickEvent(
+	target: EventTarget,
+	clientX: number,
+	clientY: number,
+): MouseEvent & { defaultPrevented: boolean; propagationStopped: boolean } {
+	let defaultPrevented = false;
+	let propagationStopped = false;
+
+	return {
+		target,
+		clientX,
+		clientY,
+		preventDefault: () => {
+			defaultPrevented = true;
+		},
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get defaultPrevented() {
+			return defaultPrevented;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as MouseEvent & {
+		defaultPrevented: boolean;
+		propagationStopped: boolean;
+	};
 }
 
 function createWheelEvent(
@@ -988,7 +1400,9 @@ class FakeDocument {
 	}
 
 	createElementNS(_namespace: string, qualifiedName: string): FakeElement {
-		return new FakeElement(this, 0, 0, qualifiedName.toUpperCase());
+		return qualifiedName === 'svg'
+			? new FakeElement(this, 160, 96, 'SVG')
+			: new FakeElement(this, 0, 0, qualifiedName.toUpperCase());
 	}
 
 	createSizedElement(clientWidth: number, clientHeight: number): FakeElement {
@@ -1035,6 +1449,8 @@ class FakeElement {
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
 	private readonly capturedPointers = new Set<number>();
 	private parent: FakeElement | undefined;
+	public boundsLeft = 0;
+	public boundsTop = 0;
 
 	constructor(
 		readonly ownerDocument: FakeDocument,
@@ -1137,14 +1553,22 @@ class FakeElement {
 		this.capturedPointers.delete(pointerId);
 	}
 
+	losePointerCapture(pointerId: number): void {
+		this.capturedPointers.delete(pointerId);
+		this.dispatch(
+			'lostpointercapture',
+			createPointerEvent(this.asEventTarget(), 0, 0, pointerId),
+		);
+	}
+
 	getBoundingClientRect(): DOMRect {
 		return {
-			x: 0,
-			y: 0,
-			left: 0,
-			top: 0,
-			right: this.clientWidth,
-			bottom: this.clientHeight,
+			x: this.boundsLeft,
+			y: this.boundsTop,
+			left: this.boundsLeft,
+			top: this.boundsTop,
+			right: this.boundsLeft + this.clientWidth,
+			bottom: this.boundsTop + this.clientHeight,
 			width: this.clientWidth,
 			height: this.clientHeight,
 			toJSON: () => ({}),
@@ -1202,6 +1626,15 @@ function readRectAttributes(element: FakeElement): Record<string, string | null>
 	};
 }
 
+function readIndicatorCenter(element: FakeElement): { x: number; y: number } {
+	return {
+		x: Number(element.getAttribute('x'))
+			+ Number(element.getAttribute('width')) / 2,
+		y: Number(element.getAttribute('y'))
+			+ Number(element.getAttribute('height')) / 2,
+	};
+}
+
 function getChildByAttribute(
 	element: FakeElement,
 	attribute: string,
@@ -1223,6 +1656,30 @@ function getDescendantsByTagName(
 		...(child.tagName === tagName ? [child] : []),
 		...getDescendantsByTagName(child, tagName),
 	]);
+}
+
+class FakeAnimationFrameScheduler implements GraphAnimationFrameScheduler {
+	private nextRequestId = 1;
+	private readonly callbacks = new Map<number, FrameRequestCallback>();
+	cancelCount = 0;
+
+	get pendingCount(): number {
+		return this.callbacks.size;
+	}
+
+	request(callback: FrameRequestCallback): number {
+		const requestId = this.nextRequestId;
+
+		this.nextRequestId += 1;
+		this.callbacks.set(requestId, callback);
+		return requestId;
+	}
+
+	cancel(requestId: number): void {
+		if (this.callbacks.delete(requestId)) {
+			this.cancelCount += 1;
+		}
+	}
 }
 
 class FakeResizeObserver {

@@ -7,6 +7,8 @@ import type {
 import {
 	calculateCameraWorldBounds,
 	calculateGraphBounds,
+	calculateMinimapWorldDelta,
+	clientToMinimapPoint,
 	createMinimapGraphGeometry,
 	createMinimapProjection,
 	createMinimapViewportGeometry,
@@ -121,6 +123,69 @@ suite('Graph Navigator Minimap Geometry', () => {
 			projection.minimapToWorld(projection.worldToMinimap(worldPoint)),
 			worldPoint,
 		);
+	});
+
+	test('Client 좌표를 CSS 크기와 SVG 논리 크기 차이를 반영해 Minimap 좌표로 변환한다', () => {
+		assert.deepStrictEqual(clientToMinimapPoint(
+			{ x: 260, y: 146 },
+			{ left: 100, top: 50, width: 320, height: 192 },
+			{ width: 160, height: 96 },
+		), { x: 80, y: 48 });
+		assert.deepStrictEqual(clientToMinimapPoint(
+			{ x: 500, y: 260 },
+			{ left: 100, top: 50, width: 320, height: 192 },
+			{ width: 160, height: 96 },
+		), { x: 200, y: 105 });
+	});
+
+	test('Client 좌표 변환은 0-size와 유효하지 않은 입력을 거부한다', () => {
+		assert.strictEqual(clientToMinimapPoint(
+			{ x: 10, y: 10 },
+			{ left: 0, top: 0, width: 0, height: 96 },
+			{ width: 160, height: 96 },
+		), undefined);
+		assert.strictEqual(clientToMinimapPoint(
+			{ x: Number.NaN, y: 10 },
+			{ left: 0, top: 0, width: 160, height: 96 },
+			{ width: 160, height: 96 },
+		), undefined);
+	});
+
+	test('Minimap Drag 이동량을 기존 역투영으로 fractional World 이동량에 변환한다', () => {
+		const projection = createMinimapProjection(
+			{ x: -200, y: 100, width: 1_000, height: 500 },
+			{ width: 160, height: 96 },
+			8,
+		);
+
+		assert.ok(projection);
+		const start = { x: 40.5, y: 50.25 };
+		const current = { x: 73.75, y: 31.5 };
+		const expectedStart = projection.minimapToWorld(start);
+		const expectedCurrent = projection.minimapToWorld(current);
+
+		assertPointAlmostEqual(
+			calculateMinimapWorldDelta(projection, start, current)
+				?? assert.fail('World 이동량을 계산해야 한다.'),
+			{
+				x: expectedCurrent.x - expectedStart.x,
+				y: expectedCurrent.y - expectedStart.y,
+			},
+		);
+	});
+
+	test('Minimap Drag World 이동량은 유효하지 않은 좌표를 안전하게 거부한다', () => {
+		const projection = createMinimapProjection(
+			{ x: 0, y: 0, width: 100, height: 50 },
+			{ width: 160, height: 96 },
+		);
+
+		assert.ok(projection);
+		assert.strictEqual(calculateMinimapWorldDelta(
+			projection,
+			{ x: 10, y: 10 },
+			{ x: Number.POSITIVE_INFINITY, y: 20 },
+		), undefined);
 	});
 
 	test('저장 위치 기반 Node와 Edge를 투영하고 잘못된 Edge는 제외한다', () => {
