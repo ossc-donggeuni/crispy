@@ -25,6 +25,20 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Navigator', () => {
+	const originalResizeObserver = globalThis.ResizeObserver;
+
+	suiteSetup(() => {
+		globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+	});
+
+	setup(() => {
+		FakeResizeObserver.reset();
+	});
+
+	suiteTeardown(() => {
+		globalThis.ResizeObserver = originalResizeObserver;
+	});
+
 	test('Minimap과 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다', () => {
 		const fixture = createNavigatorFixture();
 
@@ -73,6 +87,37 @@ suite('Graph Navigator', () => {
 		);
 	});
 
+	test('Viewport Indicator를 Node/Edge 위의 고정 Layer에 Pointer 입력 없이 표시한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+
+		assert.deepStrictEqual(fixture.minimapSvg.children, [
+			fixture.minimapEdgeLayer,
+			fixture.minimapNodeLayer,
+			fixture.minimapViewportLayer,
+		]);
+		assert.deepStrictEqual(
+			fixture.minimapViewportLayer.children,
+			[fixture.minimapViewportIndicator],
+		);
+		assert.strictEqual(fixture.minimapViewportIndicator.tagName, 'RECT');
+		assert.strictEqual(
+			fixture.minimapViewportIndicator.getAttribute('pointer-events'),
+			'none',
+		);
+		assert.strictEqual(
+			fixture.minimapViewportIndicator.getAttribute('visibility'),
+			null,
+		);
+		assert.strictEqual(
+			getDescendantsByTagName(fixture.minimapSvg, 'TEXT').length,
+			0,
+		);
+	});
+
 	test('투영 크기가 0인 Node도 최소 2px Shape로 표시한다', () => {
 		const zeroSizeNode = {
 			...createMinimapNode('node:zero', 0, 0),
@@ -90,15 +135,17 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(rect.getAttribute('height'), '2');
 	});
 
-	test('setLayout은 같은 Minimap/SVG를 유지하며 Graphic을 최신 Layout과 Empty 상태로 교체한다', () => {
+	test('setLayout은 같은 Minimap/SVG/Indicator를 유지하며 최신 Projection과 Empty 상태를 반영한다', () => {
 		const fixture = createNavigatorFixture(
 			undefined,
 			{},
-			createMinimapLayout([createMinimapNode('node:initial', 0, 0)]),
+			createLargeMinimapLayout(),
 		);
+		const indicator = fixture.minimapViewportIndicator;
+		const initialIndicatorWidth = Number(indicator.getAttribute('width'));
 		const nextLayout = createMinimapLayout([
 			createMinimapNode('node:next-a', 0, 0),
-			createMinimapNode('node:next-b', 200, 100),
+			createMinimapNode('node:next-b', 4_000, 2_400),
 		]);
 
 		fixture.navigator.setLayout(nextLayout);
@@ -106,6 +153,8 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.overlay.children[0], fixture.navigatorElement);
 		assert.strictEqual(fixture.bottomRow.children[0], fixture.minimap);
 		assert.strictEqual(fixture.minimap.children[0], fixture.minimapSvg);
+		assert.strictEqual(fixture.minimapViewportIndicator, indicator);
+		assert.ok(Number(indicator.getAttribute('width')) < initialIndicatorWidth);
 		assert.strictEqual(fixture.minimapNodeLayer.children.length, 2);
 		assert.deepStrictEqual(
 			fixture.minimapNodeLayer.children.map((node) => (
@@ -117,13 +166,19 @@ suite('Graph Navigator', () => {
 		fixture.navigator.setLayout(createEmptyLayout());
 		assert.strictEqual(fixture.minimapNodeLayer.children.length, 0);
 		assert.strictEqual(fixture.minimapEdgeLayer.children.length, 0);
+		assert.strictEqual(indicator.getAttribute('visibility'), 'hidden');
+
+		fixture.camera.setState({ x: -200, y: -100, scale: 1.5 });
+		assert.strictEqual(indicator.getAttribute('visibility'), 'hidden');
+		fixture.navigator.setLayout(nextLayout);
+		assert.strictEqual(indicator.getAttribute('visibility'), null);
 	});
 
 	test('nodePositions 변경만으로 기존 Minimap Container를 유지하며 Node와 Edge를 다시 투영한다', () => {
 		const layout = createMinimapLayout([
 			createMinimapNode('node:left', 0, 0),
 			createMinimapNode('node:middle', 150, 80),
-			createMinimapNode('node:right', 400, 160),
+			createMinimapNode('node:right', 2_000, 160),
 		], [{
 			id: 'edge:middle-right',
 			sourceId: 'node:middle',
@@ -132,26 +187,29 @@ suite('Graph Navigator', () => {
 		const fixture = createNavigatorFixture(undefined, {}, layout);
 		const minimap = fixture.minimap;
 		const svg = fixture.minimapSvg;
-		const initialMiddle = getChildByAttribute(
+		const initialRight = getChildByAttribute(
 			fixture.minimapNodeLayer,
 			'data-graph-node-id',
-			'node:middle',
+			'node:right',
 		);
-		const initialX = Number(initialMiddle.getAttribute('x'));
+		const initialX = Number(initialRight.getAttribute('x'));
+		const indicator = fixture.minimapViewportIndicator;
+		const initialIndicatorWidth = Number(indicator.getAttribute('width'));
 
 		fixture.graphState.setState({
 			camera: fixture.graphState.getState().camera,
-			nodePositions: { 'node:middle': { x: 260, y: 30 } },
+			nodePositions: { 'node:right': { x: 4_000, y: 30 } },
 		});
-		const movedMiddle = getChildByAttribute(
+		const movedRight = getChildByAttribute(
 			fixture.minimapNodeLayer,
 			'data-graph-node-id',
-			'node:middle',
+			'node:right',
 		);
 
 		assert.strictEqual(fixture.minimap, minimap);
 		assert.strictEqual(fixture.minimapSvg, svg);
-		assert.notStrictEqual(Number(movedMiddle.getAttribute('x')), initialX);
+		assert.notStrictEqual(Number(movedRight.getAttribute('x')), initialX);
+		assert.ok(Number(indicator.getAttribute('width')) < initialIndicatorWidth);
 		assert.strictEqual(fixture.minimapEdgeLayer.children.length, 1);
 
 		const currentNodes = [...fixture.minimapNodeLayer.children];
@@ -161,6 +219,73 @@ suite('Graph Navigator', () => {
 			nodePositions: fixture.graphState.getState().nodePositions,
 		});
 		assert.deepStrictEqual(fixture.minimapNodeLayer.children, currentNodes);
+	});
+
+	test('Camera Pan과 Zoom은 같은 Indicator attribute만 갱신하고 Graph Graphic을 유지한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		const nodes = [...fixture.minimapNodeLayer.children];
+		const edges = [...fixture.minimapEdgeLayer.children];
+		const initialX = Number(indicator.getAttribute('x'));
+		const initialWidth = Number(indicator.getAttribute('width'));
+		const initialHeight = Number(indicator.getAttribute('height'));
+
+		fixture.camera.setState({ x: -300, y: -200, scale: 1 });
+		assert.strictEqual(fixture.minimapViewportIndicator, indicator);
+		assert.notStrictEqual(Number(indicator.getAttribute('x')), initialX);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+
+		fixture.camera.setScaleAt(2, { x: 400, y: 300 });
+		assert.strictEqual(fixture.minimapViewportIndicator, indicator);
+		assert.ok(Number(indicator.getAttribute('width')) < initialWidth);
+		assert.ok(Number(indicator.getAttribute('height')) < initialHeight);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+	});
+
+	test('Graph Viewport Resize는 Indicator만 갱신하고 Observer를 dispose에서 정리한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		const nodes = [...fixture.minimapNodeLayer.children];
+		const edges = [...fixture.minimapEdgeLayer.children];
+		const initialWidth = Number(indicator.getAttribute('width'));
+		const initialHeight = Number(indicator.getAttribute('height'));
+
+		assert.strictEqual(FakeResizeObserver.getInstanceCount(), 1);
+		fixture.viewport.clientWidth = 400;
+		fixture.viewport.clientHeight = 300;
+		FakeResizeObserver.trigger(fixture.viewport);
+
+		assert.ok(Number(indicator.getAttribute('width')) < initialWidth);
+		assert.ok(Number(indicator.getAttribute('height')) < initialHeight);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+		assert.strictEqual(FakeResizeObserver.getInstanceCount(), 1);
+
+		fixture.viewport.clientWidth = 0;
+		FakeResizeObserver.trigger(fixture.viewport);
+		assert.strictEqual(indicator.getAttribute('visibility'), 'hidden');
+		fixture.viewport.clientWidth = 400;
+		FakeResizeObserver.trigger(fixture.viewport);
+		assert.strictEqual(indicator.getAttribute('visibility'), null);
+
+		const resizedAttributes = readRectAttributes(indicator);
+
+		fixture.navigator.dispose();
+		assert.strictEqual(FakeResizeObserver.isObserving(fixture.viewport), false);
+		fixture.viewport.clientWidth = 200;
+		fixture.viewport.clientHeight = 150;
+		FakeResizeObserver.trigger(fixture.viewport);
+		assert.deepStrictEqual(readRectAttributes(indicator), resizedAttributes);
 	});
 
 	test('복원된 Camera 좌표를 반올림하고 scale을 퍼센트로 최초 표시한다', () => {
@@ -496,7 +621,15 @@ suite('Graph Navigator', () => {
 	});
 
 	test('Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다', () => {
-		const fixture = createNavigatorFixture();
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+		);
+		const indicator = fixture.minimapViewportIndicator;
+		const nodes = [...fixture.minimapNodeLayer.children];
+		const edges = [...fixture.minimapEdgeLayer.children];
+		const initialX = indicator.getAttribute('x');
 
 		fixture.viewport.dispatch(
 			'pointerdown',
@@ -511,6 +644,10 @@ suite('Graph Navigator', () => {
 			createPointerEvent(fixture.viewport.asEventTarget(), 130.6, -35.5),
 		);
 		assert.strictEqual(fixture.coordinate.textContent, '(121, -45)');
+		assert.notStrictEqual(indicator.getAttribute('x'), initialX);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+		const pannedWidth = Number(indicator.getAttribute('width'));
 
 		fixture.viewport.dispatch('wheel', createWheelEvent(400, 300, -120));
 		assert.strictEqual(
@@ -518,6 +655,9 @@ suite('Graph Navigator', () => {
 			`${Math.round(fixture.camera.getState().scale * 100)}%`,
 		);
 		assert.notStrictEqual(fixture.scale.textContent, '100%');
+		assert.ok(Number(indicator.getAttribute('width')) < pannedWidth);
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
 	});
 
 	test('Zoom 버튼은 범위 안에서 scale을 0.1씩 Viewport 중앙 기준으로 변경한다', () => {
@@ -661,10 +801,13 @@ suite('Graph Navigator', () => {
 		const fixture = createNavigatorFixture(
 			undefined,
 			{},
-			createMinimapLayout([createMinimapNode('node:dispose', 0, 0)]),
+			createLargeMinimapLayout(),
 		);
 		const displayedCoordinate = fixture.coordinate.textContent;
 		const displayedMinimapNodes = [...fixture.minimapNodeLayer.children];
+		const displayedIndicator = readRectAttributes(
+			fixture.minimapViewportIndicator,
+		);
 		fixture.rootListButton.dispatch('click', {} as Event);
 
 		fixture.navigator.dispose();
@@ -680,6 +823,10 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(
 			fixture.minimapNodeLayer.children,
 			displayedMinimapNodes,
+		);
+		assert.deepStrictEqual(
+			readRectAttributes(fixture.minimapViewportIndicator),
+			displayedIndicator,
 		);
 
 		fixture.zoomInButton.dispatch('click', {} as Event);
@@ -726,6 +873,8 @@ function createNavigatorFixture(
 	const minimapSvg = getChild(minimap, 0);
 	const minimapEdgeLayer = getChild(minimapSvg, 0);
 	const minimapNodeLayer = getChild(minimapSvg, 1);
+	const minimapViewportLayer = getChild(minimapSvg, 2);
+	const minimapViewportIndicator = getChild(minimapViewportLayer, 0);
 	const zoom = getChild(bottomRow, 1);
 	const coordinate = getChild(zoom, 0);
 	const controls = getChild(zoom, 1);
@@ -753,6 +902,8 @@ function createNavigatorFixture(
 		minimapSvg,
 		minimapEdgeLayer,
 		minimapNodeLayer,
+		minimapViewportLayer,
+		minimapViewportIndicator,
 		zoom,
 		featureRow,
 		actionRail,
@@ -887,8 +1038,8 @@ class FakeElement {
 
 	constructor(
 		readonly ownerDocument: FakeDocument,
-		readonly clientWidth = 0,
-		readonly clientHeight = 0,
+		public clientWidth = 0,
+		public clientHeight = 0,
 		readonly tagName = 'DIV',
 	) {}
 
@@ -929,6 +1080,10 @@ class FakeElement {
 
 	setAttribute(name: string, value = ''): void {
 		this.attributes.set(name, value);
+	}
+
+	removeAttribute(name: string): void {
+		this.attributes.delete(name);
 	}
 
 	hasAttribute(name: string): boolean {
@@ -1026,6 +1181,27 @@ function createMinimapLayout(
 	};
 }
 
+function createLargeMinimapLayout(): GraphLayout {
+	return createMinimapLayout([
+		createMinimapNode('node:large-a', 0, 0),
+		createMinimapNode('node:large-b', 2_000, 1_200),
+	], [{
+		id: 'edge:large',
+		sourceId: 'node:large-a',
+		targetId: 'node:large-b',
+	}]);
+}
+
+function readRectAttributes(element: FakeElement): Record<string, string | null> {
+	return {
+		x: element.getAttribute('x'),
+		y: element.getAttribute('y'),
+		width: element.getAttribute('width'),
+		height: element.getAttribute('height'),
+		visibility: element.getAttribute('visibility'),
+	};
+}
+
 function getChildByAttribute(
 	element: FakeElement,
 	attribute: string,
@@ -1047,4 +1223,59 @@ function getDescendantsByTagName(
 		...(child.tagName === tagName ? [child] : []),
 		...getDescendantsByTagName(child, tagName),
 	]);
+}
+
+class FakeResizeObserver {
+	private static instances: FakeResizeObserver[] = [];
+	private readonly observedElements = new Set<Element>();
+
+	constructor(private readonly callback: ResizeObserverCallback) {
+		FakeResizeObserver.instances.push(this);
+	}
+
+	static reset(): void {
+		FakeResizeObserver.instances = [];
+	}
+
+	static getInstanceCount(): number {
+		return FakeResizeObserver.instances.length;
+	}
+
+	static isObserving(target: FakeElement): boolean {
+		const element = target.asHtmlElement();
+
+		return FakeResizeObserver.instances.some(
+			(observer) => observer.observedElements.has(element),
+		);
+	}
+
+	static trigger(target: FakeElement): void {
+		const element = target.asHtmlElement();
+
+		for (const observer of FakeResizeObserver.instances) {
+			if (!observer.observedElements.has(element)) {
+				continue;
+			}
+
+			observer.callback(
+				[{
+					target: element,
+					contentRect: target.getBoundingClientRect(),
+				} as unknown as ResizeObserverEntry],
+				observer as unknown as ResizeObserver,
+			);
+		}
+	}
+
+	observe(target: Element): void {
+		this.observedElements.add(target);
+	}
+
+	disconnect(): void {
+		this.observedElements.clear();
+	}
+
+	unobserve(target: Element): void {
+		this.observedElements.delete(target);
+	}
 }

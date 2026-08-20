@@ -675,6 +675,22 @@
 	opacity: 0.55;
 }
 
+.graph-navigator-minimap-viewport-layer,
+.graph-navigator-minimap-viewport-indicator {
+	pointer-events: none;
+}
+
+.graph-navigator-minimap-viewport-indicator {
+	fill: var(--vscode-editor-selectionBackground, transparent);
+	fill-opacity: 0.12;
+	stroke: var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--vscode-descriptionForeground))
+	);
+	stroke-width: 1.5;
+	stroke-opacity: 0.8;
+}
+
 .graph-navigator-zoom {
 	display: flex;
 	flex: none;

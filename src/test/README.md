@@ -176,7 +176,7 @@
 - 한 번 생성한 같은 Layout reference를 Renderer와 Navigator에 함께 적용한다
 - Folder Open/Close Layout Reflow 중 Minimap을 포함한 Navigator DOM을 재생성하지 않는다
 - Node Drag 중 transient 위치는 무시하고 pointerup 저장 뒤 Minimap을 갱신한다
-- File Group Reflow와 Root Detach/Reattach를 최신 Minimap Graphic에 반영한다
+- Folder/File Detach, Reattach와 File Group Reflow를 최신 Minimap Graphic 및 Viewport Indicator에 반영한다
 - 여러 Root의 저장 위치를 같은 Graph World에서 독립적으로 적용한다
 - 저장 위치를 우선하고 Layout 크기를 fallback으로 Folder/File Root 중심을 계산한다
 - Folder/File Backlink가 전달한 Root ID를 공통 Root Focus 경로로 처리한다
@@ -199,8 +199,11 @@
 - Minimap Container와 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다
 - 초기 Layout을 SVG Line/Rect로 렌더링하며 Text를 생성하지 않는다
 - 0 크기로 투영된 Node도 최소 2px Shape로 표시한다
+- Edge/Node보다 위 Layer에 단일 Viewport Indicator를 Pointer 입력 없이 표시한다
 - 갱신 및 Empty Layout Graphic만 교체하면서 Navigator, Minimap과 SVG DOM을 유지한다
-- `nodePositions` 변경은 재투영하고 Camera-only 변경은 기존 Graphic을 유지한다
+- `nodePositions` 변경은 Graph와 Indicator를 같은 Projection으로 재투영한다
+- Camera Pan/Zoom은 동일 Indicator attribute만 갱신하고 기존 Node/Edge DOM을 유지한다
+- Graph Viewport Resize는 Indicator만 갱신하며 Observer 중복과 dispose 이후 callback을 차단한다
 - Minimap에 기존 Camera 완전 입력 차단 규약을 적용한다
 - Minimap의 Pointer와 Wheel 입력으로 Camera Pan/Zoom을 시작하지 않는다
 - 복원된 Camera 좌표와 scale을 최초 표시한다
@@ -218,6 +221,9 @@
 - Padding 안에서 aspect ratio를 유지하고 남는 축을 중앙 정렬한다
 - World → Minimap → World 좌표를 왕복한다
 - 저장 위치 기반 Node/Edge geometry를 만들고 잘못된 Edge를 제외한다
+- 기본/Pan/Zoom/fractional Camera의 World Viewport Bounds를 기존 Camera API로 계산한다
+- 0-size/유효하지 않은 Viewport를 거부하고 좌표 순서를 normalize한다
+- World Viewport를 기존 Projection으로 Indicator화하고 SVG 밖 영역을 Clamp한다
 
 ## `graph/graphCamera.test.ts`
 

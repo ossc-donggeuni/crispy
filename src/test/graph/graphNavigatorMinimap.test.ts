@@ -5,9 +5,11 @@ import type {
 	GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
 import {
+	calculateCameraWorldBounds,
 	calculateGraphBounds,
 	createMinimapGraphGeometry,
 	createMinimapProjection,
+	createMinimapViewportGeometry,
 } from '../../webview/graph/graphNavigatorMinimap';
 
 suite('Graph Navigator Minimap Geometry', () => {
@@ -160,6 +162,113 @@ suite('Graph Navigator Minimap Geometry', () => {
 			undefined,
 		);
 	});
+
+	test('기본 Camera와 Pan Camera의 Viewport를 기존 API로 World Bounds화한다', () => {
+		const viewportSize = { width: 800, height: 600 };
+
+		assert.deepStrictEqual(calculateCameraWorldBounds(
+			createCameraTransform({ x: 0, y: 0, scale: 1 }),
+			viewportSize,
+		), { x: 0, y: 0, width: 800, height: 600 });
+		assert.deepStrictEqual(calculateCameraWorldBounds(
+			createCameraTransform({ x: 100, y: -50, scale: 1 }),
+			viewportSize,
+		), { x: -100, y: 50, width: 800, height: 600 });
+	});
+
+	test('Zoom과 fractional scale을 Camera World Bounds 크기에 반영한다', () => {
+		const viewportSize = { width: 800, height: 600 };
+		const zoomIn = calculateCameraWorldBounds(
+			createCameraTransform({ x: 0, y: 0, scale: 2 }),
+			viewportSize,
+		);
+		const zoomOut = calculateCameraWorldBounds(
+			createCameraTransform({ x: 0, y: 0, scale: 0.5 }),
+			viewportSize,
+		);
+		const fractional = calculateCameraWorldBounds(
+			createCameraTransform({ x: 25, y: 50, scale: 1.25 }),
+			viewportSize,
+		);
+
+		assert.deepStrictEqual(zoomIn, { x: 0, y: 0, width: 400, height: 300 });
+		assert.deepStrictEqual(zoomOut, { x: 0, y: 0, width: 1_600, height: 1_200 });
+		assert.ok((zoomIn?.width ?? 0) < (zoomOut?.width ?? 0));
+		assert.deepStrictEqual(fractional, {
+			x: -20,
+			y: -40,
+			width: 640,
+			height: 480,
+		});
+	});
+
+	test('Camera 좌표 순서를 normalize하고 0-size 및 유효하지 않은 입력을 거부한다', () => {
+		const invertedCamera = {
+			viewportToWorld: (point: { x: number; y: number }) => ({
+				x: 100 - point.x,
+				y: 50 - point.y,
+			}),
+		};
+
+		assert.deepStrictEqual(calculateCameraWorldBounds(
+			invertedCamera,
+			{ width: 80, height: 40 },
+		), { x: 20, y: 10, width: 80, height: 40 });
+		assert.strictEqual(calculateCameraWorldBounds(
+			invertedCamera,
+			{ width: 0, height: 40 },
+		), undefined);
+		assert.strictEqual(calculateCameraWorldBounds({
+			viewportToWorld: () => ({ x: Number.NaN, y: 0 }),
+		}, { width: 80, height: 40 }), undefined);
+		assert.strictEqual(calculateCameraWorldBounds({
+			viewportToWorld: () => {
+				throw new Error('invalid camera');
+			},
+		}, { width: 80, height: 40 }), undefined);
+	});
+
+	test('Camera World Bounds를 기존 Projection의 Minimap Indicator로 변환한다', () => {
+		const minimapSize = { width: 160, height: 96 };
+		const projection = createMinimapProjection(
+			{ x: 0, y: 0, width: 100, height: 100 },
+			minimapSize,
+			8,
+		);
+
+		assert.ok(projection);
+		assert.deepStrictEqual(createMinimapViewportGeometry(
+			{ x: 25, y: 25, width: 50, height: 50 },
+			projection,
+			minimapSize,
+		), { x: 60, y: 28, width: 40, height: 40 });
+	});
+
+	test('Graph보다 큰 Camera Indicator와 Graph 밖 Camera를 SVG Bounds로 Clamp한다', () => {
+		const minimapSize = { width: 160, height: 96 };
+		const projection = createMinimapProjection(
+			{ x: 0, y: 0, width: 100, height: 100 },
+			minimapSize,
+			8,
+		);
+
+		assert.ok(projection);
+		assert.deepStrictEqual(createMinimapViewportGeometry(
+			{ x: -100, y: -100, width: 300, height: 300 },
+			projection,
+			minimapSize,
+		), { x: 0, y: 0, width: 160, height: 96 });
+		assert.deepStrictEqual(createMinimapViewportGeometry(
+			{ x: 1_000, y: 1_000, width: 100, height: 100 },
+			projection,
+			minimapSize,
+		), { x: 160, y: 96, width: 0, height: 0 });
+		assert.strictEqual(createMinimapViewportGeometry(
+			{ x: 0, y: 0, width: -1, height: 10 },
+			projection,
+			minimapSize,
+		), undefined);
+	});
 });
 
 function createNode(
@@ -199,4 +308,15 @@ function assertPointAlmostEqual(
 ): void {
 	assert.ok(Math.abs(actual.x - expected.x) < 1e-10);
 	assert.ok(Math.abs(actual.y - expected.y) < 1e-10);
+}
+
+function createCameraTransform(
+	state: { readonly x: number; readonly y: number; readonly scale: number },
+): { viewportToWorld(point: { x: number; y: number }): { x: number; y: number } } {
+	return {
+		viewportToWorld: (point) => ({
+			x: (point.x - state.x) / state.scale,
+			y: (point.y - state.y) / state.scale,
+		}),
+	};
 }

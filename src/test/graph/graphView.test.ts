@@ -58,6 +58,7 @@ suite('Graph View', () => {
 			INITIAL_GRAPH_STATE,
 			GRAPH_MOCK,
 		);
+		graphView.camera.setState({ x: 0, y: 0, scale: 4 });
 		const rootList = getDescendantByClass(
 			root,
 			'graph-navigator-root-list',
@@ -68,6 +69,13 @@ suite('Graph View', () => {
 			'graph-navigator-minimap-node-layer',
 		);
 		const initialMinimapNodeCount = minimapNodeLayer.children.length;
+		const minimapViewportIndicator = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-viewport-indicator',
+		);
+		const initialIndicator = readMinimapViewportAttributes(
+			minimapViewportIndicator,
+		);
 
 		assert.deepStrictEqual(
 			rootList.children.map((item) => (
@@ -89,8 +97,16 @@ suite('Graph View', () => {
 			minimap,
 		);
 		assert.ok(minimapNodeLayer.children.length > initialMinimapNodeCount);
+		assert.notDeepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 		graphView.state.toggleFolder(GRAPH_MOCK_PROJECT.id);
 		assert.strictEqual(minimapNodeLayer.children.length, initialMinimapNodeCount);
+		assert.deepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 		graphView.dispose();
 	});
 
@@ -248,6 +264,7 @@ suite('Graph View', () => {
 			INITIAL_GRAPH_STATE,
 			GRAPH_MOCK,
 		);
+		graphView.camera.setState({ x: 0, y: 0, scale: 4 });
 		const project = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -262,8 +279,15 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			GRAPH_MOCK_PROJECT.id,
 		);
+		const minimapViewportIndicator = getDescendantByClass(
+			root,
+			'graph-navigator-minimap-viewport-indicator',
+		);
+		const initialIndicator = readMinimapViewportAttributes(
+			minimapViewportIndicator,
+		);
 
-		beginNodeDrag(project, 120, 60);
+		beginNodeDrag(project, 4_000, 2_500);
 		assert.strictEqual(
 			getDescendantByAttribute(
 				minimapNodeLayer,
@@ -276,8 +300,12 @@ suite('Graph View', () => {
 			graphView.state.getState().nodePositions[GRAPH_MOCK_PROJECT.id],
 			undefined,
 		);
+		assert.deepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 
-		project.dispatch('pointerup', createPointerEvent(project, 120, 60));
+		project.dispatch('pointerup', createPointerEvent(project, 4_000, 2_500));
 		assert.notStrictEqual(
 			getDescendantByAttribute(
 				minimapNodeLayer,
@@ -287,6 +315,10 @@ suite('Graph View', () => {
 			initialMinimapNode,
 		);
 		assert.ok(graphView.state.getState().nodePositions[GRAPH_MOCK_PROJECT.id]);
+		assert.notDeepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 		graphView.dispose();
 	});
 
@@ -894,7 +926,7 @@ suite('Graph View', () => {
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
 			{
-				camera: { x: 0, y: 0, scale: 1 },
+				camera: { x: 0, y: 0, scale: 4 },
 				nodePositions: {},
 				openedFolders: { [rootFolder.id]: true },
 			},
@@ -915,6 +947,13 @@ suite('Graph View', () => {
 			minimapNodeLayer,
 			'data-graph-node-id',
 			childFile.id,
+		);
+		const minimapViewportIndicator = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-viewport-indicator',
+		);
+		const initialIndicator = readMinimapViewportAttributes(
+			minimapViewportIndicator,
 		);
 
 		assert.deepStrictEqual(
@@ -957,15 +996,15 @@ suite('Graph View', () => {
 		const handle = getDescendantByClass(childFileNode, 'graph-detach-handle');
 
 		handle.dispatch('pointerdown', createPointerEvent(handle, 20, 30));
-		handle.dispatch('pointermove', createPointerEvent(handle, 40, 50));
-		handle.dispatch('pointerup', createPointerEvent(handle, 64, 72));
+		handle.dispatch('pointermove', createPointerEvent(handle, 1_000, 800));
+		handle.dispatch('pointerup', createPointerEvent(handle, 4_000, 3_000));
 		assert.deepStrictEqual(detachDrops, [{
 			nodeId: childFile.id,
-			clientX: 64,
-			clientY: 72,
+			clientX: 4_000,
+			clientY: 3_000,
 		}]);
 		assert.deepStrictEqual(graphView.state.getState().nodePositions, {
-			[childFile.id]: { x: 64, y: 72 },
+			[childFile.id]: { x: 1_000, y: 750 },
 		});
 		assert.strictEqual(
 			findDescendantByClass(childFileNode, 'graph-detach-handle'),
@@ -973,7 +1012,7 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(
 			childFileNode.style.transform,
-			'translate(64px, 72px)',
+			'translate(1000px, 750px)',
 		);
 		const backlinkGroup = getDescendantByAttribute(
 			root,
@@ -1003,6 +1042,10 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			childFile.id,
 		), initialMinimapFile);
+		assert.notDeepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 
 		graphView.dispose();
 	});
@@ -1061,6 +1104,13 @@ suite('Graph View', () => {
 			'graph-navigator-minimap-node-layer',
 		);
 		const initialMinimapNodeCount = minimapNodeLayer.children.length;
+		const minimapViewportIndicator = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-viewport-indicator',
+		);
+		const initialIndicator = readMinimapViewportAttributes(
+			minimapViewportIndicator,
+		);
 
 		rootListButton.dispatch('click', createClickEvent(rootListButton));
 		assert.strictEqual(rootListPanel.hidden, false);
@@ -1077,12 +1127,12 @@ suite('Graph View', () => {
 		const handle = getDescendantByClass(folder, 'graph-detach-handle');
 
 		handle.dispatch('pointerdown', createPointerEvent(handle, 380, 290));
-		handle.dispatch('pointermove', createPointerEvent(handle, 400, 310));
-		handle.dispatch('pointerup', createPointerEvent(handle, 420, 330));
+		handle.dispatch('pointermove', createPointerEvent(handle, 1_000, 800));
+		handle.dispatch('pointerup', createPointerEvent(handle, 4_120, 3_080));
 
 		assert.deepStrictEqual(
 			graphView.state.getState().nodePositions[promotedFolder.id],
-			{ x: 150, y: 125 },
+			{ x: 2_000, y: 1_500 },
 		);
 		assert.deepStrictEqual(
 			graphView.state.getState().nodePositions[sibling.id],
@@ -1099,7 +1149,7 @@ suite('Graph View', () => {
 			findDescendantByClass(folder, 'graph-detach-handle'),
 			undefined,
 		);
-		assert.strictEqual(folder.style.transform, 'translate(150px, 125px)');
+		assert.strictEqual(folder.style.transform, 'translate(2000px, 1500px)');
 		assert.ok(findDescendantByClass(folder, 'graph-root-context-label'));
 		assert.ok(findDescendantByAttribute(
 			root,
@@ -1128,6 +1178,10 @@ suite('Graph View', () => {
 		assert.strictEqual(rootListPanel.hidden, false);
 		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
 		assert.ok(minimapNodeLayer.children.length > initialMinimapNodeCount);
+		assert.notDeepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
 		const detachedRootButton = getNavigatorRootButtons(root)[1];
 
@@ -1135,8 +1189,8 @@ suite('Graph View', () => {
 		graphView.camera.focusOn = (point) => focusPoints.push(point);
 		detachedRootButton.dispatch('click', createClickEvent(detachedRootButton));
 		assert.deepStrictEqual(focusPoints, [{
-			x: 150 + GRAPH_FOLDER_NODE_WIDTH / 2,
-			y: 125 + GRAPH_FOLDER_NODE_HEIGHT / 2,
+			x: 2_000 + GRAPH_FOLDER_NODE_WIDTH / 2,
+			y: 1_500 + GRAPH_FOLDER_NODE_HEIGHT / 2,
 		}]);
 
 		backlink.dispatch('pointerdown', createPointerEvent(backlink, 100, 100));
@@ -1155,6 +1209,10 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy']);
 		assert.strictEqual(getDescendantByClass(root, 'graph-navigator-minimap'), minimap);
 		assert.strictEqual(minimapNodeLayer.children.length, initialMinimapNodeCount);
+		assert.deepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 		assert.strictEqual(rootListPanel.hidden, false);
 		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
 		const focusCountAfterReattach = focusPoints.length;
@@ -1356,7 +1414,7 @@ suite('Graph View', () => {
 		const siblingId = 'folder:pagination-samples/twenty-one-files';
 		const edgeId = `${parentId}->${fileGroupId}`;
 		const graphView = initializeGraphView(root.asHtmlElement(), {
-			camera: { x: 0, y: 0, scale: 1 },
+			camera: { x: 0, y: 0, scale: 4 },
 			nodePositions: {},
 			openedFolders: {
 				[GRAPH_MOCK_PROJECT.id]: true,
@@ -1389,6 +1447,13 @@ suite('Graph View', () => {
 			fileGroupId,
 		);
 		const initialMinimapHeight = minimapFileGroup.getAttribute('height');
+		const minimapViewportIndicator = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-viewport-indicator',
+		);
+		const initialIndicator = readMinimapViewportAttributes(
+			minimapViewportIndicator,
+		);
 
 		assert.strictEqual(fileGroup.style.height, '198px');
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 5);
@@ -1408,6 +1473,10 @@ suite('Graph View', () => {
 				fileGroupId,
 			).getAttribute('height'),
 			initialMinimapHeight,
+		);
+		assert.notDeepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
 		);
 
 		getDescendantByClass(fileGroup, 'graph-file-more').dispatch(
@@ -1430,6 +1499,10 @@ suite('Graph View', () => {
 		assert.strictEqual(readTranslateY(sibling.style.transform), initialSiblingY);
 		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
 		assert.ok(getText(fileGroup).includes('+ 12개 더보기'));
+		assert.deepStrictEqual(
+			readMinimapViewportAttributes(minimapViewportIndicator),
+			initialIndicator,
+		);
 
 		graphView.dispose();
 		graphView.state.showMoreFiles(fileGroupId);
@@ -1574,6 +1647,10 @@ class FakeElement {
 
 	setAttribute(name: string, value = ''): void {
 		this.attributes.set(name, value);
+	}
+
+	removeAttribute(name: string): void {
+		this.attributes.delete(name);
 	}
 
 	getAttribute(name: string): string | null {
@@ -1761,6 +1838,18 @@ function findDescendantByClass(
 	}
 
 	return undefined;
+}
+
+function readMinimapViewportAttributes(
+	indicator: FakeElement,
+): Record<string, string | null> {
+	return {
+		x: indicator.getAttribute('x'),
+		y: indicator.getAttribute('y'),
+		width: indicator.getAttribute('width'),
+		height: indicator.getAttribute('height'),
+		visibility: indicator.getAttribute('visibility'),
+	};
 }
 
 function createClickEvent(

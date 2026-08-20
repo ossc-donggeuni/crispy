@@ -1,3 +1,4 @@
+import type { GraphCamera } from './graphCamera';
 import {
 	resolveGraphLayoutNodePosition,
 	type GraphLayout,
@@ -19,7 +20,7 @@ export interface MinimapPoint {
 	readonly y: number;
 }
 
-/** Padding을 제외한 Minimap 렌더 영역 크기다. */
+/** Padding을 적용하기 전 Minimap 또는 Graph Viewport의 전체 렌더 크기다. */
 export interface MinimapSize {
 	readonly width: number;
 	readonly height: number;
@@ -53,6 +54,9 @@ export interface MinimapGraphGeometry {
 	readonly nodes: readonly MinimapNodeGeometry[];
 	readonly edges: readonly MinimapEdgeGeometry[];
 }
+
+/** 현재 Camera가 보는 World 영역을 Minimap SVG 안에 Clamp한 Rect다. */
+export type MinimapViewportGeometry = GraphBounds;
 
 /** Minimap Container의 고정 내부 여백이다. */
 export const GRAPH_NAVIGATOR_MINIMAP_PADDING = 8;
@@ -159,6 +163,103 @@ export function createMinimapProjection(
 	};
 }
 
+/** 기존 Camera API로 Graph Viewport의 좌상단과 우하단을 World Bounds로 변환한다. */
+export function calculateCameraWorldBounds(
+	camera: Pick<GraphCamera, 'viewportToWorld'>,
+	viewportSize: MinimapSize,
+): GraphBounds | undefined {
+	if (
+		!areFiniteNumbers(viewportSize.width, viewportSize.height)
+		|| viewportSize.width <= 0
+		|| viewportSize.height <= 0
+	) {
+		return undefined;
+	}
+
+	let first: MinimapPoint;
+	let second: MinimapPoint;
+
+	try {
+		first = camera.viewportToWorld({ x: 0, y: 0 });
+		second = camera.viewportToWorld({
+			x: viewportSize.width,
+			y: viewportSize.height,
+		});
+	} catch {
+		return undefined;
+	}
+
+	if (!first || !second || !areFiniteNumbers(first.x, first.y, second.x, second.y)) {
+		return undefined;
+	}
+
+	const left = Math.min(first.x, second.x);
+	const top = Math.min(first.y, second.y);
+	const right = Math.max(first.x, second.x);
+	const bottom = Math.max(first.y, second.y);
+	const width = right - left;
+	const height = bottom - top;
+
+	return areFiniteNumbers(left, top, width, height)
+		? { x: left, y: top, width, height }
+		: undefined;
+}
+
+/** Camera World Bounds를 현재 Graph Projection으로 변환하고 SVG 영역 안에 Clamp한다. */
+export function createMinimapViewportGeometry(
+	worldBounds: GraphBounds,
+	projection: MinimapProjection,
+	minimapSize: MinimapSize,
+): MinimapViewportGeometry | undefined {
+	if (
+		!areFiniteNumbers(
+			worldBounds.x,
+			worldBounds.y,
+			worldBounds.width,
+			worldBounds.height,
+			minimapSize.width,
+			minimapSize.height,
+		)
+		|| worldBounds.width < 0
+		|| worldBounds.height < 0
+		|| minimapSize.width <= 0
+		|| minimapSize.height <= 0
+	) {
+		return undefined;
+	}
+
+	let first: MinimapPoint;
+	let second: MinimapPoint;
+
+	try {
+		first = projection.worldToMinimap({
+			x: worldBounds.x,
+			y: worldBounds.y,
+		});
+		second = projection.worldToMinimap({
+			x: worldBounds.x + worldBounds.width,
+			y: worldBounds.y + worldBounds.height,
+		});
+	} catch {
+		return undefined;
+	}
+
+	if (!first || !second || !areFiniteNumbers(first.x, first.y, second.x, second.y)) {
+		return undefined;
+	}
+
+	const left = clamp(Math.min(first.x, second.x), 0, minimapSize.width);
+	const top = clamp(Math.min(first.y, second.y), 0, minimapSize.height);
+	const right = clamp(Math.max(first.x, second.x), 0, minimapSize.width);
+	const bottom = clamp(Math.max(first.y, second.y), 0, minimapSize.height);
+	const width = Math.max(0, right - left);
+	const height = Math.max(0, bottom - top);
+
+	return areFiniteNumbers(left, top, width, height)
+		? { x: left, y: top, width, height }
+		: undefined;
+}
+
 /** Layout과 저장 위치를 Minimap Node/Edge 좌표로 한 번에 투영한다. */
 export function createMinimapGraphGeometry(
 	layout: GraphLayout,
@@ -244,4 +345,8 @@ function resolvePositionedNodes(
 
 function areFiniteNumbers(...values: readonly number[]): boolean {
 	return values.every(Number.isFinite);
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+	return Math.min(Math.max(value, minimum), maximum);
 }

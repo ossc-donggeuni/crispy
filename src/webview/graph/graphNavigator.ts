@@ -4,7 +4,13 @@ import {
 } from './graphCamera';
 import { resolveFileIcon } from './fileIconResolver';
 import type { GraphLayout } from './graphLayout';
-import { createMinimapGraphGeometry } from './graphNavigatorMinimap';
+import {
+	calculateCameraWorldBounds,
+	createMinimapGraphGeometry,
+	createMinimapViewportGeometry,
+	type MinimapProjection,
+	type MinimapSize,
+} from './graphNavigatorMinimap';
 import type { GraphNavigatorRoot } from './graphNavigatorRoots';
 import type {
 	GraphStateSnapshot,
@@ -175,6 +181,11 @@ export function initializeGraphNavigator(
 	const minimapSvg = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
 	const minimapEdgeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
 	const minimapNodeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
+	const minimapViewportLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
+	const minimapViewportIndicator = ownerDocument.createElementNS(
+		SVG_NAMESPACE,
+		'rect',
+	);
 	const zoom = ownerDocument.createElement('div');
 	const coordinate = ownerDocument.createElement('div');
 	const controls = ownerDocument.createElement('div');
@@ -209,7 +220,15 @@ export function initializeGraphNavigator(
 	minimapSvg.setAttribute('aria-hidden', 'true');
 	minimapEdgeLayer.classList.add('graph-navigator-minimap-edge-layer');
 	minimapNodeLayer.classList.add('graph-navigator-minimap-node-layer');
-	minimapSvg.append(minimapEdgeLayer, minimapNodeLayer);
+	minimapViewportLayer.classList.add('graph-navigator-minimap-viewport-layer');
+	minimapViewportIndicator.classList.add(
+		'graph-navigator-minimap-viewport-indicator',
+	);
+	minimapViewportIndicator.setAttribute('pointer-events', 'none');
+	minimapViewportIndicator.setAttribute('visibility', 'hidden');
+	minimapViewportIndicator.setAttribute('rx', '2');
+	minimapViewportLayer.append(minimapViewportIndicator);
+	minimapSvg.append(minimapEdgeLayer, minimapNodeLayer, minimapViewportLayer);
 	minimap.append(minimapSvg);
 	zoom.className = 'graph-navigator-zoom';
 	coordinate.className = 'graph-navigator-coordinate';
@@ -267,31 +286,77 @@ export function initializeGraphNavigator(
 	let currentLayout: GraphLayout | undefined = initialLayout;
 	const initialGraphState = graphState.getState();
 	let renderedNodePositions = initialGraphState.nodePositions;
+	let renderedCamera = initialGraphState.camera;
+	let currentMinimapProjection: MinimapProjection | undefined;
+	let currentMinimapSize: MinimapSize | undefined;
+	let disposed = false;
 
-	/** 최신 Layout과 저장 위치를 고정 SVG Layer의 단순 Line/Rect로 교체한다. */
-	const renderMinimap = (
+	/** 캐시된 Graph Projection만 사용해 현재 Camera Viewport Rect attribute를 갱신한다. */
+	const renderMinimapViewportIndicator = (): void => {
+		if (disposed || !currentMinimapProjection || !currentMinimapSize) {
+			minimapViewportIndicator.setAttribute('visibility', 'hidden');
+			return;
+		}
+
+		const worldBounds = calculateCameraWorldBounds(camera, {
+			width: viewport.clientWidth,
+			height: viewport.clientHeight,
+		});
+		const geometry = worldBounds
+			? createMinimapViewportGeometry(
+				worldBounds,
+				currentMinimapProjection,
+				currentMinimapSize,
+			)
+			: undefined;
+
+		if (!geometry) {
+			minimapViewportIndicator.setAttribute('visibility', 'hidden');
+			return;
+		}
+
+		minimapViewportIndicator.setAttribute('x', String(geometry.x));
+		minimapViewportIndicator.setAttribute('y', String(geometry.y));
+		minimapViewportIndicator.setAttribute('width', String(geometry.width));
+		minimapViewportIndicator.setAttribute('height', String(geometry.height));
+		minimapViewportIndicator.removeAttribute('visibility');
+	};
+
+	/** 최신 Layout/저장 위치로 Graph Projection과 Graphic을 교체한 뒤 Indicator도 맞춘다. */
+	const renderMinimapGraph = (
 		state: GraphStateSnapshot = graphState.getState(),
 	): void => {
 		minimapEdgeLayer.replaceChildren();
 		minimapNodeLayer.replaceChildren();
+		currentMinimapProjection = undefined;
+		currentMinimapSize = undefined;
 
 		if (!currentLayout || minimap.clientWidth <= 0 || minimap.clientHeight <= 0) {
+			renderMinimapViewportIndicator();
 			return;
 		}
 
+		const minimapSize = {
+			width: minimap.clientWidth,
+			height: minimap.clientHeight,
+		};
 		minimapSvg.setAttribute(
 			'viewBox',
-			`0 0 ${minimap.clientWidth} ${minimap.clientHeight}`,
+			`0 0 ${minimapSize.width} ${minimapSize.height}`,
 		);
 		const geometry = createMinimapGraphGeometry(
 			currentLayout,
 			state.nodePositions,
-			{ width: minimap.clientWidth, height: minimap.clientHeight },
+			minimapSize,
 		);
 
 		if (!geometry) {
+			renderMinimapViewportIndicator();
 			return;
 		}
+
+		currentMinimapProjection = geometry.projection;
+		currentMinimapSize = minimapSize;
 
 		for (const edge of geometry.edges) {
 			const line = ownerDocument.createElementNS(SVG_NAMESPACE, 'line');
@@ -319,15 +384,24 @@ export function initializeGraphNavigator(
 			rect.setAttribute('rx', String(Math.min(1.5, width / 2, height / 2)));
 			minimapNodeLayer.append(rect);
 		}
+
+		renderMinimapViewportIndicator();
 	};
 
 	const render = (state: GraphStateSnapshot = graphState.getState()): void => {
 		coordinate.textContent = `(${Math.round(state.camera.x)}, ${Math.round(state.camera.y)})`;
 		scale.textContent = `${Math.round(state.camera.scale * 100)}%`;
+		const cameraChanged = state.camera.x !== renderedCamera.x
+			|| state.camera.y !== renderedCamera.y
+			|| state.camera.scale !== renderedCamera.scale;
+		const nodePositionsChanged = state.nodePositions !== renderedNodePositions;
 
-		if (state.nodePositions !== renderedNodePositions) {
+		renderedCamera = state.camera;
+		if (nodePositionsChanged) {
 			renderedNodePositions = state.nodePositions;
-			renderMinimap(state);
+			renderMinimapGraph(state);
+		} else if (cameraChanged) {
+			renderMinimapViewportIndicator();
 		}
 	};
 
@@ -350,11 +424,18 @@ export function initializeGraphNavigator(
 	zoomOutButton.addEventListener('click', handleZoomOut);
 	zoomInButton.addEventListener('click', handleZoomIn);
 	const unsubscribeState = graphState.subscribe(render);
+	const resizeObserver = typeof ResizeObserver === 'function'
+		? new ResizeObserver(() => {
+			if (!disposed) {
+				renderMinimapViewportIndicator();
+			}
+		})
+		: undefined;
+
+	resizeObserver?.observe(viewport);
 	renderRootListState();
 	render();
-	renderMinimap(initialGraphState);
-
-	let disposed = false;
+	renderMinimapGraph(initialGraphState);
 
 	return {
 		setLayout(layout): void {
@@ -363,7 +444,7 @@ export function initializeGraphNavigator(
 			}
 
 			currentLayout = layout;
-			renderMinimap();
+			renderMinimapGraph();
 		},
 		setRoots(roots): void {
 			if (disposed) {
@@ -385,6 +466,9 @@ export function initializeGraphNavigator(
 
 			disposed = true;
 			currentLayout = undefined;
+			currentMinimapProjection = undefined;
+			currentMinimapSize = undefined;
+			resizeObserver?.disconnect();
 			unsubscribeState();
 			disposeRootItems();
 			for (const action of navigatorActions) {
