@@ -29,6 +29,36 @@ import {
 } from '../../webview/graph/graphView';
 
 suite('Graph View', () => {
+	test('초기 Graph Root를 Navigator 표시 데이터와 같은 순서로 Panel에 연결한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
+		const rootList = getDescendantByClass(
+			root,
+			'graph-navigator-root-list',
+		);
+
+		assert.deepStrictEqual(
+			rootList.children.map((item) => (
+				getDescendantByClass(item, 'graph-navigator-root-name').textContent
+			)),
+			['crispy', 'multi-root-demo/', 'standalone-root.ts'],
+		);
+		assert.deepStrictEqual(
+			getDescendantsByClass(rootList, 'graph-navigator-root-path')
+				.map((path) => path.textContent),
+			[
+				'crispy/packages/demo/src/',
+				'crispy/src/webview/graph/examples/promoted/standalone/file/',
+			],
+		);
+		graphView.dispose();
+	});
+
 	test('여러 Root의 저장 위치를 독립적으로 같은 Graph World에 렌더링한다', () => {
 		const secondaryProject: Project = {
 			kind: 'project',

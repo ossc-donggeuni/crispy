@@ -5,6 +5,7 @@ import {
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
 } from '../../webview/graph/graphCamera';
+import { resolveFileIcon } from '../../webview/graph/fileIconResolver';
 import { initializeGraphNavigator } from '../../webview/graph/graphNavigator';
 import { createGraphState } from '../../webview/graph/graphState';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../../webview/panel/panelState';
@@ -52,7 +53,7 @@ suite('Graph Navigator', () => {
 			fixture.rootListButton.getAttribute('aria-controls'),
 			fixture.rootListPanel.id,
 		);
-		assert.strictEqual(fixture.rootListPanel.children.length, 1);
+		assert.strictEqual(fixture.rootListPanel.children.length, 3);
 		assert.strictEqual(
 			fixture.rootListPanel.getAttribute('aria-labelledby'),
 			fixture.rootListTitle.id,
@@ -64,6 +65,170 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(
 			fixture.rootListIcon.getAttribute('aria-hidden'),
 			'true',
+		);
+	});
+
+	test('Project, Folder와 File Root를 전달 순서와 기존 Icon 규약으로 렌더링한다', () => {
+		const fixture = createNavigatorFixture();
+
+		fixture.navigator.setRoots([
+			{
+				rootId: 'root:project',
+				nodeId: 'project:crispy',
+				name: 'crispy',
+				kind: 'project',
+			},
+			{
+				rootId: 'root:folder',
+				nodeId: 'folder:docs',
+				name: 'docs',
+				kind: 'folder',
+				relativePath: 'crispy/src/',
+			},
+			{
+				rootId: 'root:file',
+				nodeId: 'file:webview.css',
+				name: 'webview.css',
+				kind: 'file',
+				relativePath: 'crispy/src/webview/',
+			},
+		]);
+
+		assert.strictEqual(fixture.rootList.hidden, false);
+		assert.strictEqual(fixture.rootListEmpty.hidden, true);
+		assert.strictEqual(fixture.rootList.children.length, 3);
+		const [projectItem, folderItem, fileItem] = fixture.rootList.children;
+
+		assert.ok(projectItem);
+		assert.ok(folderItem);
+		assert.ok(fileItem);
+		assert.deepStrictEqual(
+			fixture.rootList.children.map((item) => (
+				getChild(getChild(item, 1), 0).textContent
+			)),
+			['crispy', 'docs/', 'webview.css'],
+		);
+		assert.strictEqual(
+			getChild(projectItem, 0).getAttribute('data-folder-icon'),
+			'folder-open.svg',
+		);
+		assert.strictEqual(
+			getChild(folderItem, 0).getAttribute('data-folder-icon'),
+			'folder-closed.svg',
+		);
+		const fileIcon = getChild(fileItem, 0);
+
+		assert.strictEqual(fileIcon.hasClass('graph-file-icon'), true);
+		assert.strictEqual(
+			fileIcon.getAttribute('data-file-icon'),
+			resolveFileIcon('webview.css'),
+		);
+		assert.strictEqual(
+			getChild(getChild(folderItem, 1), 1).textContent,
+			'crispy/src/',
+		);
+		assert.strictEqual(
+			getChild(getChild(fileItem, 1), 1).textContent,
+			'crispy/src/webview/',
+		);
+	});
+
+	test('relativePath가 없거나 빈 문자열이면 보조 Path Row를 만들지 않는다', () => {
+		const fixture = createNavigatorFixture();
+
+		fixture.navigator.setRoots([
+			{
+				rootId: 'root:project',
+				nodeId: 'project:crispy',
+				name: 'crispy',
+				kind: 'project',
+			},
+			{
+				rootId: 'root:folder',
+				nodeId: 'folder:docs',
+				name: 'docs',
+				kind: 'folder',
+				relativePath: '',
+			},
+		]);
+
+		for (const item of fixture.rootList.children) {
+			assert.strictEqual(getChild(item, 1).children.length, 1);
+		}
+	});
+
+	test('setRoots 재호출은 기존 Item을 최신 목록으로 교체하고 빈 목록을 표시한다', () => {
+		const fixture = createNavigatorFixture();
+
+		fixture.navigator.setRoots([
+			{
+				rootId: 'root:project',
+				nodeId: 'project:crispy',
+				name: 'crispy',
+				kind: 'project',
+			},
+			{
+				rootId: 'root:folder',
+				nodeId: 'folder:docs',
+				name: 'docs',
+				kind: 'folder',
+			},
+		]);
+		fixture.navigator.setRoots([{
+			rootId: 'root:file',
+			nodeId: 'file:webview.css',
+			name: 'webview.css',
+			kind: 'file',
+		}]);
+
+		assert.strictEqual(fixture.rootList.children.length, 1);
+		assert.strictEqual(
+			getChild(getChild(getChild(fixture.rootList, 0), 1), 0).textContent,
+			'webview.css',
+		);
+
+		fixture.navigator.setRoots([]);
+
+		assert.strictEqual(fixture.rootList.children.length, 0);
+		assert.strictEqual(fixture.rootList.hidden, true);
+		assert.strictEqual(fixture.rootListEmpty.hidden, false);
+		assert.strictEqual(
+			fixture.rootListEmpty.textContent,
+			'활성화된 루트가 없습니다.',
+		);
+	});
+
+	test('setRoots는 닫힌 Panel을 열지 않고 열린 Panel도 닫지 않는다', () => {
+		const fixture = createNavigatorFixture();
+		const roots = [{
+			rootId: 'root:project',
+			nodeId: 'project:crispy',
+			name: 'crispy',
+			kind: 'project' as const,
+		}];
+
+		fixture.navigator.setRoots(roots);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'false',
+		);
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+		fixture.navigator.setRoots([]);
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), true);
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+		fixture.navigator.setRoots(roots);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'false',
 		);
 	});
 
@@ -284,6 +449,8 @@ function createNavigatorFixture(
 	const featureRow = getChild(navigatorElement, 2);
 	const rootListPanel = getChild(featureRow, 0);
 	const rootListTitle = getChild(rootListPanel, 0);
+	const rootList = getChild(rootListPanel, 1);
+	const rootListEmpty = getChild(rootListPanel, 2);
 	const actionRail = getChild(featureRow, 1);
 	const rootListButton = getChild(actionRail, 0);
 	const rootListIcon = getChild(rootListButton, 0);
@@ -300,6 +467,8 @@ function createNavigatorFixture(
 		actionRail,
 		rootListPanel,
 		rootListTitle,
+		rootList,
+		rootListEmpty,
 		rootListButton,
 		rootListIcon,
 		coordinate,

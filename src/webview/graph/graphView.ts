@@ -6,6 +6,7 @@ import { createGraphLayout, type GraphLayout } from './graphLayout';
 import type { Graph } from './graphModel';
 import { addGraphRoot, removeGraphRoot } from './graphRootPromotion';
 import { initializeGraphNavigator } from './graphNavigator';
+import { createGraphNavigatorRoots } from './graphNavigatorRoots';
 import {
 	initializeGraphRenderer,
 	type GraphRenderer,
@@ -293,6 +294,7 @@ export function initializeGraphView(
 		},
 	);
 	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
+	navigator.setRoots(createGraphNavigatorRoots(currentGraph));
 	let disposed = false;
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,

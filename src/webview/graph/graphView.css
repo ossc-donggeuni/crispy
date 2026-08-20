@@ -653,8 +653,12 @@
 	position: absolute;
 	right: calc(100% + 6px);
 	bottom: 0;
+	display: flex;
 	width: min(240px, calc(100vw - 112px));
 	min-height: 144px;
+	max-height: min(360px, calc(100vh - 112px));
+	flex-direction: column;
+	overflow: hidden;
 	padding: 12px;
 }
 
@@ -663,10 +667,98 @@
 }
 
 .graph-navigator-root-list-title {
+	flex: none;
 	margin: 0;
 	font-size: 13px;
 	font-weight: 600;
 	line-height: 18px;
+}
+
+.graph-navigator-root-list {
+	min-height: 0;
+	flex: 1 1 auto;
+	margin: 10px -4px 0;
+	padding: 0 4px;
+	overflow-y: auto;
+	list-style: none;
+}
+
+.graph-navigator-root-item {
+	display: flex;
+	min-width: 0;
+	gap: 8px;
+	align-items: flex-start;
+	padding: 6px;
+	border-radius: 4px;
+}
+
+.graph-navigator-root-item:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
+
+.graph-navigator-root-icon {
+	display: block;
+	width: 20px;
+	height: 20px;
+	flex: none;
+	background-color: var(--vscode-icon-foreground, var(--vscode-foreground));
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	pointer-events: none;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-navigator-root-icon[data-folder-icon='folder-open.svg'] {
+	mask-image: url('./assets/file-icons/folder-open.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-open.svg');
+}
+
+.graph-navigator-root-icon[data-folder-icon='folder-closed.svg'] {
+	mask-image: url('./assets/file-icons/folder-closed.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
+}
+
+.graph-navigator-root-icon.graph-file-icon {
+	width: 20px;
+	height: 20px;
+	background-color: transparent;
+}
+
+.graph-navigator-root-content {
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.graph-navigator-root-name,
+.graph-navigator-root-path {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-navigator-root-name {
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 20px;
+}
+
+.graph-navigator-root-path,
+.graph-navigator-root-empty {
+	color: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
+	font-size: 11px;
+	line-height: 16px;
+}
+
+.graph-navigator-root-empty {
+	margin: 12px 0 0;
+}
+
+.graph-navigator-root-empty[hidden] {
+	display: none;
 }
 
 .graph-navigator-action-rail {

@@ -2,12 +2,16 @@ import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	type GraphCamera,
 } from './graphCamera';
+import { resolveFileIcon } from './fileIconResolver';
+import type { GraphNavigatorRoot } from './graphNavigatorRoots';
 import type {
 	GraphStateSnapshot,
 	GraphStateStore,
 } from './graphState';
 
 export interface GraphNavigator {
+	/** 전달받은 표시 데이터 순서대로 Root List Panel 내용을 교체한다. */
+	setRoots(roots: readonly GraphNavigatorRoot[]): void;
 	dispose(): void;
 }
 
@@ -16,6 +20,9 @@ const ROOT_LIST_LABEL = '활성화된 루트 목록';
 const ROOT_LIST_PANEL_ID = 'graph-navigator-root-list-panel';
 const ROOT_LIST_PANEL_TITLE_ID = 'graph-navigator-root-list-title';
 const ROOT_LIST_ICON_ASSET = 'navigator-root.svg';
+const ROOT_LIST_EMPTY_LABEL = '활성화된 루트가 없습니다.';
+const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
+const FOLDER_ROOT_ICON_ASSET = 'folder-closed.svg';
 
 /** Action Rail에 추가할 Navigator Action의 공통 DOM 계약이다. */
 interface NavigatorActionDefinition {
@@ -58,6 +65,50 @@ function createNavigatorActionButton(
 	};
 }
 
+/** Navigator 표시 데이터 하나를 비대화형 Root List Item DOM으로 만든다. */
+function createRootListItem(
+	ownerDocument: Document,
+	root: GraphNavigatorRoot,
+): HTMLLIElement {
+	const item = ownerDocument.createElement('li');
+	const icon = ownerDocument.createElement('span');
+	const content = ownerDocument.createElement('div');
+	const name = ownerDocument.createElement('span');
+	const displayName = root.kind === 'folder' ? `${root.name}/` : root.name;
+
+	item.className = 'graph-navigator-root-item';
+	icon.className = 'graph-navigator-root-icon';
+	icon.setAttribute('aria-hidden', 'true');
+	if (root.kind === 'file') {
+		icon.classList.add('graph-file-icon');
+		icon.setAttribute('data-file-icon', resolveFileIcon(root.name));
+	} else {
+		icon.setAttribute(
+			'data-folder-icon',
+			root.kind === 'project'
+				? PROJECT_ROOT_ICON_ASSET
+				: FOLDER_ROOT_ICON_ASSET,
+		);
+	}
+	content.className = 'graph-navigator-root-content';
+	name.className = 'graph-navigator-root-name';
+	name.textContent = displayName;
+	name.title = displayName;
+	content.append(name);
+
+	if (root.relativePath) {
+		const path = ownerDocument.createElement('span');
+
+		path.className = 'graph-navigator-root-path';
+		path.textContent = root.relativePath;
+		path.title = root.relativePath;
+		content.append(path);
+	}
+
+	item.append(icon, content);
+	return item;
+}
+
 /**
  * Overlay에 Camera 좌표와 Zoom Control을 생성하고 Graph State와 동기화한다.
  *
@@ -78,6 +129,8 @@ export function initializeGraphNavigator(
 	const featureRow = ownerDocument.createElement('div');
 	const rootListPanel = ownerDocument.createElement('section');
 	const rootListTitle = ownerDocument.createElement('h2');
+	const rootList = ownerDocument.createElement('ul');
+	const rootListEmpty = ownerDocument.createElement('p');
 	const actionRail = ownerDocument.createElement('div');
 	const coordinate = ownerDocument.createElement('div');
 	const controls = ownerDocument.createElement('div');
@@ -95,7 +148,11 @@ export function initializeGraphNavigator(
 	rootListTitle.className = 'graph-navigator-root-list-title';
 	rootListTitle.id = ROOT_LIST_PANEL_TITLE_ID;
 	rootListTitle.textContent = ROOT_LIST_LABEL;
-	rootListPanel.append(rootListTitle);
+	rootList.className = 'graph-navigator-root-list';
+	rootList.hidden = true;
+	rootListEmpty.className = 'graph-navigator-root-empty';
+	rootListEmpty.textContent = ROOT_LIST_EMPTY_LABEL;
+	rootListPanel.append(rootListTitle, rootList, rootListEmpty);
 	actionRail.className = 'graph-navigator-action-rail';
 	actionRail.setAttribute('role', 'toolbar');
 	actionRail.setAttribute('aria-label', 'Navigator actions');
@@ -135,6 +192,7 @@ export function initializeGraphNavigator(
 		onActivate: handleRootListToggle,
 	});
 	const navigatorActions = [rootListAction];
+	let renderedRootItems: HTMLElement[] = [];
 
 	rootListButton = rootListAction.button;
 	actionRail.append(...navigatorActions.map((action) => action.button));
@@ -173,6 +231,21 @@ export function initializeGraphNavigator(
 	let disposed = false;
 
 	return {
+		setRoots(roots): void {
+			if (disposed) {
+				return;
+			}
+
+			for (const item of renderedRootItems) {
+				item.remove();
+			}
+			renderedRootItems = roots.map((root) => (
+				createRootListItem(ownerDocument, root)
+			));
+			rootList.append(...renderedRootItems);
+			rootList.hidden = renderedRootItems.length === 0;
+			rootListEmpty.hidden = renderedRootItems.length > 0;
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
