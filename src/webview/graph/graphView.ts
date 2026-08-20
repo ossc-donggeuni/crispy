@@ -49,6 +49,7 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 export function initializeGraphLayoutReflow(
 	state: GraphStateStore,
 	renderer: Pick<GraphRenderer, 'applyLayout'>,
+	navigator: Pick<GraphNavigator, 'setLayout'>,
 	createLayout: (state: GraphStateSnapshot) => GraphLayout,
 ): () => void {
 	let active = true;
@@ -67,13 +68,23 @@ export function initializeGraphLayoutReflow(
 
 		renderedFileGroupPages = nextState.fileGroupPages;
 		renderedOpenedFolders = nextState.openedFolders;
-		renderer.applyLayout(createLayout(nextState));
+		applyGraphLayout(renderer, navigator, createLayout(nextState));
 	});
 
 	return () => {
 		active = false;
 		unsubscribe();
 	};
+}
+
+/** Renderer와 Navigator에 한 번 생성한 동일 Layout reference를 함께 적용한다. */
+export function applyGraphLayout(
+	renderer: Pick<GraphRenderer, 'applyLayout'>,
+	navigator: Pick<GraphNavigator, 'setLayout'>,
+	layout: GraphLayout,
+): void {
+	renderer.applyLayout(layout);
+	navigator.setLayout(layout);
 }
 
 /**
@@ -221,6 +232,9 @@ export function initializeGraphView(
 
 		return currentLayout;
 	};
+	const applyCurrentLayout = (snapshot: GraphStateSnapshot): void => {
+		applyGraphLayout(renderer, navigator, createCurrentLayout(snapshot));
+	};
 	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
 		const nextGraph = promoteToGraphRoot(
 			currentGraph,
@@ -232,7 +246,7 @@ export function initializeGraphView(
 
 		if (nextGraph) {
 			currentGraph = nextGraph;
-			renderer.applyLayout(createCurrentLayout(state.getState()));
+			applyCurrentLayout(state.getState());
 			syncNavigatorRoots();
 		}
 
@@ -288,15 +302,16 @@ export function initializeGraphView(
 			fileGroupPages: snapshot.fileGroupPages,
 			openedFolders: snapshot.openedFolders,
 		});
-		renderer.applyLayout(createCurrentLayout(state.getState()));
+		applyCurrentLayout(state.getState());
 		syncNavigatorRoots();
 		return true;
 	};
+	const initialLayout = createCurrentLayout(initialGraphState);
 
 	renderer = initializeGraphRenderer(
 		edgeLayer,
 		nodeLayer,
-		createCurrentLayout(initialGraphState),
+		initialLayout,
 		state,
 		{
 			onFolderClick: (folderId) => {
@@ -316,6 +331,7 @@ export function initializeGraphView(
 		viewport,
 		state,
 		camera,
+		initialLayout,
 		{ onRootSelect: handleNavigatorRootSelect },
 	);
 	syncNavigatorRoots();
@@ -323,6 +339,7 @@ export function initializeGraphView(
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
 		renderer,
+		navigator,
 		createCurrentLayout,
 	);
 

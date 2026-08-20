@@ -111,8 +111,11 @@ src/webview/graph/
 
 ### `graphNavigator.ts`
 
-> Overlay에서 Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
+> Overlay에서 Minimap 영역, Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
 
+- Zoom Controls 왼쪽에 하단 정렬된 빈 Minimap Container를 항상 표시
+- Minimap에 기존 `data-graph-camera-ignore` 규약을 적용해 Pan과 Wheel Zoom 입력 차단
+- Renderer와 공유하는 초기 `GraphLayout`을 받고 `setLayout()`으로 최신 Layout reference 교체
 - 복원된 Graph State 기준으로 좌표와 scale 최초 표시
 - Camera State 변경 구독 및 표시 갱신
 - 세로형 Action Rail과 활성화된 Root 목록 Action Button 표시
@@ -122,7 +125,7 @@ src/webview/graph/
 - 빈 Root 안내와 제목이 고정된 Scroll 목록 제공
 - Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Action/Zoom Button Listener, State 구독 및 DOM 정리
+- `dispose()` 시 Minimap Layout reference, Action/Zoom Button Listener, State 구독 및 DOM 정리
 - Root 선택 상태는 포함하지 않음
 
 ### `graphNavigatorRoots.ts`
@@ -242,15 +245,16 @@ src/webview/graph/
 - 별도 detached 상태 없이 `currentGraph.roots`를 실행 중 Root의 단일 기준으로 사용
 - Root도 일반 Container와 같은 Open/Close interaction 및 Reflow 경로 사용
 - 전달받은 초기 `GraphState`로 새 Store 초기화
-- 복원된 File Group page와 opened Folder를 반영해 Layout과 Renderer 초기화
-- `fileGroupPages` 또는 `openedFolders` reference 변경 시 Layout Reflow 적용
+- 복원된 File Group page와 opened Folder를 반영한 같은 초기 Layout을 Renderer와 Navigator에 전달
+- `fileGroupPages` 또는 `openedFolders` reference 변경 시 한 번 생성한 Layout을 Renderer와 Navigator에 함께 적용
 - Camera 및 Node 위치만 바뀌면 Layout Reflow 생략
 - Detach Drop client 좌표를 viewport-local과 World 좌표로 변환해 새 Root 위치로 저장
-- Folder/File 공통 Root Promotion 후 최신 Root/Backlink/Context를 한 번의 Layout 갱신으로 반영
+- Folder/File 공통 Root Promotion 후 최신 Root/Backlink/Context를 Renderer와 Navigator의 한 번의 공통 Layout 갱신으로 반영
 - Backlink 클릭 시 저장 위치 또는 Layout 위치의 실제 Root 중심으로 Focus
 - Context Label 클릭 시 Backlink DOM client 중심을 World 좌표로 변환해 Focus
 - Promoted Root를 자신의 Backlink에 Drop하면 `removeGraphRoot()`로 Reattach
 - Reattach 시 해당 Root의 독립 위치만 제거하고 Camera, Open, Pagination과 다른 위치 유지
+- Reflow, Detach와 Reattach가 `applyGraphLayout()`을 통해 동일 Layout reference를 Renderer와 Navigator에 전달
 - 초기 Camera 상태를 World transform과 Grid에 적용
 - Overlay Navigator 초기화 후 최초 Graph를 `createGraphNavigatorRoots()`로 변환해 Root 목록에 전달
 - Navigator Root 선택 시 저장된 `nodePositions`를 우선하고 현재 Layout 위치로 fallback해 기존 Camera Focus 요청

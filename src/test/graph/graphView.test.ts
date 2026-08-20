@@ -27,12 +27,29 @@ import {
 	createPromotedGraphRootId,
 } from '../../webview/graph/graphRootPromotion';
 import {
+	applyGraphLayout,
 	focusGraphRoot,
 	initializeGraphLayoutReflow,
 	initializeGraphView,
 } from '../../webview/graph/graphView';
 
 suite('Graph View', () => {
+	test('한 번 생성한 Layout reference를 Renderer와 Navigator에 함께 적용한다', () => {
+		const layout = createGraphLayout(GRAPH_MOCK);
+		let rendererLayout: typeof layout | undefined;
+		let navigatorLayout: typeof layout | undefined;
+
+		applyGraphLayout(
+			{ applyLayout: (nextLayout) => { rendererLayout = nextLayout; } },
+			{ setLayout: (nextLayout) => { navigatorLayout = nextLayout; } },
+			layout,
+		);
+
+		assert.strictEqual(rendererLayout, layout);
+		assert.strictEqual(navigatorLayout, layout);
+		assert.strictEqual(rendererLayout, navigatorLayout);
+	});
+
 	test('초기 Graph Root를 Navigator 표시 데이터와 같은 순서로 Panel에 연결한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -45,6 +62,7 @@ suite('Graph View', () => {
 			root,
 			'graph-navigator-root-list',
 		);
+		const minimap = getDescendantByClass(root, 'graph-navigator-minimap');
 
 		assert.deepStrictEqual(
 			rootList.children.map((item) => (
@@ -59,6 +77,11 @@ suite('Graph View', () => {
 				'crispy/packages/demo/src/',
 				'crispy/src/webview/graph/examples/promoted/standalone/file/',
 			],
+		);
+		graphView.state.toggleFolder(GRAPH_MOCK_PROJECT.id);
+		assert.strictEqual(
+			getDescendantByClass(root, 'graph-navigator-minimap'),
+			minimap,
 		);
 		graphView.dispose();
 	});
@@ -1088,11 +1111,11 @@ suite('Graph View', () => {
 		const overlayLayer = root.children[0]?.children[1];
 		assert.strictEqual(overlayLayer?.className, 'graph-overlay-layer');
 		assert.strictEqual(
-			overlayLayer?.children[0]?.children[0]?.textContent,
+			getDescendantByClass(root, 'graph-navigator-coordinate').textContent,
 			'(120, -45)',
 		);
 		assert.strictEqual(
-			overlayLayer?.children[0]?.children[1]?.children[1]?.textContent,
+			getDescendantByClass(root, 'graph-navigator-scale').textContent,
 			'150%',
 		);
 
@@ -1318,13 +1341,15 @@ suite('Graph View', () => {
 	test('Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛴다', () => {
 		const state = createGraphState();
 		let createLayoutCalls = 0;
-		let applyLayoutCalls = 0;
+		const rendererLayouts: ReturnType<typeof createGraphLayout>[] = [];
+		const navigatorLayouts: ReturnType<typeof createGraphLayout>[] = [];
 		const unsubscribe = initializeGraphLayoutReflow(
 			state,
 			{
-				applyLayout: () => {
-					applyLayoutCalls += 1;
-				},
+				applyLayout: (layout) => rendererLayouts.push(layout),
+			},
+			{
+				setLayout: (layout) => navigatorLayouts.push(layout),
 			},
 			(snapshot) => {
 				createLayoutCalls += 1;
@@ -1344,21 +1369,27 @@ suite('Graph View', () => {
 			nodePositions: { 'folder:app': { x: 700, y: 250 } },
 		});
 		assert.strictEqual(createLayoutCalls, 0);
-		assert.strictEqual(applyLayoutCalls, 0);
+		assert.strictEqual(rendererLayouts.length, 0);
+		assert.strictEqual(navigatorLayouts.length, 0);
 
 		state.toggleFolder('folder:app');
 		assert.strictEqual(createLayoutCalls, 1);
-		assert.strictEqual(applyLayoutCalls, 1);
+		assert.strictEqual(rendererLayouts.length, 1);
+		assert.strictEqual(navigatorLayouts.length, 1);
+		assert.strictEqual(rendererLayouts[0], navigatorLayouts[0]);
 
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
 		assert.strictEqual(createLayoutCalls, 2);
-		assert.strictEqual(applyLayoutCalls, 2);
+		assert.strictEqual(rendererLayouts.length, 2);
+		assert.strictEqual(navigatorLayouts.length, 2);
+		assert.strictEqual(rendererLayouts[1], navigatorLayouts[1]);
 
 		unsubscribe();
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
 		state.toggleFolder('folder:app');
 		assert.strictEqual(createLayoutCalls, 2);
-		assert.strictEqual(applyLayoutCalls, 2);
+		assert.strictEqual(rendererLayouts.length, 2);
+		assert.strictEqual(navigatorLayouts.length, 2);
 	});
 });
 

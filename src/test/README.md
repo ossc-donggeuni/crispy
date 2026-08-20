@@ -173,6 +173,8 @@
 
 ## `graph/graphView.test.ts`
 
+- 한 번 생성한 같은 Layout reference를 Renderer와 Navigator에 함께 적용한다
+- Layout Reflow 중 Minimap을 포함한 Navigator DOM을 재생성하지 않는다
 - 여러 Root의 저장 위치를 같은 Graph World에서 독립적으로 적용한다
 - 저장 위치를 우선하고 Layout 크기를 fallback으로 Folder/File Root 중심을 계산한다
 - Folder/File Backlink가 전달한 Root ID를 공통 Root Focus 경로로 처리한다
@@ -188,10 +190,14 @@
 - Project Root와 Folder를 같은 Open/Close interaction으로 처리한다
 - 복원된 File Group page를 최초 Layout 높이와 Renderer contents에 반영한다
 - 더보기와 접기가 File Group size, sibling 위치와 Edge를 함께 Reflow한다
-- Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛴다
+- Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛰며 Renderer/Navigator에 같은 Layout을 전달한다
 
 ## `graph/graphNavigator.test.ts`
 
+- 빈 Minimap과 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다
+- 초기 Layout과 갱신 Layout을 받으면서 Navigator와 Minimap DOM을 유지한다
+- Minimap에 기존 Camera 완전 입력 차단 규약을 적용한다
+- Minimap의 Pointer와 Wheel 입력으로 Camera Pan/Zoom을 시작하지 않는다
 - 복원된 Camera 좌표와 scale을 최초 표시한다
 - Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다
 - Zoom 버튼이 scale 범위 안에서 Viewport 중앙을 기준으로 동작한다

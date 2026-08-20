@@ -6,6 +6,7 @@ import {
 	MIN_CAMERA_SCALE,
 } from '../../webview/graph/graphCamera';
 import { resolveFileIcon } from '../../webview/graph/fileIconResolver';
+import type { GraphLayout } from '../../webview/graph/graphLayout';
 import {
 	initializeGraphNavigator,
 	type GraphNavigatorInteractions,
@@ -20,6 +21,43 @@ import {
 } from '../../webview/webviewState';
 
 suite('Graph Navigator', () => {
+	test('Minimap과 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다', () => {
+		const fixture = createNavigatorFixture();
+
+		assert.strictEqual(fixture.navigatorElement.children.length, 2);
+		assert.strictEqual(
+			fixture.bottomRow.hasClass('graph-navigator-bottom-row'),
+			true,
+		);
+		assert.deepStrictEqual(fixture.bottomRow.children, [
+			fixture.minimap,
+			fixture.zoom,
+		]);
+		assert.strictEqual(fixture.minimap.hasClass('graph-navigator-minimap'), true);
+		assert.strictEqual(fixture.minimap.children.length, 0);
+		assert.strictEqual(
+			fixture.minimap.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.deepStrictEqual(fixture.zoom.children, [
+			fixture.coordinate,
+			fixture.controls,
+		]);
+		assert.strictEqual(fixture.featureRow.children[1], fixture.actionRail);
+	});
+
+	test('초기 Layout을 받고 setLayout 시 Navigator와 빈 Minimap DOM을 재생성하지 않는다', () => {
+		const initialLayout = createEmptyLayout();
+		const fixture = createNavigatorFixture(undefined, {}, initialLayout);
+		const nextLayout = createEmptyLayout();
+
+		fixture.navigator.setLayout(nextLayout);
+
+		assert.strictEqual(fixture.overlay.children[0], fixture.navigatorElement);
+		assert.strictEqual(fixture.bottomRow.children[0], fixture.minimap);
+		assert.strictEqual(fixture.minimap.children.length, 0);
+	});
+
 	test('복원된 Camera 좌표를 반올림하고 scale을 퍼센트로 최초 표시한다', () => {
 		const fixture = createNavigatorFixture({
 			x: 513.42,
@@ -430,6 +468,28 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
+	test('Minimap에서 시작한 Pointer와 Wheel 입력은 Camera Pan과 Zoom을 시작하지 않는다', () => {
+		const fixture = createNavigatorFixture();
+		const initialCamera = fixture.camera.getState();
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(fixture.minimap.asEventTarget()),
+		);
+		fixture.viewport.dispatch(
+			'pointermove',
+			createPointerEvent(fixture.minimap.asEventTarget(), 80, 70),
+		);
+		fixture.viewport.dispatch(
+			'wheel',
+			createWheelEvent(80, 70, -120, fixture.minimap.asEventTarget()),
+		);
+
+		assert.deepStrictEqual(fixture.camera.getState(), initialCamera);
+		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
+		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
+	});
+
 	test('Action Rail과 Root Button에서 시작한 Pointer 입력은 Camera Pan을 시작하지 않는다', () => {
 		const fixture = createNavigatorFixture();
 
@@ -499,6 +559,7 @@ suite('Graph Navigator', () => {
 
 		fixture.navigator.dispose();
 		fixture.navigator.dispose();
+		fixture.navigator.setLayout(createEmptyLayout());
 		assert.strictEqual(fixture.overlay.children.length, 0);
 
 		fixture.graphState.setState({
@@ -522,6 +583,7 @@ suite('Graph Navigator', () => {
 function createNavigatorFixture(
 	initialCamera = { x: 0, y: 0, scale: 1 },
 	interactions: GraphNavigatorInteractions = {},
+	initialLayout: GraphLayout = createEmptyLayout(),
 ) {
 	const ownerDocument = new FakeDocument();
 	const viewport = ownerDocument.createSizedElement(800, 600);
@@ -541,12 +603,16 @@ function createNavigatorFixture(
 		viewport.asHtmlElement(),
 		graphState,
 		camera,
+		initialLayout,
 		interactions,
 	);
 	const navigatorElement = getChild(overlay, 0);
-	const coordinate = getChild(navigatorElement, 0);
-	const controls = getChild(navigatorElement, 1);
-	const featureRow = getChild(navigatorElement, 2);
+	const bottomRow = getChild(navigatorElement, 0);
+	const minimap = getChild(bottomRow, 0);
+	const zoom = getChild(bottomRow, 1);
+	const coordinate = getChild(zoom, 0);
+	const controls = getChild(zoom, 1);
+	const featureRow = getChild(navigatorElement, 1);
 	const rootListPanel = getChild(featureRow, 0);
 	const rootListTitle = getChild(rootListPanel, 0);
 	const rootList = getChild(rootListPanel, 1);
@@ -564,6 +630,11 @@ function createNavigatorFixture(
 		graphState,
 		camera,
 		navigator,
+		navigatorElement,
+		bottomRow,
+		minimap,
+		zoom,
+		featureRow,
 		actionRail,
 		rootListPanel,
 		rootListTitle,
@@ -618,13 +689,14 @@ function createWheelEvent(
 	clientX: number,
 	clientY: number,
 	deltaY: number,
+	target: EventTarget | null = null,
 ): WheelEvent {
 	return {
 		clientX,
 		clientY,
 		deltaY,
 		deltaMode: 0,
-		target: null,
+		target,
 		preventDefault: () => undefined,
 	} as WheelEvent;
 }
@@ -647,6 +719,15 @@ class FakeDocument {
 	createSizedElement(clientWidth: number, clientHeight: number): FakeElement {
 		return new FakeElement(this, clientWidth, clientHeight, 'DIV');
 	}
+}
+
+function createEmptyLayout(): GraphLayout {
+	return {
+		nodes: [],
+		edges: [],
+		rootContexts: {},
+		rootNodeIds: new Set(),
+	};
 }
 
 class FakeElement {

@@ -3,6 +3,7 @@ import {
 	type GraphCamera,
 } from './graphCamera';
 import { resolveFileIcon } from './fileIconResolver';
+import type { GraphLayout } from './graphLayout';
 import type { GraphNavigatorRoot } from './graphNavigatorRoots';
 import type {
 	GraphStateSnapshot,
@@ -10,6 +11,8 @@ import type {
 } from './graphState';
 
 export interface GraphNavigator {
+	/** Minimap이 사용할 최신 Renderer Layout reference를 교체한다. */
+	setLayout(layout: GraphLayout): void;
 	/** 전달받은 표시 데이터 순서대로 Root List Panel 내용을 교체한다. */
 	setRoots(roots: readonly GraphNavigatorRoot[]): void;
 	dispose(): void;
@@ -138,12 +141,13 @@ function createRootListItem(
 }
 
 /**
- * Overlay에 Camera 좌표와 Zoom Control을 생성하고 Graph State와 동기화한다.
+ * Overlay에 Minimap 영역, Camera 좌표와 Zoom Control을 생성하고 Graph State와 동기화한다.
  *
  * @param overlayLayer Navigator를 배치할 Graph Overlay Layer
  * @param viewport 중앙 Zoom 기준을 제공하는 Graph Viewport
  * @param graphState Camera 표시를 구독할 기존 Graph State Store
  * @param camera 중앙 기준 Zoom을 수행할 기존 Graph Camera
+ * @param initialLayout Minimap에 전달할 Renderer와 동일한 초기 Layout
  * @param interactions Root 선택을 상위 계층에 전달할 callback
  * @returns Listener, State 구독 및 DOM을 정리할 lifecycle 핸들
  */
@@ -152,6 +156,7 @@ export function initializeGraphNavigator(
 	viewport: HTMLElement,
 	graphState: GraphStateStore,
 	camera: GraphCamera,
+	initialLayout: GraphLayout,
 	interactions: GraphNavigatorInteractions = {},
 ): GraphNavigator {
 	const ownerDocument = overlayLayer.ownerDocument;
@@ -162,6 +167,9 @@ export function initializeGraphNavigator(
 	const rootList = ownerDocument.createElement('ul');
 	const rootListEmpty = ownerDocument.createElement('p');
 	const actionRail = ownerDocument.createElement('div');
+	const bottomRow = ownerDocument.createElement('div');
+	const minimap = ownerDocument.createElement('div');
+	const zoom = ownerDocument.createElement('div');
 	const coordinate = ownerDocument.createElement('div');
 	const controls = ownerDocument.createElement('div');
 	const zoomOutButton = ownerDocument.createElement('button');
@@ -187,6 +195,11 @@ export function initializeGraphNavigator(
 	actionRail.setAttribute('role', 'toolbar');
 	actionRail.setAttribute('aria-label', 'Navigator actions');
 	actionRail.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
+	bottomRow.className = 'graph-navigator-bottom-row';
+	minimap.className = 'graph-navigator-minimap';
+	minimap.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
+	minimap.setAttribute('aria-hidden', 'true');
+	zoom.className = 'graph-navigator-zoom';
 	coordinate.className = 'graph-navigator-coordinate';
 	controls.className = 'graph-navigator-controls';
 	controls.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
@@ -235,8 +248,11 @@ export function initializeGraphNavigator(
 	actionRail.append(...navigatorActions.map((action) => action.button));
 	featureRow.append(rootListPanel, actionRail);
 	controls.append(zoomOutButton, scale, zoomInButton);
-	navigator.append(coordinate, controls, featureRow);
+	zoom.append(coordinate, controls);
+	bottomRow.append(minimap, zoom);
+	navigator.append(bottomRow, featureRow);
 	overlayLayer.append(navigator);
+	const minimapState: { layout?: GraphLayout } = { layout: initialLayout };
 
 	const render = (state: GraphStateSnapshot = graphState.getState()): void => {
 		coordinate.textContent = `(${Math.round(state.camera.x)}, ${Math.round(state.camera.y)})`;
@@ -268,6 +284,13 @@ export function initializeGraphNavigator(
 	let disposed = false;
 
 	return {
+		setLayout(layout): void {
+			if (disposed) {
+				return;
+			}
+
+			minimapState.layout = layout;
+		},
 		setRoots(roots): void {
 			if (disposed) {
 				return;
@@ -287,6 +310,7 @@ export function initializeGraphNavigator(
 			}
 
 			disposed = true;
+			minimapState.layout = undefined;
 			unsubscribeState();
 			disposeRootItems();
 			for (const action of navigatorActions) {
