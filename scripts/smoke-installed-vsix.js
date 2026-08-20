@@ -216,7 +216,7 @@ async function main() {
 			],
 		});
 
-		console.log(`[installed-vsix-smoke] VS Code ${vscodeVersion} Extension Host PTY smoke passed for ${target}.`);
+		console.log(`[installed-vsix-smoke] VS Code ${vscodeVersion} Extension Host PTY and MCP child smoke passed for ${target}.`);
 	} finally {
 		fs.rmSync(temporaryRoot, { recursive: true, force: true });
 	}

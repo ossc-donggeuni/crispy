@@ -47,27 +47,38 @@ export function assertValidMcpSessionCredentials(
 ): void {
 	assertOpaqueId(credentials.generation);
 	assertOpaqueId(credentials.sessionId);
-	if (
-		!isCanonicalBase64Url(credentials.routeId)
-		|| decodedBase64UrlLength(credentials.routeId) < MCP_ROUTE_RANDOM_BYTES
-	) {
+	if (!isValidMcpRouteId(credentials.routeId)) {
 		throw new Error('MCP route registration failed.');
 	}
-	if (
-		!isCanonicalBase64Url(credentials.token)
-		|| decodedBase64UrlLength(credentials.token) < MCP_TOKEN_RANDOM_BYTES
-	) {
+	if (!isValidMcpBearerToken(credentials.token)) {
 		throw new Error('MCP token registration failed.');
 	}
 }
 
+/** Parent/child IPC identity에 공통으로 적용하는 길이와 문자 allowlist다. */
+export function isValidMcpOpaqueId(value: unknown): value is string {
+	return typeof value === 'string'
+		&& value.length > 0
+		&& value.length <= 128
+		&& /^[A-Za-z0-9._:-]+$/.test(value);
+}
+
+/** C1의 24-byte canonical base64url route 계약을 IPC에서도 재사용한다. */
+export function isValidMcpRouteId(value: unknown): value is string {
+	return typeof value === 'string'
+		&& isCanonicalBase64Url(value)
+		&& decodedBase64UrlLength(value) >= MCP_ROUTE_RANDOM_BYTES;
+}
+
+/** C1의 최소 256-bit canonical base64url bearer 계약을 IPC에서도 재사용한다. */
+export function isValidMcpBearerToken(value: unknown): value is string {
+	return typeof value === 'string'
+		&& isCanonicalBase64Url(value)
+		&& decodedBase64UrlLength(value) >= MCP_TOKEN_RANDOM_BYTES;
+}
+
 function assertOpaqueId(value: string): void {
-	if (
-		typeof value !== 'string'
-		|| value.length === 0
-		|| value.length > 128
-		|| !/^[A-Za-z0-9._:-]+$/.test(value)
-	) {
+	if (!isValidMcpOpaqueId(value)) {
 		throw new Error('MCP session identity is invalid.');
 	}
 }

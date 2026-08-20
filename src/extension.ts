@@ -18,6 +18,13 @@ import {
 	type PersistedWebviewState,
 } from './webview/webviewState';
 
+/** C2 Host APIs are bundled for later Canvas/PTY integration but stay disconnected in this phase. */
+export { McpAdapterSupervisor } from './mcp/adapterSupervisor';
+export {
+	McpSessionRuntime,
+	resolveMcpChildAssetPath,
+} from './mcp/sessionRuntime';
+
 /**
  * Panel 하나가 소유하는 Terminal runtime과 Webview 구독의 정리 경계다.
  * Panel dispose와 Extension deactivate가 같은 경계를 공유한다.
