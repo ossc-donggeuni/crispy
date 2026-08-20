@@ -2,6 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { inflateRawSync } = require('node:zlib');
+const { builtinModules } = require('node:module');
 const yauzl = require('yauzl');
 const packageJson = require('../package.json');
 const { verifyNativeBinary } = require('./native-binary');
@@ -70,7 +72,19 @@ function isSafeArchivePath(entryName) {
 
 function readEntry(zipFile, entry) {
 	return new Promise((resolve, reject) => {
-		zipFile.openReadStream(entry, (error, stream) => {
+		const maxBytes = 64 * 1024 * 1024;
+		if (
+			entry.compressedSize > maxBytes
+			|| entry.uncompressedSize > maxBytes
+			|| (entry.compressionMethod !== 0 && entry.compressionMethod !== 8)
+		) {
+			reject(new Error(`archive entry exceeds limits or uses unsupported compression: ${entry.fileName}`));
+			return;
+		}
+		const streamOptions = entry.compressionMethod === 8
+			? { decompress: false }
+			: undefined;
+		const onStream = (error, stream) => {
 			if (error !== null) {
 				reject(error);
 				return;
@@ -80,15 +94,33 @@ function readEntry(zipFile, entry) {
 			let length = 0;
 			stream.on('data', (chunk) => {
 				length += chunk.length;
-				if (length > 64 * 1024 * 1024) {
+				if (length > maxBytes) {
 					stream.destroy(new Error(`archive entry exceeds 64 MiB: ${entry.fileName}`));
 					return;
 				}
 				chunks.push(chunk);
 			});
 			stream.once('error', reject);
-			stream.once('end', () => resolve(Buffer.concat(chunks, length)));
-		});
+			stream.once('end', () => {
+				try {
+					const encoded = Buffer.concat(chunks, length);
+					const decoded = entry.compressionMethod === 8
+						? inflateRawSync(encoded, { maxOutputLength: maxBytes })
+						: encoded;
+					if (decoded.length !== entry.uncompressedSize) {
+						throw new Error(`archive entry size mismatch: ${entry.fileName}`);
+					}
+					resolve(decoded);
+				} catch (decompressionError) {
+					reject(decompressionError);
+				}
+			});
+		};
+		if (streamOptions === undefined) {
+			zipFile.openReadStream(entry, onStream);
+		} else {
+			zipFile.openReadStream(entry, streamOptions, onStream);
+		}
 	});
 }
 
@@ -122,6 +154,7 @@ async function collectArchive(target, vsixPath) {
 
 	const nodePtyPrefix = 'extension/dist/node_modules/node-pty/';
 	const bufferedEntries = new Set([
+		'extension/dist/mcp-server.mjs',
 		`${nodePtyPrefix}package.json`,
 		...artifactsByTarget[target].map((artifactPath) => `${nodePtyPrefix}${artifactPath}`),
 	]);
@@ -179,6 +212,85 @@ function requireEntry(target, vsixPath, entries, entryName) {
 	return record;
 }
 
+function verifyMcpChildBundle(target, vsixPath, entries) {
+	const entryName = 'extension/dist/mcp-server.mjs';
+	const record = requireEntry(target, vsixPath, entries, entryName);
+	if (record.entry.uncompressedSize <= 0 || record.buffer?.length <= 0) {
+		throw inspectionError(
+			target,
+			'MCP child bundle is empty',
+			`${vsixPath}:${entryName}`,
+			'non-empty regular file',
+			`${record.entry.uncompressedSize} bytes`,
+		);
+	}
+	if (isUnixEntry(record.entry)) {
+		const kind = record.mode & 0o170000;
+		if (kind !== 0 && kind !== 0o100000) {
+			throw inspectionError(
+				target,
+				'MCP child artifact is not a regular file',
+				`${vsixPath}:${entryName}`,
+				'regular file',
+				`mode=${record.mode.toString(8)}`,
+			);
+		}
+	}
+	if (entries.has(`${entryName}.map`)) {
+		throw inspectionError(
+			target,
+			'production MCP child source map is not allowed',
+			`${vsixPath}:${entryName}.map`,
+			'absent',
+			'present',
+		);
+	}
+
+	const source = record.buffer.toString('utf8');
+	const nodeBuiltins = new Set(builtinModules);
+	const importPattern = /(?:\bfrom|\bimport)\s*(?:\(\s*)?["']([^"']+)["']/gu;
+	for (const match of source.matchAll(importPattern)) {
+		if (!match[1].startsWith('node:') && !nodeBuiltins.has(match[1])) {
+			throw inspectionError(
+				target,
+				'MCP child has an unresolved non-built-in runtime import',
+				`${vsixPath}:${entryName}`,
+				'Node built-ins only',
+				match[1],
+			);
+		}
+	}
+	if (!source.includes('crispy_ping')) {
+		throw inspectionError(
+			target,
+			'MCP child bundle does not contain the Crispy protocol implementation',
+			`${vsixPath}:${entryName}`,
+			'bundled crispy_ping implementation',
+			'missing',
+		);
+	}
+
+	const forbiddenRuntimePrefixes = [
+		'extension/node_modules/@modelcontextprotocol/',
+		'extension/node_modules/zod/',
+		'extension/node_modules/hono/',
+		'extension/dist/node_modules/@modelcontextprotocol/',
+		'extension/dist/node_modules/zod/',
+		'extension/dist/node_modules/hono/',
+	];
+	for (const entry of entries.keys()) {
+		if (forbiddenRuntimePrefixes.some((prefix) => entry.startsWith(prefix))) {
+			throw inspectionError(
+				target,
+				'MCP child dependency must be bundled into mcp-server.mjs',
+				`${vsixPath}:${entry}`,
+				'no external MCP/Zod/Hono runtime tree',
+				'archive dependency present',
+			);
+		}
+	}
+}
+
 function verifyNodePtyTree(target, vsixPath, entries) {
 	const prefix = 'extension/dist/node_modules/node-pty/';
 	const allowedArtifacts = new Set(artifactsByTarget[target]);
@@ -218,6 +330,7 @@ async function inspectVsix(target, vsixPath) {
 
 	const entries = await collectArchive(target, vsixPath);
 	requireEntry(target, vsixPath, entries, 'extension/dist/extension.js');
+	verifyMcpChildBundle(target, vsixPath, entries);
 	requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/LICENSE');
 	const packageRecord = requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/package.json');
 

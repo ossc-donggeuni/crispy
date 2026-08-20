@@ -1,4 +1,5 @@
 const esbuild = require("esbuild");
+const fs = require('node:fs');
 const {
 	extensionHostRuntimeExternals,
 } = require('./scripts/runtime-dependencies');
@@ -28,6 +29,10 @@ const esbuildProblemMatcherPlugin = {
 
 async function main() {
 	const contexts = [];
+	if (production) {
+		/** Development watch가 남긴 child map을 production artifact로 오인하지 않게 한다. */
+		fs.rmSync('dist/mcp-server.mjs.map', { force: true });
+	}
 
 	try {
 		contexts.push(await esbuild.context({
@@ -63,6 +68,21 @@ async function main() {
 			loader: {
 				'.svg': 'copy',
 			},
+			logLevel: 'silent',
+			plugins: [
+				/* add to the end of plugins array */
+				esbuildProblemMatcherPlugin,
+			],
+		}));
+		contexts.push(await esbuild.context({
+			entryPoints: ['src/mcp/childEntrypoint.ts'],
+			bundle: true,
+			format: 'esm',
+			minify: production,
+			sourcemap: !production,
+			sourcesContent: false,
+			platform: 'node',
+			outfile: 'dist/mcp-server.mjs',
 			logLevel: 'silent',
 			plugins: [
 				/* add to the end of plugins array */
