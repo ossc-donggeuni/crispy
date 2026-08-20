@@ -63,6 +63,11 @@ suite('Graph View', () => {
 			'graph-navigator-root-list',
 		);
 		const minimap = getDescendantByClass(root, 'graph-navigator-minimap');
+		const minimapNodeLayer = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-node-layer',
+		);
+		const initialMinimapNodeCount = minimapNodeLayer.children.length;
 
 		assert.deepStrictEqual(
 			rootList.children.map((item) => (
@@ -83,6 +88,9 @@ suite('Graph View', () => {
 			getDescendantByClass(root, 'graph-navigator-minimap'),
 			minimap,
 		);
+		assert.ok(minimapNodeLayer.children.length > initialMinimapNodeCount);
+		graphView.state.toggleFolder(GRAPH_MOCK_PROJECT.id);
+		assert.strictEqual(minimapNodeLayer.children.length, initialMinimapNodeCount);
 		graphView.dispose();
 	});
 
@@ -229,6 +237,56 @@ suite('Graph View', () => {
 			graphView.state.getState().nodePositions[secondaryProject.id],
 			secondaryPosition,
 		);
+		graphView.dispose();
+	});
+
+	test('Node Drag 중 transient 위치는 무시하고 pointerup 저장 뒤 Minimap을 갱신한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
+		const project = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+		const minimapNodeLayer = getDescendantByClass(
+			root,
+			'graph-navigator-minimap-node-layer',
+		);
+		const initialMinimapNode = getDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+
+		beginNodeDrag(project, 120, 60);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				minimapNodeLayer,
+				'data-graph-node-id',
+				GRAPH_MOCK_PROJECT.id,
+			),
+			initialMinimapNode,
+		);
+		assert.strictEqual(
+			graphView.state.getState().nodePositions[GRAPH_MOCK_PROJECT.id],
+			undefined,
+		);
+
+		project.dispatch('pointerup', createPointerEvent(project, 120, 60));
+		assert.notStrictEqual(
+			getDescendantByAttribute(
+				minimapNodeLayer,
+				'data-graph-node-id',
+				GRAPH_MOCK_PROJECT.id,
+			),
+			initialMinimapNode,
+		);
+		assert.ok(graphView.state.getState().nodePositions[GRAPH_MOCK_PROJECT.id]);
 		graphView.dispose();
 	});
 
@@ -847,6 +905,17 @@ suite('Graph View', () => {
 			root,
 			'graph-navigator-action-button',
 		);
+		const minimap = getDescendantByClass(root, 'graph-navigator-minimap');
+		const minimapNodeLayer = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-node-layer',
+		);
+
+		const initialMinimapFile = getDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			childFile.id,
+		);
 
 		assert.deepStrictEqual(
 			getNavigatorRootNames(root),
@@ -928,6 +997,12 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getNavigatorRootPaths(root), ['detach-root/']);
 		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'false');
 		assert.strictEqual(graph.roots.length, 2);
+		assert.strictEqual(getDescendantByClass(root, 'graph-navigator-minimap'), minimap);
+		assert.notStrictEqual(getDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			childFile.id,
+		), initialMinimapFile);
 
 		graphView.dispose();
 	});
@@ -980,6 +1055,12 @@ suite('Graph View', () => {
 			root,
 			'graph-navigator-root-list-panel',
 		);
+		const minimap = getDescendantByClass(root, 'graph-navigator-minimap');
+		const minimapNodeLayer = getDescendantByClass(
+			minimap,
+			'graph-navigator-minimap-node-layer',
+		);
+		const initialMinimapNodeCount = minimapNodeLayer.children.length;
 
 		rootListButton.dispatch('click', createClickEvent(rootListButton));
 		assert.strictEqual(rootListPanel.hidden, false);
@@ -1046,6 +1127,7 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getNavigatorRootPaths(root), ['crispy/']);
 		assert.strictEqual(rootListPanel.hidden, false);
 		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
+		assert.ok(minimapNodeLayer.children.length > initialMinimapNodeCount);
 		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
 		const detachedRootButton = getNavigatorRootButtons(root)[1];
 
@@ -1071,6 +1153,8 @@ suite('Graph View', () => {
 		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
 		folder.dispatch('pointerup', createPointerEvent(folder, 300, 121));
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy']);
+		assert.strictEqual(getDescendantByClass(root, 'graph-navigator-minimap'), minimap);
+		assert.strictEqual(minimapNodeLayer.children.length, initialMinimapNodeCount);
 		assert.strictEqual(rootListPanel.hidden, false);
 		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
 		const focusCountAfterReattach = focusPoints.length;
@@ -1298,6 +1382,13 @@ suite('Graph View', () => {
 		const initialSiblingY = readTranslateY(sibling.style.transform);
 		const initialEdgePath = edge.getAttribute('d');
 		const more = getDescendantByClass(fileGroup, 'graph-file-more');
+		const minimap = getDescendantByClass(root, 'graph-navigator-minimap');
+		const minimapFileGroup = getDescendantByAttribute(
+			getDescendantByClass(minimap, 'graph-navigator-minimap-node-layer'),
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const initialMinimapHeight = minimapFileGroup.getAttribute('height');
 
 		assert.strictEqual(fileGroup.style.height, '198px');
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 5);
@@ -1310,6 +1401,14 @@ suite('Graph View', () => {
 			initialSiblingY + 150,
 		);
 		assert.notStrictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.notStrictEqual(
+			getDescendantByAttribute(
+				getDescendantByClass(minimap, 'graph-navigator-minimap-node-layer'),
+				'data-graph-node-id',
+				fileGroupId,
+			).getAttribute('height'),
+			initialMinimapHeight,
+		);
 
 		getDescendantByClass(fileGroup, 'graph-file-more').dispatch(
 			'click',
@@ -1451,6 +1550,14 @@ class FakeElement {
 			child.parent = this;
 			this.children.push(child);
 		}
+	}
+
+	replaceChildren(...children: FakeElement[]): void {
+		for (const child of this.children) {
+			child.parent = undefined;
+		}
+		this.children.length = 0;
+		this.append(...children);
 	}
 
 	remove(): void {

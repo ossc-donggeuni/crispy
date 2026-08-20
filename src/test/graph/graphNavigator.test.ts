@@ -6,7 +6,11 @@ import {
 	MIN_CAMERA_SCALE,
 } from '../../webview/graph/graphCamera';
 import { resolveFileIcon } from '../../webview/graph/fileIconResolver';
-import type { GraphLayout } from '../../webview/graph/graphLayout';
+import type {
+	GraphLayout,
+	GraphLayoutEdge,
+	GraphLayoutNode,
+} from '../../webview/graph/graphLayout';
 import {
 	initializeGraphNavigator,
 	type GraphNavigatorInteractions,
@@ -34,7 +38,7 @@ suite('Graph Navigator', () => {
 			fixture.zoom,
 		]);
 		assert.strictEqual(fixture.minimap.hasClass('graph-navigator-minimap'), true);
-		assert.strictEqual(fixture.minimap.children.length, 0);
+		assert.deepStrictEqual(fixture.minimap.children, [fixture.minimapSvg]);
 		assert.strictEqual(
 			fixture.minimap.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
 			true,
@@ -46,16 +50,117 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.featureRow.children[1], fixture.actionRail);
 	});
 
-	test('초기 Layout을 받고 setLayout 시 Navigator와 빈 Minimap DOM을 재생성하지 않는다', () => {
-		const initialLayout = createEmptyLayout();
+	test('초기 Layout을 SVG Line과 Rect로 렌더링하고 Text를 생성하지 않는다', () => {
+		const nodes = [
+			createMinimapNode('node:a', 0, 0),
+			createMinimapNode('node:b', 300, 100),
+		];
+		const initialLayout = createMinimapLayout(nodes, [{
+			id: 'edge:a-b',
+			sourceId: 'node:a',
+			targetId: 'node:b',
+		}]);
 		const fixture = createNavigatorFixture(undefined, {}, initialLayout);
-		const nextLayout = createEmptyLayout();
+
+		assert.strictEqual(fixture.minimapSvg.tagName, 'SVG');
+		assert.strictEqual(fixture.minimapEdgeLayer.children.length, 1);
+		assert.strictEqual(fixture.minimapNodeLayer.children.length, 2);
+		assert.strictEqual(getChild(fixture.minimapEdgeLayer, 0).tagName, 'LINE');
+		assert.strictEqual(getChild(fixture.minimapNodeLayer, 0).tagName, 'RECT');
+		assert.strictEqual(
+			getDescendantsByTagName(fixture.minimapSvg, 'TEXT').length,
+			0,
+		);
+	});
+
+	test('투영 크기가 0인 Node도 최소 2px Shape로 표시한다', () => {
+		const zeroSizeNode = {
+			...createMinimapNode('node:zero', 0, 0),
+			width: 0,
+			height: 0,
+		};
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createMinimapLayout([zeroSizeNode]),
+		);
+		const rect = getChild(fixture.minimapNodeLayer, 0);
+
+		assert.strictEqual(rect.getAttribute('width'), '2');
+		assert.strictEqual(rect.getAttribute('height'), '2');
+	});
+
+	test('setLayout은 같은 Minimap/SVG를 유지하며 Graphic을 최신 Layout과 Empty 상태로 교체한다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createMinimapLayout([createMinimapNode('node:initial', 0, 0)]),
+		);
+		const nextLayout = createMinimapLayout([
+			createMinimapNode('node:next-a', 0, 0),
+			createMinimapNode('node:next-b', 200, 100),
+		]);
 
 		fixture.navigator.setLayout(nextLayout);
 
 		assert.strictEqual(fixture.overlay.children[0], fixture.navigatorElement);
 		assert.strictEqual(fixture.bottomRow.children[0], fixture.minimap);
-		assert.strictEqual(fixture.minimap.children.length, 0);
+		assert.strictEqual(fixture.minimap.children[0], fixture.minimapSvg);
+		assert.strictEqual(fixture.minimapNodeLayer.children.length, 2);
+		assert.deepStrictEqual(
+			fixture.minimapNodeLayer.children.map((node) => (
+				node.getAttribute('data-graph-node-id')
+			)),
+			['node:next-a', 'node:next-b'],
+		);
+
+		fixture.navigator.setLayout(createEmptyLayout());
+		assert.strictEqual(fixture.minimapNodeLayer.children.length, 0);
+		assert.strictEqual(fixture.minimapEdgeLayer.children.length, 0);
+	});
+
+	test('nodePositions 변경만으로 기존 Minimap Container를 유지하며 Node와 Edge를 다시 투영한다', () => {
+		const layout = createMinimapLayout([
+			createMinimapNode('node:left', 0, 0),
+			createMinimapNode('node:middle', 150, 80),
+			createMinimapNode('node:right', 400, 160),
+		], [{
+			id: 'edge:middle-right',
+			sourceId: 'node:middle',
+			targetId: 'node:right',
+		}]);
+		const fixture = createNavigatorFixture(undefined, {}, layout);
+		const minimap = fixture.minimap;
+		const svg = fixture.minimapSvg;
+		const initialMiddle = getChildByAttribute(
+			fixture.minimapNodeLayer,
+			'data-graph-node-id',
+			'node:middle',
+		);
+		const initialX = Number(initialMiddle.getAttribute('x'));
+
+		fixture.graphState.setState({
+			camera: fixture.graphState.getState().camera,
+			nodePositions: { 'node:middle': { x: 260, y: 30 } },
+		});
+		const movedMiddle = getChildByAttribute(
+			fixture.minimapNodeLayer,
+			'data-graph-node-id',
+			'node:middle',
+		);
+
+		assert.strictEqual(fixture.minimap, minimap);
+		assert.strictEqual(fixture.minimapSvg, svg);
+		assert.notStrictEqual(Number(movedMiddle.getAttribute('x')), initialX);
+		assert.strictEqual(fixture.minimapEdgeLayer.children.length, 1);
+
+		const currentNodes = [...fixture.minimapNodeLayer.children];
+
+		fixture.graphState.setState({
+			camera: { x: 50, y: 60, scale: 1.5 },
+			nodePositions: fixture.graphState.getState().nodePositions,
+		});
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, currentNodes);
 	});
 
 	test('복원된 Camera 좌표를 반올림하고 scale을 퍼센트로 최초 표시한다', () => {
@@ -553,8 +658,13 @@ suite('Graph Navigator', () => {
 	});
 
 	test('dispose 이후 State 구독과 Action/Zoom 버튼 Listener를 정리한다', () => {
-		const fixture = createNavigatorFixture();
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createMinimapLayout([createMinimapNode('node:dispose', 0, 0)]),
+		);
 		const displayedCoordinate = fixture.coordinate.textContent;
+		const displayedMinimapNodes = [...fixture.minimapNodeLayer.children];
 		fixture.rootListButton.dispatch('click', {} as Event);
 
 		fixture.navigator.dispose();
@@ -567,6 +677,10 @@ suite('Graph Navigator', () => {
 			nodePositions: {},
 		});
 		assert.strictEqual(fixture.coordinate.textContent, displayedCoordinate);
+		assert.deepStrictEqual(
+			fixture.minimapNodeLayer.children,
+			displayedMinimapNodes,
+		);
 
 		fixture.zoomInButton.dispatch('click', {} as Event);
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 50, y: 60, scale: 2 });
@@ -609,6 +723,9 @@ function createNavigatorFixture(
 	const navigatorElement = getChild(overlay, 0);
 	const bottomRow = getChild(navigatorElement, 0);
 	const minimap = getChild(bottomRow, 0);
+	const minimapSvg = getChild(minimap, 0);
+	const minimapEdgeLayer = getChild(minimapSvg, 0);
+	const minimapNodeLayer = getChild(minimapSvg, 1);
 	const zoom = getChild(bottomRow, 1);
 	const coordinate = getChild(zoom, 0);
 	const controls = getChild(zoom, 1);
@@ -633,6 +750,9 @@ function createNavigatorFixture(
 		navigatorElement,
 		bottomRow,
 		minimap,
+		minimapSvg,
+		minimapEdgeLayer,
+		minimapNodeLayer,
 		zoom,
 		featureRow,
 		actionRail,
@@ -713,7 +833,11 @@ type GraphEventListener = (event: never) => void;
 
 class FakeDocument {
 	createElement(tagName = 'div'): FakeElement {
-		return new FakeElement(this, 0, 0, tagName.toUpperCase());
+		return new FakeElement(this, 160, 96, tagName.toUpperCase());
+	}
+
+	createElementNS(_namespace: string, qualifiedName: string): FakeElement {
+		return new FakeElement(this, 0, 0, qualifiedName.toUpperCase());
 	}
 
 	createSizedElement(clientWidth: number, clientHeight: number): FakeElement {
@@ -781,6 +905,14 @@ class FakeElement {
 			child.parent = this;
 			this.children.push(child);
 		}
+	}
+
+	replaceChildren(...children: FakeElement[]): void {
+		for (const child of this.children) {
+			child.parent = undefined;
+		}
+		this.children.length = 0;
+		this.append(...children);
 	}
 
 	remove(): void {
@@ -863,4 +995,56 @@ class FakeElement {
 			toJSON: () => ({}),
 		};
 	}
+}
+
+function createMinimapNode(
+	id: string,
+	x: number,
+	y: number,
+): GraphLayoutNode {
+	return {
+		kind: 'folder',
+		id,
+		name: id,
+		status: 'loaded',
+		depth: 0,
+		position: { x, y },
+		width: 100,
+		height: 40,
+	};
+}
+
+function createMinimapLayout(
+	nodes: readonly GraphLayoutNode[],
+	edges: readonly GraphLayoutEdge[] = [],
+): GraphLayout {
+	return {
+		nodes,
+		edges,
+		rootContexts: {},
+		rootNodeIds: new Set(),
+	};
+}
+
+function getChildByAttribute(
+	element: FakeElement,
+	attribute: string,
+	value: string,
+): FakeElement {
+	const child = element.children.find(
+		(candidate) => candidate.getAttribute(attribute) === value,
+	);
+
+	assert.ok(child);
+	return child;
+}
+
+function getDescendantsByTagName(
+	element: FakeElement,
+	tagName: string,
+): FakeElement[] {
+	return element.children.flatMap((child) => [
+		...(child.tagName === tagName ? [child] : []),
+		...getDescendantsByTagName(child, tagName),
+	]);
 }

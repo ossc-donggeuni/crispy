@@ -174,7 +174,9 @@
 ## `graph/graphView.test.ts`
 
 - 한 번 생성한 같은 Layout reference를 Renderer와 Navigator에 함께 적용한다
-- Layout Reflow 중 Minimap을 포함한 Navigator DOM을 재생성하지 않는다
+- Folder Open/Close Layout Reflow 중 Minimap을 포함한 Navigator DOM을 재생성하지 않는다
+- Node Drag 중 transient 위치는 무시하고 pointerup 저장 뒤 Minimap을 갱신한다
+- File Group Reflow와 Root Detach/Reattach를 최신 Minimap Graphic에 반영한다
 - 여러 Root의 저장 위치를 같은 Graph World에서 독립적으로 적용한다
 - 저장 위치를 우선하고 Layout 크기를 fallback으로 Folder/File Root 중심을 계산한다
 - Folder/File Backlink가 전달한 Root ID를 공통 Root Focus 경로로 처리한다
@@ -194,8 +196,11 @@
 
 ## `graph/graphNavigator.test.ts`
 
-- 빈 Minimap과 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다
-- 초기 Layout과 갱신 Layout을 받으면서 Navigator와 Minimap DOM을 유지한다
+- Minimap Container와 Zoom Controls를 같은 하단 Row에 왼쪽부터 배치한다
+- 초기 Layout을 SVG Line/Rect로 렌더링하며 Text를 생성하지 않는다
+- 0 크기로 투영된 Node도 최소 2px Shape로 표시한다
+- 갱신 및 Empty Layout Graphic만 교체하면서 Navigator, Minimap과 SVG DOM을 유지한다
+- `nodePositions` 변경은 재투영하고 Camera-only 변경은 기존 Graphic을 유지한다
 - Minimap에 기존 Camera 완전 입력 차단 규약을 적용한다
 - Minimap의 Pointer와 Wheel 입력으로 Camera Pan/Zoom을 시작하지 않는다
 - 복원된 Camera 좌표와 scale을 최초 표시한다
@@ -204,6 +209,15 @@
 - Zoom Control의 Pointer 입력으로 Camera Pan을 시작하지 않는다
 - 복원 후 Zoom 변경을 기존 Webview State 저장 흐름으로 다시 저장한다
 - `dispose()` 시 Button Listener와 State 구독을 정리한다
+
+## `graph/graphNavigatorMinimap.test.ts`
+
+- 단일/다중 Node의 실제 위치와 width/height로 Bounds를 계산한다
+- 음수 좌표, 멀리 떨어진 Multi-Root와 저장 `nodePositions` override를 반영한다
+- Empty, 유효하지 않은 Node와 0 또는 0에 가까운 Bounds를 안전하게 처리한다
+- Padding 안에서 aspect ratio를 유지하고 남는 축을 중앙 정렬한다
+- World → Minimap → World 좌표를 왕복한다
+- 저장 위치 기반 Node/Edge geometry를 만들고 잘못된 Edge를 제외한다
 
 ## `graph/graphCamera.test.ts`
 

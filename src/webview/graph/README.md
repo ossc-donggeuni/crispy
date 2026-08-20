@@ -16,6 +16,7 @@ src/webview/graph/
 ├── graphMockData.ts
 ├── graphModel.ts
 ├── graphNavigator.ts
+├── graphNavigatorMinimap.ts
 ├── graphNavigatorRoots.ts
 ├── graphNodeDrag.ts
 ├── graphRenderer.ts
@@ -113,9 +114,12 @@ src/webview/graph/
 
 > Overlay에서 Minimap 영역, Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
 
-- Zoom Controls 왼쪽에 하단 정렬된 빈 Minimap Container를 항상 표시
+- Zoom Controls 왼쪽에 하단 정렬된 Minimap Container와 고정 SVG Layer를 항상 표시
 - Minimap에 기존 `data-graph-camera-ignore` 규약을 적용해 Pan과 Wheel Zoom 입력 차단
-- Renderer와 공유하는 초기 `GraphLayout`을 받고 `setLayout()`으로 최신 Layout reference 교체
+- Renderer와 공유하는 초기 `GraphLayout`을 즉시 렌더링하고 `setLayout()`으로 Graphic 교체
+- Node는 이름/Icon 없는 최소 2px Rounded Rect, Edge는 약한 단순 Line으로 표시
+- Graph State의 `nodePositions` reference 변경 시에만 저장 위치를 반영해 Minimap 재투영
+- Camera-only State 변경은 Minimap Graphic을 유지하고 Drag 중 transient DOM 위치는 구독하지 않음
 - 복원된 Graph State 기준으로 좌표와 scale 최초 표시
 - Camera State 변경 구독 및 표시 갱신
 - 세로형 Action Rail과 활성화된 Root 목록 Action Button 표시
@@ -125,8 +129,21 @@ src/webview/graph/
 - 빈 Root 안내와 제목이 고정된 Scroll 목록 제공
 - Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Minimap Layout reference, Action/Zoom Button Listener, State 구독 및 DOM 정리
+- `dispose()` 시 Minimap Layout reference, Action/Zoom Button Listener, 공통 State 구독 및 DOM 정리
 - Root 선택 상태는 포함하지 않음
+
+### `graphNavigatorMinimap.ts`
+
+> 현재 Layout과 저장 Node 위치를 DOM 없이 Minimap Bounds 및 좌표로 변환합니다.
+
+- Renderer와 공통 `resolveGraphLayoutNodePosition()`을 사용해 저장 위치를 Layout 기본 위치보다 우선
+- 현재 Layout에 포함된 유효 Node의 실제 위치와 width/height로 Multi-Root World Bounds 계산
+- Empty 또는 유효 Node가 없는 Layout은 가상 Bounds 없이 `undefined`로 처리
+- 고정 Padding 안에서 `min(scaleX, scaleY)` 단일 scale과 남는 축 중앙 정렬 적용
+- World origin과 Minimap origin 기반 World ↔ Minimap 양방향 Projection 제공
+- Node Rect와 source 오른쪽 중앙 → target 왼쪽 중앙 Edge Line geometry 생성
+- 존재하지 않는 Node를 참조하는 Edge는 전체 계산을 중단하지 않고 제외
+- Camera, Viewport Indicator 및 Navigation 상태는 포함하지 않음
 
 ### `graphNavigatorRoots.ts`
 

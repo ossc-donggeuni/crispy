@@ -4,6 +4,7 @@ import {
 } from './graphCamera';
 import { resolveFileIcon } from './fileIconResolver';
 import type { GraphLayout } from './graphLayout';
+import { createMinimapGraphGeometry } from './graphNavigatorMinimap';
 import type { GraphNavigatorRoot } from './graphNavigatorRoots';
 import type {
 	GraphStateSnapshot,
@@ -31,6 +32,8 @@ const ROOT_LIST_ICON_ASSET = 'navigator-root.svg';
 const ROOT_LIST_EMPTY_LABEL = '활성화된 루트가 없습니다.';
 const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
 const FOLDER_ROOT_ICON_ASSET = 'folder-closed.svg';
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const MINIMAP_NODE_MIN_SIZE = 2;
 
 /** Action Rail에 추가할 Navigator Action의 공통 DOM 계약이다. */
 interface NavigatorActionDefinition {
@@ -169,6 +172,9 @@ export function initializeGraphNavigator(
 	const actionRail = ownerDocument.createElement('div');
 	const bottomRow = ownerDocument.createElement('div');
 	const minimap = ownerDocument.createElement('div');
+	const minimapSvg = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
+	const minimapEdgeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
+	const minimapNodeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
 	const zoom = ownerDocument.createElement('div');
 	const coordinate = ownerDocument.createElement('div');
 	const controls = ownerDocument.createElement('div');
@@ -199,6 +205,12 @@ export function initializeGraphNavigator(
 	minimap.className = 'graph-navigator-minimap';
 	minimap.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
 	minimap.setAttribute('aria-hidden', 'true');
+	minimapSvg.classList.add('graph-navigator-minimap-svg');
+	minimapSvg.setAttribute('aria-hidden', 'true');
+	minimapEdgeLayer.classList.add('graph-navigator-minimap-edge-layer');
+	minimapNodeLayer.classList.add('graph-navigator-minimap-node-layer');
+	minimapSvg.append(minimapEdgeLayer, minimapNodeLayer);
+	minimap.append(minimapSvg);
 	zoom.className = 'graph-navigator-zoom';
 	coordinate.className = 'graph-navigator-coordinate';
 	controls.className = 'graph-navigator-controls';
@@ -252,11 +264,71 @@ export function initializeGraphNavigator(
 	bottomRow.append(minimap, zoom);
 	navigator.append(bottomRow, featureRow);
 	overlayLayer.append(navigator);
-	const minimapState: { layout?: GraphLayout } = { layout: initialLayout };
+	let currentLayout: GraphLayout | undefined = initialLayout;
+	const initialGraphState = graphState.getState();
+	let renderedNodePositions = initialGraphState.nodePositions;
+
+	/** 최신 Layout과 저장 위치를 고정 SVG Layer의 단순 Line/Rect로 교체한다. */
+	const renderMinimap = (
+		state: GraphStateSnapshot = graphState.getState(),
+	): void => {
+		minimapEdgeLayer.replaceChildren();
+		minimapNodeLayer.replaceChildren();
+
+		if (!currentLayout || minimap.clientWidth <= 0 || minimap.clientHeight <= 0) {
+			return;
+		}
+
+		minimapSvg.setAttribute(
+			'viewBox',
+			`0 0 ${minimap.clientWidth} ${minimap.clientHeight}`,
+		);
+		const geometry = createMinimapGraphGeometry(
+			currentLayout,
+			state.nodePositions,
+			{ width: minimap.clientWidth, height: minimap.clientHeight },
+		);
+
+		if (!geometry) {
+			return;
+		}
+
+		for (const edge of geometry.edges) {
+			const line = ownerDocument.createElementNS(SVG_NAMESPACE, 'line');
+
+			line.classList.add('graph-navigator-minimap-edge');
+			line.setAttribute('data-graph-edge-id', edge.id);
+			line.setAttribute('x1', String(edge.source.x));
+			line.setAttribute('y1', String(edge.source.y));
+			line.setAttribute('x2', String(edge.target.x));
+			line.setAttribute('y2', String(edge.target.y));
+			minimapEdgeLayer.append(line);
+		}
+
+		for (const node of geometry.nodes) {
+			const rect = ownerDocument.createElementNS(SVG_NAMESPACE, 'rect');
+			const width = Math.max(MINIMAP_NODE_MIN_SIZE, node.width);
+			const height = Math.max(MINIMAP_NODE_MIN_SIZE, node.height);
+
+			rect.classList.add('graph-navigator-minimap-node');
+			rect.setAttribute('data-graph-node-id', node.id);
+			rect.setAttribute('x', String(node.x - (width - node.width) / 2));
+			rect.setAttribute('y', String(node.y - (height - node.height) / 2));
+			rect.setAttribute('width', String(width));
+			rect.setAttribute('height', String(height));
+			rect.setAttribute('rx', String(Math.min(1.5, width / 2, height / 2)));
+			minimapNodeLayer.append(rect);
+		}
+	};
 
 	const render = (state: GraphStateSnapshot = graphState.getState()): void => {
 		coordinate.textContent = `(${Math.round(state.camera.x)}, ${Math.round(state.camera.y)})`;
 		scale.textContent = `${Math.round(state.camera.scale * 100)}%`;
+
+		if (state.nodePositions !== renderedNodePositions) {
+			renderedNodePositions = state.nodePositions;
+			renderMinimap(state);
+		}
 	};
 
 	const zoomBy = (scaleDelta: number): void => {
@@ -280,6 +352,7 @@ export function initializeGraphNavigator(
 	const unsubscribeState = graphState.subscribe(render);
 	renderRootListState();
 	render();
+	renderMinimap(initialGraphState);
 
 	let disposed = false;
 
@@ -289,7 +362,8 @@ export function initializeGraphNavigator(
 				return;
 			}
 
-			minimapState.layout = layout;
+			currentLayout = layout;
+			renderMinimap();
 		},
 		setRoots(roots): void {
 			if (disposed) {
@@ -310,7 +384,7 @@ export function initializeGraphNavigator(
 			}
 
 			disposed = true;
-			minimapState.layout = undefined;
+			currentLayout = undefined;
 			unsubscribeState();
 			disposeRootItems();
 			for (const action of navigatorActions) {
