@@ -1,7 +1,9 @@
 import * as assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import {
 	createMcpChildEnvironment,
+	createMcpChildSpawnOptions,
 	McpSessionRuntime,
 	validateMcpHostRuntime,
 	type McpChildSpawnRequest,
@@ -20,7 +22,7 @@ const hostRuntime = Object.freeze({
 });
 
 suite('MCP session runtime lifecycle', () => {
-	test('child 환경에서 token 변형을 제거하고 process.env를 변경하지 않는다', () => {
+	test('child 환경에서 credential과 Node 실행 제어 변형을 제거한다', () => {
 		const parent = {
 			PATH: '/bin',
 			CRISPY_MCP_TOKEN: 'first-secret',
@@ -28,6 +30,8 @@ suite('MCP session runtime lifecycle', () => {
 			CrIsPy_McP_ToKeN: 'third-secret',
 			CRISPY_MCP_GENERATION: 'stale-generation',
 			ELECTRON_RUN_AS_NODE: '0',
+			NODE_OPTIONS: '--require /workspace/hook.js',
+			Node_Path: '/workspace/node_modules',
 		};
 		const snapshot = { ...parent };
 		const child = createMcpChildEnvironment(parent, 'generation-fresh');
@@ -36,9 +40,32 @@ suite('MCP session runtime lifecycle', () => {
 		assert.strictEqual(child.PATH, '/bin');
 		assert.strictEqual(child.ELECTRON_RUN_AS_NODE, '1');
 		assert.strictEqual(child.CRISPY_MCP_GENERATION, 'generation-fresh');
-		assert.ok(!Object.keys(child).some(
-			(name) => name.toUpperCase() === 'CRISPY_MCP_TOKEN',
-		));
+		const childNames = new Set(Object.keys(child).map((name) => name.toUpperCase()));
+		assert.ok(!childNames.has('CRISPY_MCP_TOKEN'));
+		assert.ok(!childNames.has('NODE_OPTIONS'));
+		assert.ok(!childNames.has('NODE_PATH'));
+	});
+
+	test('child spawn은 standalone asset 디렉터리를 cwd로 고정한다', () => {
+		const childEntryPath = path.join(
+			process.cwd(),
+			'installed-extension',
+			'dist',
+			'mcp-server.mjs',
+		);
+		const environment = { ELECTRON_RUN_AS_NODE: '1' };
+		const options = createMcpChildSpawnOptions({
+			executablePath: process.execPath,
+			childEntryPath,
+			generation: 'generation-spawn-options',
+			environment,
+		});
+
+		assert.strictEqual(options.cwd, path.dirname(childEntryPath));
+		assert.strictEqual(options.env, environment);
+		assert.deepStrictEqual(options.stdio, ['ignore', 'ignore', 'ignore', 'ipc']);
+		assert.strictEqual(options.shell, false);
+		assert.strictEqual(options.windowsHide, true);
 	});
 
 	test('지원 target과 runtime만 허용하고 안전한 failure reason을 반환한다', () => {

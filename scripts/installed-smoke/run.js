@@ -9,6 +9,14 @@ const net = require('node:net');
 const vscode = require('vscode');
 const { isPathInside, runPtySmoke } = require('../pty-smoke');
 
+const blockedMcpChildEnvironmentNames = new Set([
+	'CRISPY_MCP_TOKEN',
+	'CRISPY_MCP_GENERATION',
+	'ELECTRON_RUN_AS_NODE',
+	'NODE_OPTIONS',
+	'NODE_PATH',
+]);
+
 function requiredEnvironment(name) {
 	const value = process.env[name];
 	if (value === undefined || value === '') {
@@ -21,11 +29,7 @@ function createMcpChildEnvironment(generation) {
 	const environment = {};
 	for (const [name, value] of Object.entries(process.env)) {
 		const upperName = name.toUpperCase();
-		if (
-			upperName === 'CRISPY_MCP_TOKEN'
-			|| upperName === 'CRISPY_MCP_GENERATION'
-			|| upperName === 'ELECTRON_RUN_AS_NODE'
-		) {
+		if (blockedMcpChildEnvironmentNames.has(upperName)) {
 			continue;
 		}
 		environment[name] = value;
@@ -117,6 +121,7 @@ async function runMcpChildSmoke(installedExtensionRoot) {
 	const routeId = randomBytes(24).toString('base64url');
 	const token = randomBytes(32).toString('base64url');
 	const child = spawn(process.execPath, [childEntry], {
+		cwd: path.dirname(childEntry),
 		env: createMcpChildEnvironment(generation),
 		stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
 		shell: false,
