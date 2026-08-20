@@ -110,12 +110,14 @@ src/webview/graph/
 
 ### `graphNavigator.ts`
 
-> Overlay에서 현재 Camera 좌표와 중앙 기준 Zoom Control을 표시합니다.
+> Overlay에서 Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
 
 - 복원된 Graph State 기준으로 좌표와 scale 최초 표시
 - Camera State 변경 구독 및 표시 갱신
+- 세로형 Action Rail과 활성화된 Root 목록 Action Button 표시
+- Navigator 로컬 상태로 제목만 있는 Root List Panel Shell 열기/닫기
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Button Listener, State 구독 및 DOM 정리
+- `dispose()` 시 Action/Zoom Button Listener, State 구독 및 DOM 정리
 
 ### `graphNodeDrag.ts`
 

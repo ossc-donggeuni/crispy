@@ -32,6 +32,71 @@ suite('Graph Navigator', () => {
 		);
 	});
 
+	test('Action Rail과 Root List Action을 접근 가능한 버튼으로 생성한다', () => {
+		const fixture = createNavigatorFixture();
+
+		assert.strictEqual(fixture.actionRail.hasClass('graph-navigator-action-rail'), true);
+		assert.strictEqual(fixture.actionRail.children.length, 1);
+		assert.strictEqual(fixture.actionRail.getAttribute('role'), 'toolbar');
+		assert.strictEqual(
+			fixture.actionRail.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.strictEqual(fixture.rootListButton.type, 'button');
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-label'),
+			'활성화된 루트 목록',
+		);
+		assert.strictEqual(fixture.rootListButton.title, '활성화된 루트 목록');
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-controls'),
+			fixture.rootListPanel.id,
+		);
+		assert.strictEqual(fixture.rootListPanel.children.length, 1);
+		assert.strictEqual(
+			fixture.rootListPanel.getAttribute('aria-labelledby'),
+			fixture.rootListTitle.id,
+		);
+		assert.strictEqual(
+			fixture.rootListIcon.getAttribute('data-navigator-icon'),
+			'navigator-root.svg',
+		);
+		assert.strictEqual(
+			fixture.rootListIcon.getAttribute('aria-hidden'),
+			'true',
+		);
+	});
+
+	test('Root List Panel은 초기에 닫혀 있고 Action을 누를 때마다 열림 상태와 활성 표시를 동기화한다', () => {
+		const fixture = createNavigatorFixture();
+
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'false',
+		);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
+		assert.strictEqual(fixture.rootListTitle.textContent, '활성화된 루트 목록');
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), true);
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'false',
+		);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
+	});
+
 	test('Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다', () => {
 		const fixture = createNavigatorFixture();
 
@@ -110,6 +175,28 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
+	test('Action Rail과 Root List Panel에서 시작한 Pointer 입력은 Camera Pan을 시작하지 않는다', () => {
+		const fixture = createNavigatorFixture();
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(fixture.rootListButton.asEventTarget()),
+		);
+		fixture.viewport.dispatch(
+			'pointermove',
+			createPointerEvent(fixture.rootListButton.asEventTarget(), 40, 30),
+		);
+		fixture.rootListButton.dispatch('click', {} as Event);
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(fixture.rootListPanel.asEventTarget()),
+		);
+
+		assert.deepStrictEqual(fixture.camera.getState(), { x: 0, y: 0, scale: 1 });
+		assert.strictEqual(fixture.viewport.hasPointerCapture(1), false);
+		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
+	});
+
 	test('getState에서 복원한 Camera의 Zoom 변경을 기존 Webview State 흐름으로 다시 저장한다', () => {
 		let savedState: PersistedWebviewState | undefined = {
 			panel: { ...DEFAULT_PANEL_LAYOUT_STATE },
@@ -142,9 +229,10 @@ suite('Graph Navigator', () => {
 		unsubscribe();
 	});
 
-	test('dispose 이후 State 구독과 Zoom 버튼 Listener를 정리한다', () => {
+	test('dispose 이후 State 구독과 Action/Zoom 버튼 Listener를 정리한다', () => {
 		const fixture = createNavigatorFixture();
 		const displayedCoordinate = fixture.coordinate.textContent;
+		fixture.rootListButton.dispatch('click', {} as Event);
 
 		fixture.navigator.dispose();
 		fixture.navigator.dispose();
@@ -158,6 +246,13 @@ suite('Graph Navigator', () => {
 
 		fixture.zoomInButton.dispatch('click', {} as Event);
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 50, y: 60, scale: 2 });
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'true',
+		);
 	});
 });
 
@@ -186,6 +281,12 @@ function createNavigatorFixture(
 	const navigatorElement = getChild(overlay, 0);
 	const coordinate = getChild(navigatorElement, 0);
 	const controls = getChild(navigatorElement, 1);
+	const featureRow = getChild(navigatorElement, 2);
+	const rootListPanel = getChild(featureRow, 0);
+	const rootListTitle = getChild(rootListPanel, 0);
+	const actionRail = getChild(featureRow, 1);
+	const rootListButton = getChild(actionRail, 0);
+	const rootListIcon = getChild(rootListButton, 0);
 	const zoomOutButton = getChild(controls, 0);
 	const scale = getChild(controls, 1);
 	const zoomInButton = getChild(controls, 2);
@@ -196,6 +297,11 @@ function createNavigatorFixture(
 		graphState,
 		camera,
 		navigator,
+		actionRail,
+		rootListPanel,
+		rootListTitle,
+		rootListButton,
+		rootListIcon,
 		coordinate,
 		controls,
 		zoomOutButton,
@@ -282,9 +388,12 @@ class FakeElement {
 		},
 	};
 	className = '';
+	hidden = false;
+	id = '';
 	textContent = '';
+	title = '';
 	type = '';
-	private readonly attributes = new Set<string>();
+	private readonly attributes = new Map<string, string>();
 	private readonly classNames = new Set<string>();
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
 	private readonly capturedPointers = new Set<number>();
@@ -323,12 +432,16 @@ class FakeElement {
 		}
 	}
 
-	setAttribute(name: string): void {
-		this.attributes.add(name);
+	setAttribute(name: string, value = ''): void {
+		this.attributes.set(name, value);
 	}
 
 	hasAttribute(name: string): boolean {
 		return this.attributes.has(name);
+	}
+
+	getAttribute(name: string): string | null {
+		return this.attributes.get(name) ?? null;
 	}
 
 	closest(selector: string): FakeElement | null {
@@ -342,7 +455,8 @@ class FakeElement {
 	}
 
 	hasClass(className: string): boolean {
-		return this.classNames.has(className);
+		return this.classNames.has(className)
+			|| this.className.split(/\s+/).includes(className);
 	}
 
 	addEventListener(type: string, listener: GraphEventListener): void {
