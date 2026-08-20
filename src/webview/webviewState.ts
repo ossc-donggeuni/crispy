@@ -130,6 +130,7 @@ function createDefaultWebviewState(): PersistedWebviewState {
 			nodePositions: {},
 			fileGroupPages: {},
 			openedFolders: {},
+			detachedRootNodeIds: {},
 		},
 	};
 }

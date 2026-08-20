@@ -255,6 +255,7 @@ suite('Crispy Extension Host', () => {
 				nodePositions: {},
 				fileGroupPages: {},
 				openedFolders: { 'folder:src': true },
+				detachedRootNodeIds: { 'folder:src': true },
 			},
 		};
 		const initialPanel = await openCanvas();
@@ -294,6 +295,7 @@ suite('Crispy Extension Host', () => {
 				nodePositions: {},
 				fileGroupPages: {},
 				openedFolders: {},
+				detachedRootNodeIds: {},
 			},
 		};
 		const panel = await openCanvas();

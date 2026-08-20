@@ -123,6 +123,27 @@ export function addGraphRoot(
 }
 
 /**
+ * 저장된 Detached Root Node ID를 현재 Graph에 순서대로 다시 적용한다.
+ * 이미 Root이거나 현재 Graph에 없는 Node는 상태를 정리하지 않고 건너뛴다.
+ */
+export function applyDetachedGraphRoots(
+	graph: Graph,
+	detachedRootNodeIds: Readonly<Record<string, true>>,
+): Graph {
+	let currentGraph = graph;
+
+	for (const nodeId of Object.keys(detachedRootNodeIds)) {
+		const addition = addGraphRoot(currentGraph, nodeId);
+
+		if (addition) {
+			currentGraph = addition.graph;
+		}
+	}
+
+	return currentGraph;
+}
+
+/**
  * Source Root의 기존 Context, Source Root 이름과 실제 Tree Parent segment를 잇는다.
  * 새 대상 Node 자신의 이름은 제외하고 비어 있지 않으면 `/`로 끝낸다.
  */
