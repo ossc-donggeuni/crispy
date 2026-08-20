@@ -16,6 +16,7 @@ src/webview/graph/
 ├── graphMockData.ts
 ├── graphModel.ts
 ├── graphNavigator.ts
+├── graphNavigatorRoots.ts
 ├── graphNodeDrag.ts
 ├── graphRenderer.ts
 ├── graphRootContext.ts
@@ -118,6 +119,16 @@ src/webview/graph/
 - Navigator 로컬 상태로 제목만 있는 Root List Panel Shell 열기/닫기
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
 - `dispose()` 시 Action/Zoom Button Listener, State 구독 및 DOM 정리
+
+### `graphNavigatorRoots.ts`
+
+> Graph Root를 Navigator Root Item이 사용할 표시 데이터로 변환합니다.
+
+- `Graph.roots` 순서를 유지해 `rootId`, `nodeId`, `name`, `kind`로 projection
+- Root 이름과 Project/Folder/File kind를 `graph.rootNodes` 직접 참조로 조회
+- 선택적 `context.relativePath`를 경로 재계산 없이 그대로 전달
+- Root Node가 없는 잘못된 Root 참조만 건너뛰고 입력 Graph는 변경하지 않음
+- Root Item DOM 렌더링과 Detach/Reattach 실시간 동기화는 포함하지 않음
 
 ### `graphNodeDrag.ts`
 
