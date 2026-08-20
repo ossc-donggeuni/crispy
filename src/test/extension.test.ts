@@ -124,6 +124,15 @@ suite('Crispy Extension Host', () => {
 	test('activate 반환 API가 VS Code extension exports와 같은 instance다', () => {
 		assert.strictEqual(extensionModule, extension.exports);
 		assert.strictEqual(Object.isFrozen(extensionModule), true);
+		assert.strictEqual(typeof extensionModule.requestWorkspaceRefresh, 'function');
+	});
+
+	test('Workspace Refresh 진입점이 열린 Canvas runtime을 유지한 채 완료된다', async () => {
+		const panel = await openCanvas();
+
+		await extensionModule.requestWorkspaceRefresh();
+
+		assert.strictEqual(await openCanvas(), panel);
 	});
 
 	test('Canvas command가 실제 설정으로 WebviewPanel을 최초 생성한다', async () => {

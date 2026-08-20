@@ -11,7 +11,10 @@ import {
 	createTerminalRuntimeCleanup,
 	runCleanupWithTimeout,
 } from './agent/host/terminal/terminalRuntimeCleanup';
-import type { ExtensionToWebviewMessage } from './messages';
+import type {
+	ExtensionToWebviewMessage,
+	WorkspaceToWebviewMessage,
+} from './messages';
 import {
 	parseWebviewState,
 	serializeWebviewState,
@@ -20,8 +23,11 @@ import {
 import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
 import {
+	createCurrentWorkspaceGraph,
+	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
+	type WorkspaceRefreshCoordinator,
 } from './workspace';
 
 /**
@@ -31,6 +37,8 @@ import {
 interface CanvasRuntime {
 	/** 정리 대상 Panel이며 deactivate에서 직접 dispose한다. */
 	readonly panel: vscode.WebviewPanel;
+	/** 이 Panel에 귀속된 직렬화 Workspace Refresh를 요청한다. */
+	requestWorkspaceRefresh(): Promise<void>;
 
 	/** Routing과 Webview 구독을 native 종료 없이 즉시 분리한다. */
 	detach(): void;
@@ -66,6 +74,7 @@ export interface TerminalMessageHost {
 /** VS Code가 실제 활성화한 extension module instance에서 제공하는 공개 API다. */
 export interface CrispyExtensionApi {
 	deactivate(): Promise<void>;
+	requestWorkspaceRefresh(): Promise<void>;
 	handleWebviewMessage(
 		webview: Pick<vscode.Webview, 'postMessage'>,
 		message: unknown,
@@ -127,8 +136,13 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			},
 		);
 		
-		const snapshot = await createWorkspaceSnapshot();
-		const graph = convertWorkspaceSnapshotToGraph(snapshot);
+		const workspaceGraphDependencies = {
+			createWorkspaceSnapshot,
+			convertWorkspaceSnapshotToGraph,
+		};
+		const graph = await createCurrentWorkspaceGraph(
+			workspaceGraphDependencies,
+		);
 
 		panel.webview.html = getWebviewHtml(
 			panel.webview,
@@ -138,9 +152,18 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			graph,
 		);
 
-		const runtime = createCanvasRuntime(panel, terminalHost, [
-			messageSubscription,
-		]);
+		const workspaceRefresh = createWorkspaceRefreshCoordinator({
+			...workspaceGraphDependencies,
+			postMessage: (message: WorkspaceToWebviewMessage) => (
+				panel.webview.postMessage(message)
+			),
+		});
+		const runtime = createCanvasRuntime(
+			panel,
+			terminalHost,
+			[messageSubscription],
+			workspaceRefresh,
+		);
 		currentRuntime = runtime;
 
 		panel.onDidDispose(() => {
@@ -158,6 +181,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 
 	return Object.freeze({
 		deactivate,
+		requestWorkspaceRefresh,
 		handleWebviewMessage,
 	});
 }
@@ -170,20 +194,28 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
  * @param panel 정리 대상 Terminal을 표시하던 Webview Panel
  * @param terminalHost Panel이 소유한 Terminal session 및 PTY 정리 경계
  * @param subscriptions Host 정리 뒤 해제할 Webview message listener 구독 목록
+ * @param workspaceRefresh Panel과 함께 유지할 Workspace Refresh coordinator
  * @returns Panel dispose와 deactivate가 공유하는 멱등한 정리 경계
  */
 function createCanvasRuntime(
 	panel: vscode.WebviewPanel,
 	terminalHost: TerminalHost,
 	subscriptions: readonly vscode.Disposable[],
+	workspaceRefresh: WorkspaceRefreshCoordinator,
 ): CanvasRuntime {
 	const cleanup = createTerminalRuntimeCleanup(terminalHost, subscriptions);
 
 	return {
 		panel,
+		requestWorkspaceRefresh: workspaceRefresh.requestWorkspaceRefresh,
 		detach: cleanup.detach,
 		terminate: cleanup.terminate,
 	};
+}
+
+/** 현재 Canvas runtime에 직렬화 Workspace Refresh를 요청한다. */
+export function requestWorkspaceRefresh(): Promise<void> {
+	return currentRuntime?.requestWorkspaceRefresh() ?? Promise.resolve();
 }
 
 /**
