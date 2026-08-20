@@ -140,18 +140,6 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			createWorkspaceSnapshot,
 			convertWorkspaceSnapshotToGraph,
 		};
-		const graph = await createCurrentWorkspaceGraph(
-			workspaceGraphDependencies,
-		);
-
-		panel.webview.html = getWebviewHtml(
-			panel.webview,
-			stylesUri,
-			scriptUri,
-			lastWebviewState,
-			graph,
-		);
-
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({
 			...workspaceGraphDependencies,
 			postMessage: (message: WorkspaceToWebviewMessage) => (
@@ -164,13 +152,30 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			[messageSubscription],
 			workspaceRefresh,
 		);
-		currentRuntime = runtime;
+		let panelDisposed = false;
 
 		panel.onDidDispose(() => {
+			panelDisposed = true;
 			releaseCanvasRuntime(runtime);
 			runtime.detach();
 			void runtime.terminate().catch(() => undefined);
 		});
+
+		const graph = await createCurrentWorkspaceGraph(
+			workspaceGraphDependencies,
+		);
+		if (panelDisposed) {
+			return panel;
+		}
+
+		panel.webview.html = getWebviewHtml(
+			panel.webview,
+			stylesUri,
+			scriptUri,
+			lastWebviewState,
+			graph,
+		);
+		currentRuntime = runtime;
 
 		return panel;
 	};
@@ -208,7 +213,11 @@ function createCanvasRuntime(
 	return {
 		panel,
 		requestWorkspaceRefresh: workspaceRefresh.requestWorkspaceRefresh,
-		detach: cleanup.detach,
+		detach(): void {
+			/** Webview/Terminal 정리보다 먼저 Refresh 결과와 pending 실행을 차단한다. */
+			workspaceRefresh.dispose();
+			cleanup.detach();
+		},
 		terminate: cleanup.terminate,
 	};
 }

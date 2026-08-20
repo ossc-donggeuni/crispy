@@ -13,6 +13,8 @@ export interface WorkspaceRefreshDependencies {
 export interface WorkspaceRefreshCoordinator {
 	/** 실행 중 요청을 pending 후속 실행으로 병합하며 완료 Promise는 reject하지 않는다. */
 	requestWorkspaceRefresh(): Promise<void>;
+	/** 새 요청과 결과 전송을 차단하고 pending 후속 실행을 폐기한다. */
+	dispose(): void;
 }
 
 /** 초기화와 Refresh가 공유하는 현재 Workspace Snapshot → Graph 생성 경로다. */
@@ -37,23 +39,30 @@ export function createWorkspaceRefreshCoordinator(
 	let refreshing = false;
 	let pending = false;
 	let activeRefresh: Promise<void> | undefined;
+	let disposed = false;
 
 	const runRefreshLoop = async (): Promise<void> => {
 		try {
-			do {
+			while (!disposed) {
 				pending = false;
 
 				try {
 					const graph = await createCurrentWorkspaceGraph(dependencies);
 
-					await dependencies.postMessage({
-						type: 'workspace.graphUpdated',
-						graph,
-					} satisfies WorkspaceToWebviewMessage);
+					if (!disposed) {
+						await dependencies.postMessage({
+							type: 'workspace.graphUpdated',
+							graph,
+						} satisfies WorkspaceToWebviewMessage);
+					}
 				} catch {
 					/** 실패한 결과는 전송하지 않고 실행 중 쌓인 pending 요청만 계속한다. */
 				}
-			} while (pending);
+
+				if (!pending) {
+					break;
+				}
+			}
 		} finally {
 			refreshing = false;
 			activeRefresh = undefined;
@@ -62,6 +71,10 @@ export function createWorkspaceRefreshCoordinator(
 
 	return {
 		requestWorkspaceRefresh(): Promise<void> {
+			if (disposed) {
+				return Promise.resolve();
+			}
+
 			if (refreshing) {
 				pending = true;
 				return activeRefresh ?? Promise.resolve();
@@ -74,6 +87,10 @@ export function createWorkspaceRefreshCoordinator(
 
 			activeRefresh = refresh;
 			return refresh;
+		},
+		dispose(): void {
+			disposed = true;
+			pending = false;
 		},
 	};
 }

@@ -8,6 +8,97 @@ import {
 import type { WorkspaceSnapshot } from '../../workspace/workspaceModel';
 
 suite('Workspace Refresh Coordinator', () => {
+	test('Idle dispose는 멱등하며 이후 요청을 안전한 no-op으로 처리한다', async () => {
+		let snapshotCalls = 0;
+		let conversionCalls = 0;
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				snapshotCalls += 1;
+				return createSnapshot('disposed');
+			},
+			convertWorkspaceSnapshotToGraph() {
+				conversionCalls += 1;
+				return createGraph('disposed');
+			},
+			async postMessage() {
+				postMessageCalls += 1;
+				return true;
+			},
+		});
+
+		coordinator.dispose();
+		coordinator.dispose();
+		coordinator.dispose();
+		await assert.doesNotReject(coordinator.requestWorkspaceRefresh());
+
+		assert.strictEqual(snapshotCalls, 0);
+		assert.strictEqual(conversionCalls, 0);
+		assert.strictEqual(postMessageCalls, 0);
+	});
+
+	test('Snapshot 실행 중 dispose는 결과와 모든 pending 후속 실행을 폐기한다', async () => {
+		const snapshot = createDeferred<WorkspaceSnapshot>();
+		let snapshotCalls = 0;
+		let conversionCalls = 0;
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			createWorkspaceSnapshot() {
+				snapshotCalls += 1;
+				return snapshot.promise;
+			},
+			convertWorkspaceSnapshotToGraph() {
+				conversionCalls += 1;
+				return createGraph('disposed-running');
+			},
+			async postMessage() {
+				postMessageCalls += 1;
+				return true;
+			},
+		});
+		const activeRefresh = coordinator.requestWorkspaceRefresh();
+
+		await waitFor(() => snapshotCalls === 1);
+		coordinator.requestWorkspaceRefresh();
+		coordinator.requestWorkspaceRefresh();
+		coordinator.dispose();
+		coordinator.dispose();
+		snapshot.resolve(createSnapshot('disposed-running'));
+		await assert.doesNotReject(activeRefresh);
+
+		assert.strictEqual(snapshotCalls, 1);
+		assert.strictEqual(conversionCalls, 1);
+		assert.strictEqual(postMessageCalls, 0);
+	});
+
+	test('Graph 변환 완료 뒤 dispose되어도 예약된 Webview 전송을 차단한다', async () => {
+		const snapshot = createDeferred<WorkspaceSnapshot>();
+		let conversionCalls = 0;
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			createWorkspaceSnapshot: () => snapshot.promise,
+			convertWorkspaceSnapshotToGraph() {
+				conversionCalls += 1;
+				return createGraph('converted-before-dispose');
+			},
+			async postMessage() {
+				postMessageCalls += 1;
+				return true;
+			},
+		});
+		const activeRefresh = coordinator.requestWorkspaceRefresh();
+
+		await Promise.resolve();
+		snapshot.resolve(createSnapshot('converted-before-dispose'));
+		await Promise.resolve();
+		assert.strictEqual(conversionCalls, 1);
+
+		coordinator.dispose();
+		await activeRefresh;
+
+		assert.strictEqual(postMessageCalls, 0);
+	});
+
 	test('Idle 요청은 현재 Snapshot을 기존 Graph 변환 후 Webview에 전송한다', async () => {
 		const snapshot = createSnapshot('initial');
 		const graph = createGraph('initial');
@@ -191,6 +282,95 @@ suite('Workspace Refresh Coordinator', () => {
 		assert.deepStrictEqual(
 			messages.map((message) => message.graph.roots[0]?.nodeId),
 			['project:converted'],
+		);
+	});
+
+	test('postMessage false는 retry나 dispose로 해석하지 않고 다음 요청을 허용한다', async () => {
+		let snapshotCalls = 0;
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				snapshotCalls += 1;
+				return createSnapshot(`delivery-${snapshotCalls}`);
+			},
+			convertWorkspaceSnapshotToGraph: (snapshot) => (
+				createGraph(snapshot.roots[0]?.name ?? 'empty')
+			),
+			async postMessage() {
+				postMessageCalls += 1;
+				return postMessageCalls > 1;
+			},
+		});
+
+		await coordinator.requestWorkspaceRefresh();
+		assert.strictEqual(snapshotCalls, 1);
+		assert.strictEqual(postMessageCalls, 1);
+
+		await coordinator.requestWorkspaceRefresh();
+		assert.strictEqual(snapshotCalls, 2);
+		assert.strictEqual(postMessageCalls, 2);
+	});
+
+	test('postMessage rejection은 완료 Promise에 노출하지 않고 다음 요청을 허용한다', async () => {
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				return createSnapshot(`rejection-${postMessageCalls}`);
+			},
+			convertWorkspaceSnapshotToGraph: (snapshot) => (
+				createGraph(snapshot.roots[0]?.name ?? 'empty')
+			),
+			async postMessage() {
+				postMessageCalls += 1;
+				if (postMessageCalls === 1) {
+					throw new Error('delivery failed');
+				}
+
+				return true;
+			},
+		});
+
+		await assert.doesNotReject(coordinator.requestWorkspaceRefresh());
+		await assert.doesNotReject(coordinator.requestWorkspaceRefresh());
+
+		assert.strictEqual(postMessageCalls, 2);
+	});
+
+	test('dispose된 이전 Coordinator 결과는 새 Coordinator 전송과 격리된다', async () => {
+		const oldSnapshot = createDeferred<WorkspaceSnapshot>();
+		const oldMessages: WorkspaceToWebviewMessage[] = [];
+		const newMessages: WorkspaceToWebviewMessage[] = [];
+		const oldCoordinator = createWorkspaceRefreshCoordinator({
+			createWorkspaceSnapshot: () => oldSnapshot.promise,
+			convertWorkspaceSnapshotToGraph: () => createGraph('old'),
+			async postMessage(message) {
+				oldMessages.push(message);
+				return true;
+			},
+		});
+		const oldRefresh = oldCoordinator.requestWorkspaceRefresh();
+
+		await Promise.resolve();
+		oldCoordinator.dispose();
+		const newCoordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				return createSnapshot('new');
+			},
+			convertWorkspaceSnapshotToGraph: () => createGraph('new'),
+			async postMessage(message) {
+				newMessages.push(message);
+				return true;
+			},
+		});
+
+		await newCoordinator.requestWorkspaceRefresh();
+		oldSnapshot.resolve(createSnapshot('old'));
+		await oldRefresh;
+
+		assert.strictEqual(oldMessages.length, 0);
+		assert.deepStrictEqual(
+			newMessages.map((message) => message.graph.roots[0]?.nodeId),
+			['project:new'],
 		);
 	});
 });
