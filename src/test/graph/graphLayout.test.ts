@@ -960,7 +960,7 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(originalGroup.children.length, 7);
 	});
 
-	test('펼친 File Group은 visible Row 수로 줄고 모두 hidden이면 Group과 Edge만 숨긴다', () => {
+	test('펼친 File Group은 visible Row 수로 줄고 모두 hidden이면 projection에서 Group과 Edge를 제외한다', () => {
 		const parentId = 'folder:app/src';
 		const fileGroupId = createFileGroupId(parentId);
 		const originalGraph = createGraphLayout(GRAPH_MOCK_PROJECT);
@@ -986,7 +986,6 @@ suite('Graph Model / Layout', () => {
 			fileGroupPages,
 			hiddenNodeIds: allHiddenNodeIds,
 		});
-		const allHiddenGroup = getFileGroup(allHiddenLayout.nodes, parentId);
 		const oneVisibleId = fileIds[6] as string;
 		const oneVisibleLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
 			fileGroupPages,
@@ -1005,12 +1004,13 @@ suite('Graph Model / Layout', () => {
 			filteredExpandedGroup.children.map((file) => file.id),
 			[fileIds[0], fileIds[1], fileIds[3], fileIds[4], fileIds[5], fileIds[6]],
 		);
-		assert.strictEqual(allHiddenGroup.hidden, true);
-		assert.deepStrictEqual(allHiddenGroup.children, []);
-		assert.strictEqual(allHiddenGroup.height, getFileGroupHeight(0, false));
 		assert.strictEqual(
-			allHiddenLayout.edges.find((edge) => edge.targetId === fileGroupId)?.hidden,
-			true,
+			allHiddenLayout.nodes.find((node) => node.id === fileGroupId),
+			undefined,
+		);
+		assert.strictEqual(
+			allHiddenLayout.edges.find((edge) => edge.targetId === fileGroupId),
+			undefined,
 		);
 		assert.strictEqual(oneVisibleGroup.hidden, undefined);
 		assert.strictEqual(oneVisibleGroup.presentation, 'grouped');

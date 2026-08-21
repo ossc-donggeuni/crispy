@@ -1281,7 +1281,7 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('펼친 File Group Filter는 높이를 줄이고 all-hidden Group을 복원 가능한 상태로 숨긴다', () => {
+	test('펼친 File Group Filter는 높이를 줄이고 all-hidden Group을 projection에서 제거한다', () => {
 		const project = createPaginationProject([7]);
 		const folder = project.children[0];
 
@@ -1296,17 +1296,16 @@ suite('Graph Renderer / Node Drag', () => {
 		}, {}, project);
 		const initialState = fixture.graphState.getState();
 		const connectedEdge = fixture.getConnectedEdge(fileGroupId);
-		const applyHiddenFiles = (hiddenNodeIds: Record<string, true>): FakeElement => {
+		const applyHiddenFiles = (hiddenNodeIds: Record<string, true>): void => {
 			applyRendererHiddenNodeIds(fixture, project, hiddenNodeIds);
-
-			return fixture.getNode(fileGroupId);
 		};
 		let fileGroup = fixture.getNode(fileGroupId);
 
 		assert.strictEqual(getRenderedFileIds(fileGroup).length, 7);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(7, true)}px`);
 
-		fileGroup = applyHiddenFiles({ [fileIds[2] as string]: true });
+		applyHiddenFiles({ [fileIds[2] as string]: true });
+		fileGroup = fixture.getNode(fileGroupId);
 
 		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [
 			fileIds[0],
@@ -1325,31 +1324,33 @@ suite('Graph Renderer / Node Drag', () => {
 			initialState.detachedRootNodeIds,
 		);
 
-		fileGroup = applyHiddenFiles(Object.fromEntries(
+		const removedFileGroup = fileGroup;
+
+		applyHiddenFiles(Object.fromEntries(
 			fileIds.map((fileId) => [fileId, true]),
 		) as Record<string, true>);
 
-		assert.strictEqual(fileGroup.hidden, true);
-		assert.deepStrictEqual(getRenderedFileIds(fileGroup), []);
-		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(0, false)}px`);
-		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-controls'), undefined);
-		assert.strictEqual(connectedEdge.getAttribute('visibility'), 'hidden');
+		assert.strictEqual(fixture.nodeLayer.children.includes(removedFileGroup), false);
+		assert.strictEqual(fixture.edgeLayer.children.includes(connectedEdge), false);
+		assert.strictEqual(removedFileGroup.getEventListenerCount(), 0);
 
-		fileGroup = applyHiddenFiles(Object.fromEntries(
+		applyHiddenFiles(Object.fromEntries(
 			fileIds.slice(0, 6).map((fileId) => [fileId, true]),
 		) as Record<string, true>);
+		fileGroup = fixture.getNode(fileGroupId);
 
-		assert.strictEqual(fileGroup.hidden, false);
+		assert.notStrictEqual(fileGroup, removedFileGroup);
 		assert.strictEqual(
 			fileGroup.getAttribute('data-file-group-presentation'),
 			'grouped',
 		);
 		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [fileIds[6]]);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(1, false)}px`);
-		assert.strictEqual(connectedEdge.getAttribute('visibility'), null);
+		assert.strictEqual(fixture.getConnectedEdge(fileGroupId).getAttribute('visibility'), null);
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 2);
 
-		fileGroup = applyHiddenFiles({});
+		applyHiddenFiles({});
+		fileGroup = fixture.getNode(fileGroupId);
 
 		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(7, true)}px`);
@@ -1702,6 +1703,98 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.deepStrictEqual(folderClicks, [removedFolderId]);
 		assert.deepStrictEqual(fileClicks, ['file:app/src/graphView.ts']);
 		fixture.renderer.dispose();
+	});
+
+	test('applyLayout은 같은 grouped File Group DOM을 유지하며 File 증감과 Footer를 갱신한다', () => {
+		const project = createPaginationProject([6]);
+		const folder = project.children[0];
+
+		assert.ok(folder && isFolder(folder));
+		const fileGroupId = createFileGroupId(folder.id);
+		const fixture = createRendererFixture(1, undefined, {}, project);
+		const fileGroup = fixture.getNode(fileGroupId);
+		const edge = fixture.getConnectedEdge(fileGroupId);
+		const initialRows = getDescendantsByClass(fileGroup, 'graph-file-item');
+		const initialFileIds = folder.children.map((file) => file.id);
+		const removedVisibleProject: Project = {
+			...project,
+			children: [{
+				...folder,
+				children: folder.children.filter((_, index) => index !== 2),
+			}],
+		};
+		const applyProject = (nextProject: Project): void => {
+			const state = fixture.graphState.getState();
+
+			fixture.renderer.applyLayout(createGraphLayout(
+				createSingleRootGraph(nextProject),
+				{
+					fileGroupPages: state.fileGroupPages,
+					openedFolders: state.openedFolders,
+					hiddenNodeIds: state.hiddenNodeIds,
+				},
+			));
+		};
+
+		applyProject(removedVisibleProject);
+
+		assert.strictEqual(fixture.getNode(fileGroupId), fileGroup);
+		assert.strictEqual(fixture.getConnectedEdge(fileGroupId), edge);
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [
+			initialFileIds[0],
+			initialFileIds[1],
+			initialFileIds[3],
+			initialFileIds[4],
+			initialFileIds[5],
+		]);
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-controls'), undefined);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(5, false)}px`);
+		assert.ok(initialRows.every((row) => row.getEventListenerCount() === 0));
+		const retainedRows = getDescendantsByClass(fileGroup, 'graph-file-item');
+
+		applyProject(removedVisibleProject);
+
+		assert.strictEqual(fixture.getNode(fileGroupId), fileGroup);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item'),
+			retainedRows,
+		);
+		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 2));
+
+		const addedFile = {
+			kind: 'file' as const,
+			id: 'file:pagination-0/file-7.ts',
+			name: 'file-7.ts',
+		};
+		const addedProject: Project = {
+			...removedVisibleProject,
+			children: [{
+				...(removedVisibleProject.children[0] as typeof folder),
+				children: [
+					...(removedVisibleProject.children[0] as typeof folder).children,
+					addedFile,
+				],
+			}],
+		};
+
+		applyProject(addedProject);
+
+		assert.strictEqual(fixture.getNode(fileGroupId), fileGroup);
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [
+			initialFileIds[0],
+			initialFileIds[1],
+			initialFileIds[3],
+			initialFileIds[4],
+			initialFileIds[5],
+		]);
+		assert.strictEqual(
+			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
+			'+ 1개 더보기',
+		);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(5, true)}px`);
+		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 0));
+		fixture.renderer.dispose();
+		assert.strictEqual(fileGroup.getEventListenerCount(), 0);
 	});
 
 	test('재추가된 File Group은 저장된 page만큼 File Row를 복원한다', () => {
