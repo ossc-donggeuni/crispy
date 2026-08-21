@@ -332,6 +332,27 @@ suite('Crispy MCP protocol server', () => {
 		assert.deepStrictEqual(fixture.ping, []);
 	});
 
+	test('arguments를 생략한 crispy_ping도 정상 result와 ping으로 관찰한다', async () => {
+		const fixture = await startFixture();
+		const response = await postJson(fixture.url, fixture.token, {
+			jsonrpc: '2.0',
+			id: 22,
+			method: 'tools/call',
+			params: { name: CRISPY_PING_TOOL_NAME },
+		});
+		const responseBody = parseMcpResponseBody(await response.text());
+
+		assert.strictEqual(response.status, 200);
+		assert.notStrictEqual(responseBody.result?.isError, true);
+		await waitForActivityCount(fixture.activity, 1);
+		await waitForEventCount(fixture.ping, 1);
+		assert.deepStrictEqual(fixture.ping, [{
+			type: 'session.crispyPingObserved',
+			generation: fixture.generation,
+			sessionId: fixture.sessionId,
+		}]);
+	});
+
 	test('SDK가 허용한 mixed batch는 qualifying result가 있을 때 activity를 한 번 관찰한다', async () => {
 		const fixture = await startFixture();
 		const batch = await postJson(fixture.url, fixture.token, [

@@ -410,10 +410,15 @@ function isCrispyPingCall(value: unknown): boolean {
 	const argumentsValue = (params as Record<string, unknown>).arguments;
 	return request.method === 'tools/call'
 		&& (params as Record<string, unknown>).name === CRISPY_PING_TOOL_NAME
-		&& argumentsValue !== null
-		&& typeof argumentsValue === 'object'
-		&& !Array.isArray(argumentsValue)
-		&& Object.keys(argumentsValue).length === 0;
+		&& (
+			argumentsValue === undefined
+			|| (
+				argumentsValue !== null
+				&& typeof argumentsValue === 'object'
+				&& !Array.isArray(argumentsValue)
+				&& Object.keys(argumentsValue).length === 0
+			)
+		);
 }
 
 function cancelResponseBody(body: ReadableStream<Uint8Array> | null): void {
