@@ -20,6 +20,16 @@ const {
 } = require('../../../scripts/smoke-codex-config-compat') as CodexConfigCompatSmokeModule;
 
 suite('Codex config compatibility smoke script', () => {
+	test('standalone smoke는 node-pty handle이 남아도 결과 코드로 종료한다', () => {
+		const source = fs.readFileSync(
+			path.join(__dirname, '../../../scripts/smoke-codex-config-compat.js'),
+			'utf8',
+		);
+
+		assert.match(source, /\(\) => process\.exit\(0\)/u);
+		assert.match(source, /process\.exit\(1\)/u);
+	});
+
 	test('전용 cmd fixture는 npm shim의 self-path lookup에 의존하지 않는다', () => {
 		const source = createWindowsBatchFixtureSource(
 			'C:\\Node 100%\\node.exe',

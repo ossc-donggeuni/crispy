@@ -267,10 +267,13 @@ async function main() {
 }
 
 if (require.main === module) {
-	main().catch((error) => {
-		console.error(error instanceof Error ? error.message : String(error));
-		process.exitCode = 1;
-	});
+	main().then(
+		() => process.exit(0),
+		(error) => {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exit(1);
+		},
+	);
 }
 
 module.exports = Object.freeze({

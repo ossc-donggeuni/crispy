@@ -87,6 +87,7 @@ jobs:
       - name: Install latest Codex CLI
         run: npm install --global @openai/codex@latest
       - name: Smoke Codex config through Windows node-pty
+        timeout-minutes: 2
         run: pnpm run smoke:codex-config-compat
       - name: Package and inspect VSIX
         run: pnpm run package:vsix -- --target win32-x64

@@ -47,4 +47,5 @@ jobs:
       - name: Install latest Codex CLI
         run: npm install --global @openai/codex@latest
       - name: Parse Crispy config through Codex and node-pty
+        timeout-minutes: 2
         run: pnpm run smoke:codex-config-compat
