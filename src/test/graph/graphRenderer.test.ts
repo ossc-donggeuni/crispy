@@ -2310,6 +2310,7 @@ class FakeElement {
 		},
 	};
 	className = '';
+	hidden = false;
 	textContent = '';
 	type = '';
 	clientWidth: number;
@@ -2370,6 +2371,10 @@ class FakeElement {
 			name,
 			(this.attributeWriteCounts.get(name) ?? 0) + 1,
 		);
+	}
+
+	removeAttribute(name: string): void {
+		this.attributes.delete(name);
 	}
 
 	getAttribute(name: string): string | null {

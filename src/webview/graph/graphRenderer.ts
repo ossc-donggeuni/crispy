@@ -31,6 +31,7 @@ import { fitRelativePath } from './graphRootContext';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
+	applyLayout(node: GraphFileGroupNode): void;
 	dispose(): void;
 }
 
@@ -151,6 +152,14 @@ export function initializeGraphRenderer(
 		readonly rootId: string;
 		readonly element: HTMLElement;
 	} | undefined;
+	/** 숨겨지지 않은 최신 Backlink DOM만 interaction 대상으로 반환한다. */
+	const getVisibleBacklinkElement = (
+		targetRootId: string,
+	): HTMLElement | undefined => {
+		const element = backlinkElements.get(targetRootId);
+
+		return element?.hidden === false ? element : undefined;
+	};
 	/** 현재 Backlink Target 표시를 즉시 제거한다. */
 	const clearReattachTarget = (): void => {
 		activeReattachTarget?.element.classList.remove(REATTACH_TARGET_CLASS);
@@ -165,7 +174,7 @@ export function initializeGraphRenderer(
 		const rootId = rootNodeIds.has(nodeId)
 			? interactions.resolveRootId?.(nodeId)
 			: undefined;
-		const element = rootId ? backlinkElements.get(rootId) : undefined;
+		const element = rootId ? getVisibleBacklinkElement(rootId) : undefined;
 		const isTarget = element
 			? isPointInsideExpandedRect(
 				clientX,
@@ -219,6 +228,7 @@ export function initializeGraphRenderer(
 
 		path.classList.add('graph-edge');
 		path.setAttribute('data-graph-edge-id', edge.id);
+		syncEdgeVisibility(path, edge);
 		edgeLayer.append(path);
 		edgeElements.set(edge.id, path);
 	};
@@ -344,6 +354,7 @@ export function initializeGraphRenderer(
 			layoutNode,
 			ownerDocument,
 		);
+		element.hidden = layoutNode.hidden === true;
 		syncDetachDrag(layoutNode, element);
 		const backlinkTargetRootId = getNodeBacklinkTargetRootId(layoutNode);
 
@@ -599,6 +610,12 @@ export function initializeGraphRenderer(
 			for (const nextEdge of nextLayout.edges) {
 				if (!previousEdgesById.has(nextEdge.id)) {
 					addEdge(nextEdge);
+				} else {
+					const edgeElement = edgeElements.get(nextEdge.id);
+
+					if (edgeElement) {
+						syncEdgeVisibility(edgeElement, nextEdge);
+					}
 				}
 			}
 
@@ -628,8 +645,16 @@ export function initializeGraphRenderer(
 				nodeDrag?.updateDefaultPosition(nextNode.position);
 
 				if (element) {
+					element.hidden = nextNode.hidden === true;
 					syncDetachDrag(nextNode, element);
 					updateContainerStatusState(element, nextNode);
+				}
+
+				if (
+					nextNode.kind === 'file-group'
+					&& nextNode.presentation === 'grouped'
+				) {
+					fileGroupContents.get(nextNode.id)?.applyLayout(nextNode);
 				}
 
 				if (
@@ -688,12 +713,14 @@ export function initializeGraphRenderer(
 				return undefined;
 			}
 
-			return backlinkElements.get(targetRootId)?.getBoundingClientRect();
+			const element = getVisibleBacklinkElement(targetRootId);
+
+			return element?.getBoundingClientRect();
 		},
 		getBacklinkClientCenter(targetRootId) {
-			const bounds = disposed
-				? undefined
-				: backlinkElements.get(targetRootId)?.getBoundingClientRect();
+			const bounds = disposed ? undefined : getVisibleBacklinkElement(
+				targetRootId,
+			)?.getBoundingClientRect();
 
 			if (!bounds) {
 				return undefined;
@@ -988,7 +1015,9 @@ function initializeFileGroupContent(
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
 ): FileGroupContentRenderer {
+	let renderedNode = node;
 	let content: FileGroupContentElements = { elements: [], cleanups: [] };
+	let fileRows = new Map<string, HTMLLIElement>();
 	let disposed = false;
 	const clearContent = (): void => {
 		for (const cleanup of content.cleanups) {
@@ -1000,6 +1029,7 @@ function initializeFileGroupContent(
 		}
 
 		content = { elements: [], cleanups: [] };
+		fileRows = new Map();
 	};
 
 	return {
@@ -1009,16 +1039,17 @@ function initializeFileGroupContent(
 			}
 
 			clearContent();
-			const visibleCount = getVisibleFileCount(node.children.length, page);
-			const remainingCount = getRemainingFileCount(node.children.length, page);
-			const showCollapse = node.children.length > FILE_GROUP_PAGE_SIZE && page > 1;
+			const visibleCount = getVisibleFileCount(renderedNode.children.length, page);
+			const remainingCount = getRemainingFileCount(renderedNode.children.length, page);
+			const showCollapse = renderedNode.children.length > FILE_GROUP_PAGE_SIZE
+				&& page > 1;
 			const list = ownerDocument.createElement('ul');
 			const elements: HTMLElement[] = [list];
 			const cleanups: Array<() => void> = [];
 
 			list.className = 'graph-file-list';
 
-			for (const file of node.children.slice(0, visibleCount)) {
+			for (const file of renderedNode.children.slice(0, visibleCount)) {
 				const row = createFileRow(
 					file,
 					ownerDocument,
@@ -1028,6 +1059,7 @@ function initializeFileGroupContent(
 				);
 
 				list.append(row.element);
+				fileRows.set(file.id, row.element);
 				cleanups.push(row.dispose);
 			}
 
@@ -1043,7 +1075,7 @@ function initializeFileGroupContent(
 					const more = ownerDocument.createElement('button');
 					const handleMoreClick = (event: MouseEvent): void => {
 						event.stopPropagation();
-						graphState.showMoreFiles(node.id);
+						graphState.showMoreFiles(renderedNode.id);
 					};
 
 					more.className = 'graph-file-control graph-file-more';
@@ -1061,7 +1093,7 @@ function initializeFileGroupContent(
 					const collapse = ownerDocument.createElement('button');
 					const handleCollapseClick = (event: MouseEvent): void => {
 						event.stopPropagation();
-						graphState.collapseFileGroup(node.id);
+						graphState.collapseFileGroup(renderedNode.id);
 					};
 
 					collapse.className = 'graph-file-control graph-file-collapse';
@@ -1080,6 +1112,20 @@ function initializeFileGroupContent(
 			}
 
 			content = { elements, cleanups };
+		},
+		applyLayout(nextNode): void {
+			if (disposed) {
+				return;
+			}
+
+			renderedNode = nextNode;
+			const filesById = new Map(
+				nextNode.children.map((file) => [file.id, file]),
+			);
+
+			for (const [fileId, row] of fileRows) {
+				row.hidden = filesById.get(fileId)?.hidden === true;
+			}
 		},
 		dispose(): void {
 			if (disposed) {
@@ -1103,6 +1149,7 @@ function createFileRow(
 	const item = ownerDocument.createElement('li');
 
 	item.className = 'graph-file-item';
+	item.hidden = file.hidden === true;
 	item.setAttribute('data-file-id', file.id);
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	applyFileBacklinkAttributes(item, file);
@@ -1148,6 +1195,18 @@ function createFileRow(
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
 		},
 	};
+}
+
+/** Layout Edge의 계산된 표시 여부를 기존 SVG path에 반영한다. */
+function syncEdgeVisibility(
+	element: SVGPathElement,
+	edge: GraphLayoutEdge,
+): void {
+	if (edge.hidden === true) {
+		element.setAttribute('visibility', 'hidden');
+	} else {
+		element.removeAttribute('visibility');
+	}
 }
 
 /** Folder/standalone File Card에서 사용할 Backlink 대상 Root ID를 찾는다. */

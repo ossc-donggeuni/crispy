@@ -850,6 +850,78 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(folder.position.x - root.position.x, 262);
 	});
 
+	test('Filter 표시 상태를 Project를 제외한 Folder subtree와 File presentation에 계산한다', () => {
+		const childFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:filter/parent/child',
+			name: 'child',
+			status: 'loaded',
+			children: [],
+		};
+		const parentFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:filter/parent',
+			name: 'parent',
+			status: 'loaded',
+			children: [childFolder],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:filter',
+			name: 'filter',
+			status: 'loaded',
+			children: [
+				parentFolder,
+				{ kind: 'file', id: 'file:filter/a.ts', name: 'a.ts' },
+				{ kind: 'file', id: 'file:filter/b.ts', name: 'b.ts' },
+			],
+		};
+		const hiddenNodeIds = {
+			[project.id]: true as const,
+			[parentFolder.id]: true as const,
+			'file:filter/a.ts': true as const,
+		};
+		const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+			openedFolders: {
+				[project.id]: true,
+				[parentFolder.id]: true,
+				[childFolder.id]: true,
+			},
+			hiddenNodeIds,
+		});
+		const projectNode = getLayoutNode(layout.nodes, project.id);
+		const parentNode = getLayoutNode(layout.nodes, parentFolder.id);
+		const childNode = getLayoutNode(layout.nodes, childFolder.id);
+		const fileGroup = getFileGroup(layout.nodes, project.id);
+		const hiddenFile = fileGroup.children.find(
+			(file) => file.id === 'file:filter/a.ts',
+		);
+		const visibleFile = fileGroup.children.find(
+			(file) => file.id === 'file:filter/b.ts',
+		);
+
+		assert.strictEqual(projectNode.hidden, undefined);
+		assert.strictEqual(parentNode.hidden, true);
+		assert.strictEqual(childNode.hidden, true);
+		assert.strictEqual(fileGroup.hidden, undefined);
+		assert.strictEqual(fileGroup.presentation, 'grouped');
+		assert.strictEqual(hiddenFile?.hidden, true);
+		assert.strictEqual(visibleFile?.hidden, undefined);
+		assert.strictEqual(
+			layout.edges.find((edge) => edge.targetId === parentFolder.id)?.hidden,
+			true,
+		);
+		assert.strictEqual(
+			layout.edges.find((edge) => edge.targetId === childFolder.id)?.hidden,
+			true,
+		);
+		assert.deepStrictEqual(hiddenNodeIds, {
+			[project.id]: true,
+			[parentFolder.id]: true,
+			'file:filter/a.ts': true,
+		});
+	});
+
 	test('30px File Row와 pagination control 높이를 File Group Layout 높이에 반영한다', () => {
 		const layout = createGraphLayout(GRAPH_MOCK_PROJECT);
 		const fileGroup = getFileGroup(layout.nodes, 'folder:app/src');

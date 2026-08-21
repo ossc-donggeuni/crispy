@@ -28,6 +28,8 @@ export interface GraphLayoutPosition {
 interface GraphLayoutNodeBase {
 	readonly id: string;
 	readonly name: string;
+	/** Graph 구조와 geometry는 유지하되 표시에서 제외할 때만 존재한다. */
+	readonly hidden?: true;
 	readonly depth: number;
 	readonly position: GraphLayoutPosition;
 	readonly width: number;
@@ -61,6 +63,8 @@ export interface GraphFileNode {
 	readonly kind: 'file';
 	readonly id: string;
 	readonly name: string;
+	/** File Row 또는 standalone Card를 표시에서 제외할 때만 존재한다. */
+	readonly hidden?: true;
 	readonly presentation: GraphFilePresentation;
 	readonly targetRootId?: string;
 }
@@ -88,6 +92,8 @@ export interface GraphLayoutEdge {
 	readonly id: string;
 	readonly sourceId: string;
 	readonly targetId: string;
+	/** 연결 Node 중 하나가 숨겨져 표시에서 제외할 때만 존재한다. */
+	readonly hidden?: true;
 }
 
 /** 결정된 Node 위치와 직접 Parent-Child Edge 목록이다. */
@@ -104,6 +110,7 @@ export interface GraphLayout {
 export interface GraphLayoutOptions {
 	readonly fileGroupPages?: Readonly<Record<string, number>>;
 	readonly openedFolders?: Readonly<Record<string, true>>;
+	readonly hiddenNodeIds?: Readonly<Record<string, true>>;
 }
 
 /** 저장 위치가 있으면 우선하고 없으면 Layout의 결정적 기본 위치를 반환한다. */
@@ -143,6 +150,7 @@ interface LayoutTreeNode {
 	readonly id: string;
 	readonly name: string;
 	readonly kind: GraphLayoutNode['kind'];
+	readonly hidden?: true;
 	readonly status?: ProjectContainer['status'];
 	readonly depth: number;
 	readonly width: number;
@@ -193,13 +201,21 @@ export function createGraphLayout(
 		}
 
 		const tree = rootNode.kind === 'file'
-			? createStandaloneFileGroupTree(rootNode, 0)
+			? createStandaloneFileGroupTree(
+				rootNode,
+				0,
+				undefined,
+				undefined,
+				options.hiddenNodeIds?.[rootNode.id] === true,
+			)
 			: createContainerTree(
 				rootNode,
 				0,
 				options.fileGroupPages ?? {},
 				options.openedFolders ?? {},
 				rootsByNodeId,
+				options.hiddenNodeIds ?? {},
+				false,
 			);
 		const subtreeHeight = placeTree(tree, rootTop, nodes, edges);
 
@@ -226,22 +242,37 @@ function createContainerTree(
 	fileGroupPages: Readonly<Record<string, number>>,
 	openedFolders: Readonly<Record<string, true>>,
 	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
+	hiddenNodeIds: Readonly<Record<string, true>>,
+	inheritedHidden: boolean,
 ): LayoutTreeNode {
+	const hidden = inheritedHidden
+		|| (
+			container.kind === 'folder'
+			&& hiddenNodeIds[container.id] === true
+		);
 	const isOpened = openedFolders[container.id] === true;
 	const visibleChildren = isOpened ? container.children : [];
 	const folderChildren = visibleChildren
 		.filter(isFolder)
 		.map((folder) => {
 			const targetRoot = rootsByNodeId.get(folder.id);
+			const folderHidden = hidden || hiddenNodeIds[folder.id] === true;
 
 			return targetRoot
-				? createFolderBacklinkTree(folder, depth + 1, targetRoot)
+				? createFolderBacklinkTree(
+					folder,
+					depth + 1,
+					targetRoot,
+					folderHidden,
+				)
 				: createContainerTree(
 					folder,
 					depth + 1,
 					fileGroupPages,
 					openedFolders,
 					rootsByNodeId,
+					hiddenNodeIds,
+					hidden,
 				);
 		});
 	const files = visibleChildren.filter(isFile);
@@ -252,6 +283,8 @@ function createContainerTree(
 			depth + 1,
 			fileGroupPages,
 			rootsByNodeId,
+			hiddenNodeIds,
+			hidden,
 		)
 		: [];
 
@@ -259,6 +292,7 @@ function createContainerTree(
 		id: container.id,
 		name: container.name,
 		kind: container.kind,
+		...(hidden ? { hidden: true as const } : {}),
 		status: container.status,
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
@@ -272,11 +306,13 @@ function createFolderBacklinkTree(
 	folder: Folder,
 	depth: number,
 	targetRoot: GraphRoot,
+	hidden: boolean,
 ): LayoutTreeNode {
 	return {
 		id: createFolderBacklinkId(targetRoot.id),
 		name: folder.name,
 		kind: 'folder-backlink',
+		...(hidden ? { hidden: true } : {}),
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
@@ -293,6 +329,8 @@ function createFileLayoutTrees(
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
 	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
+	hiddenNodeIds: Readonly<Record<string, true>>,
+	inheritedHidden: boolean,
 ): readonly LayoutTreeNode[] {
 	const singleton = files[0];
 
@@ -304,6 +342,7 @@ function createFileLayoutTrees(
 			depth,
 			parent.id,
 			targetRoot,
+			inheritedHidden || hiddenNodeIds[singleton.id] === true,
 		)];
 	}
 
@@ -318,6 +357,7 @@ function createFileLayoutTrees(
 		id,
 		name: `${parent.name} files`,
 		kind: 'file-group',
+		...(inheritedHidden ? { hidden: true as const } : {}),
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
@@ -325,6 +365,7 @@ function createFileLayoutTrees(
 		fileChildren: files.map((file) => toGraphFileNode(
 			file,
 			rootsByNodeId.get(file.id),
+			inheritedHidden || hiddenNodeIds[file.id] === true,
 		)),
 		fileGroupPresentation: 'grouped',
 		children: [],
@@ -337,27 +378,34 @@ function createStandaloneFileGroupTree(
 	depth: number,
 	parentId?: string,
 	targetRoot?: GraphRoot,
+	hidden = false,
 ): LayoutTreeNode {
 	return {
 		id: targetRoot ? createFileBacklinkGroupId(targetRoot.id) : file.id,
 		name: file.name,
 		kind: 'file-group',
+		...(hidden ? { hidden: true } : {}),
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 		parentId,
-		fileChildren: [toGraphFileNode(file, targetRoot)],
+		fileChildren: [toGraphFileNode(file, targetRoot, hidden)],
 		fileGroupPresentation: 'standalone',
 		children: [],
 	};
 }
 
 /** Project File을 Group이 소유하는 최소 File Layout child로 변환한다. */
-function toGraphFileNode(file: File, targetRoot?: GraphRoot): GraphFileNode {
+function toGraphFileNode(
+	file: File,
+	targetRoot: GraphRoot | undefined,
+	hidden: boolean,
+): GraphFileNode {
 	return {
 		kind: 'file',
 		id: file.id,
 		name: file.name,
+		...(hidden ? { hidden: true } : {}),
 		presentation: targetRoot ? 'backlink' : 'normal',
 		...(targetRoot === undefined ? {} : { targetRootId: targetRoot.id }),
 	};
@@ -407,6 +455,9 @@ function placeTree(
 			id: `${tree.id}->${child.id}`,
 			sourceId: tree.id,
 			targetId: child.id,
+			...(tree.hidden === true || child.hidden === true
+				? { hidden: true as const }
+				: {}),
 		});
 		placeTree(child, childTop, nodes, edges);
 		childTop += childHeight + GRAPH_LAYOUT_ROW_GAP;
@@ -437,6 +488,7 @@ function toGraphLayoutNode(
 	const base = {
 		id: tree.id,
 		name: tree.name,
+		...(tree.hidden === true ? { hidden: true as const } : {}),
 		depth: tree.depth,
 		position,
 		width: tree.width,
