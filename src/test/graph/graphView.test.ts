@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
 	createFileGroupId,
 	createGraphLayout,
@@ -35,6 +37,19 @@ import {
 } from '../../webview/graph/graphView';
 
 suite('Graph View', () => {
+	test('Graph Node와 File Row의 hidden 속성은 flex layout보다 우선한다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const hiddenRule = graphViewCss.match(
+			/\.graph-node\[hidden\],\s*\.graph-file-item\[hidden\]\s*\{[^}]*\}/,
+		);
+
+		assert.ok(hiddenRule);
+		assert.match(hiddenRule[0], /display:\s*none;/);
+	});
+
 	test('한 번 생성한 Layout reference를 Renderer와 Navigator에 함께 적용한다', () => {
 		const layout = createGraphLayout(GRAPH_MOCK);
 		let rendererLayout: typeof layout | undefined;
