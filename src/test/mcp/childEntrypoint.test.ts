@@ -44,6 +44,12 @@ suite('Standalone MCP child transaction', () => {
 			const registered = await registeredPromise;
 			assert.strictEqual(registered.sessionId, identity.sessionId);
 
+			const pingObservedPromise = waitForMessage(
+				child,
+				(message): message is Extract<McpChildToHostMessage, {
+					type: 'session.crispyPingObserved';
+				}> => message.type === 'session.crispyPingObserved',
+			);
 			const response = await fetch(`http://127.0.0.1:${ready.port}/mcp/${identity.routeId}`, {
 				method: 'POST',
 				headers: {
@@ -72,6 +78,12 @@ suite('Standalone MCP child transaction', () => {
 				JSON.parse(body.result?.content?.[0]?.text ?? 'null'),
 				{ ok: true, server: 'crispy', mode: 'observation-only' },
 			);
+			const pingObserved = await pingObservedPromise;
+			assert.deepStrictEqual(pingObserved, {
+				type: 'session.crispyPingObserved',
+				generation: identity.generation,
+				sessionId: identity.sessionId,
+			});
 
 			const revokedPromise = waitForMessage(
 				child,

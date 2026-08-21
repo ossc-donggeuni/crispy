@@ -52,6 +52,8 @@ suite('MCP strict IPC validator', () => {
 		}, {
 			type: 'session.mcpActivityObserved', generation, sessionId,
 		}, {
+			type: 'session.crispyPingObserved', generation, sessionId,
+		}, {
 			type: 'operation.failed',
 			requestId,
 			generation,

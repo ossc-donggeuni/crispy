@@ -255,6 +255,30 @@ target 정보 없이 일반 production bundle을 확인할 때 사용한다.
 pnpm run package
 ```
 
+#### Codex MCP session config 수동 smoke
+
+Codex MCP adapter와 session-only CLI config serializer를 실제 설치된 Codex로 확인한다. 먼저
+test source와 production `dist/mcp-server.mjs`를 준비한 뒤 smoke를 실행한다. Smoke는 config
+파일이나 VS Code settings를 쓰지 않고 `--config` argv와 process environment만 사용한다.
+Codex 로그, MCP URL 및 credential은 출력하지 않는다.
+
+```bash
+pnpm run prepare:codex-mcp-smoke
+pnpm run smoke:codex-mcp
+```
+
+Codex CLI가 로그인되어 있어야 한다. 정상 실행은 아래 세 상태만 출력하며 authenticated MCP
+activity를 관찰한 뒤 Codex와 adapter를 정리한다.
+
+```text
+adapter_ready
+awaiting_activity
+activity_observed
+```
+
+실패 시에는 raw provider output 대신 `failed:<safe-reason>`만 출력한다. 요청이 늦다는 이유로
+연결 실패를 추론하지 않으므로, activity를 기다리는 동안에는 임의 silence timeout을 두지 않는다.
+
 #### 현재 platform VSIX 검증
 
 아래 `<target>`에는 현재 머신과 정확히 일치하는 값만 사용할 수 있다.

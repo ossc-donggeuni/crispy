@@ -7,6 +7,7 @@ import {
 import {
 	CrispyMcpProtocolServer,
 	type McpActivityObservedEvent,
+	type McpPingObservedEvent,
 } from '../../mcp/protocolServer';
 import {
 	MCP_REQUEST_BODY_MAX_BYTES,
@@ -21,6 +22,7 @@ interface StartedFixture {
 	readonly generation: string;
 	readonly sessionId: string;
 	readonly activity: McpActivityObservedEvent[];
+	readonly ping: McpPingObservedEvent[];
 }
 
 interface RawHttpResponse {
@@ -213,6 +215,7 @@ suite('Crispy MCP protocol server', () => {
 			generation: fixture.generation,
 			sessionId: fixture.sessionId,
 		}]);
+		assert.deepStrictEqual(fixture.ping, []);
 	});
 
 	test('tools/list 또는 tools/call이 최초 요청이어도 activity를 관찰한다', async () => {
@@ -231,6 +234,12 @@ suite('Crispy MCP protocol server', () => {
 			assert.strictEqual(response.status, 200);
 			await waitForActivityCount(fixture.activity, 1);
 			assert.strictEqual(fixture.activity.length, 1);
+			if (index === 0) {
+				assert.deepStrictEqual(fixture.ping, []);
+			} else {
+				await waitForEventCount(fixture.ping, 1);
+				assert.strictEqual(fixture.ping.length, 1);
+			}
 			await fixture.server.shutdown();
 			runningServers.delete(fixture.server);
 		}
@@ -320,6 +329,7 @@ suite('Crispy MCP protocol server', () => {
 			generation: fixture.generation,
 			sessionId: fixture.sessionId,
 		}]);
+		assert.deepStrictEqual(fixture.ping, []);
 	});
 
 	test('SDK가 허용한 mixed batch는 qualifying result가 있을 때 activity를 한 번 관찰한다', async () => {
@@ -434,6 +444,12 @@ suite('Crispy MCP protocol server', () => {
 			}]);
 			await waitForActivityCount(fixture.activity, 1);
 			assert.strictEqual(fixture.activity.length, 1);
+			await waitForEventCount(fixture.ping, 1);
+			assert.deepStrictEqual(fixture.ping, [{
+				type: 'session.crispyPingObserved',
+				generation: fixture.generation,
+				sessionId: fixture.sessionId,
+			}]);
 		} finally {
 			await client.close();
 		}
@@ -471,9 +487,11 @@ async function startFixture(
 	sessionId = 'session-c1',
 ): Promise<StartedFixture> {
 	const activity: McpActivityObservedEvent[] = [];
+	const ping: McpPingObservedEvent[] = [];
 	const server = new CrispyMcpProtocolServer({
 		generation,
 		onActivityObserved: (event) => activity.push(event),
+		onPingObserved: (event) => ping.push(event),
 	});
 	runningServers.add(server);
 	await server.start();
@@ -486,6 +504,7 @@ async function startFixture(
 		generation,
 		sessionId,
 		activity,
+		ping,
 	};
 }
 
@@ -524,6 +543,16 @@ async function waitForActivityCount(
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	}
 	assert.strictEqual(activity.length, expectedCount);
+}
+
+async function waitForEventCount(
+	events: readonly unknown[],
+	expectedCount: number,
+): Promise<void> {
+	for (let attempt = 0; attempt < 50 && events.length < expectedCount; attempt += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	assert.strictEqual(events.length, expectedCount);
 }
 
 async function settleActivityObservers(): Promise<void> {
