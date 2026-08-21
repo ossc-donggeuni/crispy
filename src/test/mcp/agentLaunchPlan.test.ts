@@ -47,6 +47,24 @@ suite('Agent launch plan process boundary', () => {
 		}, 'darwin'), { SAFE: 'yes' });
 	});
 
+	test('일반 overlay 이름은 POSIX에서 case-sensitive이고 Windows에서만 case-insensitive다', () => {
+		const plan = createPlan({ envOverlay: { PATH: '/overlay' } });
+		const base = {
+			PATH: '/uppercase',
+			Path: '/mixed',
+			path: '/lowercase',
+		};
+
+		assert.deepStrictEqual(createAgentProcessEnvironment(plan, base, 'linux'), {
+			PATH: '/overlay',
+			Path: '/mixed',
+			path: '/lowercase',
+		});
+		assert.deepStrictEqual(createAgentProcessEnvironment(plan, base, 'win32'), {
+			PATH: '/overlay',
+		});
+	});
+
 	test('direct plan은 executable, argv, cwd와 concrete env를 그대로 보존한다', () => {
 		const plan = createPlan();
 		const request = createAgentProcessSpawnRequest(plan, {

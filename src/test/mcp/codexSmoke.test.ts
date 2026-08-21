@@ -14,6 +14,7 @@ import {
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type { McpPrepareResult } from '../../mcp/sessionRuntime';
 import type { AgentExecutableResolver } from '../../mcp/agentExecutableResolver';
+import type { CodexConfigStyleResolver } from '../../mcp/codexCompatibility';
 
 const generation = 'generation-codex-smoke';
 const sessionId = 'session-codex-smoke';
@@ -325,6 +326,7 @@ function createSmokeFixture(overrides: {
 		readonly baseEnvironment: NodeJS.ProcessEnv;
 		readonly randomBytes: (size: number) => Buffer;
 		readonly resolveExecutable: AgentExecutableResolver;
+		readonly resolveConfigStyle: CodexConfigStyleResolver;
 		readonly terminateProvider: (provider: ChildProcess) => Promise<void>;
 		readonly report: (status: CodexSmokeStatus) => void;
 	};
@@ -395,6 +397,7 @@ function createSmokeFixture(overrides: {
 				launcherKind: 'direct' as const,
 			}),
 		}),
+		resolveConfigStyle: async () => 'keyed-filters' as const,
 		terminateProvider: async () => {
 			terminateCount += 1;
 		},

@@ -82,6 +82,12 @@ jobs:
         run: npm install --global pnpm@11.18.0
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Run tests
+        run: pnpm test
+      - name: Install latest Codex CLI
+        run: npm install --global @openai/codex@latest
+      - name: Smoke Codex config through Windows node-pty
+        run: pnpm run smoke:codex-config-compat
       - name: Package and inspect VSIX
         run: pnpm run package:vsix -- --target win32-x64
       - name: Smoke installed VSIX

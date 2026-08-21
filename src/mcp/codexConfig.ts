@@ -9,6 +9,10 @@ export const CODEX_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
 export const CODEX_MCP_SERVER_NAME_RANDOM_BYTES = 16;
 export const CODEX_CONFIG_OVERRIDE_ARGUMENT = '--config';
 
+export type CodexShellEnvironmentPolicyStyle =
+	| 'keyed-filters'
+	| 'legacy-exclude';
+
 const BLOCKED_CODEX_PROVIDER_ENVIRONMENT_NAMES = new Set([
 	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
 	'ELECTRON_RUN_AS_NODE',
@@ -37,6 +41,7 @@ export function createCodexMcpServerName(
 export function createCodexMcpConfig(
 	connection: McpConnectionDescriptor,
 	random?: McpRandomBytes,
+	shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle = 'keyed-filters',
 ): CodexMcpConfig {
 	assertValidCodexMcpUrl(connection.url);
 	const serverName = createCodexMcpServerName(random);
@@ -46,13 +51,22 @@ export function createCodexMcpConfig(
 		`${serverKey}.bearer_token_env_var=${serializeCodexTomlString(CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE)}`,
 		`${serverKey}.required=false`,
 		`${serverKey}.enabled_tools=[${serializeCodexTomlString(CRISPY_PING_TOOL_NAME)}]`,
-		`shell_environment_policy.filters.${CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE}=${serializeCodexTomlString('exclude')}`,
+		createShellEnvironmentPolicyAssignment(shellEnvironmentPolicyStyle),
 	];
 	const args = Object.freeze(assignments.flatMap((assignment) => [
 		CODEX_CONFIG_OVERRIDE_ARGUMENT,
 		assignment,
 	]));
 	return Object.freeze({ serverName, args });
+}
+
+function createShellEnvironmentPolicyAssignment(
+	style: CodexShellEnvironmentPolicyStyle,
+): string {
+	if (style === 'legacy-exclude') {
+		return `shell_environment_policy.exclude=[${serializeCodexTomlString(CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE)}]`;
+	}
+	return `shell_environment_policy.filters.${CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE}=${serializeCodexTomlString('exclude')}`;
 }
 
 /**

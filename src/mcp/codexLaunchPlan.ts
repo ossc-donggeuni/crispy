@@ -6,6 +6,7 @@ import {
 import {
 	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
 	createCodexMcpConfig,
+	type CodexShellEnvironmentPolicyStyle,
 } from './codexConfig';
 import type { McpRandomBytes } from './sessionCredentials';
 import type { McpConnectionDescriptor } from './sessionRuntime';
@@ -22,6 +23,7 @@ export interface BuildCodexMcpLaunchPlanOptions
 	readonly argsBeforeConfig?: readonly string[];
 	readonly argsAfterConfig?: readonly string[];
 	readonly randomBytes?: McpRandomBytes;
+	readonly shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle;
 }
 
 /** A fail-open Codex plan never contains an MCP credential or Electron child control. */
@@ -41,7 +43,11 @@ export function buildCodexBareLaunchPlan(
 export function buildCodexMcpLaunchPlan(
 	options: BuildCodexMcpLaunchPlanOptions,
 ): AgentLaunchPlan {
-	const config = createCodexMcpConfig(options.connection, options.randomBytes);
+	const config = createCodexMcpConfig(
+		options.connection,
+		options.randomBytes,
+		options.shellEnvironmentPolicyStyle,
+	);
 	/** Building and final environment materialization both require an active descriptor. */
 	options.connection.withBearerToken(() => undefined);
 	return freezeCodexPlan({

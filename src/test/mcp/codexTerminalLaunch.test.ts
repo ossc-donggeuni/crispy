@@ -14,6 +14,7 @@ suite('Codex terminal launch preparation', () => {
 	test('trusted cwd와 executable을 Shell resolution 없이 구조화해 반환한다', async () => {
 		let workspaceCalls = 0;
 		let executableCalls = 0;
+		let configStyleCalls = 0;
 		const prepare = createPrepareCodexTerminalLaunch({
 			workspaceResolver: () => {
 				workspaceCalls += 1;
@@ -34,6 +35,11 @@ suite('Codex terminal launch preparation', () => {
 			readPlatform: () => 'linux',
 			readEnvironment: () => ({ PATH: '/bin', TERM_PROGRAM: 'stale' }),
 			getCliPath: () => '/opt/custom codex',
+			resolveConfigStyle: async (options) => {
+				configStyleCalls += 1;
+				assert.strictEqual(options.executable.executable, '/opt/custom codex');
+				return 'keyed-filters';
+			},
 		});
 
 		const result = await prepare('tab-codex', 'session-codex');
@@ -44,6 +50,7 @@ suite('Codex terminal launch preparation', () => {
 		}
 		assert.strictEqual(workspaceCalls, 1);
 		assert.strictEqual(executableCalls, 1);
+		assert.strictEqual(configStyleCalls, 1);
 		assert.deepStrictEqual(result.preparation.executable, {
 			executable: '/opt/custom codex',
 			launcherKind: 'direct',
@@ -51,6 +58,10 @@ suite('Codex terminal launch preparation', () => {
 		assert.strictEqual(result.preparation.cwd, root.fsPath);
 		assert.strictEqual(result.preparation.environment.TERM, 'xterm-256color');
 		assert.strictEqual(result.preparation.environment.TERM_PROGRAM, undefined);
+		assert.strictEqual(
+			result.preparation.shellEnvironmentPolicyStyle,
+			'keyed-filters',
+		);
 	});
 
 	test('workspace failure는 executable probe 전에 기존 안전 오류로 반환한다', async () => {
@@ -93,6 +104,7 @@ suite('Codex terminal launch preparation', () => {
 			},
 			readPlatform: () => 'win32',
 			readEnvironment: () => ({ PATH: 'C:\\Tools', PATHEXT: '.EXE;.CMD' }),
+			resolveConfigStyle: async () => 'keyed-filters',
 		});
 
 		assert.strictEqual((await prepare('tab-one', 'session-one')).ok, false);
@@ -100,5 +112,31 @@ suite('Codex terminal launch preparation', () => {
 		assert.strictEqual((await prepare('tab-two', 'session-two')).ok, true);
 		assert.strictEqual((await prepare('tab-three', 'session-three')).ok, true);
 		assert.strictEqual(calls, 2);
+	});
+
+	test('version 확인 실패는 실행 준비를 막지 않고 MCP만 비활성화한다', async () => {
+		const prepare = createPrepareCodexTerminalLaunch({
+			workspaceResolver: () => ({ ok: true, root }),
+			resolveExecutable: async () => ({
+				ok: true,
+				executable: {
+					executable: '/opt/codex',
+					launcherKind: 'direct',
+				},
+			}),
+			readPlatform: () => 'linux',
+			readEnvironment: () => ({ PATH: '/bin' }),
+			resolveConfigStyle: async () => undefined,
+		});
+
+		const result = await prepare('tab-bare', 'session-bare');
+
+		assert.strictEqual(result.ok, true);
+		if (result.ok) {
+			assert.strictEqual(
+				result.preparation.shellEnvironmentPolicyStyle,
+				undefined,
+			);
+		}
 	});
 });

@@ -10,12 +10,18 @@ import type {
 	AgentExecutableResolver,
 	ResolvedAgentExecutable,
 } from './agentExecutableResolver';
+import {
+	resolveCodexConfigStyle,
+	type CodexConfigStyleResolver,
+} from './codexCompatibility';
+import type { CodexShellEnvironmentPolicyStyle } from './codexConfig';
 
 export interface PreparedCodexTerminalLaunch {
 	readonly executable: ResolvedAgentExecutable;
 	readonly cwd: string;
 	readonly environment: NodeJS.ProcessEnv;
 	readonly platform: NodeJS.Platform;
+	readonly shellEnvironmentPolicyStyle?: CodexShellEnvironmentPolicyStyle;
 }
 
 export type PrepareCodexTerminalLaunch = (
@@ -32,6 +38,7 @@ export interface PrepareCodexTerminalLaunchDependencies {
 	readonly readPlatform: () => NodeJS.Platform;
 	readonly readEnvironment: () => NodeJS.ProcessEnv;
 	readonly getCliPath?: () => string | undefined;
+	readonly resolveConfigStyle?: CodexConfigStyleResolver;
 }
 
 const PROVIDER_START_ERROR = Object.freeze({
@@ -51,6 +58,8 @@ export function createPrepareCodexTerminalLaunch(
 		string,
 		ReturnType<AgentExecutableResolver>
 	>();
+	const resolveConfigStyle = dependencies.resolveConfigStyle
+		?? resolveCodexConfigStyle;
 
 	return async (tabId, sessionId) => {
 		const workspace = dependencies.workspaceResolver();
@@ -109,6 +118,18 @@ export function createPrepareCodexTerminalLaunch(
 			return providerStartFailure(tabId, sessionId);
 		}
 
+		let shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle | undefined;
+		try {
+			shellEnvironmentPolicyStyle = await resolveConfigStyle({
+				executable: resolution.executable,
+				cwd: workspace.root.fsPath,
+				platform,
+				environment,
+			});
+		} catch {
+			/** An unreadable Codex version disables MCP but leaves bare Codex available. */
+		}
+
 		return {
 			ok: true,
 			preparation: Object.freeze({
@@ -116,6 +137,9 @@ export function createPrepareCodexTerminalLaunch(
 				cwd: workspace.root.fsPath,
 				environment: Object.freeze({ ...environment }),
 				platform,
+				...(shellEnvironmentPolicyStyle === undefined
+					? {}
+					: { shellEnvironmentPolicyStyle }),
 			}),
 		};
 	};

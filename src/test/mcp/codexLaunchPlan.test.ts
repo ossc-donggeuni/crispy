@@ -42,6 +42,7 @@ suite('Codex AgentLaunchPlan builder', () => {
 			argsBeforeConfig: ['exec'],
 			argsAfterConfig: ['ping'],
 			randomBytes: (size) => Buffer.alloc(size, 0xab),
+			shellEnvironmentPolicyStyle: 'keyed-filters',
 		});
 		const environment = createAgentProcessEnvironment(plan, {
 			crispy_mcp_token: 'stale',
@@ -68,6 +69,7 @@ suite('Codex AgentLaunchPlan builder', () => {
 				executable: { executable: '/opt/codex', launcherKind: 'direct' },
 				cwd: '/workspace',
 				connection,
+				shellEnvironmentPolicyStyle: 'keyed-filters',
 			}),
 			/credential is no longer active/,
 		);
@@ -79,6 +81,7 @@ suite('Codex AgentLaunchPlan builder', () => {
 			executable: { executable: '/opt/codex', launcherKind: 'direct' },
 			cwd: '/workspace',
 			connection,
+			shellEnvironmentPolicyStyle: 'keyed-filters',
 		});
 		connection.invalidate();
 

@@ -101,7 +101,16 @@ export {
 	createCodexProviderEnvironment,
 	sanitizeCodexProviderEnvironment,
 	type CodexMcpConfig,
+	type CodexShellEnvironmentPolicyStyle,
 } from './codexConfig';
+export {
+	CODEX_KEYED_FILTER_CONSERVATIVE_BASELINE,
+	CODEX_VERSION_PROBE_TIMEOUT_MS,
+	resolveCodexConfigStyle,
+	selectCodexConfigStyleFromVersionOutput,
+	type CodexConfigStyleResolver,
+	type ResolveCodexConfigStyleOptions,
+} from './codexCompatibility';
 export {
 	buildCodexBareLaunchPlan,
 	buildCodexMcpLaunchPlan,

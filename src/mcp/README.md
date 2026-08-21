@@ -9,6 +9,7 @@ codex --version
 ```
 
 Codex CLI는 미리 로그인되어 있어야 한다. Crispy Terminal은 신뢰된 로컬 단일-root workspace에서만 실행된다.
+실행 시 `codex --version`을 확인해 구버전에는 legacy environment exclude를, 검증된 최신 계열에는 keyed filter를 사용한다. 버전을 확인할 수 없으면 MCP 없이 bare Codex로 실행한다.
 
 ## Extension Development Host에서 실행
 
@@ -58,4 +59,16 @@ pnpm run smoke:codex-mcp
 adapter_ready
 awaiting_activity
 activity_observed
+```
+
+설치된 Codex의 config parsing과 node-pty 실행 경계만 확인하려면 다음을 실행한다.
+
+```bash
+pnpm run smoke:codex-config-compat
+```
+
+정상 출력 예시는 다음과 같다.
+
+```text
+[codex-config-compat-smoke] keyed-filters config parsed through node-pty.
 ```

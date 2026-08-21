@@ -142,6 +142,7 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 function createFixture(options: {
 	readonly fakePid?: number;
 	readonly supervisor?: FakeCodexSupervisor;
+	readonly configStyle?: 'keyed-filters' | 'legacy-exclude' | null;
 	readonly buildPlan?: ConstructorParameters<typeof TerminalHost>[0][
 		'buildCodexMcpLaunchPlan'
 	];
@@ -173,6 +174,12 @@ function createFixture(options: {
 					Electron_Run_As_Node: '1',
 				},
 				platform: 'linux',
+				...(options.configStyle === null
+					? {}
+					: {
+						shellEnvironmentPolicyStyle:
+							options.configStyle ?? 'keyed-filters',
+					}),
 			},
 		}),
 		mcpSupervisor: supervisor,
@@ -194,6 +201,39 @@ async function beginCodex(
 }
 
 suite('Codex direct PTY and MCP transaction', () => {
+	test('version 호환성을 확인하지 못하면 adapter 없이 bare Codex를 한 번만 실행한다', async () => {
+		const fixture = createFixture({ configStyle: null });
+
+		await beginCodex(fixture.host, 'tab-version-fail-open');
+
+		assert.strictEqual(fixture.supervisor.prepareCalls.length, 0);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(fixture.adapter.spawnCalls[0].args, []);
+		assert.strictEqual(Object.keys(fixture.adapter.spawnCalls[0].env).some(
+			(name) => name.toUpperCase() === 'CRISPY_MCP_TOKEN',
+		), false);
+	});
+
+	test('구버전 style은 legacy exclude config로 authenticated Codex를 실행한다', async () => {
+		const fixture = createFixture({ configStyle: 'legacy-exclude' });
+
+		await beginCodex(fixture.host, 'tab-legacy-config');
+
+		assert.strictEqual(fixture.supervisor.prepareCalls.length, 1);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		const args = fixture.adapter.spawnCalls[0].args;
+		assert.strictEqual(Array.isArray(args), true);
+		if (!Array.isArray(args)) {
+			return;
+		}
+		assert.strictEqual(args.includes(
+			'shell_environment_policy.exclude=["CRISPY_MCP_TOKEN"]',
+		), true);
+		assert.strictEqual(args.some(
+			(argument) => argument.includes('shell_environment_policy.filters'),
+		), false);
+	});
+
 	test('registered 결과 전에는 spawn하지 않고 Codex를 PTY root로 정확히 한 번 시작한다', async () => {
 		const supervisor = new FakeCodexSupervisor();
 		supervisor.deferPrepare = true;

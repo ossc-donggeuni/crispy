@@ -46,17 +46,20 @@ export function createAgentProcessEnvironment(
 	baseEnvironment: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform = process.platform,
 ): Readonly<Record<string, string>> {
-	const keyForOverlay = (name: string): string =>
+	const keyForOverlay = (name: string): string => platform === 'win32'
+		? name.toLocaleUpperCase('en-US')
+		: name;
+	const keyForSecurityPolicy = (name: string): string =>
 		name.toLocaleUpperCase('en-US');
 	const removed = new Set([
 		...MCP_PROVIDER_ENVIRONMENT_REMOVALS,
 		...plan.envRemove,
 	].map(
-		(name) => name.toLocaleUpperCase('en-US'),
+		keyForSecurityPolicy,
 	));
 	const allowedOverlayEntries = Object.entries(plan.envOverlay).filter(
 		([name]) => {
-			const normalized = keyForOverlay(name);
+			const normalized = keyForSecurityPolicy(name);
 			if (normalized === 'ELECTRON_RUN_AS_NODE') {
 				return false;
 			}
@@ -72,7 +75,7 @@ export function createAgentProcessEnvironment(
 	for (const [name, value] of Object.entries(baseEnvironment)) {
 		if (
 			typeof value !== 'string'
-			|| removed.has(name.toLocaleUpperCase('en-US'))
+			|| removed.has(keyForSecurityPolicy(name))
 			|| overlayNames.has(keyForOverlay(name))
 		) {
 			continue;

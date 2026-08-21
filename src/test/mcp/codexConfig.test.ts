@@ -64,6 +64,21 @@ suite('Codex MCP session config serializer', () => {
 		assert.match(second, /^crispy_canvas_[a-f0-9]{32}$/);
 	});
 
+	test('구버전 호환 모드는 같은 token을 legacy exclude array로만 직렬화한다', () => {
+		const config = createCodexMcpConfig(
+			createConnection(),
+			(size) => Buffer.alloc(size, 0xcd),
+			'legacy-exclude',
+		);
+
+		assert.strictEqual(config.args.includes(
+			'shell_environment_policy.exclude=["CRISPY_MCP_TOKEN"]',
+		), true);
+		assert.strictEqual(config.args.some((argument) => argument.includes(
+			'shell_environment_policy.filters',
+		)), false);
+	});
+
 	test('random source byte 계약과 exact loopback session URL을 강제한다', () => {
 		assert.throws(
 			() => createCodexMcpServerName(() => Buffer.alloc(1)),

@@ -653,10 +653,12 @@ export class TerminalHost {
 
 		const preparation = preparationResult.preparation;
 		let prepared: McpPrepareResult | undefined;
-		try {
-			prepared = await supervisor.prepareSession(session.sessionId);
-		} catch {
-			/** Supervisor rejection is the same fail-open boundary as a typed prepare failure. */
+		if (preparation.shellEnvironmentPolicyStyle !== undefined) {
+			try {
+				prepared = await supervisor.prepareSession(session.sessionId);
+			} catch {
+				/** Supervisor rejection is the same fail-open boundary as a typed prepare failure. */
+			}
 		}
 
 		if (!this.isCurrentProviderSession(session, 'codex')) {
@@ -666,7 +668,10 @@ export class TerminalHost {
 
 		let plan: AgentLaunchPlan | undefined;
 		let generation: string | undefined;
-		if (prepared?.ok) {
+		if (
+			prepared?.ok
+			&& preparation.shellEnvironmentPolicyStyle !== undefined
+		) {
 			generation = prepared.connection.generation;
 			const runtime = supervisor.getSessionRuntime(session.sessionId);
 			if (
@@ -680,6 +685,8 @@ export class TerminalHost {
 						executable: preparation.executable,
 						cwd: preparation.cwd,
 						connection: prepared.connection,
+						shellEnvironmentPolicyStyle:
+							preparation.shellEnvironmentPolicyStyle,
 					});
 				} catch {
 					/** Revoked descriptor or serializer failure continues through bare cleanup. */

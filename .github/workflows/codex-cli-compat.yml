@@ -1,0 +1,50 @@
+name: Codex CLI compatibility
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/codex-cli-compat.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'scripts/smoke-codex-config-compat.js'
+      - 'src/mcp/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/codex-cli-compat.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'scripts/smoke-codex-config-compat.js'
+      - 'src/mcp/**'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-codex:
+    name: latest Codex (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - ubuntu-24.04
+          - windows-2025
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.18.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install latest Codex CLI
+        run: npm install --global @openai/codex@latest
+      - name: Parse Crispy config through Codex and node-pty
+        run: pnpm run smoke:codex-config-compat
