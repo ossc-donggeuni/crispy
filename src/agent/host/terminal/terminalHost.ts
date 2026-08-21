@@ -124,7 +124,7 @@ export interface TerminalHostOptions {
 	readonly createAgentProcessSpawnRequest?: AgentProcessSpawnRequestBuilder;
 	readonly spawnAgentPty?: AgentPtySpawner;
 
-	/** Panel detach 뒤 PID snapshot과 비동기 OS 종료를 담당하는 Host controller다. */
+	/** Session 분리 뒤 PID snapshot과 비동기 OS 종료를 담당하는 Host controller다. */
 	readonly processTreeController?: ProcessTreeController;
 }
 
@@ -207,7 +207,7 @@ export class TerminalHost {
 	/** PTY spawn 경계에 진입한 Codex session만 provider-started 표시를 허용한다. */
 	private readonly codexPtySpawnStarted = new Set<SessionId>();
 
-	/** Panel 종료 경로에서 동기 node-pty kill을 피하는 process-tree controller다. */
+	/** Session 종료 경로에서 root-only kill을 피하는 process-tree controller다. */
 	private readonly processTreeController: ProcessTreeController;
 
 	/** Webview가 마지막으로 알린 활성 탭이며 등록된 탭만 값이 될 수 있다. */
@@ -227,6 +227,12 @@ export class TerminalHost {
 
 	/** Panel dispose가 동기 시작한 MCP supervisor cleanup을 terminate가 기다린다. */
 	private mcpTerminationPromise: Promise<void> | undefined;
+
+	/** reset/reselect/restart/tab close가 분리한 session별 process-tree cleanup이다. */
+	private readonly processCleanupBySession = new Map<SessionId, Promise<void>>();
+
+	/** 같은 탭의 다음 CLI 시작이 이전 process tree 종료를 기다리는 경계다. */
+	private readonly processCleanupByTab = new Map<TabId, Promise<void>>();
 
 	/**
 	 * 비어 있는 세션 저장소와 Host 소유 의존성을 초기화한다.
@@ -310,7 +316,7 @@ export class TerminalHost {
 		}
 		const session = this.getActiveSession(tabId);
 		if (session !== undefined) {
-			this.disposeSessionProcess(session);
+			void this.cleanupSessionProcessTree(session);
 			this.removeSession(session.sessionId);
 		}
 
@@ -346,7 +352,7 @@ export class TerminalHost {
 
 		const session = this.getActiveSession(tabId);
 		if (session !== undefined) {
-			this.disposeSessionProcess(session);
+			void this.cleanupSessionProcessTree(session);
 			this.removeSession(session.sessionId);
 		}
 
@@ -383,9 +389,21 @@ export class TerminalHost {
 		this.providerByTab.set(tabId, providerId);
 
 		const current = this.getActiveSession(tabId);
+		let pendingCleanup = this.getTabProcessCleanup(tabId);
 		if (current !== undefined) {
-			this.disposeSessionProcess(current);
+			pendingCleanup = this.cleanupSessionProcessTree(current);
 			this.removeSession(current.sessionId);
+		}
+		if (pendingCleanup !== undefined) {
+			await pendingCleanup;
+		}
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| this.providerByTab.get(tabId) !== providerId
+			|| this.getActiveSession(tabId) !== undefined
+		) {
+			return;
 		}
 
 		const dimensions = this.lastDimensionsByTab.get(tabId);
@@ -428,6 +446,18 @@ export class TerminalHost {
 
 		this.lastDimensionsByTab.set(tabId, { cols, rows });
 		if (!this.providerByTab.has(tabId)) {
+			return;
+		}
+
+		const pendingCleanup = this.getTabProcessCleanup(tabId);
+		if (pendingCleanup !== undefined) {
+			await pendingCleanup;
+		}
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| !this.providerByTab.has(tabId)
+		) {
 			return;
 		}
 
@@ -1043,8 +1073,24 @@ export class TerminalHost {
 			return;
 		}
 
-		this.disposeSessionProcess(session);
+		const registeredAtRestart = this.registeredTabs.has(tabId);
+		const providerAtRestart = this.providerByTab.get(tabId);
+		const pendingCleanup = this.cleanupSessionProcessTree(session);
 		this.removeSession(sessionId);
+		await pendingCleanup;
+		if (
+			!this.lifecycleActive
+			|| this.getActiveSession(tabId) !== undefined
+			|| (
+				registeredAtRestart
+				&& (
+					!this.registeredTabs.has(tabId)
+					|| this.providerByTab.get(tabId) !== providerAtRestart
+				)
+			)
+		) {
+			return;
+		}
 
 		const dimensions = this.lastDimensionsByTab.get(tabId)
 			?? RESTART_FALLBACK_DIMENSIONS;
@@ -1148,15 +1194,16 @@ export class TerminalHost {
 		this.detach();
 		this.terminationPromise ??= Promise.all([
 			this.mcpTerminationPromise ?? Promise.resolve(),
+			...this.processCleanupBySession.values(),
 			...this.detachedProcesses.map((process) =>
-				this.terminateDetachedProcess(process)
+				this.terminateProcessTree(process)
 			),
 		]).then(() => undefined, () => undefined);
 		return this.terminationPromise;
 	}
 
 	/** PID가 지연되는 ConPTY도 handle을 보존해 준비 후 process tree를 종료한다. */
-	private async terminateDetachedProcess(
+	private async terminateProcessTree(
 		process: PtyProcessHandle,
 	): Promise<void> {
 		let rootPid = process.pid;
@@ -1166,19 +1213,19 @@ export class TerminalHost {
 					timeoutMs: DETACHED_PID_READY_TIMEOUT_MS,
 				});
 			} catch {
-				this.killDetachedProcess(process);
+				this.killProcessHandle(process);
 				return;
 			}
 		}
 		if (!isValidProcessTreeRootPid(rootPid)) {
-			this.killDetachedProcess(process);
+			this.killProcessHandle(process);
 			return;
 		}
 
 		try {
 			const capture = await this.processTreeController.capture(rootPid);
 			if (capture.status !== 'captured') {
-				this.killDetachedProcess(process);
+				this.killProcessHandle(process);
 				return;
 			}
 			const result = await this.processTreeController.terminate(capture.snapshot);
@@ -1187,19 +1234,76 @@ export class TerminalHost {
 				&& result.outcome !== 'already_terminated'
 				&& result.outcome !== 'force_terminated'
 			) {
-				this.killDetachedProcess(process);
+				this.killProcessHandle(process);
 			}
 		} catch {
-			this.killDetachedProcess(process);
+			this.killProcessHandle(process);
 		}
 	}
 
-	private killDetachedProcess(process: PtyProcessHandle): void {
+	private killProcessHandle(process: PtyProcessHandle): void {
 		try {
 			process.kill();
 		} catch {
 			/** 비동기 fallback kill 실패도 다른 process와 MCP 정리를 막지 않는다. */
 		}
+	}
+
+	/**
+	 * 실행 중 session을 routing에서 즉시 분리하고 전체 process tree를 비동기로 종료한다.
+	 * 유효 PID를 확보할 수 없거나 capture/terminate가 실패하면 root handle kill로 수렴한다.
+	 * 같은 session의 반복 요청은 최초 cleanup Promise를 재사용한다.
+	 */
+	private cleanupSessionProcessTree(session: TerminalSession): Promise<void> {
+		const existing = this.processCleanupBySession.get(session.sessionId);
+		if (existing !== undefined) {
+			return existing;
+		}
+
+		const mcpCleanup = this.cleanupMcpSession(session.sessionId);
+		if (session.state.kind === 'running') {
+			try {
+				session.markStopping();
+			} catch {
+				/** 상태 표시 실패도 routing 분리와 process-tree 정리를 막지 않는다. */
+			}
+		}
+
+		let process: PtyProcessHandle | undefined;
+		try {
+			process = session.detachProcess();
+		} catch {
+			/** handle 분리 실패도 최종 상태 전이와 MCP 정리를 막지 않는다. */
+		}
+
+		try {
+			session.markDisposed();
+		} catch {
+			/** 상태 전이 실패도 이미 분리한 handle 정리를 막지 않는다. */
+		}
+
+		const cleanup = Promise.all([
+			mcpCleanup,
+			process === undefined
+				? Promise.resolve()
+				: this.terminateProcessTree(process),
+		]).then(() => undefined, () => undefined);
+		this.processCleanupBySession.set(session.sessionId, cleanup);
+		this.processCleanupByTab.set(session.tabId, cleanup);
+		void cleanup.then(() => {
+			if (this.processCleanupBySession.get(session.sessionId) === cleanup) {
+				this.processCleanupBySession.delete(session.sessionId);
+			}
+			if (this.processCleanupByTab.get(session.tabId) === cleanup) {
+				this.processCleanupByTab.delete(session.tabId);
+			}
+		});
+		return cleanup;
+	}
+
+	/** 같은 탭에서 앞서 분리한 process tree가 끝날 때까지만 다음 시작을 보류한다. */
+	private getTabProcessCleanup(tabId: TabId): Promise<void> | undefined {
+		return this.processCleanupByTab.get(tabId);
 	}
 
 	/**

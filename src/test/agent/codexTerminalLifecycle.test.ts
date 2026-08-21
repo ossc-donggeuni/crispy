@@ -14,6 +14,7 @@ import type {
 	McpSessionRuntimeEvent,
 } from '../../mcp/sessionRuntime';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
+import { createCaptureFailureProcessTreeController } from './support/fakeProcessTreeController';
 
 const shellPolicy: ShellLaunchPolicy = {
 	executable: '/host/shell',
@@ -183,6 +184,7 @@ function createFixture(options: {
 			},
 		}),
 		mcpSupervisor: supervisor,
+		processTreeController: createCaptureFailureProcessTreeController(),
 		...(options.buildPlan === undefined
 			? {}
 			: { buildCodexMcpLaunchPlan: options.buildPlan }),
