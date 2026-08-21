@@ -1,3 +1,4 @@
+import { resolveGraphLayoutNodePosition } from './graphLayout';
 import type {
 	GraphFileNode,
 	GraphFileGroupNode,
@@ -135,7 +136,7 @@ export function initializeGraphRenderer(
 	const renderedPositions = new Map<string, GraphLayoutPosition>(
 		layout.nodes.map((node) => [
 			node.id,
-			initialState.nodePositions[node.id] ?? node.position,
+			resolveGraphLayoutNodePosition(node, initialState.nodePositions),
 		]),
 	);
 	const nodeDrags = new Map<string, GraphNodeDrag>();
@@ -388,8 +389,10 @@ export function initializeGraphRenderer(
 			element,
 			renderedLayout.rootContexts[layoutNode.id],
 		);
-		const position = graphState.getState().nodePositions[layoutNode.id]
-			?? layoutNode.position;
+		const position = resolveGraphLayoutNodePosition(
+			layoutNode,
+			graphState.getState().nodePositions,
+		);
 
 		renderedPositions.set(layoutNode.id, position);
 		element.style.transform = `translate(${position.x}px, ${position.y}px)`;
@@ -473,8 +476,14 @@ export function initializeGraphRenderer(
 		renderedNodePositions = state.nodePositions;
 
 		for (const layoutNode of renderedLayout.nodes) {
-			const previous = previousPositions[layoutNode.id] ?? layoutNode.position;
-			const next = state.nodePositions[layoutNode.id] ?? layoutNode.position;
+			const previous = resolveGraphLayoutNodePosition(
+				layoutNode,
+				previousPositions,
+			);
+			const next = resolveGraphLayoutNodePosition(
+				layoutNode,
+				state.nodePositions,
+			);
 
 			if (previous.x === next.x && previous.y === next.y) {
 				continue;
@@ -655,7 +664,10 @@ export function initializeGraphRenderer(
 					}
 				}
 
-				const targetPosition = storedPositions[nextNode.id] ?? nextNode.position;
+				const targetPosition = resolveGraphLayoutNodePosition(
+					nextNode,
+					storedPositions,
+				);
 				const currentPosition = renderedPositions.get(nextNode.id);
 
 				if (

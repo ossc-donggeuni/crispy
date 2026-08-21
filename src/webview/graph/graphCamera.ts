@@ -19,6 +19,12 @@ export interface GraphPoint {
 	y: number;
 }
 
+/** Camera가 World 중심을 배치할 Graph Viewport의 화면 크기다. */
+export interface GraphViewportSize {
+	readonly width: number;
+	readonly height: number;
+}
+
 /** Camera Focus 이동 시간을 선택적으로 지정한다. */
 export interface GraphCameraFocusOptions {
 	duration?: number;
@@ -81,6 +87,36 @@ interface FocusAnimationSession {
 	readonly duration: number;
 	startTime?: number;
 	frameRequestId?: number;
+}
+
+/** World Point가 Viewport 중앙에 오도록 현재 scale의 Camera State를 계산한다. */
+export function createCenteredGraphCameraState(
+	point: GraphPoint,
+	viewportSize: GraphViewportSize,
+	scale: number,
+): GraphCameraState | undefined {
+	if (
+		!Number.isFinite(point.x)
+		|| !Number.isFinite(point.y)
+		|| !Number.isFinite(viewportSize.width)
+		|| !Number.isFinite(viewportSize.height)
+		|| !Number.isFinite(scale)
+		|| viewportSize.width < 0
+		|| viewportSize.height < 0
+		|| scale <= 0
+	) {
+		return undefined;
+	}
+
+	const state = {
+		x: viewportSize.width / 2 - point.x * scale,
+		y: viewportSize.height / 2 - point.y * scale,
+		scale,
+	};
+
+	return Number.isFinite(state.x) && Number.isFinite(state.y)
+		? state
+		: undefined;
 }
 
 /**
@@ -207,11 +243,15 @@ export function initializeGraphCamera(
 		cancelFocusAnimation();
 		const startState = getState();
 		const duration = Math.max(0, focusOptions.duration ?? DEFAULT_FOCUS_DURATION);
-		const targetState: GraphCameraState = {
-			x: viewport.clientWidth / 2 - point.x * startState.scale,
-			y: viewport.clientHeight / 2 - point.y * startState.scale,
-			scale: startState.scale,
-		};
+		const targetState = createCenteredGraphCameraState(
+			point,
+			{ width: viewport.clientWidth, height: viewport.clientHeight },
+			startState.scale,
+		);
+
+		if (!targetState) {
+			return;
+		}
 
 		if (!animationFrameScheduler || duration === 0) {
 			applyCameraState(targetState);

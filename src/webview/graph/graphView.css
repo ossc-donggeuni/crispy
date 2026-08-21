@@ -627,7 +627,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
-	align-items: center;
+	align-items: flex-end;
 	pointer-events: none;
 	user-select: none;
 }
@@ -635,8 +635,76 @@
 .graph-navigator-feature-row {
 	position: relative;
 	display: flex;
-	align-self: flex-end;
 	order: -1;
+}
+
+.graph-navigator-bottom-row {
+	display: flex;
+	gap: 6px;
+	align-items: flex-end;
+}
+
+.graph-navigator-minimap {
+	width: 160px;
+	height: 96px;
+	box-sizing: border-box;
+	flex: none;
+	overflow: hidden;
+	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--graph-navigator-border-color);
+	border-radius: 6px;
+	pointer-events: auto;
+}
+
+.graph-navigator-minimap-svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	cursor: crosshair;
+	pointer-events: all;
+}
+
+.graph-navigator-minimap-edge-layer,
+.graph-navigator-minimap-node-layer,
+.graph-navigator-minimap-viewport-layer {
+	pointer-events: none;
+}
+
+.graph-navigator-minimap-edge {
+	fill: none;
+	stroke: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
+	stroke-width: 1;
+	opacity: 0.25;
+}
+
+.graph-navigator-minimap-node {
+	fill: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
+	opacity: 0.55;
+}
+
+.graph-navigator-minimap-viewport-indicator {
+	fill: var(--vscode-editor-selectionBackground, transparent);
+	fill-opacity: 0.12;
+	stroke: var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--vscode-descriptionForeground))
+	);
+	stroke-width: 1.5;
+	stroke-opacity: 0.8;
+	cursor: grab;
+	pointer-events: all;
+}
+
+.graph-navigator-minimap-viewport-indicator.is-dragging {
+	cursor: grabbing;
+}
+
+.graph-navigator-zoom {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	gap: 6px;
+	align-items: center;
 }
 
 .graph-navigator-root-list-panel,

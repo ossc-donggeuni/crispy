@@ -106,6 +106,14 @@ export interface GraphLayoutOptions {
 	readonly openedFolders?: Readonly<Record<string, true>>;
 }
 
+/** 저장 위치가 있으면 우선하고 없으면 Layout의 결정적 기본 위치를 반환한다. */
+export function resolveGraphLayoutNodePosition(
+	node: Pick<GraphLayoutNode, 'id' | 'position'>,
+	nodePositions: Readonly<Record<string, GraphLayoutPosition | undefined>>,
+): GraphLayoutPosition {
+	return nodePositions[node.id] ?? node.position;
+}
+
 /** Project Root 및 Folder Node의 고정 폭이다. */
 export const GRAPH_FOLDER_NODE_WIDTH = 200;
 /** Project Root 및 Folder Node의 고정 높이다. */

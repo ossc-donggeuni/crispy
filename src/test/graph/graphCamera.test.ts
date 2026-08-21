@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import {
+	createCenteredGraphCameraState,
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
 	initializeGraphCamera,
@@ -63,6 +64,24 @@ suite('Graph Camera', () => {
 			fixture.camera.viewportToWorld({ x: 150, y: 20 }),
 			{ x: 25, y: 30 },
 		);
+	});
+
+	test('World Target을 Viewport 중앙에 놓는 Camera State를 기존 focusOn 규칙으로 계산한다', () => {
+		assert.deepStrictEqual(createCenteredGraphCameraState(
+			{ x: 100, y: 200 },
+			{ width: 800, height: 600 },
+			1.5,
+		), { x: 250, y: 0, scale: 1.5 });
+		assert.strictEqual(createCenteredGraphCameraState(
+			{ x: Number.NaN, y: 200 },
+			{ width: 800, height: 600 },
+			1.5,
+		), undefined);
+		assert.strictEqual(createCenteredGraphCameraState(
+			{ x: 100, y: 200 },
+			{ width: 800, height: 600 },
+			0,
+		), undefined);
 	});
 
 	test('기본 Pointer Drag로 Pan하고 종료 시 Capture와 Drag 상태를 정리한다', () => {

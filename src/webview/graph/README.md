@@ -16,6 +16,7 @@ src/webview/graph/
 ├── graphMockData.ts
 ├── graphModel.ts
 ├── graphNavigator.ts
+├── graphNavigatorMinimap.ts
 ├── graphNavigatorRoots.ts
 ├── graphNodeDrag.ts
 ├── graphRenderer.ts
@@ -45,6 +46,7 @@ src/webview/graph/
 - Camera State 변경을 World transform과 Grid에 반영
 - Viewport / World 좌표 상호 변환
 - `focusOn()`으로 현재 scale을 유지한 채 World 지점을 Viewport 중앙으로 이동
+- `focusOn()`과 연속 `setState()`가 공유하는 World Target 중앙 배치 Camera State 계산
 - `requestAnimationFrame` 기반 약 300ms cubic ease-out Focus Animation
 - 새 Focus 요청, 사용자 Pan / Zoom 및 `dispose()`에서 진행 중 Animation 취소
 - `data-graph-camera-ignore`로 Pan과 Wheel Zoom 모두 차단
@@ -111,8 +113,21 @@ src/webview/graph/
 
 ### `graphNavigator.ts`
 
-> Overlay에서 Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
+> Overlay에서 Minimap 영역, Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
 
+- Zoom Controls 왼쪽에 하단 정렬된 Minimap Container와 고정 SVG Layer를 항상 표시
+- Minimap에 기존 `data-graph-camera-ignore` 규약을 적용해 Pan과 Wheel Zoom 입력 차단
+- Renderer와 공유하는 초기 `GraphLayout`을 즉시 렌더링하고 `setLayout()`으로 Graphic 교체
+- Node는 이름/Icon 없는 최소 2px Rounded Rect, Edge는 약한 단순 Line으로 표시
+- Edge/Node 위 고정 Viewport Layer의 단일 Rect로 현재 Camera 가시 World 영역 표시
+- Graph State의 `nodePositions` reference 변경 시에만 저장 위치를 반영해 Minimap 재투영
+- Camera-only State 변경은 기존 Projection과 Graphic을 유지하고 Indicator attribute만 갱신
+- Graph Viewport `ResizeObserver`는 Indicator만 갱신하며 Navigator `dispose()`에서 해제
+- Minimap Background Click을 현재 Projection으로 World에 역투영해 기존 `camera.focusOn()` 정책으로 이동
+- Viewport Indicator를 Primary Pointer Capture로 Drag하고 Projection 역투영 이동량을 현재 scale의 `camera.setState()`에 실시간 적용
+- Drag 입력은 Camera State만 변경해 기존 Camera-only Indicator fast path를 그대로 재사용
+- `pointerup`, `pointercancel`, `lostpointercapture`에서 session을 정리하고 Drag 후 Background Click을 억제
+- Node Drag 중 transient DOM 위치는 구독하지 않고 pointerup 저장 뒤 Graph와 Indicator 재투영
 - 복원된 Graph State 기준으로 좌표와 scale 최초 표시
 - Camera State 변경 구독 및 표시 갱신
 - 세로형 Action Rail과 활성화된 Root 목록 Action Button 표시
@@ -122,8 +137,26 @@ src/webview/graph/
 - 빈 Root 안내와 제목이 고정된 Scroll 목록 제공
 - Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Action/Zoom Button Listener, State 구독 및 DOM 정리
+- `dispose()` 시 Minimap Layout/Projection reference, 활성 Pointer Capture, Viewport ResizeObserver, Minimap/Action/Zoom Listener, 공통 State 구독 및 DOM 정리
 - Root 선택 상태는 포함하지 않음
+
+### `graphNavigatorMinimap.ts`
+
+> 현재 Layout과 저장 Node 위치를 DOM 없이 Minimap Bounds 및 좌표로 변환합니다.
+
+- Renderer와 공통 `resolveGraphLayoutNodePosition()`을 사용해 저장 위치를 Layout 기본 위치보다 우선
+- 현재 Layout에 포함된 유효 Node의 실제 위치와 width/height로 Multi-Root World Bounds 계산
+- Empty 또는 유효 Node가 없는 Layout은 가상 Bounds 없이 `undefined`로 처리
+- 고정 Padding 안에서 `min(scaleX, scaleY)` 단일 scale과 남는 축 중앙 정렬 적용
+- World origin과 Minimap origin 기반 World ↔ Minimap 양방향 Projection 제공
+- Node Rect와 source 오른쪽 중앙 → target 왼쪽 중앙 Edge Line geometry 생성
+- 존재하지 않는 Node를 참조하는 Edge는 전체 계산을 중단하지 않고 제외
+- 기존 `camera.viewportToWorld()`로 실제 Graph Viewport 좌상단/우하단의 World Bounds 계산
+- Camera World Bounds를 기존 Graph Projection으로 변환하고 SVG 영역에 안전하게 Clamp
+- Indicator geometry는 계산 결과만 제공하며 Camera 또는 Navigation 상태를 소유하지 않음
+- Client Point를 실제 SVG 크기와 논리 Minimap 크기 차이를 반영해 변환
+- Drag 시작/현재 Minimap Point를 같은 Projection으로 역투영해 World 이동량 제공
+- Pointer session, Camera 상태와 DOM Listener는 소유하지 않음
 
 ### `graphNavigatorRoots.ts`
 
@@ -212,6 +245,7 @@ src/webview/graph/
 - Root Context Label의 클릭 가능한 회색 부모 경로 표현
 - Detach Drag 및 Reattach Target 최소 활성 상태
 - Floating Root List Panel의 Button Hover/Focus/Active, Ellipsis와 목록 Scroll 스타일
+- Minimap Background 탐색 Cursor와 Viewport Indicator Grab/Grabbing 상태
 
 ### `graphState.ts`
 
@@ -242,15 +276,16 @@ src/webview/graph/
 - 별도 detached 상태 없이 `currentGraph.roots`를 실행 중 Root의 단일 기준으로 사용
 - Root도 일반 Container와 같은 Open/Close interaction 및 Reflow 경로 사용
 - 전달받은 초기 `GraphState`로 새 Store 초기화
-- 복원된 File Group page와 opened Folder를 반영해 Layout과 Renderer 초기화
-- `fileGroupPages` 또는 `openedFolders` reference 변경 시 Layout Reflow 적용
+- 복원된 File Group page와 opened Folder를 반영한 같은 초기 Layout을 Renderer와 Navigator에 전달
+- `fileGroupPages` 또는 `openedFolders` reference 변경 시 한 번 생성한 Layout을 Renderer와 Navigator에 함께 적용
 - Camera 및 Node 위치만 바뀌면 Layout Reflow 생략
 - Detach Drop client 좌표를 viewport-local과 World 좌표로 변환해 새 Root 위치로 저장
-- Folder/File 공통 Root Promotion 후 최신 Root/Backlink/Context를 한 번의 Layout 갱신으로 반영
+- Folder/File 공통 Root Promotion 후 최신 Root/Backlink/Context를 Renderer와 Navigator의 한 번의 공통 Layout 갱신으로 반영
 - Backlink 클릭 시 저장 위치 또는 Layout 위치의 실제 Root 중심으로 Focus
 - Context Label 클릭 시 Backlink DOM client 중심을 World 좌표로 변환해 Focus
 - Promoted Root를 자신의 Backlink에 Drop하면 `removeGraphRoot()`로 Reattach
 - Reattach 시 해당 Root의 독립 위치만 제거하고 Camera, Open, Pagination과 다른 위치 유지
+- Reflow, Detach와 Reattach가 `applyGraphLayout()`을 통해 동일 Layout reference를 Renderer와 Navigator에 전달
 - 초기 Camera 상태를 World transform과 Grid에 적용
 - Overlay Navigator 초기화 후 최초 Graph를 `createGraphNavigatorRoots()`로 변환해 Root 목록에 전달
 - Navigator Root 선택 시 저장된 `nodePositions`를 우선하고 현재 Layout 위치로 fallback해 기존 Camera Focus 요청
