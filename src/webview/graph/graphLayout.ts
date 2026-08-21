@@ -72,7 +72,7 @@ export interface GraphFileNode {
 /** File Group Card의 표시 방식을 나타낸다. */
 export type GraphFileGroupPresentation = 'grouped' | 'standalone';
 
-/** 같은 Parent에 직접 포함된 File을 하나로 묶은 Layout Node다. */
+/** 같은 Parent에 직접 포함되고 Filter를 통과한 File을 하나로 묶은 Layout Node다. */
 export interface GraphFileGroupNode extends GraphLayoutNodeBase {
 	readonly kind: 'file-group';
 	readonly parentId?: string;
@@ -348,24 +348,26 @@ function createFileLayoutTrees(
 
 	const id = createFileGroupId(parent.id);
 	const page = fileGroupPages[id] ?? 1;
-	const visibleFileCount = getVisibleFileCount(files.length, page);
-	const remainingFileCount = getRemainingFileCount(files.length, page);
+	const visibleFiles = files.filter((file) => hiddenNodeIds[file.id] !== true);
+	const visibleFileCount = getVisibleFileCount(visibleFiles.length, page);
+	const remainingFileCount = getRemainingFileCount(visibleFiles.length, page);
 	const hasPaginationControls = remainingFileCount > 0
-		|| (files.length > FILE_GROUP_PAGE_SIZE && page > 1);
+		|| (visibleFiles.length > FILE_GROUP_PAGE_SIZE && page > 1);
+	const hidden = inheritedHidden || visibleFiles.length === 0;
 
 	return [{
 		id,
 		name: `${parent.name} files`,
 		kind: 'file-group',
-		...(inheritedHidden ? { hidden: true as const } : {}),
+		...(hidden ? { hidden: true as const } : {}),
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
 		parentId: parent.id,
-		fileChildren: files.map((file) => toGraphFileNode(
+		fileChildren: visibleFiles.map((file) => toGraphFileNode(
 			file,
 			rootsByNodeId.get(file.id),
-			inheritedHidden || hiddenNodeIds[file.id] === true,
+			inheritedHidden,
 		)),
 		fileGroupPresentation: 'grouped',
 		children: [],
