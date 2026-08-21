@@ -55,6 +55,9 @@ export class McpAdapterSupervisor {
 		if (this.disposed || !isValidMcpOpaqueId(sessionId)) {
 			return Promise.resolve(supervisorFailure('adapter_start_failed'));
 		}
+		if (this.stops.has(sessionId)) {
+			return Promise.resolve(supervisorFailure('adapter_start_failed'));
+		}
 		const restarting = this.restarts.get(sessionId);
 		if (restarting !== undefined) {
 			return restarting;
@@ -175,7 +178,14 @@ export class McpAdapterSupervisor {
 			await restarting.catch(() => undefined);
 		}
 		this.prepares.delete(sessionId);
-		await this.runtimes.get(sessionId)?.stop();
+		const runtime = this.runtimes.get(sessionId);
+		if (runtime === undefined) {
+			return;
+		}
+		await runtime.stop();
+		if (this.runtimes.get(sessionId) === runtime) {
+			this.runtimes.delete(sessionId);
+		}
 	}
 
 	private createOwnedRuntime(sessionId: string): McpSessionRuntime | undefined {

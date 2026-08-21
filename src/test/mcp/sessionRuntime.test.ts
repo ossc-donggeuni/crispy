@@ -71,6 +71,23 @@ suite('MCP session runtime lifecycle', () => {
 	test('지원 target과 runtime만 허용하고 안전한 failure reason을 반환한다', () => {
 		assert.strictEqual(validateMcpHostRuntime(hostRuntime), undefined);
 		assert.strictEqual(validateMcpHostRuntime({
+			...hostRuntime,
+			platform: 'linux',
+			arch: 'x64',
+			glibcVersionRuntime: '2.28',
+		}), undefined);
+		assert.strictEqual(validateMcpHostRuntime({
+			...hostRuntime,
+			platform: 'linux',
+			arch: 'x64',
+		}), 'unsupported_runtime');
+		assert.strictEqual(validateMcpHostRuntime({
+			...hostRuntime,
+			platform: 'linux',
+			arch: 'x64',
+			glibcVersionRuntime: '',
+		}), 'unsupported_runtime');
+		assert.strictEqual(validateMcpHostRuntime({
 			...hostRuntime, platform: 'darwin', arch: 'x64',
 		}), 'unsupported_platform');
 		assert.strictEqual(validateMcpHostRuntime({
@@ -79,6 +96,37 @@ suite('MCP session runtime lifecycle', () => {
 		assert.strictEqual(validateMcpHostRuntime({
 			...hostRuntime, executablePath: '',
 		}), 'unsupported_runtime');
+	});
+
+	test('Linux musl은 credential 생성과 child spawn 전에 fail-open한다', async () => {
+		let randomCalls = 0;
+		let spawnCalls = 0;
+		const runtime = createRuntime({
+			hostRuntime: {
+				...hostRuntime,
+				platform: 'linux',
+				arch: 'x64',
+			},
+			randomBytes: (size) => {
+				randomCalls += 1;
+				return Buffer.alloc(size);
+			},
+			spawnChild: () => {
+				spawnCalls += 1;
+				throw new Error('must not spawn');
+			},
+		});
+
+		const result = await runtime.start();
+
+		assert.deepStrictEqual(result, {
+			ok: false,
+			failure: { reason: 'unsupported_runtime', retryable: false },
+			providerAction: 'continue_without_mcp',
+		});
+		assert.strictEqual(randomCalls, 0);
+		assert.strictEqual(spawnCalls, 0);
+		assert.strictEqual(runtime.lifecycle, 'stopped');
 	});
 
 	test('spawn throw는 adapter_start_failed이고 child credential을 env/argv로 만들지 않는다', async () => {

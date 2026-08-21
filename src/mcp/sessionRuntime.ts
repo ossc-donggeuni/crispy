@@ -141,6 +141,7 @@ export interface McpHostRuntimeInfo {
 	readonly arch: string;
 	readonly nodeVersion: string;
 	readonly executablePath: string;
+	readonly glibcVersionRuntime?: string;
 }
 
 export interface McpSessionRuntimeOptions {
@@ -253,10 +254,41 @@ export function validateMcpHostRuntime(
 		majorVersion === undefined
 		|| Number(majorVersion) < 22
 		|| info.executablePath.length === 0
+		|| (
+			info.platform === 'linux'
+			&& (
+				typeof info.glibcVersionRuntime !== 'string'
+				|| info.glibcVersionRuntime.length === 0
+			)
+		)
 	) {
 		return 'unsupported_runtime';
 	}
 	return undefined;
+}
+
+function getGlibcVersionRuntime(): string | undefined {
+	if (process.platform !== 'linux') {
+		return undefined;
+	}
+	try {
+		const report = process.report.getReport();
+		if (report === null || typeof report !== 'object') {
+			return undefined;
+		}
+		const header = (report as { readonly header?: unknown }).header;
+		if (header === null || typeof header !== 'object') {
+			return undefined;
+		}
+		const version = (header as {
+			readonly glibcVersionRuntime?: unknown;
+		}).glibcVersionRuntime;
+		return typeof version === 'string' && version.length > 0
+			? version
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Agent session 하나가 독립 child, port, route, token과 generation을 소유한다. */
@@ -314,6 +346,7 @@ export class McpSessionRuntime {
 			arch: process.arch,
 			nodeVersion: process.versions.node,
 			executablePath: process.execPath,
+			glibcVersionRuntime: getGlibcVersionRuntime(),
 		};
 		this.timeouts = normalizeTimeouts(options.timeouts);
 		this.randomBytes = options.randomBytes;

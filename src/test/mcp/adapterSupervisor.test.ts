@@ -66,10 +66,7 @@ suite('MCP adapter supervisor', () => {
 		]);
 
 		await fixture.supervisor.stopSession('session-one');
-		assert.strictEqual(
-			fixture.supervisor.getSessionRuntime('session-one')?.lifecycle,
-			'stopped',
-		);
+		assert.strictEqual(fixture.supervisor.getSessionRuntime('session-one'), undefined);
 		assert.strictEqual(
 			fixture.supervisor.getSessionRuntime('session-two')?.lifecycle,
 			'running',
@@ -80,10 +77,7 @@ suite('MCP adapter supervisor', () => {
 			(event) => event.type === 'runtime.failure'
 				&& event.sessionId === 'session-two',
 		));
-		assert.strictEqual(
-			fixture.supervisor.getSessionRuntime('session-one')?.lifecycle,
-			'stopped',
-		);
+		assert.strictEqual(fixture.supervisor.getSessionRuntime('session-one'), undefined);
 		assert.strictEqual(
 			fixture.supervisor.getSessionRuntime('session-two')?.lifecycle,
 			'crashed',
@@ -147,11 +141,34 @@ suite('MCP adapter supervisor', () => {
 		assert.strictEqual(fixture.supervisor.stopSession('session-one'), firstStop);
 		assert.strictEqual((await restart).ok, true);
 		await firstStop;
-		assert.strictEqual(
-			fixture.supervisor.getSessionRuntime('session-one')?.lifecycle,
-			'stopped',
-		);
+		assert.strictEqual(fixture.supervisor.getSessionRuntime('session-one'), undefined);
 		assert.strictEqual(fixture.children.length, 2);
+		await fixture.supervisor.dispose();
+	});
+
+	test('stop 중 prepare를 차단하고 완료 후 같은 session ID를 fresh runtime으로 준비한다', async () => {
+		const fixture = createSupervisorFixture();
+		const first = await fixture.supervisor.prepareSession('session-one');
+		assert.strictEqual(first.ok, true);
+		if (!first.ok) {
+			return;
+		}
+
+		const stop = fixture.supervisor.stopSession('session-one');
+		const duringStop = await fixture.supervisor.prepareSession('session-one');
+		assert.strictEqual(duringStop.ok, false);
+		assert.strictEqual(fixture.children.length, 1);
+		await stop;
+		assert.strictEqual(fixture.supervisor.getSessionRuntime('session-one'), undefined);
+
+		const second = await fixture.supervisor.prepareSession('session-one');
+		assert.strictEqual(second.ok, true);
+		if (!second.ok) {
+			return;
+		}
+		assert.strictEqual(fixture.children.length, 2);
+		assert.notStrictEqual(second.connection.generation, first.connection.generation);
+		assert.throws(() => first.connection.withBearerToken((token) => token));
 		await fixture.supervisor.dispose();
 	});
 
