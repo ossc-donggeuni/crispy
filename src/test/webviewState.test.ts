@@ -117,7 +117,7 @@ suite('Webview State', () => {
 		);
 	});
 
-	test('getState의 전체 Webview 상태를 외부 객체와 분리해 우선 복원한다', () => {
+	test('이전 전체 getState에서는 Session만 복원하고 Host Workspace 상태를 유지한다', () => {
 		const savedState = createWebviewState('left', 40, -30, 1.5);
 		const htmlState = createWebviewState('bottom', 100, 200, 2);
 
@@ -126,26 +126,32 @@ suite('Webview State', () => {
 			serializeWebviewState(htmlState),
 		);
 
-		assert.deepStrictEqual(state, savedState);
+		assert.deepStrictEqual(state, {
+			panel: savedState.panel,
+			graph: {
+				...htmlState.graph,
+				camera: savedState.graph.camera,
+			},
+		});
 		assert.notStrictEqual(state, savedState);
 		assert.notStrictEqual(state.panel, savedState.panel);
 		assert.notStrictEqual(state.graph, savedState.graph);
 		assert.notStrictEqual(state.graph.camera, savedState.graph.camera);
 		assert.notStrictEqual(
 			state.graph.nodePositions,
-			savedState.graph.nodePositions,
+			htmlState.graph.nodePositions,
 		);
 		assert.notStrictEqual(
 			state.graph.fileGroupPages,
-			savedState.graph.fileGroupPages,
+			htmlState.graph.fileGroupPages,
 		);
 		assert.notStrictEqual(
 			state.graph.openedFolders,
-			savedState.graph.openedFolders,
+			htmlState.graph.openedFolders,
 		);
 		assert.notStrictEqual(
 			state.graph.detachedRootNodeIds,
-			savedState.graph.detachedRootNodeIds,
+			htmlState.graph.detachedRootNodeIds,
 		);
 	});
 

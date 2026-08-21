@@ -91,11 +91,20 @@ export function restoreWebviewState(
 		};
 	}
 
-	/** W-04.3 이전에 setState()가 저장한 전체 Webview snapshot을 호환 복원한다. */
+	/** 이전 전체 snapshot에서도 Panel/Camera만 Session 호환 상태로 복원한다. */
 	const legacySavedState = parseWebviewState(persistedState);
 
 	if (legacySavedState) {
-		return legacySavedState;
+		const initialState = deserializeWebviewState(serializedInitialState)
+			?? createDefaultWebviewState();
+
+		return {
+			panel: legacySavedState.panel,
+			graph: {
+				...initialState.graph,
+				camera: legacySavedState.graph.camera,
+			},
+		};
 	}
 
 	return deserializeWebviewState(serializedInitialState)

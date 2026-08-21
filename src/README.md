@@ -38,9 +38,10 @@ src/
 - Webview HTML 구성
 - 빌드된 CSS와 JavaScript 리소스 연결
 - Webview 메시지 수신 및 응답
-- 유효한 `webview.stateChanged`와 `workspace.stateChanged` snapshot을 Host 메모리에 병합
-- Panel 재생성 시 마지막 snapshot을 `data-webview-state`로 전달
-- `deactivate()` 시 현재 Panel과 마지막 snapshot 정리
+- Canvas 생성 시 Root별 `.crispy/state.json`을 읽고 Workspace 상태를 병합
+- `workspace.stateChanged`를 Host 메모리에 반영하고 Root별 metadata로 분배해 저장
+- Panel 재생성 시 현재 Session/Workspace snapshot을 `data-webview-state`로 전달
+- `deactivate()` 시 현재 Panel과 세션 메모리를 정리하고 다음 활성화에서 metadata 복원
 
 ### `messages.ts`
 

@@ -1,7 +1,10 @@
 import * as assert from 'assert';
-import type {
+import {
 	CrispyExtensionApi,
 	TerminalMessageHost,
+	createInitialWebviewState,
+	loadWorkspacePersistentStateForRoots,
+	persistWorkspacePersistentStateForRoots,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
@@ -15,6 +18,7 @@ import {
 	type WebviewSessionState,
 } from '../webview/webviewState';
 import {
+	createDefaultWorkspacePersistentState,
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
@@ -214,6 +218,101 @@ suite('Crispy Extension Host', () => {
 		}
 	});
 
+	test('Host 메모리가 없는 새 실행은 Workspace metadata와 기본 Session을 조합한다', () => {
+		const workspaceState = createWorkspacePersistentState();
+
+		assert.deepStrictEqual(
+			createInitialWebviewState(undefined, workspaceState),
+			createPersistedStateFromSession(
+				createDefaultWebviewSessionState(),
+				workspaceState,
+			),
+		);
+	});
+
+	test('Multi-root metadata를 병합하고 한 Root의 read 실패를 격리한다', async () => {
+		const frontendUri = vscode.Uri.file('/workspace/frontend');
+		const backendUri = vscode.Uri.file('/workspace/backend');
+		const frontendState = createWorkspacePersistentStateForRoot(
+			frontendUri,
+			2,
+		);
+		const backendState = createWorkspacePersistentStateForRoot(backendUri, 4);
+		const states = new Map([
+			[frontendUri.toString(), frontendState],
+			[backendUri.toString(), backendState],
+		]);
+		const merged = await loadWorkspacePersistentStateForRoots(
+			[frontendUri, backendUri],
+			async (rootUri) => states.get(rootUri.toString())
+				?? createDefaultWorkspacePersistentState(),
+		);
+
+		assert.deepStrictEqual(merged, mergeWorkspaceStates(
+			frontendState,
+			backendState,
+		));
+
+		const isolated = await loadWorkspacePersistentStateForRoots(
+			[frontendUri, backendUri],
+			async (rootUri) => {
+				if (rootUri.toString() === frontendUri.toString()) {
+					throw new Error('frontend read failed');
+				}
+
+				return backendState;
+			},
+		);
+
+		assert.deepStrictEqual(isolated, backendState);
+	});
+
+	test('Workspace snapshot을 Root별로 write하고 실패 Root만 warning으로 격리한다', async () => {
+		const frontendUri = vscode.Uri.file('/workspace/frontend');
+		const backendUri = vscode.Uri.file('/workspace/backend');
+		const frontendState = createWorkspacePersistentStateForRoot(
+			frontendUri,
+			2,
+		);
+		const hiddenFolderId = `folder:${vscode.Uri.joinPath(
+			frontendUri,
+			'private',
+		).toString()}`;
+		frontendState.nodePositions[hiddenFolderId] = { x: 900, y: 500 };
+		frontendState.openedFolders[hiddenFolderId] = true;
+		const backendState = createWorkspacePersistentStateForRoot(backendUri, 4);
+		const writes: Array<{
+			readonly rootUri: vscode.Uri;
+			readonly state: WorkspacePersistentState;
+		}> = [];
+		const warnings: unknown[][] = [];
+
+		await assert.doesNotReject(persistWorkspacePersistentStateForRoots(
+			mergeWorkspaceStates(frontendState, backendState),
+			[frontendUri, backendUri],
+			async (rootUri, state) => {
+				writes.push({ rootUri, state });
+				if (rootUri.toString() === frontendUri.toString()) {
+					throw new Error('frontend write failed');
+				}
+			},
+			{ warn: (...values) => warnings.push(values) },
+		));
+
+		assert.deepStrictEqual(
+			writes.map(({ rootUri }) => rootUri.toString()),
+			[frontendUri.toString(), backendUri.toString()],
+		);
+		assert.deepStrictEqual(writes[0]?.state, frontendState);
+		assert.deepStrictEqual(writes[1]?.state, backendState);
+		assert.deepStrictEqual(
+			writes[0]?.state.nodePositions[hiddenFolderId],
+			{ x: 900, y: 500 },
+		);
+		assert.strictEqual(warnings.length, 1);
+		assert.match(String(warnings[0]?.[0]), /frontend/);
+	});
+
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {
 		const firstPanel = await openCanvas();
 		const secondPanel = await openCanvas();
@@ -304,7 +403,9 @@ suite('Crispy Extension Host', () => {
 		const panelAfterDeactivate = await openCanvas();
 		assert.strictEqual(
 			getSerializedInitialWebviewState(panelAfterDeactivate),
-			serializeWebviewState(undefined),
+			serializeWebviewState(createPersistedStateFromSession(
+				createDefaultWebviewSessionState(),
+			)),
 		);
 	});
 
@@ -751,6 +852,41 @@ function createWorkspacePersistentState(): WorkspacePersistentState {
 		detachedRootNodeIds: {
 			'file:file:///workspace/app/index.ts': true,
 		},
+	};
+}
+
+function createWorkspacePersistentStateForRoot(
+	rootUri: vscode.Uri,
+	page: number,
+): WorkspacePersistentState {
+	const folderId = `folder:${vscode.Uri.joinPath(rootUri, 'src').toString()}`;
+	const fileId = `file:${vscode.Uri.joinPath(
+		rootUri,
+		'src',
+		'index.ts',
+	).toString()}`;
+
+	return {
+		version: 1,
+		nodePositions: { [folderId]: { x: page * 100, y: page * 50 } },
+		fileGroupPages: { [`${folderId}:files`]: page },
+		openedFolders: { [folderId]: true },
+		detachedRootNodeIds: { [fileId]: true },
+	};
+}
+
+function mergeWorkspaceStates(
+	...states: readonly WorkspacePersistentState[]
+): WorkspacePersistentState {
+	return {
+		version: 1,
+		nodePositions: Object.assign({}, ...states.map((state) => state.nodePositions)),
+		fileGroupPages: Object.assign({}, ...states.map((state) => state.fileGroupPages)),
+		openedFolders: Object.assign({}, ...states.map((state) => state.openedFolders)),
+		detachedRootNodeIds: Object.assign(
+			{},
+			...states.map((state) => state.detachedRootNodeIds),
+		),
 	};
 }
 

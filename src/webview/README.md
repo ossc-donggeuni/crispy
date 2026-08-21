@@ -59,7 +59,7 @@ src/webview/
 - `collapsed`가 없는 이전 저장 상태를 Dock과 크기를 유지한 채 호환 복원
 - Extension Host가 HTML로 전달하는 초기 상태 직렬화 및 복원
 - 저장 상태가 없거나 잘못된 경우 Panel 및 Graph 기본값 적용
-- W-04.3 이전 전체 Webview `setState()` snapshot 호환 복원
+- W-04.3 이전 전체 Webview `setState()` snapshot에서도 Panel/Camera만 호환 복원
 
 ### `webview.ts`
 

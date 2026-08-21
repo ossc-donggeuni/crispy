@@ -9,7 +9,9 @@
 - 열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다
 - Panel을 dispose한 뒤 Canvas command가 새 Panel을 생성한다
 - deactivate가 열린 Panel과 참조를 정리해 다음 생성에 영향을 주지 않는다
-- Panel dispose 후 Session 및 Workspace 메모리 상태를 복원하고 deactivate 시 초기화한다
+- Host 메모리가 없는 새 실행에서 Root별 Workspace metadata와 기본 Session을 조합한다
+- Multi-root read/write를 독립적으로 수행하고 한 Root의 실패를 격리한다
+- Panel dispose 후 Session 및 Workspace 메모리 상태를 복원하고 deactivate 뒤 metadata를 다시 적용한다
 - Session 변경과 Workspace 변경이 서로의 필드를 덮어쓰지 않는다
 - 잘못된 `webview.stateChanged` snapshot은 마지막 유효 상태를 덮어쓰지 않는다
 - `handleWebviewMessage`가 `webview.ready`에 `extension.ready`로 응답한다
@@ -17,7 +19,7 @@
 ## `webviewState.test.ts`
 
 - 저장 상태가 없으면 Panel 및 Graph 기본 상태를 새 snapshot으로 복원한다
-- `getState()`의 전체 Webview 상태를 외부 객체와 분리해 우선 복원한다
+- 이전 전체 `getState()`에서는 Panel/Camera만 복원하고 Host Workspace 상태를 유지한다
 - `getState()`가 없으면 HTML의 `data-webview-state`를 복원한다
 - 이전 저장 상태에 부가 Graph 필드가 없어도 빈 상태로 호환 복원한다
 - 잘못된 저장 상태와 HTML 상태는 안전하게 기본값으로 처리한다
@@ -26,6 +28,10 @@
 - Workspace 상태 변경만 `workspace.stateChanged` 전체 snapshot으로 전달한다
 - serialize 후 restore해도 File Group page와 열린 Folder 상태를 유지한다
 - Graph, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다
+
+## `workspace/workspaceSnapshot.test.ts`
+
+- 이름이 정확히 `.crispy`인 Directory를 탐색과 Snapshot에서 제외한다
 
 ## `panel/panelState.test.ts`
 

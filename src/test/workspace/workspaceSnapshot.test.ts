@@ -288,6 +288,44 @@ suite('Workspace Snapshot', () => {
 		);
 	});
 
+	test('정확히 `.crispy`인 Directory를 탐색과 Snapshot에서 제외한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/app');
+		const crispyUri = vscode.Uri.joinPath(rootUri, '.crispy');
+		const srcUri = vscode.Uri.joinPath(rootUri, 'src');
+		const sourceFileUri = vscode.Uri.joinPath(srcUri, 'index.ts');
+		const fake = createFakeFileSystem({
+			[rootUri.toString()]: [
+				['.crispy', vscode.FileType.Directory],
+				['src', vscode.FileType.Directory],
+			],
+			[crispyUri.toString()]: [['state.json', vscode.FileType.File]],
+			[srcUri.toString()]: [['index.ts', vscode.FileType.File]],
+		});
+
+		const snapshot = await createWorkspaceSnapshot(
+			{ workspaceFolders: [createWorkspaceFolder('app', rootUri, 0)] },
+			fake.fileSystem,
+		);
+
+		assert.deepStrictEqual(snapshot.roots[0]?.children, [{
+			kind: 'folder',
+			id: `folder:${srcUri.toString()}`,
+			name: 'src',
+			uri: srcUri,
+			status: 'loaded',
+			children: [{
+				kind: 'file',
+				id: `file:${sourceFileUri.toString()}`,
+				name: 'index.ts',
+				uri: sourceFileUri,
+			}],
+		}]);
+		assert.deepStrictEqual(
+			fake.readDirectoryCalls.map((uri) => uri.toString()),
+			[rootUri.toString(), srcUri.toString()],
+		);
+	});
+
 	test('Multi-root Workspace의 각 Tree를 독립적으로 생성한다', async () => {
 		const appUri = vscode.Uri.file('/workspace/app');
 		const apiUri = vscode.Uri.file('/workspace/api');

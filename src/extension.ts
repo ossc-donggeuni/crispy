@@ -25,7 +25,11 @@ import {
 	serializeWebviewState,
 	type PersistedWebviewState,
 } from './webview/webviewState';
-import { parseWorkspacePersistentState } from './workspace/workspaceMetadata';
+import {
+	createDefaultWorkspacePersistentState,
+	parseWorkspacePersistentState,
+	type WorkspacePersistentState,
+} from './workspace/workspaceMetadata';
 import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
 import {
@@ -33,6 +37,10 @@ import {
 	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
+	mergeWorkspacePersistentStates,
+	partitionWorkspacePersistentStateByRoot,
+	readWorkspacePersistentState,
+	writeWorkspacePersistentState,
 	type WorkspaceRefreshCoordinator,
 } from './workspace';
 
@@ -62,6 +70,7 @@ interface CanvasRuntime {
 
 let currentRuntime: CanvasRuntime | undefined;
 let lastWebviewState: PersistedWebviewState | undefined;
+const pendingWorkspaceWrites = new Set<Promise<void>>();
 
 /** 검증된 terminal 메시지를 실제 TerminalHost 경계로 전달하는 최소 계약이다. */
 export interface TerminalMessageHost {
@@ -191,18 +200,25 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			void runtime.terminate().catch(() => undefined);
 		});
 
-		const graph = await createCurrentWorkspaceGraph(
-			workspaceGraphDependencies,
-		);
+		const rootUris = getCurrentWorkspaceRootUris();
+		const [graph, workspaceState] = await Promise.all([
+			createCurrentWorkspaceGraph(workspaceGraphDependencies),
+			loadWorkspacePersistentStateForRoots(rootUris),
+		]);
 		if (panelDisposed) {
 			return panel;
 		}
+		const initialWebviewState = createInitialWebviewState(
+			lastWebviewState,
+			workspaceState,
+		);
+		lastWebviewState = initialWebviewState;
 
 		panel.webview.html = getWebviewHtml(
 			panel.webview,
 			stylesUri,
 			scriptUri,
-			lastWebviewState,
+			initialWebviewState,
 			graph,
 		);
 		currentRuntime = runtime;
@@ -327,6 +343,15 @@ export function handleWebviewMessage(
 						detachedRootNodeIds: state.detachedRootNodeIds,
 					},
 				};
+				const persistence = persistWorkspacePersistentStateForRoots(
+					state,
+					getCurrentWorkspaceRootUris(),
+				);
+				pendingWorkspaceWrites.add(persistence);
+				void persistence.then(
+					() => pendingWorkspaceWrites.delete(persistence),
+					() => pendingWorkspaceWrites.delete(persistence),
+				);
 			}
 
 			return undefined;
@@ -348,6 +373,95 @@ export function handleWebviewMessage(
 		default:
 			return handleTerminalMessage(parseResult.value, terminalHost);
 	}
+}
+
+/** 현재 열린 Workspace Folder의 Root URI를 순서대로 복사한다. */
+function getCurrentWorkspaceRootUris(): vscode.Uri[] {
+	return (vscode.workspace.workspaceFolders ?? []).map(({ uri }) => uri);
+}
+
+/** Root별 metadata를 독립적으로 읽고 기존 ownership 검증으로 병합한다. */
+export async function loadWorkspacePersistentStateForRoots(
+	rootUris: readonly vscode.Uri[],
+	readState: (
+		rootUri: vscode.Uri,
+	) => Promise<WorkspacePersistentState> = readWorkspacePersistentState,
+): Promise<WorkspacePersistentState> {
+	const rootStates = await Promise.all(rootUris.map(async (rootUri) => {
+		try {
+			return { rootUri, state: await readState(rootUri) };
+		} catch {
+			return {
+				rootUri,
+				state: createDefaultWorkspacePersistentState(),
+			};
+		}
+	}));
+
+	return mergeWorkspacePersistentStates(rootStates);
+}
+
+/**
+ * 새 Extension 세션은 disk metadata를 사용하고, 같은 Extension 세션의 Panel
+ * 재생성은 아직 write 중일 수 있는 Host 메모리 snapshot을 우선한다.
+ */
+export function createInitialWebviewState(
+	previousState: PersistedWebviewState | undefined,
+	loadedWorkspaceState: WorkspacePersistentState,
+): PersistedWebviewState {
+	const sessionState = previousState
+		? parseWebviewSessionState({
+			panel: previousState.panel,
+			camera: previousState.graph.camera,
+		}) ?? createDefaultWebviewSessionState()
+		: createDefaultWebviewSessionState();
+	const previousWorkspaceState = previousState
+		? parseWorkspacePersistentState({
+			version: loadedWorkspaceState.version,
+			nodePositions: previousState.graph.nodePositions ?? {},
+			fileGroupPages: previousState.graph.fileGroupPages ?? {},
+			openedFolders: previousState.graph.openedFolders ?? {},
+			detachedRootNodeIds: previousState.graph.detachedRootNodeIds ?? {},
+		})
+		: undefined;
+	const workspaceState = previousWorkspaceState
+		?? parseWorkspacePersistentState(loadedWorkspaceState)
+		?? createDefaultWorkspacePersistentState();
+
+	return {
+		panel: sessionState.panel,
+		graph: {
+			camera: sessionState.camera,
+			nodePositions: workspaceState.nodePositions,
+			fileGroupPages: workspaceState.fileGroupPages,
+			openedFolders: workspaceState.openedFolders,
+			detachedRootNodeIds: workspaceState.detachedRootNodeIds,
+		},
+	};
+}
+
+/** 기존 partition/write 함수로 모든 Root write를 시작하고 실패를 Root별로 격리한다. */
+export async function persistWorkspacePersistentStateForRoots(
+	state: WorkspacePersistentState,
+	rootUris: readonly vscode.Uri[],
+	writeState: (
+		rootUri: vscode.Uri,
+		rootState: WorkspacePersistentState,
+	) => Promise<void> = writeWorkspacePersistentState,
+	logger: Pick<Console, 'warn'> = console,
+): Promise<void> {
+	const rootStates = partitionWorkspacePersistentStateByRoot(state, rootUris);
+
+	await Promise.all(rootStates.map(async ({ rootUri, state: rootState }) => {
+		try {
+			await writeState(rootUri, rootState);
+		} catch (error) {
+			logger.warn(
+				`[Crispy] Failed to write Workspace State: ${rootUri.toString()}`,
+				error,
+			);
+		}
+	}));
 }
 
 /**
@@ -431,6 +545,7 @@ export async function deactivate(): Promise<void> {
 	currentRuntime = undefined;
 	lastWebviewState = undefined;
 	if (runtime === undefined) {
+		await Promise.all([...pendingWorkspaceWrites]);
 		return;
 	}
 
@@ -442,7 +557,10 @@ export async function deactivate(): Promise<void> {
 		/** Panel 정리 실패가 확장 비활성화를 막지 않게 한다. */
 	}
 
-	await runCleanupWithTimeout(() => runtime.terminate());
+	await Promise.all([
+		runCleanupWithTimeout(() => runtime.terminate()),
+		...pendingWorkspaceWrites,
+	]);
 }
 
 /**
