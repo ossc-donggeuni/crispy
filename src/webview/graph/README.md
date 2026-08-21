@@ -16,6 +16,7 @@ src/webview/graph/
 ├── graphMockData.ts
 ├── graphModel.ts
 ├── graphNavigator.ts
+├── graphNavigatorRoots.ts
 ├── graphNodeDrag.ts
 ├── graphRenderer.ts
 ├── graphRootContext.ts
@@ -110,12 +111,29 @@ src/webview/graph/
 
 ### `graphNavigator.ts`
 
-> Overlay에서 현재 Camera 좌표와 중앙 기준 Zoom Control을 표시합니다.
+> Overlay에서 Camera 표시와 Zoom Control, 확장 가능한 Navigator Action을 관리합니다.
 
 - 복원된 Graph State 기준으로 좌표와 scale 최초 표시
 - Camera State 변경 구독 및 표시 갱신
+- 세로형 Action Rail과 활성화된 Root 목록 Action Button 표시
+- Navigator 로컬 상태로 Root List Panel 열기/닫기
+- `setRoots()`로 기존 Item을 교체하며 `GraphNavigatorRoot` 순서대로 Project/Folder/File 표시
+- 기존 Folder/File Icon asset과 File Icon Resolver를 재사용하고 Detach Context 경로를 보조 Text로 표시
+- 빈 Root 안내와 제목이 고정된 Scroll 목록 제공
+- Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Button Listener, State 구독 및 DOM 정리
+- `dispose()` 시 Action/Zoom Button Listener, State 구독 및 DOM 정리
+- Root 선택 상태는 포함하지 않음
+
+### `graphNavigatorRoots.ts`
+
+> Graph Root를 Navigator Root Item이 사용할 표시 데이터로 변환합니다.
+
+- `Graph.roots` 순서를 유지해 `rootId`, `nodeId`, `name`, `kind`로 projection
+- Root 이름과 Project/Folder/File kind를 `graph.rootNodes` 직접 참조로 조회
+- 선택적 `context.relativePath`를 경로 재계산 없이 그대로 전달
+- Root Node가 없는 잘못된 Root 참조만 건너뛰고 입력 Graph는 변경하지 않음
+- 이 변환 모듈은 Root Item DOM 렌더링과 Detach/Reattach 실시간 동기화를 담당하지 않음
 
 ### `graphNodeDrag.ts`
 
@@ -193,6 +211,7 @@ src/webview/graph/
 - Folder/File Backlink의 반투명 상태와 공통 화살표 표시
 - Root Context Label의 클릭 가능한 회색 부모 경로 표현
 - Detach Drag 및 Reattach Target 최소 활성 상태
+- Floating Root List Panel의 Button Hover/Focus/Active, Ellipsis와 목록 Scroll 스타일
 
 ### `graphState.ts`
 
@@ -233,6 +252,10 @@ src/webview/graph/
 - Promoted Root를 자신의 Backlink에 Drop하면 `removeGraphRoot()`로 Reattach
 - Reattach 시 해당 Root의 독립 위치만 제거하고 Camera, Open, Pagination과 다른 위치 유지
 - 초기 Camera 상태를 World transform과 Grid에 적용
-- Overlay Navigator 초기화
+- Overlay Navigator 초기화 후 최초 Graph를 `createGraphNavigatorRoots()`로 변환해 Root 목록에 전달
+- Navigator Root 선택 시 저장된 `nodePositions`를 우선하고 현재 Layout 위치로 fallback해 기존 Camera Focus 요청
+- Root Focus는 현재 Camera scale과 기존 ease-out Animation 정책을 유지
+- 초기화와 성공한 Detach/Reattach에서 공통 projection으로 최신 `currentGraph.roots`를 Navigator에 동기화
+- 실패한 Promotion/Reattach에서는 Root 목록을 유지하고 Panel Open 상태와 독립적으로 Content만 교체
 - 외부 Graph 기능을 위한 State와 Camera 인터페이스 제공
 - `dispose()` 시 Layout 구독, Navigator, Renderer, Camera와 Graph View DOM 정리

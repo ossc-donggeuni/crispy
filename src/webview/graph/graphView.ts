@@ -5,7 +5,11 @@ import {
 import { createGraphLayout, type GraphLayout } from './graphLayout';
 import type { Graph } from './graphModel';
 import { addGraphRoot, removeGraphRoot } from './graphRootPromotion';
-import { initializeGraphNavigator } from './graphNavigator';
+import {
+	initializeGraphNavigator,
+	type GraphNavigator,
+} from './graphNavigator';
+import { createGraphNavigatorRoots } from './graphNavigatorRoots';
 import {
 	initializeGraphRenderer,
 	type GraphRenderer,
@@ -204,7 +208,11 @@ export function initializeGraphView(
 	let currentGraph = graph;
 	const camera = initializeGraphCamera(viewport, world, state);
 	let renderer: GraphRenderer;
+	let navigator: GraphNavigator;
 	let currentLayout: GraphLayout;
+	const syncNavigatorRoots = (): void => {
+		navigator.setRoots(createGraphNavigatorRoots(currentGraph));
+	};
 	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => {
 		currentLayout = createGraphLayout(currentGraph, {
 			fileGroupPages: snapshot.fileGroupPages,
@@ -225,6 +233,7 @@ export function initializeGraphView(
 		if (nextGraph) {
 			currentGraph = nextGraph;
 			renderer.applyLayout(createCurrentLayout(state.getState()));
+			syncNavigatorRoots();
 		}
 
 		interactions.onDetachDrop?.(request);
@@ -236,6 +245,15 @@ export function initializeGraphView(
 			state,
 			camera,
 			targetRootId,
+		);
+	};
+	const handleNavigatorRootSelect = (rootId: string): void => {
+		focusGraphRoot(
+			currentGraph,
+			currentLayout,
+			state,
+			camera,
+			rootId,
 		);
 	};
 	const handleRootContextClick = (rootId: string): void => {
@@ -271,6 +289,7 @@ export function initializeGraphView(
 			openedFolders: snapshot.openedFolders,
 		});
 		renderer.applyLayout(createCurrentLayout(state.getState()));
+		syncNavigatorRoots();
 		return true;
 	};
 
@@ -292,7 +311,14 @@ export function initializeGraphView(
 			)?.id,
 		},
 	);
-	const navigator = initializeGraphNavigator(overlayLayer, viewport, state, camera);
+	navigator = initializeGraphNavigator(
+		overlayLayer,
+		viewport,
+		state,
+		camera,
+		{ onRootSelect: handleNavigatorRootSelect },
+	);
+	syncNavigatorRoots();
 	let disposed = false;
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
