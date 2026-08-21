@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import * as vscode from 'vscode';
 import type { WorkspaceToWebviewMessage } from '../../messages';
 import type { Graph } from '../../webview/graph/graphModel';
@@ -15,6 +17,77 @@ import { createWorkspaceSnapshot } from '../../workspace/workspaceSnapshot';
 import { convertWorkspaceSnapshotToGraph } from '../../workspace/workspaceToGraph';
 
 suite('Workspace Filter Integration', () => {
+	test('기본 Filter를 최초 생성하고 같은 초기 Workspace Graph에 적용한다', async () => {
+		const extensionUri = vscode.Uri.file('/extension');
+		const rootUri = vscode.Uri.file('/workspace/new-app');
+		const nodeModulesUri = vscode.Uri.joinPath(rootUri, 'node_modules');
+		const srcUri = vscode.Uri.joinPath(rootUri, 'src');
+		const crispyUri = vscode.Uri.joinPath(rootUri, '.crispy');
+		const filterUri = vscode.Uri.joinPath(crispyUri, 'filter.json');
+		const defaultFilterUri = vscode.Uri.joinPath(
+			extensionUri,
+			'resources',
+			'defaultWorkspaceFilter.json',
+		);
+		const defaultFilterSource = readFileSync(resolve(
+			__dirname,
+			'../../../resources/defaultWorkspaceFilter.json',
+		), 'utf8');
+		const fake = createFakeWorkspaceFileSystem({
+			[rootUri.toString()]: [
+				['node_modules', vscode.FileType.Directory],
+				['src', vscode.FileType.Directory],
+				['README.md', vscode.FileType.File],
+			],
+			[nodeModulesUri.toString()]: [['dependency.js', vscode.FileType.File]],
+			[srcUri.toString()]: [['index.ts', vscode.FileType.File]],
+		});
+		fake.setText(defaultFilterUri, defaultFilterSource);
+		const dependencies = {
+			loadWorkspaceFilters: () => loadOrCreateWorkspaceFilters(
+				[rootUri],
+				extensionUri,
+				fake.fileSystem,
+			),
+			createWorkspaceSnapshot: (
+				rootFilters: readonly WorkspaceRootFilter[],
+			) => createWorkspaceSnapshot(
+				{
+					workspaceFolders: [{ name: 'new-app', uri: rootUri, index: 0 }],
+				},
+				fake.fileSystem,
+				console,
+				rootFilters,
+			),
+			convertWorkspaceSnapshotToGraph,
+		};
+
+		const initialGraph = await createCurrentWorkspaceGraph(dependencies);
+
+		assert.deepStrictEqual(getWorkspaceChildNames(initialGraph), [
+			'src',
+			'README.md',
+		]);
+		assert.strictEqual(
+			fake.readDirectoryCalls.some(
+				(uri) => uri.toString() === nodeModulesUri.toString(),
+			),
+			false,
+		);
+		assert.deepStrictEqual(
+			fake.createDirectoryCalls.map((uri) => uri.toString()),
+			[crispyUri.toString()],
+		);
+		assert.deepStrictEqual(
+			fake.writeFileCalls.map((uri) => uri.toString()),
+			[filterUri.toString()],
+		);
+		assert.deepStrictEqual(
+			fake.getJson(filterUri),
+			JSON.parse(defaultFilterSource) as unknown,
+		);
+	});
+
 	test('초기 Graph와 Refresh가 같은 경로로 현재 filter.json을 다시 읽어 적용한다', async () => {
 		const extensionUri = vscode.Uri.file('/extension');
 		const rootUri = vscode.Uri.file('/workspace/app');
@@ -123,7 +196,10 @@ function createFakeWorkspaceFileSystem(
 ) {
 	const files = new Map<string, Uint8Array>();
 	const textEncoder = new TextEncoder();
+	const textDecoder = new TextDecoder();
 	const readDirectoryCalls: vscode.Uri[] = [];
+	const createDirectoryCalls: vscode.Uri[] = [];
+	const writeFileCalls: vscode.Uri[] = [];
 	const fileSystem = {
 		async readFile(uri: vscode.Uri): Promise<Uint8Array> {
 			const content = files.get(uri.toString());
@@ -134,8 +210,11 @@ function createFakeWorkspaceFileSystem(
 
 			return content;
 		},
-		async createDirectory(): Promise<void> {},
+		async createDirectory(uri: vscode.Uri): Promise<void> {
+			createDirectoryCalls.push(uri);
+		},
 		async writeFile(uri: vscode.Uri, content: Uint8Array): Promise<void> {
+			writeFileCalls.push(uri);
 			files.set(uri.toString(), content);
 		},
 		async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
@@ -153,8 +232,19 @@ function createFakeWorkspaceFileSystem(
 	return {
 		fileSystem,
 		readDirectoryCalls,
+		createDirectoryCalls,
+		writeFileCalls,
+		getJson(uri: vscode.Uri): unknown {
+			const content = files.get(uri.toString());
+			assert.ok(content, `Fake File이 없습니다: ${uri.toString()}`);
+
+			return JSON.parse(textDecoder.decode(content)) as unknown;
+		},
 		setFilter(uri: vscode.Uri, filter: WorkspaceFilter): void {
 			files.set(uri.toString(), textEncoder.encode(JSON.stringify(filter)));
+		},
+		setText(uri: vscode.Uri, content: string): void {
+			files.set(uri.toString(), textEncoder.encode(content));
 		},
 	};
 }
