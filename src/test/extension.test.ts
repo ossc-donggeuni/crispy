@@ -210,6 +210,99 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(watcher.disposeCalls, 1);
 	});
 
+	test('Canvas Close/Reopen은 이전 watcher를 제거하고 최신 초기 Graph와 watcher 하나만 복원한다', async () => {
+		const firstWatcher = createWorkspaceWatcherStub();
+		const reopenedWatcher = createWorkspaceWatcherStub();
+		const firstGraph: Graph = { roots: [], rootNodes: {} };
+		const reopenedProject = {
+			kind: 'project' as const,
+			id: 'project:reopened-workspace',
+			name: 'reopened-workspace',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const reopenedGraph: Graph = {
+			roots: [{ id: 'root:reopened-workspace', nodeId: reopenedProject.id }],
+			rootNodes: { [reopenedProject.id]: reopenedProject },
+		};
+		let currentWorkspaceGraph = firstGraph;
+		const graphDependencies = {
+			async createWorkspaceSnapshot() {
+				return { roots: [] };
+			},
+			convertWorkspaceSnapshotToGraph() {
+				return currentWorkspaceGraph;
+			},
+		};
+		let firstRefreshRequests = 0;
+		let firstRefreshDisposals = 0;
+		let firstMessageDisposals = 0;
+		const firstRuntime = createCanvasRuntime(
+			{} as vscode.WebviewPanel,
+			{ detach: () => undefined, terminate: () => undefined },
+			[{ dispose: () => firstMessageDisposals += 1 }],
+			{
+				requestWorkspaceRefresh() {
+					firstRefreshRequests += 1;
+					return Promise.resolve();
+				},
+				dispose: () => firstRefreshDisposals += 1,
+			},
+			firstWatcher.watch,
+		);
+
+		assert.strictEqual(await createCurrentWorkspaceGraph(graphDependencies), firstGraph);
+		assert.strictEqual(firstWatcher.watchCalls, 1);
+		firstRuntime.markWebviewReady();
+		assert.strictEqual(firstRefreshRequests, 0);
+		firstWatcher.fireWorkspaceChange();
+		assert.strictEqual(firstRefreshRequests, 1);
+
+		firstRuntime.detach();
+		currentWorkspaceGraph = reopenedGraph;
+		firstWatcher.fireWorkspaceChange();
+		assert.strictEqual(firstRefreshRequests, 1);
+		assert.strictEqual(firstRefreshDisposals, 1);
+		assert.strictEqual(firstMessageDisposals, 1);
+		assert.strictEqual(firstWatcher.disposeCalls, 1);
+		assert.strictEqual(
+			await createCurrentWorkspaceGraph(graphDependencies),
+			reopenedGraph,
+		);
+
+		let reopenedRefreshRequests = 0;
+		let reopenedRefreshDisposals = 0;
+		let reopenedMessageDisposals = 0;
+		const reopenedRuntime = createCanvasRuntime(
+			{} as vscode.WebviewPanel,
+			{ detach: () => undefined, terminate: () => undefined },
+			[{ dispose: () => reopenedMessageDisposals += 1 }],
+			{
+				requestWorkspaceRefresh() {
+					reopenedRefreshRequests += 1;
+					return Promise.resolve();
+				},
+				dispose: () => reopenedRefreshDisposals += 1,
+			},
+			reopenedWatcher.watch,
+		);
+
+		assert.strictEqual(reopenedWatcher.watchCalls, 1);
+		reopenedRuntime.markWebviewReady();
+		assert.strictEqual(reopenedRefreshRequests, 0);
+		firstWatcher.fireWorkspaceChange();
+		reopenedWatcher.fireWorkspaceChange();
+		assert.strictEqual(firstRefreshRequests, 1);
+		assert.strictEqual(reopenedRefreshRequests, 1);
+
+		reopenedRuntime.detach();
+		reopenedWatcher.fireWorkspaceChange();
+		assert.strictEqual(reopenedRefreshRequests, 1);
+		assert.strictEqual(reopenedRefreshDisposals, 1);
+		assert.strictEqual(reopenedMessageDisposals, 1);
+		assert.strictEqual(reopenedWatcher.disposeCalls, 1);
+	});
+
 	test('초기 Graph 생성 중 변경은 ready 전 전송하지 않고 최신 Graph로 후속 Refresh한다', async () => {
 		const initialSnapshot = createDeferred<void>();
 		const watcher = createWorkspaceWatcherStub();
@@ -248,6 +341,8 @@ suite('Crispy Extension Host', () => {
 
 		await waitFor(() => snapshotCalls === 1);
 		watcher.fireWorkspaceChange();
+		watcher.fireWorkspaceChange();
+		watcher.fireWorkspaceChange();
 		assert.deepStrictEqual(graphMessages, []);
 
 		initialSnapshot.resolve();
@@ -262,26 +357,77 @@ suite('Crispy Extension Host', () => {
 		runtime.detach();
 	});
 
-	test('연속 watcher callback은 기존 Coordinator의 pending Refresh로 병합된다', async () => {
+	test('ready 전 pending 변경은 Canvas dispose 시 폐기된다', () => {
+		const watcher = createWorkspaceWatcherStub();
+		let refreshRequests = 0;
+		let refreshDisposals = 0;
+		const runtime = createCanvasRuntime(
+			{} as vscode.WebviewPanel,
+			{ detach: () => undefined, terminate: () => undefined },
+			[],
+			{
+				requestWorkspaceRefresh() {
+					refreshRequests += 1;
+					return Promise.resolve();
+				},
+				dispose: () => refreshDisposals += 1,
+			},
+			watcher.watch,
+		);
+
+		watcher.fireWorkspaceChange();
+		watcher.fireWorkspaceChange();
+		runtime.detach();
+		runtime.markWebviewReady();
+		watcher.fireWorkspaceChange();
+
+		assert.strictEqual(refreshRequests, 0);
+		assert.strictEqual(refreshDisposals, 1);
+		assert.strictEqual(watcher.disposeCalls, 1);
+	});
+
+	test('연속 watcher callback은 직렬 후속 Refresh 한 번으로 병합되고 최신 Graph로 끝난다', async () => {
 		const firstSnapshot = createDeferred<void>();
 		const watcher = createWorkspaceWatcherStub();
 		let snapshotCalls = 0;
-		let graphMessages = 0;
+		let activeSnapshots = 0;
+		let maxActiveSnapshots = 0;
+		let conversionCalls = 0;
+		const staleGraph: Graph = { roots: [], rootNodes: {} };
+		const latestProject = {
+			kind: 'project' as const,
+			id: 'project:latest-workspace',
+			name: 'latest-workspace',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const latestGraph: Graph = {
+			roots: [{ id: 'root:latest-workspace', nodeId: latestProject.id }],
+			rootNodes: { [latestProject.id]: latestProject },
+		};
+		const graphMessages: Graph[] = [];
 		const coordinator = createWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				snapshotCalls += 1;
-				if (snapshotCalls === 1) {
-					await firstSnapshot.promise;
-				}
+				activeSnapshots += 1;
+				maxActiveSnapshots = Math.max(maxActiveSnapshots, activeSnapshots);
 
-				return { roots: [] };
+				try {
+					if (snapshotCalls === 1) {
+						await firstSnapshot.promise;
+					}
+
+					return { roots: [] };
+				} finally {
+					activeSnapshots -= 1;
+				}
 			},
-			convertWorkspaceSnapshotToGraph: () => ({
-				roots: [],
-				rootNodes: {},
-			}),
-			async postMessage() {
-				graphMessages += 1;
+			convertWorkspaceSnapshotToGraph: () => {
+				conversionCalls += 1;
+				return conversionCalls === 1 ? staleGraph : latestGraph;
+			},
+			async postMessage(message) {
+				graphMessages.push(message.graph);
 				return true;
 			},
 		});
@@ -298,14 +444,66 @@ suite('Crispy Extension Host', () => {
 		await waitFor(() => snapshotCalls === 1);
 		watcher.fireWorkspaceChange();
 		watcher.fireWorkspaceChange();
+		watcher.fireWorkspaceChange();
+		watcher.fireWorkspaceChange();
 
 		assert.strictEqual(snapshotCalls, 1);
 		firstSnapshot.resolve();
-		await waitFor(() => graphMessages === 2);
+		await waitFor(() => graphMessages.length === 2);
 
 		assert.strictEqual(snapshotCalls, 2);
-		assert.strictEqual(graphMessages, 2);
+		assert.strictEqual(maxActiveSnapshots, 1);
+		assert.deepStrictEqual(graphMessages, [staleGraph, latestGraph]);
 		runtime.detach();
+	});
+
+	test('Refresh Snapshot 중 Canvas dispose는 전송과 pending 후속 Refresh를 폐기한다', async () => {
+		const snapshot = createDeferred<void>();
+		const watcher = createWorkspaceWatcherStub();
+		let snapshotCalls = 0;
+		let conversionCalls = 0;
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				snapshotCalls += 1;
+				await snapshot.promise;
+				return { roots: [] };
+			},
+			convertWorkspaceSnapshotToGraph() {
+				conversionCalls += 1;
+				return { roots: [], rootNodes: {} };
+			},
+			async postMessage() {
+				postMessageCalls += 1;
+				return true;
+			},
+		});
+		const runtime = createCanvasRuntime(
+			{} as vscode.WebviewPanel,
+			{ detach: () => undefined, terminate: () => undefined },
+			[],
+			coordinator,
+			watcher.watch,
+		);
+		runtime.markWebviewReady();
+
+		watcher.fireWorkspaceChange();
+		await waitFor(() => snapshotCalls === 1);
+		const refreshCompletion = runtime.requestWorkspaceRefresh();
+		watcher.fireWorkspaceChange();
+		watcher.fireWorkspaceChange();
+		runtime.detach();
+		snapshot.resolve();
+		await refreshCompletion;
+
+		assert.strictEqual(snapshotCalls, 1);
+		assert.strictEqual(conversionCalls, 1);
+		assert.strictEqual(postMessageCalls, 0);
+		assert.strictEqual(watcher.disposeCalls, 1);
+		watcher.fireWorkspaceChange();
+		await Promise.resolve();
+		assert.strictEqual(snapshotCalls, 1);
+		assert.strictEqual(postMessageCalls, 0);
 	});
 
 	test('Canvas command가 실제 설정으로 WebviewPanel을 최초 생성한다', async () => {

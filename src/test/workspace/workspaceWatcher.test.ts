@@ -1,5 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { createCanvasRuntime } from '../../extension';
+import { createWorkspaceRefreshCoordinator } from '../../workspace/workspaceRefresh';
 import { watchWorkspaceChanges } from '../../workspace/workspaceWatcher';
 
 suite('Workspace Watcher', () => {
@@ -126,6 +128,94 @@ suite('Workspace Watcher', () => {
 
 		assert.strictEqual(changes, 2);
 		disposable.dispose();
+	});
+
+	test('Multi-root 변경은 Runtime의 동일 Coordinator 경로로 연결되고 dispose 후 중단된다', async () => {
+		const rootAUri = vscode.Uri.file('/workspace/root-a');
+		const rootBUri = vscode.Uri.file('/workspace/root-b');
+		const rootCUri = vscode.Uri.file('/workspace/root-c');
+		const rootA = createWorkspaceFolder('root-a', rootAUri, 0);
+		const rootB = createWorkspaceFolder('root-b', rootBUri, 1);
+		const rootC = createWorkspaceFolder('root-c', rootCUri, 2);
+		const fake = createFakeWorkspace([rootA, rootB]);
+		let graphVersion = 'initial';
+		let snapshotCalls = 0;
+		const graphMessages: string[] = [];
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				snapshotCalls += 1;
+				return { roots: [] };
+			},
+			convertWorkspaceSnapshotToGraph() {
+				const project = {
+					kind: 'project' as const,
+					id: `project:${graphVersion}`,
+					name: graphVersion,
+					status: 'loaded' as const,
+					children: [],
+				};
+
+				return {
+					roots: [{ id: `root:${graphVersion}`, nodeId: project.id }],
+					rootNodes: { [project.id]: project },
+				};
+			},
+			async postMessage(message) {
+				graphMessages.push(message.graph.roots[0]?.nodeId ?? 'empty');
+				return true;
+			},
+		});
+		const runtime = createCanvasRuntime(
+			{} as vscode.WebviewPanel,
+			{ detach: () => undefined, terminate: () => undefined },
+			[],
+			coordinator,
+			(onChange) => watchWorkspaceChanges(onChange, fake.source),
+		);
+		runtime.markWebviewReady();
+
+		fake.watcher.fireChange(vscode.Uri.joinPath(rootAUri, 'saved.ts'));
+		fake.watcher.fireCreate(vscode.Uri.joinPath(
+			rootAUri,
+			'.crispy',
+			'state.json',
+		));
+		fake.watcher.fireDelete(vscode.Uri.joinPath(
+			rootBUri,
+			'packages',
+			'.crispy',
+			'filter.json',
+		));
+		await Promise.resolve();
+		assert.strictEqual(snapshotCalls, 0);
+
+		graphVersion = 'root-c-added';
+		fake.fireWorkspaceFolderChange([rootC], []);
+		await waitFor(() => graphMessages.length === 1);
+		graphVersion = 'root-b-removed';
+		fake.fireWorkspaceFolderChange([], [rootB]);
+		await waitFor(() => graphMessages.length === 2);
+		graphVersion = 'file-created';
+		fake.watcher.fireCreate(vscode.Uri.joinPath(rootAUri, 'src', 'new.ts'));
+		await waitFor(() => graphMessages.length === 3);
+		graphVersion = 'folder-deleted';
+		fake.watcher.fireDelete(vscode.Uri.joinPath(rootAUri, 'generated'));
+		await waitFor(() => graphMessages.length === 4);
+
+		assert.strictEqual(snapshotCalls, 4);
+		assert.deepStrictEqual(graphMessages, [
+			'project:root-c-added',
+			'project:root-b-removed',
+			'project:file-created',
+			'project:folder-deleted',
+		]);
+
+		runtime.detach();
+		fake.watcher.fireCreate(vscode.Uri.joinPath(rootAUri, 'after-close.ts'));
+		fake.fireWorkspaceFolderChange([], [rootC]);
+		await Promise.resolve();
+		assert.strictEqual(snapshotCalls, 4);
+		assert.strictEqual(fake.watcher.disposeCalls, 1);
 	});
 
 	test('Workspace Root 추가와 제거를 각각 감지한다', () => {
@@ -281,4 +371,13 @@ function createWorkspaceFolder(
 	index: number,
 ): vscode.WorkspaceFolder {
 	return { name, uri, index };
+}
+
+/** 비동기 Coordinator가 기대 상태에 도달할 때까지 제한적으로 진행한다. */
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 20 && !predicate(); attempt += 1) {
+		await Promise.resolve();
+	}
+
+	assert.strictEqual(predicate(), true);
 }
