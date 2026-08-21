@@ -11,6 +11,8 @@ import { serializeGraphForWebview } from '../webview/graph/graphTransport';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
+	createDefaultWebviewSessionState,
+	parseWebviewSessionState,
 	parseWebviewState,
 	restoreWebviewState,
 	saveWebviewState,
@@ -18,6 +20,75 @@ import {
 	type PersistedWebviewState,
 	type WebviewStateApi,
 } from '../webview/webviewState';
+
+suite('Webview Session State', () => {
+	test('유효한 Session 상태를 파싱한다', () => {
+		assert.deepStrictEqual(parseWebviewSessionState({
+			panel: {
+				preferredDock: 'left',
+				sideSize: 380,
+				verticalSize: 280,
+				collapsed: true,
+			},
+			camera: { x: 120, y: -40, scale: 1.5 },
+		}), {
+			panel: {
+				preferredDock: 'left',
+				sideSize: 380,
+				verticalSize: 280,
+				collapsed: true,
+			},
+			camera: { x: 120, y: -40, scale: 1.5 },
+		});
+	});
+
+	test('새 기본 Session 상태를 생성한다', () => {
+		const first = createDefaultWebviewSessionState();
+		const second = createDefaultWebviewSessionState();
+
+		assert.deepStrictEqual(first, {
+			panel: DEFAULT_PANEL_LAYOUT_STATE,
+			camera: INITIAL_GRAPH_STATE.camera,
+		});
+		assert.notStrictEqual(first, second);
+		assert.notStrictEqual(first.panel, second.panel);
+		assert.notStrictEqual(first.camera, second.camera);
+	});
+
+	test('잘못된 Panel 상태를 거부한다', () => {
+		assert.strictEqual(parseWebviewSessionState({
+			panel: { ...DEFAULT_PANEL_LAYOUT_STATE, sideSize: 0 },
+			camera: INITIAL_GRAPH_STATE.camera,
+		}), undefined);
+	});
+
+	test('잘못된 Camera 상태를 거부한다', () => {
+		assert.strictEqual(parseWebviewSessionState({
+			panel: DEFAULT_PANEL_LAYOUT_STATE,
+			camera: { x: 0, y: 0, scale: 10 },
+		}), undefined);
+	});
+
+	test('입력 객체와 mutation을 공유하지 않는다', () => {
+		const input = {
+			panel: {
+				preferredDock: 'right',
+				sideSize: 420,
+				verticalSize: 300,
+				collapsed: false,
+			} as const,
+			camera: { x: 10, y: 20, scale: 2 },
+		};
+		const state = parseWebviewSessionState(input);
+
+		assert.ok(state);
+		input.camera.x = 999;
+
+		assert.strictEqual(state.camera.x, 10);
+		assert.notStrictEqual(state.panel, input.panel);
+		assert.notStrictEqual(state.camera, input.camera);
+	});
+});
 
 suite('Webview State', () => {
 	test('저장 상태가 없으면 Panel 및 Graph 기본 상태를 새 snapshot으로 복원한다', () => {
