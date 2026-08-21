@@ -2,7 +2,7 @@
 
 하나의 VS Code Webview 안에서 Project / Folder / File을 Root로 사용할 수 있는 Multi-Root Tree Graph를 렌더링하고 Camera 상태와 Pan / Zoom 및 Node 이동 동작을 관리한다.
 
-Graph는 `GraphRoot[]`와 Project/Folder/File을 허용하는 Root Node Map을 입력으로 사용한다. 기존 단일 Workspace도 Root가 하나인 같은 구조로 처리한다. `Graph.roots`만 Root 여부를 결정하고, children 포함 여부는 `openedFolders`가 별도로 결정한다. Camera, Node 위치, Open 및 Pagination은 Graph State로 관리하며 저장되지 않은 Node에는 deterministic Layout의 기본 World 좌표를 적용한다. File Group page가 바뀌면 표시 Row 수에 맞춰 Layout을 다시 계산한다. 실제 Workspace나 파일 시스템은 조회하지 않는다.
+Graph는 `GraphRoot[]`와 Project/Folder/File을 허용하는 Root Node Map을 입력으로 사용한다. 기존 단일 Workspace도 Root가 하나인 같은 구조로 처리한다. 실행 중에는 `Graph.roots`가 Root 여부를 결정하고, persisted `detachedRootNodeIds`는 초기 Workspace Graph에 Detached Root를 다시 적용하는 최소 상태로 사용한다. children 포함 여부는 `openedFolders`가 별도로 결정한다. Camera, Node 위치, Open, Pagination 및 Detached Root ID는 Graph State로 관리하며 저장되지 않은 Node에는 deterministic Layout의 기본 World 좌표를 적용한다. File Group page가 바뀌면 표시 Row 수에 맞춰 Layout을 다시 계산한다. 실제 Workspace나 파일 시스템은 조회하지 않는다.
 
 ## 구조
 
@@ -196,6 +196,7 @@ src/webview/graph/
 - 새 Context를 `Source Root Context + Source Root 이름 + Target 중간 Parent 경로`로 계산
 - Context에서 Target 자신의 이름을 제외하고 `/` separator와 trailing slash 유지
 - 중첩 Promoted Root 내부 Promotion도 최초 Graph 기준 부모 경로 연결
+- `applyDetachedGraphRoots()`로 저장된 Node ID를 현재 Graph에 순차 적용하고 누락 Node는 무시
 - `removeGraphRoot()`로 Root 목록과 직접 Root Node 참조를 immutable하게 제거
 
 ### `graphRootContext.ts`
@@ -261,9 +262,10 @@ src/webview/graph/
 - State 변경 구독 및 구독 해제
 - 이동한 Node의 World 좌표만 `nodePositions`에 저장
 - 복원 후보의 Graph 상태 검증 및 독립 객체 복사
-- `nodePositions`, `fileGroupPages` 또는 `openedFolders`가 없는 상태를 빈 값으로 파싱
+- `nodePositions`, `fileGroupPages`, `openedFolders` 또는 `detachedRootNodeIds`가 없는 상태를 빈 값으로 파싱
 - 동일한 `nodePositions` 객체의 reference fast-path 비교
 - Node 위치, File Group page 및 opened Folder 값 비교와 snapshot 참조 재사용
+- Detached Root Node ID sparse record의 parse, snapshot, equality 및 기존 저장 상태 호환 복원
 - Camera `scale` 최소값과 최대값 적용
 
 ### `graphView.ts`
@@ -273,18 +275,19 @@ src/webview/graph/
 - Viewport, World, Edge / Node / Overlay Layer 생성
 - 전달된 Multi-Root Graph를 하나의 Layout / Renderer 경로로 처리
 - 실행 중 `currentGraph` immutable snapshot과 최신 Layout 유지
-- 별도 detached 상태 없이 `currentGraph.roots`를 실행 중 Root의 단일 기준으로 사용
+- persisted `detachedRootNodeIds`를 초기 Workspace Graph에 `applyDetachedGraphRoots()`로 재적용
+- 현재 Graph에 없는 저장 Node ID는 상태에서 삭제하지 않고 복원 적용만 건너뜀
 - Root도 일반 Container와 같은 Open/Close interaction 및 Reflow 경로 사용
 - 전달받은 초기 `GraphState`로 새 Store 초기화
 - 복원된 File Group page와 opened Folder를 반영한 같은 초기 Layout을 Renderer와 Navigator에 전달
 - `fileGroupPages` 또는 `openedFolders` reference 변경 시 한 번 생성한 Layout을 Renderer와 Navigator에 함께 적용
 - Camera 및 Node 위치만 바뀌면 Layout Reflow 생략
-- Detach Drop client 좌표를 viewport-local과 World 좌표로 변환해 새 Root 위치로 저장
+- Detach Drop client 좌표를 viewport-local과 World 좌표로 변환해 새 Root 위치와 Detached Root Node ID를 함께 저장
 - Folder/File 공통 Root Promotion 후 최신 Root/Backlink/Context를 Renderer와 Navigator의 한 번의 공통 Layout 갱신으로 반영
 - Backlink 클릭 시 저장 위치 또는 Layout 위치의 실제 Root 중심으로 Focus
 - Context Label 클릭 시 Backlink DOM client 중심을 World 좌표로 변환해 Focus
 - Promoted Root를 자신의 Backlink에 Drop하면 `removeGraphRoot()`로 Reattach
-- Reattach 시 해당 Root의 독립 위치만 제거하고 Camera, Open, Pagination과 다른 위치 유지
+- Reattach 시 해당 Root의 독립 위치와 Detached Root Node ID를 제거하고 Camera, Open, Pagination과 다른 위치 유지
 - Reflow, Detach와 Reattach가 `applyGraphLayout()`을 통해 동일 Layout reference를 Renderer와 Navigator에 전달
 - 초기 Camera 상태를 World transform과 Grid에 적용
 - Overlay Navigator 초기화 후 최초 Graph를 `createGraphNavigatorRoots()`로 변환해 Root 목록에 전달

@@ -5,6 +5,7 @@ import {
 } from '../../webview/graph/graphModel';
 import {
 	addGraphRoot,
+	applyDetachedGraphRoots,
 	createPromotedGraphRootId,
 	createRootContextRelativePath,
 	findGraphNode,
@@ -268,6 +269,27 @@ suite('Graph Root Promotion', () => {
 		assert.strictEqual(
 			addGraphRoot(addition.graph, 'folder:src'),
 			undefined,
+		);
+	});
+
+	test('저장된 Detached Root를 순서대로 적용하고 존재하지 않는 Node는 유지한 채 무시한다', () => {
+		const graph = createSingleRootGraph(PROJECT, 'root:workspace');
+		const restored = applyDetachedGraphRoots(graph, {
+			'folder:graph': true,
+			'file:graphView': true,
+			'folder:missing': true,
+		});
+
+		assert.deepStrictEqual(
+			restored.roots.map((root) => root.nodeId),
+			[PROJECT.id, 'folder:graph', 'file:graphView'],
+		);
+		assert.strictEqual(restored.rootNodes['folder:graph']?.kind, 'folder');
+		assert.strictEqual(restored.rootNodes['file:graphView']?.kind, 'file');
+		assert.strictEqual(restored.rootNodes['folder:missing'], undefined);
+		assert.strictEqual(
+			applyDetachedGraphRoots(graph, { 'folder:missing': true }),
+			graph,
 		);
 	});
 

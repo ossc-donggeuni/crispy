@@ -11,12 +11,13 @@ export interface GraphNodePosition {
 	y: number;
 }
 
-/** Camera, Node 위치, 파일 그룹 page와 열린 Folder 상태를 포함하는 저장 가능한 Graph 상태다. */
+/** Camera, Node 위치, 파일 그룹 page, 열린 Folder와 Detached Root를 포함하는 저장 가능한 Graph 상태다. */
 export interface GraphState {
 	camera: GraphCameraState;
 	nodePositions: Record<string, GraphNodePosition>;
 	fileGroupPages?: Record<string, number>;
 	openedFolders?: Record<string, true>;
+	detachedRootNodeIds?: Record<string, true>;
 }
 
 /** 외부 mutation을 막기 위해 읽기 전용으로 고정한 Graph 상태 snapshot이다. */
@@ -25,6 +26,7 @@ export interface GraphStateSnapshot {
 	readonly nodePositions: Readonly<Record<string, Readonly<GraphNodePosition>>>;
 	readonly fileGroupPages: Readonly<Record<string, number>>;
 	readonly openedFolders: Readonly<Record<string, true>>;
+	readonly detachedRootNodeIds: Readonly<Record<string, true>>;
 }
 
 /** Graph 상태가 실제로 변경된 뒤 호출되는 구독 callback이다. */
@@ -62,6 +64,7 @@ export const INITIAL_GRAPH_STATE: GraphStateSnapshot = Object.freeze({
 	nodePositions: Object.freeze({}),
 	fileGroupPages: Object.freeze({}),
 	openedFolders: Object.freeze({}),
+	detachedRootNodeIds: Object.freeze({}),
 });
 
 /** 파일 총 개수와 page로 실제 표시할 파일 개수를 계산한다. */
@@ -106,8 +109,16 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 	const nodePositions = parseNodePositions(candidate.nodePositions);
 	const fileGroupPages = parseFileGroupPages(candidate.fileGroupPages);
 	const openedFolders = parseOpenedFolders(candidate.openedFolders);
+	const detachedRootNodeIds = parseDetachedRootNodeIds(
+		candidate.detachedRootNodeIds,
+	);
 
-	if (!nodePositions || !fileGroupPages || !openedFolders) {
+	if (
+		!nodePositions
+		|| !fileGroupPages
+		|| !openedFolders
+		|| !detachedRootNodeIds
+	) {
 		return undefined;
 	}
 
@@ -120,6 +131,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 		nodePositions,
 		fileGroupPages,
 		openedFolders,
+		detachedRootNodeIds,
 	};
 }
 
@@ -244,6 +256,16 @@ function createSnapshot(
 		)
 		? previousState.openedFolders
 		: Object.freeze({ ...sourceOpenedFolders });
+	const sourceDetachedRootNodeIds = state.detachedRootNodeIds
+		?? previousState?.detachedRootNodeIds
+		?? INITIAL_GRAPH_STATE.detachedRootNodeIds;
+	const detachedRootNodeIds = previousState
+		&& areSameDetachedRootNodeIds(
+			previousState.detachedRootNodeIds,
+			sourceDetachedRootNodeIds,
+		)
+		? previousState.detachedRootNodeIds
+		: Object.freeze({ ...sourceDetachedRootNodeIds });
 
 	return Object.freeze({
 		camera: Object.freeze({
@@ -254,6 +276,7 @@ function createSnapshot(
 		nodePositions,
 		fileGroupPages,
 		openedFolders,
+		detachedRootNodeIds,
 	});
 }
 
@@ -288,6 +311,10 @@ function isSameState(
 		&& areSameOpenedFolders(
 			currentState.openedFolders,
 			nextState.openedFolders,
+		)
+		&& areSameDetachedRootNodeIds(
+			currentState.detachedRootNodeIds,
+			nextState.detachedRootNodeIds,
 		);
 }
 
@@ -371,6 +398,23 @@ function parseFileGroupPages(value: unknown): Record<string, number> | undefined
  * 필드가 없으면 모든 Folder가 닫힌 빈 Map으로 복원한다.
  */
 function parseOpenedFolders(value: unknown): Record<string, true> | undefined {
+	return parseSparseTrueRecord(value);
+}
+
+/**
+ * Detached Root Node ID 복원 후보를 sparse Map으로 검증하고 복사한다.
+ * 필드가 없는 기존 상태는 Detach가 없는 빈 Map으로 복원한다.
+ */
+function parseDetachedRootNodeIds(
+	value: unknown,
+): Record<string, true> | undefined {
+	return parseSparseTrueRecord(value);
+}
+
+/** 값이 true인 ID만 허용하는 sparse record를 검증하고 복사한다. */
+function parseSparseTrueRecord(
+	value: unknown,
+): Record<string, true> | undefined {
 	if (value === undefined) {
 		return {};
 	}
@@ -460,13 +504,29 @@ function areSameOpenedFolders(
 	currentFolders: GraphStateSnapshot['openedFolders'],
 	nextFolders: GraphStateSnapshot['openedFolders'],
 ): boolean {
-	if (currentFolders === nextFolders) {
+	return areSameSparseTrueRecords(currentFolders, nextFolders);
+}
+
+/** 두 Detached Root Map에 같은 Node ID가 저장되어 있는지 판별한다. */
+function areSameDetachedRootNodeIds(
+	currentNodeIds: GraphStateSnapshot['detachedRootNodeIds'],
+	nextNodeIds: GraphStateSnapshot['detachedRootNodeIds'],
+): boolean {
+	return areSameSparseTrueRecords(currentNodeIds, nextNodeIds);
+}
+
+/** 두 sparse true record에 같은 ID가 저장되어 있는지 판별한다. */
+function areSameSparseTrueRecords(
+	currentRecord: Readonly<Record<string, true>>,
+	nextRecord: Readonly<Record<string, true>>,
+): boolean {
+	if (currentRecord === nextRecord) {
 		return true;
 	}
 
-	const currentIds = Object.keys(currentFolders);
-	const nextIds = Object.keys(nextFolders);
+	const currentIds = Object.keys(currentRecord);
+	const nextIds = Object.keys(nextRecord);
 
 	return currentIds.length === nextIds.length
-		&& currentIds.every((id) => nextFolders[id] === true);
+		&& currentIds.every((id) => nextRecord[id] === true);
 }

@@ -4,7 +4,11 @@ import {
 } from './graphCamera';
 import { createGraphLayout, type GraphLayout } from './graphLayout';
 import type { Graph } from './graphModel';
-import { addGraphRoot, removeGraphRoot } from './graphRootPromotion';
+import {
+	addGraphRoot,
+	applyDetachedGraphRoots,
+	removeGraphRoot,
+} from './graphRootPromotion';
 import {
 	initializeGraphNavigator,
 	type GraphNavigator,
@@ -25,7 +29,7 @@ import {
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
-	/** Camera, 사용자 Node 위치와 File Group page를 관리하는 단일 Store다. */
+	/** Camera, Node 위치, File Group page, Open 및 Detached Root를 관리하는 Store다. */
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
@@ -119,6 +123,10 @@ export function promoteToGraphRoot(
 		},
 		fileGroupPages: snapshot.fileGroupPages,
 		openedFolders: snapshot.openedFolders,
+		detachedRootNodeIds: {
+			...snapshot.detachedRootNodeIds,
+			[request.nodeId]: true,
+		},
 	});
 
 	return addition.graph;
@@ -216,7 +224,10 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
-	let currentGraph = graph;
+	let currentGraph = applyDetachedGraphRoots(
+		graph,
+		initialGraphState.detachedRootNodeIds,
+	);
 	const camera = initializeGraphCamera(viewport, world, state);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
@@ -294,13 +305,16 @@ export function initializeGraphView(
 		currentGraph = nextGraph;
 		const snapshot = state.getState();
 		const nodePositions = { ...snapshot.nodePositions };
+		const detachedRootNodeIds = { ...snapshot.detachedRootNodeIds };
 
 		delete nodePositions[nodeId];
+		delete detachedRootNodeIds[nodeId];
 		state.setState({
 			camera: snapshot.camera,
 			nodePositions,
 			fileGroupPages: snapshot.fileGroupPages,
 			openedFolders: snapshot.openedFolders,
+			detachedRootNodeIds,
 		});
 		applyCurrentLayout(state.getState());
 		syncNavigatorRoots();

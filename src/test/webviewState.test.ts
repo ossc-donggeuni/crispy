@@ -39,6 +39,10 @@ suite('Webview State', () => {
 			state.graph.openedFolders,
 			INITIAL_GRAPH_STATE.openedFolders,
 		);
+		assert.notStrictEqual(
+			state.graph.detachedRootNodeIds,
+			INITIAL_GRAPH_STATE.detachedRootNodeIds,
+		);
 	});
 
 	test('getState의 전체 Webview 상태를 외부 객체와 분리해 우선 복원한다', () => {
@@ -67,6 +71,10 @@ suite('Webview State', () => {
 			state.graph.openedFolders,
 			savedState.graph.openedFolders,
 		);
+		assert.notStrictEqual(
+			state.graph.detachedRootNodeIds,
+			savedState.graph.detachedRootNodeIds,
+		);
 	});
 
 	test('getState가 없으면 HTML의 data-webview-state를 복원한다', () => {
@@ -91,6 +99,10 @@ suite('Webview State', () => {
 		assert.notStrictEqual(
 			state.graph.openedFolders,
 			initialState.graph.openedFolders,
+		);
+		assert.notStrictEqual(
+			state.graph.detachedRootNodeIds,
+			initialState.graph.detachedRootNodeIds,
 		);
 	});
 
@@ -138,6 +150,7 @@ suite('Webview State', () => {
 
 		assert.deepStrictEqual(restored.graph.fileGroupPages, {});
 		assert.deepStrictEqual(restored.graph.openedFolders, {});
+		assert.deepStrictEqual(restored.graph.detachedRootNodeIds, {});
 		assert.strictEqual(createGraphState(restored.graph).getFileGroupPage('missing'), 1);
 		assert.strictEqual(
 			createGraphState(restored.graph).isFolderOpened('folder:missing'),
@@ -212,6 +225,10 @@ suite('Webview State', () => {
 			savedState?.graph.openedFolders,
 			state.graph.openedFolders,
 		);
+		assert.notStrictEqual(
+			savedState?.graph.detachedRootNodeIds,
+			state.graph.detachedRootNodeIds,
+		);
 	});
 
 	test('Graph snapshot을 저장하고 새 Store로 Round Trip한다', () => {
@@ -237,6 +254,7 @@ suite('Webview State', () => {
 				'folder:app': { x: 720, y: 180 },
 				'folder:app/src:files': { x: 1040, y: 360 },
 			},
+			detachedRootNodeIds: { 'folder:app': true },
 		});
 		graphState.showMoreFiles('folder:app/src:files');
 		graphState.showMoreFiles('folder:app/src:files');
@@ -252,6 +270,7 @@ suite('Webview State', () => {
 				},
 				fileGroupPages: { 'folder:app/src:files': 3 },
 				openedFolders: { 'folder:app': true },
+				detachedRootNodeIds: { 'folder:app': true },
 			},
 		});
 		unsubscribe();
@@ -277,9 +296,13 @@ suite('Webview State', () => {
 			reinitializedGraphState.isFolderOpened('folder:app'),
 			true,
 		);
+		assert.deepStrictEqual(
+			reinitializedGraphState.getState().detachedRootNodeIds,
+			{ 'folder:app': true },
+		);
 	});
 
-	test('serialize 후 restore해도 파일 그룹 page와 열린 Folder 상태를 유지한다', () => {
+	test('serialize 후 restore해도 page, 열린 Folder와 Detached Root 상태를 유지한다', () => {
 		const state = createWebviewState('right', 10, -20, 1.25);
 		state.graph.fileGroupPages = {
 			'folder:src:files': 4,
@@ -288,6 +311,10 @@ suite('Webview State', () => {
 		state.graph.openedFolders = {
 			'folder:src': true,
 			'folder:test': true,
+		};
+		state.graph.detachedRootNodeIds = {
+			'folder:src': true,
+			'file:test/index.ts': true,
 		};
 
 		const restored = restoreWebviewState(
@@ -302,6 +329,10 @@ suite('Webview State', () => {
 		assert.deepStrictEqual(restored.graph.openedFolders, {
 			'folder:src': true,
 			'folder:test': true,
+		});
+		assert.deepStrictEqual(restored.graph.detachedRootNodeIds, {
+			'folder:src': true,
+			'file:test/index.ts': true,
 		});
 	});
 
@@ -341,6 +372,7 @@ suite('Webview State Wiring', () => {
 			nodePositions: { 'folder:src': { x: 800, y: 240 } },
 			fileGroupPages: {},
 			openedFolders: { 'folder:src': true as const },
+			detachedRootNodeIds: { 'folder:src': true as const },
 		};
 		const agentTabId = 'agent-tab-test';
 		const savedStates: PersistedWebviewState[] = [];
@@ -352,6 +384,7 @@ suite('Webview State Wiring', () => {
 			nodePositions: initialState.graph.nodePositions,
 			fileGroupPages: initialState.graph.fileGroupPages ?? {},
 			openedFolders: initialState.graph.openedFolders ?? {},
+			detachedRootNodeIds: initialState.graph.detachedRootNodeIds ?? {},
 		};
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
 		let panelState: PanelLayoutState | undefined;
@@ -418,6 +451,7 @@ suite('Webview State Wiring', () => {
 				nodePositions: { ...graphState.nodePositions },
 				fileGroupPages: { ...graphState.fileGroupPages },
 				openedFolders: { ...graphState.openedFolders },
+				detachedRootNodeIds: { ...graphState.detachedRootNodeIds },
 			};
 
 			return {
@@ -433,6 +467,10 @@ suite('Webview State Wiring', () => {
 						openedFolders: {
 							...(state.openedFolders
 								?? currentGraphState.openedFolders),
+						},
+						detachedRootNodeIds: {
+							...(state.detachedRootNodeIds
+								?? currentGraphState.detachedRootNodeIds),
 						},
 					};
 					},
@@ -859,6 +897,7 @@ function createWebviewState(
 			nodePositions: {},
 			fileGroupPages: {},
 			openedFolders: {},
+			detachedRootNodeIds: {},
 		},
 	};
 }

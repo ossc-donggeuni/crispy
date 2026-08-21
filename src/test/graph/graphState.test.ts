@@ -20,6 +20,7 @@ suite('Graph State', () => {
 			nodePositions: {},
 			fileGroupPages: {},
 			openedFolders: {},
+			detachedRootNodeIds: {},
 		});
 		assert.deepStrictEqual(state.getState(), INITIAL_GRAPH_STATE);
 	});
@@ -31,6 +32,9 @@ suite('Graph State', () => {
 			nodePositions: { 'folder:src': { x: 120, y: 80 } },
 			fileGroupPages: { 'folder:src:files': 2 },
 			openedFolders: { 'folder:src': true } as Record<string, true>,
+			detachedRootNodeIds: {
+				'file:src/index.ts': true,
+			} as Record<string, true>,
 		};
 
 		state.setState(nextState);
@@ -38,6 +42,7 @@ suite('Graph State', () => {
 		nextState.nodePositions['folder:src'].x = 999;
 		nextState.fileGroupPages['folder:src:files'] = 999;
 		nextState.openedFolders['folder:test'] = true;
+		nextState.detachedRootNodeIds['file:src/other.ts'] = true;
 
 		const snapshot = state.getState();
 		assert.deepStrictEqual(snapshot.camera, { x: 30, y: -20, scale: 1.5 });
@@ -50,12 +55,16 @@ suite('Graph State', () => {
 		assert.deepStrictEqual(snapshot.openedFolders, {
 			'folder:src': true,
 		});
+		assert.deepStrictEqual(snapshot.detachedRootNodeIds, {
+			'file:src/index.ts': true,
+		});
 		assert.strictEqual(Object.isFrozen(snapshot), true);
 		assert.strictEqual(Object.isFrozen(snapshot.camera), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions['folder:src']), true);
 		assert.strictEqual(Object.isFrozen(snapshot.fileGroupPages), true);
 		assert.strictEqual(Object.isFrozen(snapshot.openedFolders), true);
+		assert.strictEqual(Object.isFrozen(snapshot.detachedRootNodeIds), true);
 	});
 
 	test('Folder를 열면 sparse 상태에 ID를 추가하고 닫으면 제거한다', () => {
@@ -227,6 +236,54 @@ suite('Graph State', () => {
 		assert.strictEqual(state.getState().openedFolders, initialOpenedFolders);
 	});
 
+	test('Detached Root Node ID 값이 같으면 기존 snapshot 참조를 재사용한다', () => {
+		const state = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			detachedRootNodeIds: { 'folder:app': true },
+		});
+		const initialDetachedRootNodeIds = state.getState().detachedRootNodeIds;
+
+		state.setState({
+			camera: { x: 30, y: -20, scale: 1.5 },
+			nodePositions: {},
+			detachedRootNodeIds: { 'folder:app': true },
+		});
+
+		assert.strictEqual(
+			state.getState().detachedRootNodeIds,
+			initialDetachedRootNodeIds,
+		);
+	});
+
+	test('Detached Root Node ID가 달라질 때만 새 snapshot을 알린다', () => {
+		const state = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			detachedRootNodeIds: { 'folder:app': true },
+		});
+		const snapshots: GraphStateSnapshot[] = [];
+
+		state.subscribe((snapshot) => snapshots.push(snapshot));
+		state.setState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			detachedRootNodeIds: { 'folder:app': true },
+		});
+		assert.strictEqual(snapshots.length, 0);
+
+		state.setState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			detachedRootNodeIds: { 'file:app/index.ts': true },
+		});
+
+		assert.strictEqual(snapshots.length, 1);
+		assert.deepStrictEqual(snapshots[0]?.detachedRootNodeIds, {
+			'file:app/index.ts': true,
+		});
+	});
+
 	test('Camera scale을 최소 및 최대 범위로 제한한다', () => {
 		const state = createGraphState({
 			camera: { x: 0, y: 0, scale: 0 },
@@ -250,6 +307,7 @@ suite('Graph State', () => {
 			},
 			fileGroupPages: { 'folder:src:files': 3 },
 			openedFolders: { 'folder:src': true },
+			detachedRootNodeIds: { 'file:src/index.ts': true },
 		};
 
 		const state = parseGraphState(value);
@@ -259,6 +317,7 @@ suite('Graph State', () => {
 			nodePositions: { 'folder:src': { x: 400, y: 120 } },
 			fileGroupPages: { 'folder:src:files': 3 },
 			openedFolders: { 'folder:src': true },
+			detachedRootNodeIds: { 'file:src/index.ts': true },
 		});
 		assert.notStrictEqual(state, value);
 		assert.notStrictEqual(state?.camera, value.camera);
@@ -268,14 +327,19 @@ suite('Graph State', () => {
 		);
 		assert.notStrictEqual(state?.fileGroupPages, value.fileGroupPages);
 		assert.notStrictEqual(state?.openedFolders, value.openedFolders);
+		assert.notStrictEqual(
+			state?.detachedRootNodeIds,
+			value.detachedRootNodeIds,
+		);
 	});
 
-	test('필드가 없는 기존 상태를 빈 Node 위치, page와 opened 상태로 파싱한다', () => {
+	test('필드가 없는 기존 상태를 빈 Node 위치, page, opened와 Detached 상태로 파싱한다', () => {
 		const expected = {
 			camera: { x: 1, y: 2, scale: 1 },
 			nodePositions: {},
 			fileGroupPages: {},
 			openedFolders: {},
+			detachedRootNodeIds: {},
 		};
 
 		assert.deepStrictEqual(
@@ -331,6 +395,21 @@ suite('Graph State', () => {
 				camera: { x: 0, y: 0, scale: 1 },
 				nodePositions: {},
 				openedFolders: { '': true },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				detachedRootNodeIds: [],
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				detachedRootNodeIds: { 'folder:src': false },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				detachedRootNodeIds: { '': true },
 			},
 		];
 
