@@ -145,6 +145,8 @@ const START_ERROR_MESSAGES = Object.freeze({
 
 /** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
 const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
+/** 3초 deactivate budget에서 2초 process-tree cleanup을 남기는 PID 준비 상한이다. */
+export const DETACHED_PID_READY_TIMEOUT_MS = 500;
 
 function isValidProcessTreeRootPid(pid: number): boolean {
 	return Number.isSafeInteger(pid) && pid > 1;
@@ -1160,7 +1162,9 @@ export class TerminalHost {
 		let rootPid = process.pid;
 		if (!isValidProcessTreeRootPid(rootPid)) {
 			try {
-				rootPid = await process.waitForReadyPid();
+				rootPid = await process.waitForReadyPid({
+					timeoutMs: DETACHED_PID_READY_TIMEOUT_MS,
+				});
 			} catch {
 				this.killDetachedProcess(process);
 				return;

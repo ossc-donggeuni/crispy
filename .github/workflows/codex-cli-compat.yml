@@ -1,4 +1,4 @@
-name: Codex CLI compatibility
+name: Codex config and launch compatibility
 
 on:
   pull_request:

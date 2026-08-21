@@ -3,6 +3,7 @@ import type {
 	PtyExitEvent,
 	PtyListenerDisposable,
 	PtyProcessHandle,
+	PtyReadyPidWaitOptions,
 	PtySpawnOptions,
 } from '../../../agent/host/terminal/ptyAdapter';
 
@@ -29,6 +30,7 @@ function subscribe<Listener>(
 export class FakePtyProcessHandle implements PtyProcessHandle {
 	readonly writes: string[] = [];
 	readonly resizes: Array<{ readonly cols: number; readonly rows: number }> = [];
+	readonly readyPidWaitTimeouts: Array<number | undefined> = [];
 	killCallCount = 0;
 
 	private readonly dataListeners = new Set<(data: string) => void>();
@@ -55,7 +57,8 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 		return this.exitListeners.size;
 	}
 
-	waitForReadyPid(): Promise<number> {
+	waitForReadyPid(options: PtyReadyPidWaitOptions = {}): Promise<number> {
+		this.readyPidWaitTimeouts.push(options.timeoutMs);
 		if (Number.isSafeInteger(this.currentPid) && this.currentPid > 1) {
 			return Promise.resolve(this.currentPid);
 		}

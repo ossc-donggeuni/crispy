@@ -6,7 +6,10 @@ import type {
 	ProcessTreeController,
 	ProcessTreeSnapshot,
 } from '../../agent/host/terminal/processTreeController';
-import { TerminalHost } from '../../agent/host/terminal/terminalHost';
+import {
+	DETACHED_PID_READY_TIMEOUT_MS,
+	TerminalHost,
+} from '../../agent/host/terminal/terminalHost';
 import type { PrepareTerminalLaunch } from '../../agent/host/terminal/prepareTerminalLaunch';
 import {
 	createTerminalRuntimeCleanup,
@@ -255,6 +258,36 @@ suite('Panel dispose cleanup with fake PTY', () => {
 				&& 'type' in message
 				&& message.type === 'terminal.started',
 		), false);
+	});
+
+	test('detach PID 대기는 종료 전용 상한 뒤 root kill로 fallback한다', async () => {
+		const adapter = new FakePtyAdapter(0);
+		const controller = new FakeProcessTreeController();
+		const host = new TerminalHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			emitMessage: () => undefined,
+			processTreeController: controller,
+		});
+		const cleanup = createTerminalRuntimeCleanup(host, []);
+		const starting = host.startSession('tab-delayed-cleanup-timeout', 80, 24);
+		await waitUntil(() => adapter.handles.length === 1);
+		const handle = adapter.handles[0];
+
+		cleanup.detach();
+		const terminating = cleanup.terminate();
+		await waitUntil(() => handle.readyPidWaitTimeouts.length === 2);
+		assert.deepStrictEqual(handle.readyPidWaitTimeouts, [
+			undefined,
+			DETACHED_PID_READY_TIMEOUT_MS,
+		]);
+
+		handle.rejectReadyPid();
+		await Promise.all([starting, terminating]);
+
+		assert.strictEqual(DETACHED_PID_READY_TIMEOUT_MS, 500);
+		assert.strictEqual(handle.killCallCount, 1);
+		assert.deepStrictEqual(controller.calls, []);
 	});
 
 	test('detach 중 완료된 launch 준비가 새 PTY나 routing을 다시 만들지 않는다', async () => {
