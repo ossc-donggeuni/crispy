@@ -957,6 +957,7 @@ suite('Graph Navigator', () => {
 		fixture.rootListButton.dispatch('click', {} as Event);
 		fixture.navigator.setRoots([]);
 		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
 		assert.strictEqual(
 			fixture.rootListButton.getAttribute('aria-expanded'),
 			'true',
@@ -1002,15 +1003,21 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
 	});
 
-	test('Filter Action은 지정 SVG를 사용하고 Panel 열림 및 active 상태를 독립적으로 동기화한다', () => {
+	test('Root List와 Filter Action은 단일 active Panel로 visibility와 active 상태를 동기화한다', () => {
 		const fixture = createNavigatorFixture();
 
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
 		assert.strictEqual(fixture.filterPanel.hidden, true);
 		assert.strictEqual(fixture.filterTitle.textContent, 'Workspace Filter');
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'false',
+		);
 		assert.strictEqual(
 			fixture.filterButton.getAttribute('aria-expanded'),
 			'false',
 		);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
 		assert.strictEqual(fixture.filterButton.hasClass('is-active'), false);
 		assert.strictEqual(
 			fixture.filterIcon.getAttribute('data-navigator-icon'),
@@ -1018,18 +1025,45 @@ suite('Graph Navigator', () => {
 		);
 
 		fixture.rootListButton.dispatch('click', {} as Event);
-		fixture.filterButton.dispatch('click', {} as Event);
 
 		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), true);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), false);
+		assert.strictEqual(
+			fixture.rootListButton.getAttribute('aria-expanded'),
+			'true',
+		);
+		fixture.filterButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
 		assert.strictEqual(fixture.filterPanel.hidden, false);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
 		assert.strictEqual(
 			fixture.filterButton.getAttribute('aria-expanded'),
 			'true',
 		);
 		assert.strictEqual(fixture.filterButton.hasClass('is-active'), true);
 
-		fixture.filterButton.dispatch('click', {} as Event);
+		fixture.rootListButton.dispatch('click', {} as Event);
 
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), true);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), false);
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), false);
+
+		fixture.filterButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(fixture.filterPanel.hidden, false);
+		fixture.filterButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
 		assert.strictEqual(fixture.filterPanel.hidden, true);
 		assert.strictEqual(
 			fixture.filterButton.getAttribute('aria-expanded'),
@@ -1039,6 +1073,8 @@ suite('Graph Navigator', () => {
 
 		fixture.navigator.dispose();
 		fixture.filterButton.dispatch('click', {} as Event);
+		fixture.rootListButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
 		assert.strictEqual(fixture.filterPanel.hidden, true);
 	});
 
@@ -1140,6 +1176,7 @@ suite('Graph Navigator', () => {
 		const workspace = createFilterWorkspaceFixture();
 
 		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		fixture.filterButton.dispatch('click', {} as Event);
 		const openedFolders = fixture.graphState.getState().openedFolders;
 		const initialFolderItem = getFilterItem(fixture.filterTree, workspace.srcFolder.id);
 
@@ -1190,7 +1227,37 @@ suite('Graph Navigator', () => {
 			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
 			1,
 		);
-		const nestedCollapseButton = getFilterToggle(expandedNestedFolder);
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		fixture.filterButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(fixture.filterPanel.hidden, false);
+		assert.strictEqual(
+			getFilterToggle(getFilterItem(
+				fixture.filterTree,
+				workspace.webviewFolder.id,
+			)).getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			1,
+		);
+		fixture.filterButton.dispatch('click', {} as Event);
+		fixture.filterButton.dispatch('click', {} as Event);
+		assert.strictEqual(
+			getFilterToggle(getFilterItem(
+				fixture.filterTree,
+				workspace.webviewFolder.id,
+			)).getAttribute('aria-expanded'),
+			'true',
+		);
+		const nestedCollapseButton = getFilterToggle(getFilterItem(
+			fixture.filterTree,
+			workspace.webviewFolder.id,
+		));
 
 		fixture.filterTree.dispatch(
 			'click',
@@ -1345,6 +1412,7 @@ suite('Graph Navigator', () => {
 			},
 		});
 		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		fixture.filterButton.dispatch('click', {} as Event);
 		const srcToggle = getFilterToggle(getFilterItem(
 			fixture.filterTree,
 			workspace.srcFolder.id,
@@ -1378,6 +1446,10 @@ suite('Graph Navigator', () => {
 
 		fixture.navigator.setWorkspaceGraph(refreshedGraph);
 
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(fixture.filterPanel.hidden, false);
+		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), true);
 		assert.strictEqual(
 			getFilterToggle(getFilterItem(
 				fixture.filterTree,

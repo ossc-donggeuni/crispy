@@ -74,6 +74,9 @@ interface NavigatorRootListItem {
 	dispose(): void;
 }
 
+/** 동시에 하나만 열 수 있는 Navigator의 부동 Panel이다. */
+type NavigatorPanel = 'roots' | 'filter' | undefined;
+
 /** 원본 Workspace Graph의 Project Root를 중복 없이 입력 순서대로 고른다. */
 function getWorkspaceProjects(graph: Graph): readonly Project[] {
 	const projects: Project[] = [];
@@ -343,20 +346,31 @@ export function initializeGraphNavigator(
 	zoomInButton.setAttribute('aria-label', 'Zoom in');
 	zoomInButton.textContent = '+';
 
-	let rootListOpen = false;
+	let activePanel: NavigatorPanel;
 	let rootListButton: HTMLButtonElement;
-	const renderRootListState = (): void => {
+	let filterButton: HTMLButtonElement;
+	const renderPanelState = (): void => {
+		const rootListOpen = activePanel === 'roots';
+		const filterOpen = activePanel === 'filter';
+
 		rootListPanel.hidden = !rootListOpen;
+		filterPanel.hidden = !filterOpen;
 		rootListButton.setAttribute('aria-expanded', String(rootListOpen));
+		filterButton.setAttribute('aria-expanded', String(filterOpen));
 		if (rootListOpen) {
 			rootListButton.classList.add('is-active');
 		} else {
 			rootListButton.classList.remove('is-active');
 		}
+		if (filterOpen) {
+			filterButton.classList.add('is-active');
+		} else {
+			filterButton.classList.remove('is-active');
+		}
 	};
 	const handleRootListToggle = (): void => {
-		rootListOpen = !rootListOpen;
-		renderRootListState();
+		activePanel = activePanel === 'roots' ? undefined : 'roots';
+		renderPanelState();
 	};
 	const rootListAction = createNavigatorActionButton(ownerDocument, {
 		label: ROOT_LIST_LABEL,
@@ -364,20 +378,9 @@ export function initializeGraphNavigator(
 		iconAsset: ROOT_LIST_ICON_ASSET,
 		onActivate: handleRootListToggle,
 	});
-	let filterOpen = false;
-	let filterButton: HTMLButtonElement;
-	const renderFilterPanelState = (): void => {
-		filterPanel.hidden = !filterOpen;
-		filterButton.setAttribute('aria-expanded', String(filterOpen));
-		if (filterOpen) {
-			filterButton.classList.add('is-active');
-		} else {
-			filterButton.classList.remove('is-active');
-		}
-	};
 	const handleFilterToggle = (): void => {
-		filterOpen = !filterOpen;
-		renderFilterPanelState();
+		activePanel = activePanel === 'filter' ? undefined : 'filter';
+		renderPanelState();
 	};
 	const filterAction = createNavigatorActionButton(ownerDocument, {
 		label: FILTER_LABEL,
@@ -1086,8 +1089,7 @@ export function initializeGraphNavigator(
 		: undefined;
 
 	resizeObserver?.observe(viewport);
-	renderRootListState();
-	renderFilterPanelState();
+	renderPanelState();
 	render();
 	renderMinimapGraph(initialGraphState);
 
