@@ -3,12 +3,12 @@ import {
 	type TerminalErrorCode,
 } from '../../protocol/errors';
 import type { SessionId, TabId } from '../../protocol/messages';
-import type { ShellLaunchPolicy } from '../shell/types';
 import type {
 	PtyAdapter,
 	PtyExitEvent,
 	PtyListenerDisposable,
 	PtyProcessHandle,
+	PtySpawnOptions,
 } from './ptyAdapter';
 
 /** PTY를 아직 시작하지 않은 새 session 상태다. */
@@ -282,7 +282,11 @@ export class TerminalSession {
 	 * @throws {unknown} 주입된 PTY adapter가 안전한 상위 오류 변환을 위해 보고한 spawn 실패다.
 	 * @returns 실제 PID가 준비되어 running 전이와 callback이 끝나면 이행되는 Promise
 	 */
-	start(policy: ShellLaunchPolicy, cols: number, rows: number): Promise<void> {
+	start(
+		policy: Omit<PtySpawnOptions, 'cols' | 'rows'>,
+		cols: number,
+		rows: number,
+	): Promise<void> {
 		this.assertCanTransitionFrom(['starting']);
 		const process = this.ptyAdapter.spawn({
 			executable: policy.executable,

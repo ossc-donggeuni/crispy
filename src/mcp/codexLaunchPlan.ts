@@ -32,7 +32,7 @@ export function buildCodexBareLaunchPlan(
 		executable: options.executable,
 		cwd: options.cwd,
 		args: options.args ?? [],
-		envOverlay: {},
+		createEnvOverlay: () => Object.freeze({}),
 		expectsMcp: false,
 	});
 }
@@ -42,7 +42,9 @@ export function buildCodexMcpLaunchPlan(
 	options: BuildCodexMcpLaunchPlanOptions,
 ): AgentLaunchPlan {
 	const config = createCodexMcpConfig(options.connection, options.randomBytes);
-	return options.connection.withBearerToken((token) => freezeCodexPlan({
+	/** Building and final environment materialization both require an active descriptor. */
+	options.connection.withBearerToken(() => undefined);
+	return freezeCodexPlan({
 		executable: options.executable,
 		cwd: options.cwd,
 		args: [
@@ -50,33 +52,41 @@ export function buildCodexMcpLaunchPlan(
 			...config.args,
 			...(options.argsAfterConfig ?? []),
 		],
-		envOverlay: {
-			[CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE]: token,
-		},
+		createEnvOverlay: () => options.connection.withBearerToken((token) =>
+			Object.freeze({
+				[CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE]: token,
+			})
+		),
 		expectsMcp: true,
 		mcpServerName: config.serverName,
-	}));
+	});
 }
 
 function freezeCodexPlan(options: {
 	readonly executable: ResolvedAgentExecutable;
 	readonly cwd: string;
 	readonly args: readonly string[];
-	readonly envOverlay: Readonly<Record<string, string>>;
+	readonly createEnvOverlay: () => Readonly<Record<string, string>>;
 	readonly expectsMcp: boolean;
 	readonly mcpServerName?: string;
 }): AgentLaunchPlan {
-	return Object.freeze({
+	const plan = {
 		providerId: 'codex',
 		executable: options.executable.executable,
 		args: Object.freeze([...options.args]),
 		cwd: options.cwd,
-		envOverlay: Object.freeze({ ...options.envOverlay }),
 		envRemove: MCP_PROVIDER_ENVIRONMENT_REMOVALS,
 		launcherKind: options.executable.launcherKind,
 		expectsMcp: options.expectsMcp,
 		...(options.mcpServerName === undefined
 			? {}
 			: { mcpServerName: options.mcpServerName }),
+	};
+	/** Credential-bearing overlay stays accessible to the final spawn boundary but out of snapshots. */
+	Object.defineProperty(plan, 'envOverlay', {
+		get: options.createEnvOverlay,
+		enumerable: false,
+		configurable: false,
 	});
+	return Object.freeze(plan) as unknown as AgentLaunchPlan;
 }

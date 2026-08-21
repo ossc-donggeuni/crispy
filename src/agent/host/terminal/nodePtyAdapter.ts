@@ -102,7 +102,7 @@ export interface NodePtyBinding {
 	 */
 	spawn(
 		executable: string,
-		args: string[],
+		args: string[] | string,
 		options: NodePtySpawnOptions,
 	): NodePtyProcess;
 }
@@ -264,7 +264,9 @@ export class NodePtyAdapter implements PtyAdapter {
 			const useBundledWindowsConpty = this.platform === 'win32';
 			const process = this.loadBinding().spawn(
 				options.executable,
-				[...options.args],
+				typeof options.args === 'string'
+					? options.args
+					: [...options.args],
 				{
 					cwd: options.cwd,
 					env: { ...options.env },

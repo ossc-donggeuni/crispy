@@ -10,6 +10,7 @@ suite('Agent launch plan process boundary', () => {
 	test('final sanitizer가 stale token casing과 Electron control을 제거한 뒤 overlay만 넣는다', () => {
 		const plan = createPlan({
 			envOverlay: { CRISPY_MCP_TOKEN: 'fresh-token', KEEP: 'overlay' },
+			expectsMcp: true,
 		});
 		const base: NodeJS.ProcessEnv = {
 			CRISPY_MCP_TOKEN: 'stale-one',
@@ -27,6 +28,23 @@ suite('Agent launch plan process boundary', () => {
 		});
 		assert.deepStrictEqual(base, before);
 		assert.strictEqual(Object.isFrozen(environment), true);
+	});
+
+	test('bare plan은 overlay가 잘못 들어와도 credential과 Electron control을 거부한다', () => {
+		const plan = createPlan({
+			envOverlay: {
+				crispy_mcp_token: 'must-not-survive',
+				ELECTRON_RUN_AS_NODE: '1',
+				SAFE: 'yes',
+			},
+			envRemove: [],
+			expectsMcp: false,
+		});
+
+		assert.deepStrictEqual(createAgentProcessEnvironment(plan, {
+			CrIsPy_McP_ToKeN: 'stale',
+			Electron_Run_As_Node: '1',
+		}, 'darwin'), { SAFE: 'yes' });
 	});
 
 	test('direct plan은 executable, argv, cwd와 concrete env를 그대로 보존한다', () => {

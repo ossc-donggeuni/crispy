@@ -124,7 +124,9 @@ export class FakePtyAdapter implements PtyAdapter {
 	spawn(options: PtySpawnOptions): FakePtyProcessHandle {
 		this.spawnCalls.push({
 			...options,
-			args: [...options.args],
+			args: typeof options.args === 'string'
+				? options.args
+				: [...options.args],
 			env: { ...options.env },
 		});
 		const handle = new FakePtyProcessHandle(this.fakePid);

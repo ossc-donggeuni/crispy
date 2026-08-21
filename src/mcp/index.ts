@@ -108,6 +108,13 @@ export {
 	type BuildCodexBareLaunchPlanOptions,
 	type BuildCodexMcpLaunchPlanOptions,
 } from './codexLaunchPlan';
+export { spawnAgentPty } from './agentPtyLaunch';
+export {
+	createPrepareCodexTerminalLaunch,
+	type PrepareCodexTerminalLaunch,
+	type PrepareCodexTerminalLaunchDependencies,
+	type PreparedCodexTerminalLaunch,
+} from './codexTerminalLaunch';
 export {
 	createCrispyToolServer,
 	CRISPY_MCP_SERVER_NAME,

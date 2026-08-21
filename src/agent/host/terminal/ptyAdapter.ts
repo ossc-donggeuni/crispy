@@ -15,7 +15,8 @@ export interface PtyExitEvent {
  */
 export interface PtySpawnOptions {
 	readonly executable: string;
-	readonly args: readonly string[];
+	/** Windows cmd one-shot만 node-pty의 raw command-line string을 사용한다. */
+	readonly args: readonly string[] | string;
 	readonly cwd: string;
 	readonly env: Readonly<NodeJS.ProcessEnv>;
 	readonly cols: number;

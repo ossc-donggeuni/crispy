@@ -53,6 +53,8 @@ suite('Codex AgentLaunchPlan builder', () => {
 		assert.strictEqual(plan.args[0], 'exec');
 		assert.strictEqual(plan.args.at(-1), 'ping');
 		assert.strictEqual(plan.args.some((argument) => argument.includes(token)), false);
+		assert.strictEqual(JSON.stringify(plan).includes(token), false);
+		assert.strictEqual(Object.keys(plan).includes('envOverlay'), false);
 		assert.strictEqual(environment.CRISPY_MCP_TOKEN, token);
 		assert.strictEqual(environment.crispy_mcp_token, undefined);
 		assert.strictEqual(environment.ELECTRON_RUN_AS_NODE, undefined);
@@ -67,6 +69,21 @@ suite('Codex AgentLaunchPlan builder', () => {
 				cwd: '/workspace',
 				connection,
 			}),
+			/credential is no longer active/,
+		);
+	});
+
+	test('plan 생성 뒤 revoke되면 final environment에서 credential을 다시 얻지 못한다', () => {
+		const connection = createConnection();
+		const plan = buildCodexMcpLaunchPlan({
+			executable: { executable: '/opt/codex', launcherKind: 'direct' },
+			cwd: '/workspace',
+			connection,
+		});
+		connection.invalidate();
+
+		assert.throws(
+			() => createAgentProcessEnvironment(plan, {}, 'linux'),
 			/credential is no longer active/,
 		);
 	});

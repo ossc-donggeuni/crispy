@@ -46,13 +46,27 @@ export function createAgentProcessEnvironment(
 	baseEnvironment: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform = process.platform,
 ): Readonly<Record<string, string>> {
-	const keyForOverlay = (name: string): string => platform === 'win32'
-		? name.toLocaleUpperCase('en-US')
-		: name;
-	const removed = new Set(plan.envRemove.map(
+	const keyForOverlay = (name: string): string =>
+		name.toLocaleUpperCase('en-US');
+	const removed = new Set([
+		...MCP_PROVIDER_ENVIRONMENT_REMOVALS,
+		...plan.envRemove,
+	].map(
 		(name) => name.toLocaleUpperCase('en-US'),
 	));
-	const overlayNames = new Set(Object.keys(plan.envOverlay).map(keyForOverlay));
+	const allowedOverlayEntries = Object.entries(plan.envOverlay).filter(
+		([name]) => {
+			const normalized = keyForOverlay(name);
+			if (normalized === 'ELECTRON_RUN_AS_NODE') {
+				return false;
+			}
+			return normalized !== 'CRISPY_MCP_TOKEN'
+				|| (plan.expectsMcp && name === 'CRISPY_MCP_TOKEN');
+		},
+	);
+	const overlayNames = new Set(allowedOverlayEntries.map(([name]) =>
+		keyForOverlay(name)
+	));
 	const environment: Record<string, string> = {};
 
 	for (const [name, value] of Object.entries(baseEnvironment)) {
@@ -65,7 +79,7 @@ export function createAgentProcessEnvironment(
 		}
 		environment[name] = value;
 	}
-	for (const [name, value] of Object.entries(plan.envOverlay)) {
+	for (const [name, value] of allowedOverlayEntries) {
 		if (typeof value !== 'string') {
 			throw new Error('Agent launch environment is invalid.');
 		}
