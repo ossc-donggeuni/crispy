@@ -8,6 +8,7 @@ export type {
 } from './workspaceModel';
 export { createWorkspaceSnapshot } from './workspaceSnapshot';
 export { convertWorkspaceSnapshotToGraph } from './workspaceToGraph';
+export { readDefaultWorkspaceFilter } from './workspaceDefaultFilter';
 export {
 	matchesWorkspaceFilterRule,
 	parseWorkspaceFilter,

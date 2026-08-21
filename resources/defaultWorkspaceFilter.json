@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "kind": "folder",
+      "pattern": ".git"
+    },
+    {
+      "kind": "folder",
+      "pattern": "node_modules"
+    },
+    {
+      "kind": "folder",
+      "pattern": "dist"
+    },
+    {
+      "kind": "folder",
+      "pattern": "build"
+    },
+    {
+      "kind": "folder",
+      "pattern": "coverage"
+    },
+    {
+      "kind": "folder",
+      "pattern": ".next"
+    },
+    {
+      "kind": "folder",
+      "pattern": "__pycache__"
+    },
+    {
+      "kind": "folder",
+      "pattern": ".venv"
+    },
+    {
+      "kind": "file",
+      "pattern": ".DS_Store"
+    }
+  ]
+}
