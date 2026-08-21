@@ -24,6 +24,45 @@
 	gap: 6px;
 }
 
+.agent-mcp-status {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.agent-mcp-status[hidden] {
+	display: none;
+}
+
+.agent-mcp-status-text {
+	max-width: 260px;
+	overflow: hidden;
+	font-size: 11px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-mcp-restart {
+	padding: 2px 7px;
+	color: var(--vscode-button-foreground);
+	background-color: var(--vscode-button-background);
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	font: inherit;
+	font-size: 11px;
+	cursor: pointer;
+}
+
+.agent-mcp-restart[hidden] {
+	display: none;
+}
+
+.agent-mcp-restart:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
 #agent-provider-picker-host {
 	position: absolute;
 	inset: 0;
@@ -235,6 +274,22 @@
 	color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
 }
 
+/* 각 탭이 자기 MCP 상태를 소유하므로 여러 탭의 연결 상태를 동시에 볼 수 있다. */
+.agent-tab-mcp-indicator {
+	display: block;
+	flex: 0 0 auto;
+	width: 8px;
+	height: 8px;
+	margin: 0 5px 0 2px;
+	background-color: var(--vscode-testing-iconPassed, #2ea043);
+	border: 1px solid currentColor;
+	border-radius: 50%;
+}
+
+.agent-tab-mcp-indicator[data-kind='failed'] {
+	background-color: var(--vscode-testing-iconFailed, #f85149);
+}
+
 .agent-tab-close {
 	padding: 0 6px 0 0;
 	color: inherit;
@@ -249,6 +304,12 @@
 .agent-tab-close:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: -1px;
+}
+
+@media (forced-colors: active) {
+	.agent-tab-mcp-indicator {
+		background-color: CanvasText;
+	}
 }
 
 #agent-dialog-host {

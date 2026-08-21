@@ -18,6 +18,7 @@ import {
 	HOST_TO_WEBVIEW_MESSAGE_SCHEMAS,
 	WEBVIEW_TO_HOST_MESSAGE_SCHEMAS,
 } from '../agent/protocol/schemas';
+import { MCP_FAILURE_REASONS } from '../mcp/failureReason';
 
 const TAB_ID = 'tab:contract';
 const SESSION_ID = 'session-contract';
@@ -68,6 +69,10 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 			tabId: TAB_ID,
 			sessionId: SESSION_ID,
 		},
+		requiredFields: ['tabId', 'sessionId'],
+	},
+	{
+		message: { type: 'mcp.restart', tabId: TAB_ID, sessionId: SESSION_ID },
 		requiredFields: ['tabId', 'sessionId'],
 	},
 	{
@@ -160,6 +165,23 @@ const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 		},
 		requiredFields: ['tabId', 'sessionId', 'message'],
 	},
+	{
+		message: {
+			type: 'mcp.statusChanged',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			status: 'connected',
+		},
+		requiredFields: ['tabId', 'sessionId', 'status'],
+	},
+	{
+		message: {
+			type: 'mcp.statusCleared',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		},
+		requiredFields: ['tabId', 'sessionId'],
+	},
 ];
 
 suite('Host↔Webview protocol completion contract', () => {
@@ -201,6 +223,24 @@ suite('Host↔Webview protocol completion contract', () => {
 				message: 'Unable to start terminal.',
 				canRestart: true,
 			}));
+		});
+
+		test('failed MCP status는 allowlist reason과 공유 retryability만 허용한다', () => {
+			for (const reason of MCP_FAILURE_REASONS) {
+				assertSuccess(parseHostToWebviewMessage({
+					type: 'mcp.statusChanged',
+					tabId: TAB_ID,
+					sessionId: SESSION_ID,
+					status: 'failed',
+					reason,
+					retryable: [
+						'adapter_start_failed',
+						'adapter_ready_timeout',
+						'adapter_exited',
+						'auth_registration_failed',
+					].includes(reason),
+				}));
+			}
 		});
 
 		test('cols와 rows의 최소 및 최대 경계를 허용한다', () => {
@@ -321,6 +361,48 @@ suite('Host↔Webview protocol completion contract', () => {
 			}
 		});
 
+		test('mcp.restart는 tab/session 외 실행 계약과 판단 필드를 모두 거부한다', () => {
+			for (const field of [
+				'providerId', 'reason', 'retryable', 'cols', 'rows',
+			] as const) {
+				assertFailure(parseWebviewToHostMessage({
+					type: 'mcp.restart',
+					tabId: TAB_ID,
+					sessionId: SESSION_ID,
+					[field]: field === 'retryable' ? true : 'untrusted',
+				}), 'unexpected_field', field);
+			}
+			for (const field of ['args', 'env', 'token', 'generation'] as const) {
+				assertFailure(parseWebviewToHostMessage({
+					type: 'mcp.restart',
+					tabId: TAB_ID,
+					sessionId: SESSION_ID,
+					[field]: 'untrusted',
+				}), 'forbidden_field', field);
+			}
+		});
+
+		test('MCP status의 잘못된 조합, unknown reason과 민감 추가 필드를 거부한다', () => {
+			const base = { tabId: TAB_ID, sessionId: SESSION_ID };
+			for (const candidate of [
+				{ type: 'mcp.statusChanged', ...base, status: 'connected', reason: 'adapter_exited' },
+				{ type: 'mcp.statusChanged', ...base, status: 'connected', retryable: true },
+				{ type: 'mcp.statusChanged', ...base, status: 'failed', retryable: true },
+				{ type: 'mcp.statusChanged', ...base, status: 'failed', reason: 'unknown', retryable: true },
+				{ type: 'mcp.statusChanged', ...base, status: 'failed', reason: 'adapter_exited', retryable: false },
+			]) {
+				assert.strictEqual(parseHostToWebviewMessage(candidate).ok, false);
+			}
+			for (const field of ['token', 'route', 'port', 'config', 'generation']) {
+				assertFailure(parseHostToWebviewMessage({
+					type: 'mcp.statusChanged',
+					...base,
+					status: 'connected',
+					[field]: 'secret',
+				}), 'unexpected_field', field);
+			}
+		});
+
 		test('빈 ID, 허용하지 않는 문자 및 최대 길이 초과를 거부한다', () => {
 			for (const tabId of ['', 'tab with space', `t${'a'.repeat(ID_MAX_LENGTH)}`]) {
 				assertFailure(parseWebviewToHostMessage({
@@ -425,6 +507,10 @@ suite('Host↔Webview protocol completion contract', () => {
 				'providerConfig',
 				'timeout',
 				'limits',
+				'token',
+				'route',
+				'port',
+				'generation',
 			] as const;
 			const baseMessages = [
 				WEBVIEW_MESSAGE_FIXTURES[1].message,

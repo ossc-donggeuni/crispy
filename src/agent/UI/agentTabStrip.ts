@@ -7,6 +7,9 @@ import {
 /** 탭 닫기 컨트롤에 표시하는 고정 문구다. */
 export const AGENT_TAB_CLOSE_LABEL = '×';
 
+/** 연결 indicator는 화면에 글자를 만들지 않고 접근성 이름만 제공한다. */
+export const MCP_CONNECTED_ACCESSIBLE_LABEL = 'MCP 연결됨';
+
 /**
  * 탭 닫기 컨트롤의 접근성 이름을 만든다.
  *
@@ -85,7 +88,26 @@ export function initializeAgentTabStrip(
 					callbacks.onRequestCloseTab(tab.id);
 				});
 
-				tabElement.append(selectButton, closeButton);
+				const visibleStatus = tab.mcpStatus;
+				let tabStatus: HTMLElement | undefined;
+				if (visibleStatus.kind !== 'none') {
+					tabStatus = dependencies.createElement('span');
+					tabStatus.className = 'agent-tab-mcp-indicator';
+					tabStatus.dataset.kind = visibleStatus.kind;
+					tabStatus.setAttribute('role', 'img');
+					tabStatus.setAttribute(
+						'aria-label',
+						visibleStatus.kind === 'connected'
+							? MCP_CONNECTED_ACCESSIBLE_LABEL
+							: visibleStatus.message,
+					);
+				}
+
+				tabElement.append(
+					selectButton,
+					...(tabStatus === undefined ? [] : [tabStatus]),
+					closeButton,
+				);
 				return tabElement;
 			});
 

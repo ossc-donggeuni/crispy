@@ -1,11 +1,14 @@
 import {
 	createAgentConfirmDialog,
+	formatMcpRestartConfirmMessage,
 	formatSessionRestartConfirmMessage,
 	formatTabCloseConfirmMessage,
 	AGENT_RESTART_ACCEPT_LABEL,
+	MCP_RESTART_ACCEPT_LABEL,
 	type AgentConfirmDialog,
 } from './agentConfirmDialog';
-import type { ProviderId } from '../protocol';
+import type { HostToWebviewMessage, ProviderId, SessionId } from '../protocol';
+import { messageByMcpFailureReason } from '../../mcp/failureReason';
 import {
 	createAgentTabModel,
 	type AgentTabId,
@@ -56,6 +59,9 @@ export interface AgentPanelUiCallbacks {
 	 */
 	onAgentReselectionRequested?(tabId: AgentTabId): void;
 
+	/** retryable MCP failure 확인 뒤 current tab/session의 명시적 재시작을 요청한다. */
+	onMcpRestartRequested?(tabId: AgentTabId, sessionId: SessionId): boolean | void;
+
 	/** 확인 다이얼로그에서 사용자가 닫기를 확정해 탭이 제거되었다. */
 	onTabClosed?(tabId: AgentTabId): void;
 
@@ -70,6 +76,9 @@ export interface AgentPanelUiController {
 
 	/** 현재 탭 상태 snapshot을 반환한다. */
 	getSnapshot(): AgentTabModelSnapshot;
+
+	/** 검증된 Host lifecycle/status를 tab과 session identity에 맞을 때만 반영한다. */
+	handleHostMessage(message: HostToWebviewMessage): void;
 
 	/** 각 bar, 탭 strip과 확인 다이얼로그를 정리한다. */
 	dispose(): void;
@@ -182,6 +191,45 @@ export function initializeAgentPanelUi(
 					/** 확인 다이얼로그 실패 시 현재 세션을 유지한다. */
 				});
 			},
+
+			onRestartMcpActiveTab(): void {
+				const activeTab = getActiveTab();
+				if (
+					activeTab?.sessionId === undefined
+					|| activeTab.mcpStatus.kind !== 'failed'
+					|| !activeTab.mcpStatus.retryable
+					|| activeTab.mcpRestartPending
+				) {
+					return;
+				}
+
+				const { id: tabId, sessionId } = activeTab;
+				model.setMcpRestartPending(tabId, sessionId, true);
+				void confirmDialog.confirm(
+					formatMcpRestartConfirmMessage(),
+					MCP_RESTART_ACCEPT_LABEL,
+				).then((confirmed) => {
+					if (disposed) {
+						return;
+					}
+					if (!confirmed) {
+						model.setMcpRestartPending(tabId, sessionId, false);
+						return;
+					}
+
+					try {
+						if (callbacks.onMcpRestartRequested?.(tabId, sessionId) === false) {
+							model.setMcpRestartPending(tabId, sessionId, false);
+						}
+					} catch {
+						model.setMcpRestartPending(tabId, sessionId, false);
+					}
+				}).catch(() => {
+					if (!disposed) {
+						model.setMcpRestartPending(tabId, sessionId, false);
+					}
+				});
+			},
 		},
 		dependencies,
 	);
@@ -237,6 +285,36 @@ export function initializeAgentPanelUi(
 	return {
 		model,
 		getSnapshot: () => model.getSnapshot(),
+		handleHostMessage(message): void {
+			if (disposed) {
+				return;
+			}
+			switch (message.type) {
+				case 'terminal.started':
+					model.setSession(message.tabId, message.sessionId);
+					break;
+				case 'terminal.exited':
+					model.clearSession(message.tabId, message.sessionId);
+					break;
+				case 'mcp.statusChanged':
+					model.setMcpStatus(
+						message.tabId,
+						message.sessionId,
+						message.status === 'connected'
+							? { kind: 'connected' }
+							: {
+								kind: 'failed',
+								reason: message.reason,
+								message: messageByMcpFailureReason[message.reason],
+								retryable: message.retryable,
+							},
+					);
+					break;
+				case 'mcp.statusCleared':
+					model.clearMcpStatus(message.tabId, message.sessionId);
+					break;
+			}
+		},
 		dispose(): void {
 			if (disposed) {
 				return;

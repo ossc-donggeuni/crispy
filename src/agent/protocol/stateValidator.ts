@@ -16,6 +16,7 @@ export type StateValidationErrorCode =
 	| 'ownership_mismatch'
 	| 'duplicate_start'
 	| 'duplicate_restart'
+	| 'mcp_restart_unavailable'
 	| 'invalid_session_state'
 	| 'disposed_session';
 
@@ -50,6 +51,8 @@ export function validateWebviewToHostMessageState(
 			return validateTerminalReady(message, snapshot);
 		case 'terminal.restart':
 			return validateTerminalRestart(message, snapshot);
+		case 'mcp.restart':
+			return validateMcpRestart(message, snapshot);
 		case 'terminal.input':
 		case 'terminal.resize':
 			return validateRunningSessionMessage(message, snapshot);
@@ -67,6 +70,36 @@ export function validateWebviewToHostMessageState(
 				? stateValidationFailure('unknown_tab', 'tabId')
 				: stateValidationSuccess(message);
 	}
+}
+
+/** mcp.restart는 실행 중인 current Codex session의 retryable failure에서만 허용한다. */
+function validateMcpRestart<Message extends Extract<
+	WebviewToHostWireMessage,
+	{ type: 'mcp.restart' }
+>>(
+	message: Message,
+	snapshot: TerminalStateValidationSnapshot,
+): StateValidationResult<Message> {
+	const lookup = findOwnedSession(snapshot, message.tabId, message.sessionId);
+	if (!lookup.ok) {
+		return lookup;
+	}
+	const { session } = lookup;
+	if (isDisposed(session)) {
+		return stateValidationFailure('disposed_session', 'sessionId');
+	}
+	if (session.mcpRestartInProgress) {
+		return stateValidationFailure('duplicate_restart');
+	}
+	if (
+		session.providerId !== 'codex'
+		|| session.state !== 'running'
+		|| session.mcpStatus !== 'failed'
+		|| session.mcpFailureRetryable !== true
+	) {
+		return stateValidationFailure('mcp_restart_unavailable');
+	}
+	return stateValidationSuccess(message);
 }
 
 /** terminal.ready의 최초 start 및 중복 start 규칙을 검증한다. */
@@ -241,6 +274,7 @@ const STATE_VALIDATION_ERROR_MESSAGES: Readonly<
 	ownership_mismatch: 'Terminal session ownership does not match.',
 	duplicate_start: 'Terminal start is already in progress.',
 	duplicate_restart: 'Terminal restart is already in progress.',
+	mcp_restart_unavailable: 'MCP restart is not available for this session.',
 	invalid_session_state: 'Terminal session state does not allow this message.',
 	disposed_session: 'Terminal session is disposed.',
 });

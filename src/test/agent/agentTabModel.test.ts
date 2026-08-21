@@ -30,6 +30,60 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(snapshot.tabs[0].providerId, undefined);
 		assert.strictEqual(snapshot.tabs[0].sequence, undefined);
 		assert.strictEqual(snapshot.tabs[0].label, UNSELECTED_TAB_LABEL);
+		assert.deepStrictEqual(snapshot.tabs[0].mcpStatus, { kind: 'none' });
+		assert.strictEqual(snapshot.tabs[0].mcpRestartPending, false);
+	});
+
+	test('MCP status는 정확한 current tab/session에만 적용되고 clear가 pending도 제거한다', () => {
+		const model = createModel();
+		const first = model.createTab();
+		const second = model.createTab();
+		model.assignProvider(first, 'codex');
+		model.assignProvider(second, 'codex');
+		model.setSession(first, 'session-first');
+		model.setSession(second, 'session-second');
+
+		model.setMcpStatus(first, 'session-old', { kind: 'connected' });
+		model.setMcpStatus(first, 'session-first', {
+			kind: 'failed',
+			reason: 'adapter_exited',
+			message: 'safe failure',
+			retryable: true,
+		});
+		model.setMcpRestartPending(first, 'session-first', true);
+
+		let snapshot = model.getSnapshot();
+		assert.deepStrictEqual(snapshot.tabs[0].mcpStatus, {
+			kind: 'failed',
+			reason: 'adapter_exited',
+			message: 'safe failure',
+			retryable: true,
+		});
+		assert.strictEqual(snapshot.tabs[0].mcpRestartPending, true);
+		assert.deepStrictEqual(snapshot.tabs[1].mcpStatus, { kind: 'none' });
+
+		model.clearMcpStatus(first, 'session-old');
+		assert.strictEqual(model.getSnapshot().tabs[0].mcpRestartPending, true);
+		model.clearMcpStatus(first, 'session-first');
+		snapshot = model.getSnapshot();
+		assert.deepStrictEqual(snapshot.tabs[0].mcpStatus, { kind: 'none' });
+		assert.strictEqual(snapshot.tabs[0].mcpRestartPending, false);
+	});
+
+	test('fresh session과 normal exit는 이전 session 표시를 격리한다', () => {
+		const model = createModel();
+		const tabId = model.createTab();
+		model.assignProvider(tabId, 'codex');
+		model.setSession(tabId, 'session-old');
+		model.setMcpStatus(tabId, 'session-old', { kind: 'connected' });
+
+		model.setSession(tabId, 'session-new');
+		model.clearSession(tabId, 'session-old');
+		assert.strictEqual(model.getSnapshot().tabs[0].sessionId, 'session-new');
+		assert.deepStrictEqual(model.getSnapshot().tabs[0].mcpStatus, { kind: 'none' });
+
+		model.clearSession(tabId, 'session-new');
+		assert.strictEqual(model.getSnapshot().tabs[0].sessionId, undefined);
 	});
 
 	test('provider를 배정하면 라벨이 Provider #번호 형식이 된다', () => {

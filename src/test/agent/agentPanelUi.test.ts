@@ -336,6 +336,174 @@ suite('Agent Panel UI', () => {
 		);
 	});
 
+	test('MCP status는 current tab 우측 점으로 표시하고 retryable failure에만 재시작을 제공한다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		const failureDetail = requireElement(fixture.topBar, 'agent-mcp-status');
+		const restart = requireElement(fixture.topBar, 'agent-mcp-restart');
+
+		assert.strictEqual(failureDetail.hidden, true);
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId, sessionId: 'session-current',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-stale',
+			status: 'connected',
+		});
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-current',
+			status: 'connected',
+		});
+		const connected = requireElement(fixture.tabStrip, 'agent-tab-mcp-indicator');
+		assert.strictEqual(connected.dataset.kind, 'connected');
+		assert.strictEqual(connected.textContent, '');
+		assert.strictEqual(connected.getAttribute('aria-label'), 'MCP 연결됨');
+		assert.strictEqual(failureDetail.hidden, true);
+		assert.strictEqual(restart.hidden, true);
+
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-current',
+			status: 'failed',
+			reason: 'provider_config_rejected',
+			retryable: false,
+		});
+		assert.strictEqual(
+			requireElement(fixture.tabStrip, 'agent-tab-mcp-indicator').dataset.kind,
+			'failed',
+		);
+		assert.strictEqual(failureDetail.hidden, false);
+		assert.strictEqual(failureDetail.dataset.kind, 'failed');
+		assert.strictEqual(failureDetail.getAttribute('role'), 'alert');
+		assert.strictEqual(restart.hidden, true);
+
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-current',
+			status: 'failed',
+			reason: 'adapter_exited',
+			retryable: true,
+		});
+		assert.strictEqual(restart.hidden, false);
+	});
+
+	test('MCP restart 확인, Webview 연타 방어, 취소와 clear pending을 보장한다', async () => {
+		const requests: Array<{ tabId: string; sessionId: string }> = [];
+		const fixture = createFixture({
+			onMcpRestartRequested: (tabId, sessionId) => {
+				requests.push({ tabId, sessionId });
+			},
+		});
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId, sessionId: 'session-retry',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-retry',
+			status: 'failed',
+			reason: 'adapter_exited',
+			retryable: true,
+		});
+		const restart = requireElement(fixture.topBar, 'agent-mcp-restart');
+
+		restart.click();
+		restart.click();
+		assert.strictEqual(restart.disabled, true);
+		assert.strictEqual(fixture.dialog.requests.length, 1);
+		assert.deepStrictEqual(fixture.dialog.requests[0], {
+			message: 'MCP와 Agent를 다시 시작하면 이 탭에서 실행 중인 Codex와 현재 CLI 대화가 종료됩니다. 새 MCP 연결과 새 Codex 세션으로 다시 시작하시겠습니까?',
+			acceptLabel: 'MCP와 Agent 다시 시작',
+		});
+
+		fixture.dialog.answer(false);
+		await flushMicrotasks();
+		assert.strictEqual(restart.disabled, false);
+		assert.deepStrictEqual(requests, []);
+
+		restart.click();
+		fixture.dialog.answer(true);
+		await flushMicrotasks();
+		assert.deepStrictEqual(requests, [{ tabId, sessionId: 'session-retry' }]);
+		assert.strictEqual(restart.disabled, true);
+
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusCleared', tabId, sessionId: 'session-retry',
+		});
+		assert.strictEqual(
+			requireElement(fixture.topBar, 'agent-mcp-status').hidden,
+			true,
+		);
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs[0].mcpRestartPending,
+			false,
+		);
+	});
+
+	test('여러 탭의 우측 점을 동시에 표시하고 old clear는 fresh session status를 바꾸지 않는다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const first = fixture.controller.getSnapshot().tabs[0].id;
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId: first, sessionId: 'session-first',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId: first,
+			sessionId: 'session-first',
+			status: 'connected',
+		});
+
+		requireElement(fixture.topBar, 'agent-create-tab').click();
+		selectProvider(fixture.providerPicker, 'codex');
+		const second = fixture.controller.getSnapshot().tabs[1].id;
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId: second, sessionId: 'session-second',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId: second,
+			sessionId: 'session-second',
+			status: 'connected',
+		});
+		assert.deepStrictEqual(
+			fixture.tabStrip.findAll('agent-tab-mcp-indicator').map(
+				(indicator) => indicator.parent?.dataset.tabId,
+			),
+			[first, second],
+		);
+		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, true);
+		fixture.tabStrip.findAll('agent-tab-select')[0].click();
+		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, true);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId: first, sessionId: 'session-fresh',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId: first,
+			sessionId: 'session-fresh',
+			status: 'connected',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusCleared', tabId: first, sessionId: 'session-first',
+		});
+		assert.strictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator').length, 2);
+	});
+
 	test('layout 변경 콜백은 탭 상태가 바뀐 때마다 호출된다', () => {
 		let layoutChangeCount = 0;
 		const fixture = createFixture({
@@ -369,5 +537,32 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.dialog.disposeCount, 1);
 		assert.strictEqual(fixture.documentEvents.countListeners('pointerdown'), 0);
 		assert.strictEqual(fixture.documentEvents.countListeners('keydown'), 0);
+	});
+
+	test('dispose 뒤 MCP 확인 Promise continuation은 restart callback을 호출하지 않는다', async () => {
+		let restartCount = 0;
+		const fixture = createFixture({
+			onMcpRestartRequested: () => {
+				restartCount += 1;
+			},
+		});
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId, sessionId: 'session-dispose',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-dispose',
+			status: 'failed',
+			reason: 'adapter_exited',
+			retryable: true,
+		});
+		requireElement(fixture.topBar, 'agent-mcp-restart').click();
+		fixture.controller.dispose();
+		await flushMicrotasks();
+
+		assert.strictEqual(restartCount, 0);
 	});
 });

@@ -7,6 +7,7 @@ import type {
 	HostToWebviewWireMessage,
 	WebviewToHostWireMessage,
 } from './messages';
+import { retryabilityByFailureReason } from '../../mcp/failureReason';
 import type {
 	MessageParseResult,
 	MessageValidationError,
@@ -38,6 +39,10 @@ const WEBVIEW_FORBIDDEN_FIELDS = new Set([
 	'providerConfig',
 	'timeout',
 	'limits',
+	'token',
+	'route',
+	'port',
+	'generation',
 ]);
 
 /**
@@ -65,8 +70,43 @@ export function parseWebviewToHostMessage(
 export function parseHostToWebviewMessage(
 	value: unknown,
 ): MessageParseResult<HostToWebviewWireMessage> {
-	return parseMessageWithSchemaRegistry(
+	const parsed = parseMessageWithSchemaRegistry(
 		value,
 		HOST_TO_WEBVIEW_MESSAGE_SCHEMAS,
 	);
+	if (!parsed.ok || parsed.value.type !== 'mcp.statusChanged') {
+		return parsed as MessageParseResult<HostToWebviewWireMessage>;
+	}
+
+	const message = parsed.value;
+	if (message.status === 'connected') {
+		return message.reason === undefined && message.retryable === undefined
+			? parsed as MessageParseResult<HostToWebviewWireMessage>
+			: conditionalMcpStatusFailure('reason');
+	}
+	if (
+		message.reason === undefined
+		|| message.retryable === undefined
+		|| message.retryable !== retryabilityByFailureReason[message.reason]
+	) {
+		return conditionalMcpStatusFailure(
+			message.reason === undefined ? 'reason' : 'retryable',
+		);
+	}
+
+	return parsed as MessageParseResult<HostToWebviewWireMessage>;
+}
+
+/** MCP status의 교차 필드 오류를 payload 반사 없이 기존 validation 형태로 만든다. */
+function conditionalMcpStatusFailure(
+	field: 'reason' | 'retryable',
+): MessageParseResult<HostToWebviewWireMessage> {
+	return {
+		ok: false,
+		error: {
+			code: 'invalid_field',
+			message: 'Message field is invalid.',
+			field,
+		},
+	};
 }

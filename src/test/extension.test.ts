@@ -27,6 +27,7 @@ interface TerminalHostStub extends TerminalMessageHost {
 		rows: number,
 	): Promise<unknown>;
 	restartSession(tabId: string, sessionId: string): Promise<unknown>;
+	restartMcpSession(tabId: string, sessionId: string): Promise<unknown>;
 	createTab(tabId: string): void;
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
@@ -67,6 +68,9 @@ function createTerminalHostStub(): {
 			},
 			async restartSession(tabId, sessionId) {
 				record('restartSession', tabId, sessionId);
+			},
+			async restartMcpSession(tabId, sessionId) {
+				record('restartMcpSession', tabId, sessionId);
 			},
 			createTab: (tabId) => record('createTab', tabId),
 			switchTab: (tabId) => record('switchTab', tabId),
@@ -519,6 +523,25 @@ suite('Crispy Extension Host', () => {
 		assert.deepStrictEqual(calls, [{
 			method: 'restartSession',
 			args: ['tab-restart-dispatch', 'session-restart-dispatch'],
+		}]);
+	});
+
+	test('검증된 mcp.restart의 tab/session만 명시적 MCP restart 경계로 전달한다', () => {
+		const { host, calls } = createTerminalHostStub();
+		const result = extensionModule.handleWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'mcp.restart',
+				tabId: 'tab-mcp-restart-dispatch',
+				sessionId: 'session-mcp-restart-dispatch',
+			},
+			host,
+		);
+
+		assert.strictEqual(result, undefined);
+		assert.deepStrictEqual(calls, [{
+			method: 'restartMcpSession',
+			args: ['tab-mcp-restart-dispatch', 'session-mcp-restart-dispatch'],
 		}]);
 	});
 

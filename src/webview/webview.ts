@@ -91,11 +91,13 @@ const persistWebviewState = () => {
  * Agent UI 동작을 Host protocol로 연결하며, 전송 실패가 Graph, Dock, Layout이나
  * 다른 탭 Terminal로 전파되지 않도록 이 경계 안에서 격리한다.
  */
-const postAgentMessage = (message: WebviewToExtensionMessage): void => {
+const postAgentMessage = (message: WebviewToExtensionMessage): boolean => {
 	try {
 		vscodeApi.postMessage(message);
+		return true;
 	} catch {
 		/** Host 전송 실패가 나머지 Webview 기능으로 전파되지 않게 한다. */
+		return false;
 	}
 };
 
@@ -140,6 +142,10 @@ try {
 				/** Host PTY와 기존 xterm을 정리한 뒤 같은 탭에 빈 표면을 다시 만든다. */
 				postAgentMessage({ type: 'agent.reset', tabId });
 				terminalPool.resetTab(tabId);
+			},
+
+			onMcpRestartRequested(tabId, sessionId): boolean {
+				return postAgentMessage({ type: 'mcp.restart', tabId, sessionId });
 			},
 
 			onTabClosed(tabId): void {
@@ -230,6 +236,7 @@ function handleHostMessage(message: unknown): void {
 			console.log('[Crispy] Extension ready');
 			break;
 		default:
+			agentPanelUi?.handleHostMessage(parseResult.value);
 			terminalPool.handleHostMessage(parseResult.value);
 	}
 }

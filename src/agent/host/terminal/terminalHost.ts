@@ -27,6 +27,12 @@ import type {
 } from '../../../mcp/sessionRuntime';
 import type { PrepareCodexTerminalLaunch } from '../../../mcp/codexTerminalLaunch';
 import {
+	createMcpFailure,
+	retryabilityByFailureReason,
+	type McpFailure,
+	type McpFailureReason,
+} from '../../../mcp/failureReason';
+import {
 	resolveAgentAutoRunInput,
 	resolveDetectedAgentAutoRunInput,
 	type AgentAutoRunInputResolver,
@@ -148,6 +154,21 @@ const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
 /** 3초 deactivate budget에서 2초 process-tree cleanup을 남기는 PID 준비 상한이다. */
 export const DETACHED_PID_READY_TIMEOUT_MS = 500;
 
+/** Host 내부 lifecycle은 숨은 준비 상태와 지속 표시 상태를 모두 구분한다. */
+export type InternalMcpStatus =
+	| 'idle'
+	| 'preparing'
+	| 'awaiting_activity'
+	| 'connected'
+	| 'failed'
+	| 'cleared';
+
+interface InternalMcpStatusRecord {
+	readonly status: InternalMcpStatus;
+	readonly failure?: McpFailure;
+	published: boolean;
+}
+
 function isValidProcessTreeRootPid(pid: number): boolean {
 	return Number.isSafeInteger(pid) && pid > 1;
 }
@@ -206,6 +227,15 @@ export class TerminalHost {
 
 	/** PTY spawn 경계에 진입한 Codex session만 provider-started 표시를 허용한다. */
 	private readonly codexPtySpawnStarted = new Set<SessionId>();
+
+	/** session별 숨은 준비/대기와 visible connected/failed 상태의 Host source of truth다. */
+	private readonly mcpStatusBySession = new Map<
+		SessionId,
+		InternalMcpStatusRecord
+	>();
+
+	/** 같은 탭의 명시적 MCP+Agent restart 연타를 Host에서도 직렬화한다. */
+	private readonly mcpRestartByTab = new Map<TabId, Promise<void>>();
 
 	/** Session 종료 경로에서 root-only kill을 피하는 process-tree controller다. */
 	private readonly processTreeController: ProcessTreeController;
@@ -547,6 +577,7 @@ export class TerminalHost {
 			session = current;
 		} else {
 			if (current !== undefined) {
+				this.clearMcpStatus(current);
 				this.activeSessionByTab.delete(tabId);
 			}
 			session = this.createSession(tabId);
@@ -575,9 +606,15 @@ export class TerminalHost {
 			return;
 		}
 
+		const providerId = this.providerByTab.get(tabId);
+		if (providerId === 'codex') {
+			this.mcpStatusBySession.set(session.sessionId, {
+				status: 'preparing',
+				published: false,
+			});
+		}
 		this.publish({ type: 'terminal.starting', tabId });
 
-		const providerId = this.providerByTab.get(tabId);
 		if (
 			providerId === 'codex'
 			&& this.prepareCodexLaunch !== undefined
@@ -697,8 +734,13 @@ export class TerminalHost {
 			try {
 				prepared = await supervisor.prepareSession(session.sessionId);
 			} catch {
-				/** Supervisor rejection is the same fail-open boundary as a typed prepare failure. */
+				this.recordMcpFailure(session, 'adapter_start_failed');
 			}
+		} else {
+			this.recordMcpFailure(session, 'safe_session_injection_unavailable');
+		}
+		if (prepared !== undefined && !prepared.ok) {
+			this.recordMcpFailure(session, prepared.failure.reason);
 		}
 
 		if (!this.isCurrentProviderSession(session, 'codex')) {
@@ -729,7 +771,7 @@ export class TerminalHost {
 							preparation.shellEnvironmentPolicyStyle,
 					});
 				} catch {
-					/** Revoked descriptor or serializer failure continues through bare cleanup. */
+					this.recordMcpFailure(session, 'provider_config_rejected');
 				}
 			}
 		}
@@ -745,6 +787,18 @@ export class TerminalHost {
 			|| !plan.expectsMcp
 			|| !this.isCurrentCodexRuntime(session, generation)
 		) {
+			if (
+				generation !== undefined
+				&& this.mcpStatusBySession.get(session.sessionId)?.status !== 'failed'
+			) {
+				const runtime = supervisor.getSessionRuntime(session.sessionId);
+				this.recordMcpFailure(
+					session,
+					runtime === undefined || runtime.lifecycle !== 'running'
+						? 'adapter_exited'
+						: 'provider_config_rejected',
+				);
+			}
 			await this.cleanupMcpSession(session.sessionId);
 			if (!this.isCurrentProviderSession(session, 'codex')) {
 				return;
@@ -790,7 +844,9 @@ export class TerminalHost {
 				environment: preparation.environment,
 			});
 		} catch {
-			/** Authenticated request construction failures are allowed one bare retry below. */
+			if (generation !== undefined) {
+				this.recordMcpFailure(session, 'safe_session_injection_unavailable');
+			}
 		}
 
 		if (!this.isCurrentProviderSession(session, 'codex')) {
@@ -804,6 +860,9 @@ export class TerminalHost {
 				|| !this.isCurrentCodexRuntime(session, generation)
 			)
 		) {
+			if (this.mcpStatusBySession.get(session.sessionId)?.status !== 'failed') {
+				this.recordMcpFailure(session, 'adapter_exited');
+			}
 			await this.cleanupMcpSession(session.sessionId);
 			if (!this.isCurrentProviderSession(session, 'codex')) {
 				return;
@@ -853,12 +912,16 @@ export class TerminalHost {
 			this.codexGenerationBySession.delete(session.sessionId);
 		} else {
 			this.codexGenerationBySession.set(session.sessionId, generation);
+			this.setMcpAwaitingActivity(session);
 		}
 		this.codexPtySpawnStarted.add(session.sessionId);
 		try {
 			await this.spawnProviderPty(session, request, cols, rows);
 		} catch {
 			const authenticatedSpawnFailed = generation !== undefined;
+			if (authenticatedSpawnFailed) {
+				this.recordMcpFailure(session, 'safe_session_injection_unavailable');
+			}
 			this.codexPtySpawnStarted.delete(session.sessionId);
 			await this.cleanupMcpSession(session.sessionId);
 			if (!this.isCurrentProviderSession(session, 'codex')) {
@@ -946,6 +1009,7 @@ export class TerminalHost {
 			tabId: session.tabId,
 			sessionId: session.sessionId,
 		});
+		this.publishCurrentMcpStatus(session);
 		this.runProviderAutoStart(session);
 	}
 
@@ -1098,6 +1162,74 @@ export class TerminalHost {
 	}
 
 	/**
+	 * retryable MCP failure에서만 실행 중 Codex와 adapter를 함께 정리하고 fresh session을 만든다.
+	 * 같은 탭의 동시 요청은 최초 transaction Promise를 공유하며 다른 탭과는 독립적이다.
+	 */
+	restartMcpSession(tabId: TabId, sessionId: SessionId): Promise<void> {
+		const existing = this.mcpRestartByTab.get(tabId);
+		if (existing !== undefined) {
+			return existing;
+		}
+		if (!this.canRestartMcpSession(tabId, sessionId)) {
+			return Promise.resolve();
+		}
+
+		const restart = Promise.resolve().then(() =>
+			this.performMcpRestart(tabId, sessionId)
+		).finally(() => {
+			if (this.mcpRestartByTab.get(tabId) === restart) {
+				this.mcpRestartByTab.delete(tabId);
+			}
+		});
+		this.mcpRestartByTab.set(tabId, restart);
+		return restart;
+	}
+
+	private canRestartMcpSession(tabId: TabId, sessionId: SessionId): boolean {
+		const session = this.sessionsById.get(sessionId);
+		const status = this.mcpStatusBySession.get(sessionId);
+		return this.lifecycleActive
+			&& session !== undefined
+			&& this.ownsSession(tabId, sessionId)
+			&& this.providerByTab.get(tabId) === 'codex'
+			&& session.state.kind === 'running'
+			&& status?.status === 'failed'
+			&& status.failure !== undefined
+			&& retryabilityByFailureReason[status.failure.reason];
+	}
+
+	private async performMcpRestart(
+		tabId: TabId,
+		sessionId: SessionId,
+	): Promise<void> {
+		if (!this.canRestartMcpSession(tabId, sessionId)) {
+			return;
+		}
+		const session = this.sessionsById.get(sessionId);
+		if (session === undefined) {
+			return;
+		}
+
+		const dimensions = this.lastDimensionsByTab.get(tabId)
+			?? RESTART_FALLBACK_DIMENSIONS;
+		this.clearMcpStatus(session);
+		const cleanup = this.cleanupSessionProcessTree(session);
+		this.removeSession(sessionId);
+		await cleanup;
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| this.providerByTab.get(tabId) !== 'codex'
+			|| this.getActiveSession(tabId) !== undefined
+			|| !this.mcpRestartByTab.has(tabId)
+		) {
+			return;
+		}
+
+		await this.startSession(tabId, dimensions.cols, dimensions.rows);
+	}
+
+	/**
 	 * Host가 새 `sessionId`를 생성하여 탭의 현재 세션을 등록한다.
 	 * Webview가 제공한 `sessionId`를 받을 수 있는 인자는 두지 않는다.
 	 *
@@ -1178,6 +1310,8 @@ export class TerminalHost {
 		this.providerAutoRunInputBySession.clear();
 		this.codexGenerationBySession.clear();
 		this.codexPtySpawnStarted.clear();
+		this.mcpStatusBySession.clear();
+		this.mcpRestartByTab.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.providerByTab.clear();
@@ -1330,6 +1464,8 @@ export class TerminalHost {
 		this.providerAutoRunInputBySession.clear();
 		this.codexGenerationBySession.clear();
 		this.codexPtySpawnStarted.clear();
+		this.mcpStatusBySession.clear();
+		this.mcpRestartByTab.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.providerByTab.clear();
@@ -1370,6 +1506,7 @@ export class TerminalHost {
 
 		const signal = event.signal ?? null;
 		session.markExited(event.exitCode, signal);
+		this.clearMcpStatus(session);
 		void this.cleanupMcpSession(session.sessionId);
 		this.publish({
 			type: 'terminal.exited',
@@ -1409,10 +1546,7 @@ export class TerminalHost {
 			&& runtime.lifecycle === 'running';
 	}
 
-	/**
-	 * Supervisor가 이미 current generation만 전달한 event를 Terminal session identity와 다시
-	 * 대조한다. C4는 status message를 만들거나 provider를 자동 재시작하지 않는다.
-	 */
+	/** Supervisor event를 current tab/session/generation과 대조해 표시 상태만 갱신한다. */
 	handleMcpRuntimeEvent(event: McpSessionRuntimeEvent): void {
 		const session = this.sessionsById.get(event.sessionId);
 		if (
@@ -1424,7 +1558,112 @@ export class TerminalHost {
 		) {
 			return;
 		}
-		/** Runtime owns revoke/listener cleanup. keep_running/continue_without_mcp are observational. */
+
+		switch (event.type) {
+			case 'session.mcpActivityObserved':
+				this.setMcpConnected(session);
+				break;
+			case 'runtime.failure':
+				this.recordMcpFailure(session, event.failure.reason);
+				break;
+			case 'session.crispyPingObserved':
+				/** crispy_ping 관찰은 일반 authenticated activity 이후의 진단 event다. */
+				break;
+		}
+	}
+
+	/** 테스트와 Host state snapshot이 credential-free 내부 상태만 조회하는 경계다. */
+	getMcpStatus(sessionId: SessionId): Readonly<InternalMcpStatusRecord> | undefined {
+		const status = this.mcpStatusBySession.get(sessionId);
+		return status === undefined ? undefined : Object.freeze({ ...status });
+	}
+
+	private setMcpAwaitingActivity(session: TerminalSession): void {
+		const current = this.mcpStatusBySession.get(session.sessionId);
+		if (current?.status === 'failed') {
+			return;
+		}
+		this.mcpStatusBySession.set(session.sessionId, {
+			status: 'awaiting_activity',
+			published: false,
+		});
+	}
+
+	private setMcpConnected(session: TerminalSession): void {
+		const current = this.mcpStatusBySession.get(session.sessionId);
+		if (current?.status === 'connected' || current?.status === 'failed') {
+			return;
+		}
+		this.mcpStatusBySession.set(session.sessionId, {
+			status: 'connected',
+			published: false,
+		});
+		this.publishCurrentMcpStatus(session);
+	}
+
+	private recordMcpFailure(
+		session: TerminalSession,
+		reason: McpFailureReason,
+	): void {
+		const current = this.mcpStatusBySession.get(session.sessionId);
+		if (current?.status === 'failed') {
+			return;
+		}
+		this.mcpStatusBySession.set(session.sessionId, {
+			status: 'failed',
+			failure: createMcpFailure(reason),
+			published: false,
+		});
+		this.publishCurrentMcpStatus(session);
+	}
+
+	/** terminal.started 이후의 current session에만 visible status를 한 번 발행한다. */
+	private publishCurrentMcpStatus(session: TerminalSession): void {
+		if (!this.isCurrentSession(session) || session.state.kind !== 'running') {
+			return;
+		}
+		const record = this.mcpStatusBySession.get(session.sessionId);
+		if (record === undefined || record.published) {
+			return;
+		}
+		if (record.status === 'connected') {
+			record.published = true;
+			this.publish({
+				type: 'mcp.statusChanged',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				status: 'connected',
+			});
+			return;
+		}
+		if (record.status === 'failed' && record.failure !== undefined) {
+			record.published = true;
+			this.publish({
+				type: 'mcp.statusChanged',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				status: 'failed',
+				reason: record.failure.reason,
+				retryable: record.failure.retryable,
+			});
+		}
+	}
+
+	/** old session clear가 fresh session을 지우지 않도록 current ownership에서만 발행한다. */
+	private clearMcpStatus(session: TerminalSession): void {
+		const record = this.mcpStatusBySession.get(session.sessionId);
+		if (record === undefined) {
+			return;
+		}
+		this.mcpStatusBySession.delete(session.sessionId);
+		if (!this.isCurrentSession(session)) {
+			return;
+		}
+		this.publish({
+			type: 'mcp.statusCleared',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+		});
 	}
 
 	/**
@@ -1478,6 +1717,7 @@ export class TerminalHost {
 			return undefined;
 		}
 
+		this.clearMcpStatus(session);
 		this.sessionsById.delete(sessionId);
 		this.providerAutoRunInputBySession.delete(sessionId);
 		void this.cleanupMcpSession(sessionId);
@@ -1621,6 +1861,7 @@ export class TerminalHost {
 		canRestart: boolean,
 	): void {
 		const ownsDirectCodexPty = this.codexPtySpawnStarted.has(session.sessionId);
+		this.clearMcpStatus(session);
 		session.markError(code);
 		if (ownsDirectCodexPty) {
 			void this.cleanupMcpSession(session.sessionId);
