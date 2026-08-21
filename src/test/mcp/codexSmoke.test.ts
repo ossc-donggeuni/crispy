@@ -13,6 +13,7 @@ import {
 } from '../../mcp/codexSmoke';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type { McpPrepareResult } from '../../mcp/sessionRuntime';
+import type { AgentExecutableResolver } from '../../mcp/agentExecutableResolver';
 
 const generation = 'generation-codex-smoke';
 const sessionId = 'session-codex-smoke';
@@ -47,7 +48,7 @@ suite('Codex MCP dev smoke transaction', () => {
 		assert.strictEqual(fixture.terminateCount, 1);
 		assert.strictEqual(fixture.disposeCount, 1);
 		assert.ok(spawnRequest !== undefined);
-		assert.strictEqual(spawnRequest.executable, 'codex');
+		assert.strictEqual(spawnRequest.executable, '/usr/local/bin/codex');
 		assert.strictEqual(spawnRequest.cwd, '/workspace');
 		assert.strictEqual(spawnRequest.args[0], '--ask-for-approval');
 		assert.strictEqual(spawnRequest.args[2], 'exec');
@@ -103,6 +104,78 @@ suite('Codex MCP dev smoke transaction', () => {
 		assert.strictEqual(fixture.statuses.join('').includes(bearerToken), false);
 		assert.strictEqual(fixture.terminateCount, 0);
 		assert.strictEqual(fixture.disposeCount, 1);
+	});
+
+	test('executable resolve failure는 provider를 만들지 않고 safe reason으로 정리한다', async () => {
+		const fixture = createSmokeFixture();
+		let spawnCount = 0;
+		const succeeded = await runCodexMcpSmoke({
+			...fixture.options,
+			resolveExecutable: async () => ({
+				ok: false,
+				reason: 'provider_unavailable',
+			}),
+			spawnProvider: () => {
+				spawnCount += 1;
+				return fixture.provider;
+			},
+		});
+
+		assert.strictEqual(succeeded, false);
+		assert.strictEqual(spawnCount, 0);
+		assert.deepStrictEqual(fixture.statuses, [
+			'adapter_ready',
+			'failed:provider_unavailable',
+		]);
+		assert.strictEqual(fixture.disposeCount, 1);
+	});
+
+	test('Windows cmd resolver 결과는 ComSpec one-shot request로 smoke한다', async () => {
+		const fixture = createSmokeFixture();
+		let spawnRequest: CodexProviderSpawnRequest | undefined;
+		const succeeded = await runCodexMcpSmoke({
+			...fixture.options,
+			platform: 'win32',
+			baseEnvironment: {
+				ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+				PATH: 'C:\\npm',
+			},
+			resolveExecutable: async (providerId, options) => {
+				assert.strictEqual(providerId, 'codex');
+				assert.strictEqual(options?.platform, 'win32');
+				return {
+					ok: true,
+					executable: {
+						executable: 'C:\\npm\\codex.cmd',
+						launcherKind: 'cmd-one-shot',
+					},
+				};
+			},
+			spawnProvider: (request) => {
+				spawnRequest = request;
+				setImmediate(() => fixture.events.handle({
+					type: 'session.crispyPingObserved',
+					generation,
+					sessionId,
+				}));
+				return fixture.provider;
+			},
+		});
+
+		assert.strictEqual(succeeded, true);
+		assert.ok(spawnRequest !== undefined);
+		assert.strictEqual(spawnRequest.executable, 'C:\\Windows\\System32\\cmd.exe');
+		assert.deepStrictEqual(spawnRequest.args.slice(0, 4), [
+			'/d', '/s', '/v:off', '/c',
+		]);
+		assert.strictEqual(spawnRequest.windowsVerbatimArguments, true);
+		assert.strictEqual(
+			spawnRequest.environment.CRISPY_MCP_TOKEN,
+			bearerToken,
+		);
+		assert.strictEqual(spawnRequest.args.some(
+			(argument) => argument.includes(bearerToken),
+		), false);
 	});
 
 	test('current runtime이 아니면 provider started를 표시하지 않고 stale로 정리한다', async () => {
@@ -227,6 +300,7 @@ suite('Codex MCP dev smoke launch contract', () => {
 			args: ['exec'],
 			cwd: '/workspace',
 			environment: { SAFE: 'value' },
+			windowsVerbatimArguments: false,
 		};
 		const options = createCodexSmokeSpawnOptions(request);
 
@@ -235,6 +309,7 @@ suite('Codex MCP dev smoke launch contract', () => {
 		assert.deepStrictEqual(options.stdio, ['ignore', 'ignore', 'ignore']);
 		assert.strictEqual(options.shell, false);
 		assert.strictEqual(options.windowsHide, true);
+		assert.strictEqual(options.windowsVerbatimArguments, false);
 	});
 });
 
@@ -249,6 +324,7 @@ function createSmokeFixture(overrides: {
 		readonly cwd: string;
 		readonly baseEnvironment: NodeJS.ProcessEnv;
 		readonly randomBytes: (size: number) => Buffer;
+		readonly resolveExecutable: AgentExecutableResolver;
 		readonly terminateProvider: (provider: ChildProcess) => Promise<void>;
 		readonly report: (status: CodexSmokeStatus) => void;
 	};
@@ -312,6 +388,13 @@ function createSmokeFixture(overrides: {
 			KEEP_ME: 'yes',
 		},
 		randomBytes: (size: number) => Buffer.alloc(size, 0x73),
+		resolveExecutable: async () => Object.freeze({
+			ok: true as const,
+			executable: Object.freeze({
+				executable: '/usr/local/bin/codex',
+				launcherKind: 'direct' as const,
+			}),
+		}),
 		terminateProvider: async () => {
 			terminateCount += 1;
 		},

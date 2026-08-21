@@ -299,7 +299,7 @@ export class CrispyMcpProtocolServer {
 				) {
 					try {
 						const observationResponse = sdkResponse.clone();
-						void this.observeMcpResponse(
+						await this.observeMcpResponse(
 							registration,
 							body.parsedBody,
 							observationResponse,

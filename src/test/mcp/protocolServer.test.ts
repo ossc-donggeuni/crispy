@@ -332,7 +332,7 @@ suite('Crispy MCP protocol server', () => {
 		assert.deepStrictEqual(fixture.ping, []);
 	});
 
-	test('arguments를 생략한 crispy_ping도 정상 result와 ping으로 관찰한다', async () => {
+	test('crispy_ping 성공은 response 전달 전에 관찰되어 provider exit와 경쟁하지 않는다', async () => {
 		const fixture = await startFixture();
 		const response = await postJson(fixture.url, fixture.token, {
 			jsonrpc: '2.0',
@@ -340,12 +340,16 @@ suite('Crispy MCP protocol server', () => {
 			method: 'tools/call',
 			params: { name: CRISPY_PING_TOOL_NAME },
 		});
+		assert.deepStrictEqual(fixture.ping, [{
+			type: 'session.crispyPingObserved',
+			generation: fixture.generation,
+			sessionId: fixture.sessionId,
+		}]);
 		const responseBody = parseMcpResponseBody(await response.text());
 
 		assert.strictEqual(response.status, 200);
 		assert.notStrictEqual(responseBody.result?.isError, true);
 		await waitForActivityCount(fixture.activity, 1);
-		await waitForEventCount(fixture.ping, 1);
 		assert.deepStrictEqual(fixture.ping, [{
 			type: 'session.crispyPingObserved',
 			generation: fixture.generation,

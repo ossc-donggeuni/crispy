@@ -262,6 +262,12 @@ test source와 production `dist/mcp-server.mjs`를 준비한 뒤 smoke를 실행
 파일이나 VS Code settings를 쓰지 않고 `--config` argv와 process environment만 사용한다.
 Codex 로그, MCP URL 및 credential은 출력하지 않는다.
 
+Smoke도 제품 연결과 같은 structured launch 경계를 사용한다. macOS/Linux에서는 `PATH`의
+실행 가능한 native Codex 경로를 직접 resolve하고, Windows에서는 `.exe`를 direct process로,
+npm `.cmd` shim을 `ComSpec /d /s /v:off /c` one-shot으로 구분한다. MCP plan에만 등록된
+token overlay를 넣으며 bare plan과 최종 provider environment에서는 stale token casing과
+`ELECTRON_RUN_AS_NODE`를 제거한다.
+
 ```bash
 pnpm run prepare:codex-mcp-smoke
 pnpm run smoke:codex-mcp

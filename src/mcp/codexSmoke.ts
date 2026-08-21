@@ -7,9 +7,15 @@ import {
 import path from 'node:path';
 import { McpAdapterSupervisor } from './adapterSupervisor';
 import {
-	createCodexMcpConfig,
-	createCodexProviderEnvironment,
-} from './codexConfig';
+	type AgentProcessSpawnRequest,
+	createAgentProcessSpawnOptions,
+	createAgentProcessSpawnRequest,
+} from './agentLaunchPlan';
+import {
+	resolveAgentExecutable,
+	type AgentExecutableResolver,
+} from './agentExecutableResolver';
+import { buildCodexMcpLaunchPlan } from './codexLaunchPlan';
 import {
 	MCP_FAILURE_REASONS,
 	type McpFailureReason,
@@ -25,6 +31,17 @@ export const CODEX_MCP_SMOKE_PROMPT = [
 	'Call the crispy_ping MCP tool once.',
 	'Do not run shell commands and do not modify files.',
 ].join(' ');
+
+const CODEX_SMOKE_ARGS_BEFORE_CONFIG = Object.freeze([
+	'--ask-for-approval',
+	'never',
+	'exec',
+	'--ephemeral',
+	'--color',
+	'never',
+	'--sandbox',
+	'read-only',
+]);
 
 export const CODEX_SMOKE_FAILURE_REASONS = Object.freeze([
 	...MCP_FAILURE_REASONS,
@@ -42,12 +59,7 @@ export type CodexSmokeStatus =
 	| 'activity_observed'
 	| `failed:${CodexSmokeFailureReason}`;
 
-export interface CodexProviderSpawnRequest {
-	readonly executable: string;
-	readonly args: readonly string[];
-	readonly cwd: string;
-	readonly environment: NodeJS.ProcessEnv;
-}
+export type CodexProviderSpawnRequest = AgentProcessSpawnRequest;
 
 export type CodexProviderSpawner = (
 	request: CodexProviderSpawnRequest,
@@ -70,6 +82,8 @@ export interface RunCodexMcpSmokeOptions {
 	readonly baseEnvironment: NodeJS.ProcessEnv;
 	readonly codexExecutable?: string;
 	readonly randomBytes?: McpRandomBytes;
+	readonly platform?: NodeJS.Platform;
+	readonly resolveExecutable?: AgentExecutableResolver;
 	readonly spawnProvider?: CodexProviderSpawner;
 	readonly terminateProvider?: (provider: ChildProcess) => Promise<void>;
 	readonly report?: (status: CodexSmokeStatus) => void;
@@ -143,6 +157,8 @@ export async function runCodexMcpSmoke(
 	};
 	const spawnProvider = options.spawnProvider ?? spawnCodexProvider;
 	const terminateProvider = options.terminateProvider ?? terminateCodexProvider;
+	const platform = options.platform ?? process.platform;
+	const resolveExecutable = options.resolveExecutable ?? resolveAgentExecutable;
 	let provider: ChildProcess | undefined;
 
 	try {
@@ -154,20 +170,33 @@ export async function runCodexMcpSmoke(
 		options.events.expectGeneration(prepared.connection.generation);
 		report('adapter_ready');
 
-		const config = createCodexMcpConfig(
-			prepared.connection,
-			options.randomBytes,
-		);
-		const environment = createCodexProviderEnvironment(
-			prepared.connection,
-			options.baseEnvironment,
-		);
-		const providerRequest: CodexProviderSpawnRequest = Object.freeze({
-			executable: options.codexExecutable ?? 'codex',
-			args: createCodexSmokeArgs(config.args),
-			cwd: options.cwd,
-			environment,
+		const executable = await resolveExecutable('codex', {
+			platform,
+			environment: options.baseEnvironment,
+			override: options.codexExecutable,
 		});
+		if (!executable.ok) {
+			report('failed:provider_unavailable');
+			return false;
+		}
+		let providerRequest: CodexProviderSpawnRequest;
+		try {
+			const plan = buildCodexMcpLaunchPlan({
+				executable: executable.executable,
+				cwd: options.cwd,
+				connection: prepared.connection,
+				argsBeforeConfig: CODEX_SMOKE_ARGS_BEFORE_CONFIG,
+				argsAfterConfig: [CODEX_MCP_SMOKE_PROMPT],
+				randomBytes: options.randomBytes,
+			});
+			providerRequest = createAgentProcessSpawnRequest(plan, {
+				platform,
+				environment: options.baseEnvironment,
+			});
+		} catch {
+			report('failed:provider_unavailable');
+			return false;
+		}
 		report('awaiting_activity');
 
 		try {
@@ -219,14 +248,7 @@ export function createCodexSmokeArgs(
 	configArgs: readonly string[],
 ): readonly string[] {
 	return Object.freeze([
-		'--ask-for-approval',
-		'never',
-		'exec',
-		'--ephemeral',
-		'--color',
-		'never',
-		'--sandbox',
-		'read-only',
+		...CODEX_SMOKE_ARGS_BEFORE_CONFIG,
 		...configArgs,
 		CODEX_MCP_SMOKE_PROMPT,
 	]);
@@ -235,13 +257,7 @@ export function createCodexSmokeArgs(
 export function createCodexSmokeSpawnOptions(
 	request: CodexProviderSpawnRequest,
 ): SpawnOptions {
-	return {
-		cwd: request.cwd,
-		env: request.environment,
-		stdio: ['ignore', 'ignore', 'ignore'],
-		shell: false,
-		windowsHide: true,
-	};
+	return createAgentProcessSpawnOptions(request);
 }
 
 export function spawnCodexProvider(

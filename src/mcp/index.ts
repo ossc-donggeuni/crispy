@@ -74,6 +74,24 @@ export {
 	type McpSessionRuntimeFactory,
 } from './adapterSupervisor';
 export {
+	createAgentProcessEnvironment,
+	createAgentProcessSpawnOptions,
+	createAgentProcessSpawnRequest,
+	MCP_PROVIDER_ENVIRONMENT_REMOVALS,
+	type AgentLauncherKind,
+	type AgentLaunchPlan,
+	type AgentProcessSpawnRequest,
+	type CreateAgentProcessSpawnRequestOptions,
+} from './agentLaunchPlan';
+export {
+	resolveAgentExecutable,
+	type AgentExecutableResolution,
+	type AgentExecutableResolutionFailureReason,
+	type AgentExecutableResolver,
+	type ResolveAgentExecutableOptions,
+	type ResolvedAgentExecutable,
+} from './agentExecutableResolver';
+export {
 	CODEX_CONFIG_OVERRIDE_ARGUMENT,
 	CODEX_MCP_SERVER_NAME_PREFIX,
 	CODEX_MCP_SERVER_NAME_RANDOM_BYTES,
@@ -84,6 +102,12 @@ export {
 	sanitizeCodexProviderEnvironment,
 	type CodexMcpConfig,
 } from './codexConfig';
+export {
+	buildCodexBareLaunchPlan,
+	buildCodexMcpLaunchPlan,
+	type BuildCodexBareLaunchPlanOptions,
+	type BuildCodexMcpLaunchPlanOptions,
+} from './codexLaunchPlan';
 export {
 	createCrispyToolServer,
 	CRISPY_MCP_SERVER_NAME,
