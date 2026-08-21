@@ -401,7 +401,9 @@ suite('Graph View', () => {
 		const backlinkId = createFolderBacklinkId(detachedRootId);
 
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace']);
-		graphView.updateGraph(createWorkspaceGraph(true));
+		const refreshedWorkspaceGraph = createWorkspaceGraph(true);
+
+		graphView.updateGraph(refreshedWorkspaceGraph);
 
 		const detachedRoot = getDescendantByAttribute(
 			root,
@@ -420,8 +422,15 @@ suite('Graph View', () => {
 			[detachedFolder.id]: true,
 			'folder:refresh-missing': true,
 		});
+		assert.strictEqual(refreshedWorkspaceGraph.roots.length, 1);
+		assert.strictEqual(
+			refreshedWorkspaceGraph.rootNodes[detachedFolder.id],
+			undefined,
+		);
 
-		graphView.updateGraph(createWorkspaceGraph(false));
+		const workspaceGraphWithoutDetachedFolder = createWorkspaceGraph(false);
+
+		graphView.updateGraph(workspaceGraphWithoutDetachedFolder);
 
 		assert.strictEqual(findDescendantByAttribute(
 			root,
@@ -438,6 +447,7 @@ suite('Graph View', () => {
 			[detachedFolder.id]: true,
 			'folder:refresh-missing': true,
 		});
+		assert.strictEqual(workspaceGraphWithoutDetachedFolder.roots.length, 1);
 		graphView.dispose();
 	});
 
@@ -1637,6 +1647,7 @@ suite('Graph View', () => {
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		});
 		assert.deepStrictEqual(graphView.camera.getState(), {
 			x: 120,

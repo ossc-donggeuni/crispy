@@ -8,6 +8,7 @@ import {
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
 	parseGraphState,
+	parseHiddenNodeIds,
 	type GraphStateSnapshot,
 } from '../../webview/graph/graphState';
 
@@ -21,6 +22,7 @@ suite('Graph State', () => {
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		});
 		assert.deepStrictEqual(state.getState(), INITIAL_GRAPH_STATE);
 	});
@@ -35,6 +37,9 @@ suite('Graph State', () => {
 			detachedRootNodeIds: {
 				'file:src/index.ts': true,
 			} as Record<string, true>,
+			hiddenNodeIds: {
+				'folder:src/private': true,
+			} as Record<string, true>,
 		};
 
 		state.setState(nextState);
@@ -43,6 +48,7 @@ suite('Graph State', () => {
 		nextState.fileGroupPages['folder:src:files'] = 999;
 		nextState.openedFolders['folder:test'] = true;
 		nextState.detachedRootNodeIds['file:src/other.ts'] = true;
+		nextState.hiddenNodeIds['file:src/private/secret.ts'] = true;
 
 		const snapshot = state.getState();
 		assert.deepStrictEqual(snapshot.camera, { x: 30, y: -20, scale: 1.5 });
@@ -58,6 +64,9 @@ suite('Graph State', () => {
 		assert.deepStrictEqual(snapshot.detachedRootNodeIds, {
 			'file:src/index.ts': true,
 		});
+		assert.deepStrictEqual(snapshot.hiddenNodeIds, {
+			'folder:src/private': true,
+		});
 		assert.strictEqual(Object.isFrozen(snapshot), true);
 		assert.strictEqual(Object.isFrozen(snapshot.camera), true);
 		assert.strictEqual(Object.isFrozen(snapshot.nodePositions), true);
@@ -65,6 +74,7 @@ suite('Graph State', () => {
 		assert.strictEqual(Object.isFrozen(snapshot.fileGroupPages), true);
 		assert.strictEqual(Object.isFrozen(snapshot.openedFolders), true);
 		assert.strictEqual(Object.isFrozen(snapshot.detachedRootNodeIds), true);
+		assert.strictEqual(Object.isFrozen(snapshot.hiddenNodeIds), true);
 	});
 
 	test('Folder를 열면 sparse 상태에 ID를 추가하고 닫으면 제거한다', () => {
@@ -284,6 +294,51 @@ suite('Graph State', () => {
 		});
 	});
 
+	test('숨김 Node ID 값이 같으면 기존 snapshot 참조를 재사용한다', () => {
+		const state = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			hiddenNodeIds: { 'folder:app/private': true },
+		});
+		const initialHiddenNodeIds = state.getState().hiddenNodeIds;
+
+		state.setState({
+			camera: { x: 30, y: -20, scale: 1.5 },
+			nodePositions: {},
+			hiddenNodeIds: { 'folder:app/private': true },
+		});
+
+		assert.strictEqual(state.getState().hiddenNodeIds, initialHiddenNodeIds);
+	});
+
+	test('숨김 Node ID가 달라지면 subscriber에 새 snapshot을 알린다', () => {
+		const state = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			hiddenNodeIds: { 'folder:app/private': true },
+		});
+		const snapshots: GraphStateSnapshot[] = [];
+
+		state.subscribe((snapshot) => snapshots.push(snapshot));
+		state.setState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			hiddenNodeIds: { 'folder:app/private': true },
+		});
+		assert.strictEqual(snapshots.length, 0);
+
+		state.setState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			hiddenNodeIds: { 'file:app/private/secret.ts': true },
+		});
+
+		assert.strictEqual(snapshots.length, 1);
+		assert.deepStrictEqual(snapshots[0]?.hiddenNodeIds, {
+			'file:app/private/secret.ts': true,
+		});
+	});
+
 	test('Camera scale을 최소 및 최대 범위로 제한한다', () => {
 		const state = createGraphState({
 			camera: { x: 0, y: 0, scale: 0 },
@@ -308,6 +363,7 @@ suite('Graph State', () => {
 			fileGroupPages: { 'folder:src:files': 3 },
 			openedFolders: { 'folder:src': true },
 			detachedRootNodeIds: { 'file:src/index.ts': true },
+			hiddenNodeIds: { 'folder:src/private': true },
 		};
 
 		const state = parseGraphState(value);
@@ -318,6 +374,7 @@ suite('Graph State', () => {
 			fileGroupPages: { 'folder:src:files': 3 },
 			openedFolders: { 'folder:src': true },
 			detachedRootNodeIds: { 'file:src/index.ts': true },
+			hiddenNodeIds: { 'folder:src/private': true },
 		});
 		assert.notStrictEqual(state, value);
 		assert.notStrictEqual(state?.camera, value.camera);
@@ -331,15 +388,17 @@ suite('Graph State', () => {
 			state?.detachedRootNodeIds,
 			value.detachedRootNodeIds,
 		);
+		assert.notStrictEqual(state?.hiddenNodeIds, value.hiddenNodeIds);
 	});
 
-	test('필드가 없는 기존 상태를 빈 Node 위치, page, opened와 Detached 상태로 파싱한다', () => {
+	test('필드가 없는 기존 상태를 빈 Node 위치, page, opened, Detached와 Filter 상태로 파싱한다', () => {
 		const expected = {
 			camera: { x: 1, y: 2, scale: 1 },
 			nodePositions: {},
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		};
 
 		assert.deepStrictEqual(
@@ -350,6 +409,21 @@ suite('Graph State', () => {
 			camera: { x: 1, y: 2, scale: 1 },
 			collapsedFolders: { 'folder:src': true },
 		}), expected);
+	});
+
+	test('숨김 Node ID sparse record를 검증하고 독립적인 객체로 복사한다', () => {
+		const input = {
+			'folder:src/private': true,
+			'file:src/secret.ts': true,
+		} as Record<string, true>;
+		const parsed = parseHiddenNodeIds(input);
+
+		assert.deepStrictEqual(parsed, input);
+		assert.notStrictEqual(parsed, input);
+
+		for (const invalid of [false, [], { 'folder:src': false }, { '': true }]) {
+			assert.strictEqual(parseHiddenNodeIds(invalid), undefined);
+		}
 	});
 
 	test('잘못된 Graph 상태를 거부한다', () => {
@@ -410,6 +484,16 @@ suite('Graph State', () => {
 				camera: { x: 0, y: 0, scale: 1 },
 				nodePositions: {},
 				detachedRootNodeIds: { '': true },
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				hiddenNodeIds: [],
+			},
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				hiddenNodeIds: { 'folder:src': false },
 			},
 		];
 

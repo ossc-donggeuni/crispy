@@ -226,8 +226,9 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
+	let workspaceGraph = graph;
 	let currentGraph = applyDetachedGraphRoots(
-		graph,
+		workspaceGraph,
 		initialGraphState.detachedRootNodeIds,
 	);
 	const camera = initializeGraphCamera(viewport, world, state);
@@ -369,8 +370,9 @@ export function initializeGraphView(
 
 			const snapshot = state.getState();
 
+			workspaceGraph = graph;
 			currentGraph = applyDetachedGraphRoots(
-				graph,
+				workspaceGraph,
 				snapshot.detachedRootNodeIds,
 			);
 			applyCurrentLayout(snapshot);

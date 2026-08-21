@@ -1,6 +1,7 @@
 import {
 	parseDetachedRootNodeIds,
 	parseFileGroupPages,
+	parseHiddenNodeIds,
 	parseNodePositions,
 	parseOpenedFolders,
 	type GraphNodePosition,
@@ -16,6 +17,7 @@ export interface WorkspacePersistentState {
 	fileGroupPages: Record<string, number>;
 	openedFolders: Record<string, true>;
 	detachedRootNodeIds: Record<string, true>;
+	hiddenNodeIds: Record<string, true>;
 }
 
 /** 외부 객체와 참조를 공유하지 않는 기본 Workspace Persistent State를 생성한다. */
@@ -26,6 +28,7 @@ export function createDefaultWorkspacePersistentState(): WorkspacePersistentStat
 		fileGroupPages: {},
 		openedFolders: {},
 		detachedRootNodeIds: {},
+		hiddenNodeIds: {},
 	};
 }
 
@@ -49,12 +52,14 @@ export function parseWorkspacePersistentState(
 	const detachedRootNodeIds = parseDetachedRootNodeIds(
 		candidate.detachedRootNodeIds,
 	);
+	const hiddenNodeIds = parseHiddenNodeIds(candidate.hiddenNodeIds);
 
 	if (
 		!nodePositions
 		|| !fileGroupPages
 		|| !openedFolders
 		|| !detachedRootNodeIds
+		|| !hiddenNodeIds
 	) {
 		return undefined;
 	}
@@ -65,5 +70,6 @@ export function parseWorkspacePersistentState(
 		fileGroupPages,
 		openedFolders,
 		detachedRootNodeIds,
+		hiddenNodeIds,
 	};
 }

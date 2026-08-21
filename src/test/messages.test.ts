@@ -18,6 +18,7 @@ suite('Extension to Webview Workspace messages', () => {
 				fileGroupPages: { 'folder:file:///workspace/app/src:files': 2 },
 				openedFolders: { 'folder:file:///workspace/app/src': true },
 				detachedRootNodeIds: { 'file:file:///workspace/app/index.ts': true },
+				hiddenNodeIds: { 'folder:file:///workspace/app/private': true },
 			},
 		} satisfies WorkspaceStateChangedMessage;
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;

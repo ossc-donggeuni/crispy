@@ -93,6 +93,7 @@ export function partitionWorkspacePersistentStateByRoot(
 		rootUris,
 		'detachedRootNodeIds',
 	);
+	partitionRecord(source.hiddenNodeIds, rootStates, rootUris, 'hiddenNodeIds');
 
 	return rootStates;
 }
@@ -132,6 +133,12 @@ export function mergeWorkspacePersistentStates(
 		mergeOwnedRecord(
 			source.detachedRootNodeIds,
 			merged.detachedRootNodeIds,
+			rootUri,
+			rootUris,
+		);
+		mergeOwnedRecord(
+			source.hiddenNodeIds,
+			merged.hiddenNodeIds,
 			rootUri,
 			rootUris,
 		);
@@ -182,6 +189,7 @@ function partitionRecord<
 		| 'fileGroupPages'
 		| 'openedFolders'
 		| 'detachedRootNodeIds'
+		| 'hiddenNodeIds'
 	>,
 >(
 	source: WorkspacePersistentState[Key],

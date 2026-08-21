@@ -833,6 +833,7 @@ function createPersistedStateFromSession(
 			fileGroupPages: workspaceState?.fileGroupPages ?? {},
 			openedFolders: workspaceState?.openedFolders ?? {},
 			detachedRootNodeIds: workspaceState?.detachedRootNodeIds ?? {},
+			hiddenNodeIds: workspaceState?.hiddenNodeIds ?? {},
 		},
 	};
 }
@@ -851,6 +852,9 @@ function createWorkspacePersistentState(): WorkspacePersistentState {
 		},
 		detachedRootNodeIds: {
 			'file:file:///workspace/app/index.ts': true,
+		},
+		hiddenNodeIds: {
+			'folder:file:///workspace/app/private': true,
 		},
 	};
 }
@@ -872,6 +876,7 @@ function createWorkspacePersistentStateForRoot(
 		fileGroupPages: { [`${folderId}:files`]: page },
 		openedFolders: { [folderId]: true },
 		detachedRootNodeIds: { [fileId]: true },
+		hiddenNodeIds: { [folderId]: true },
 	};
 }
 
@@ -886,6 +891,10 @@ function mergeWorkspaceStates(
 		detachedRootNodeIds: Object.assign(
 			{},
 			...states.map((state) => state.detachedRootNodeIds),
+		),
+		hiddenNodeIds: Object.assign(
+			{},
+			...states.map((state) => state.hiddenNodeIds),
 		),
 	};
 }
