@@ -25,6 +25,25 @@ export interface ResolveCodexConfigStyleOptions {
 	readonly environment: NodeJS.ProcessEnv;
 }
 
+export type CodexVersionProbeFailureReason =
+	| 'request_invalid'
+	| 'spawn_error'
+	| 'exit_nonzero'
+	| 'signal'
+	| 'timeout'
+	| 'output_limit'
+	| 'unparsable_version';
+
+export type CodexConfigStyleProbeResult =
+	| Readonly<{
+		readonly ok: true;
+		readonly style: CodexShellEnvironmentPolicyStyle;
+	}>
+	| Readonly<{
+		readonly ok: false;
+		readonly reason: CodexVersionProbeFailureReason;
+	}>;
+
 export type CodexConfigStyleResolver = (
 	options: ResolveCodexConfigStyleOptions,
 ) => Promise<CodexShellEnvironmentPolicyStyle | undefined>;
@@ -37,6 +56,14 @@ export type CodexConfigStyleResolver = (
 export const resolveCodexConfigStyle: CodexConfigStyleResolver = async (
 	options,
 ) => {
+	const result = await probeCodexConfigStyle(options);
+	return result.ok ? result.style : undefined;
+};
+
+/** Returns a stable, credential-free failure reason for compatibility smoke diagnostics. */
+export async function probeCodexConfigStyle(
+	options: ResolveCodexConfigStyleOptions,
+): Promise<CodexConfigStyleProbeResult> {
 	let request: ReturnType<typeof createAgentProcessSpawnRequest>;
 	try {
 		const plan = buildCodexBareLaunchPlan({
@@ -49,13 +76,17 @@ export const resolveCodexConfigStyle: CodexConfigStyleResolver = async (
 			environment: options.environment,
 		});
 	} catch {
-		return undefined;
+		return failure('request_invalid');
 	}
-	const output = await readVersionOutput(request);
-	return output === undefined
-		? undefined
-		: selectCodexConfigStyleFromVersionOutput(output);
-};
+	const versionResult = await readVersionOutput(request);
+	if (!versionResult.ok) {
+		return versionResult;
+	}
+	const style = selectCodexConfigStyleFromVersionOutput(versionResult.output);
+	return style === undefined
+		? failure('unparsable_version')
+		: Object.freeze({ ok: true, style });
+}
 
 export function selectCodexConfigStyleFromVersionOutput(
 	output: string,
@@ -80,7 +111,10 @@ export function selectCodexConfigStyleFromVersionOutput(
 
 async function readVersionOutput(
 	request: ReturnType<typeof createAgentProcessSpawnRequest>,
-): Promise<string | undefined> {
+): Promise<
+	| Readonly<{ readonly ok: true; readonly output: string }>
+	| Readonly<{ readonly ok: false; readonly reason: CodexVersionProbeFailureReason }>
+> {
 	let child: ChildProcess;
 	try {
 		child = spawn(
@@ -92,14 +126,21 @@ async function readVersionOutput(
 			},
 		);
 	} catch {
-		return undefined;
+		return failure('spawn_error');
 	}
 
 	return new Promise((resolve) => {
 		let settled = false;
 		let output = '';
 		let timer: NodeJS.Timeout | undefined;
-		const settle = (value: string | undefined): void => {
+		const settle = (
+			value:
+				| Readonly<{ readonly ok: true; readonly output: string }>
+				| Readonly<{
+					readonly ok: false;
+					readonly reason: CodexVersionProbeFailureReason;
+				}>,
+		): void => {
 			if (settled) {
 				return;
 			}
@@ -120,7 +161,7 @@ async function readVersionOutput(
 				} catch {
 					/** A failed compatibility probe only disables MCP for this launch. */
 				}
-				settle(undefined);
+				settle(failure('output_limit'));
 			}
 		};
 		timer = setTimeout(() => {
@@ -129,16 +170,28 @@ async function readVersionOutput(
 			} catch {
 				/** A failed compatibility probe only disables MCP for this launch. */
 			}
-			settle(undefined);
+			settle(failure('timeout'));
 		}, CODEX_VERSION_PROBE_TIMEOUT_MS);
 
 		child.stdout?.on('data', append);
 		child.stderr?.on('data', append);
-		child.once('error', () => settle(undefined));
+		child.once('error', () => settle(failure('spawn_error')));
 		child.once('exit', (code, signal) => {
-			settle(code === 0 && signal === null ? output : undefined);
+			if (signal !== null) {
+				settle(failure('signal'));
+				return;
+			}
+			settle(code === 0
+				? Object.freeze({ ok: true, output })
+				: failure('exit_nonzero'));
 		});
 	});
+}
+
+function failure(
+	reason: CodexVersionProbeFailureReason,
+): Readonly<{ readonly ok: false; readonly reason: CodexVersionProbeFailureReason }> {
+	return Object.freeze({ ok: false, reason });
 }
 
 function compareVersion(

@@ -72,3 +72,14 @@ pnpm run smoke:codex-config-compat
 ```text
 [codex-config-compat-smoke] keyed-filters config parsed through node-pty.
 ```
+
+Windows에서는 설치된 실제 `codex.cmd`의 config parsing과, 특수문자 경로에 둔
+독립 fixture의 `cmd.exe` one-shot 인자 보존을 분리해 검증한다.
+
+```text
+[codex-config-compat-smoke] keyed-filters config parsed through node-pty.
+[codex-config-compat-smoke] Windows cmd-one-shot special-path launch passed.
+```
+
+version probe가 실패하면 `spawn_error`, `exit_nonzero`, `timeout`,
+`unparsable_version`처럼 credential을 포함하지 않는 원인이 출력된다.

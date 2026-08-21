@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -11,9 +12,10 @@ const {
 	createAgentProcessSpawnRequest,
 } = require('../out/mcp/agentLaunchPlan.js');
 const {
-	resolveCodexConfigStyle,
+	probeCodexConfigStyle,
 } = require('../out/mcp/codexCompatibility.js');
 const {
+	buildCodexBareLaunchPlan,
 	buildCodexMcpLaunchPlan,
 } = require('../out/mcp/codexLaunchPlan.js');
 const {
@@ -22,6 +24,7 @@ const {
 
 const smokeTimeoutMs = 15_000;
 const maximumOutputLength = 1024 * 1024;
+const windowsArgvMarker = 'CRISPY_WINDOWS_ARGV:';
 
 function smokeError(reason) {
 	return new Error(`[codex-config-compat-smoke] ${reason}`);
@@ -46,36 +49,51 @@ async function resolveInstalledCodex(environment) {
 	return resolution.executable;
 }
 
-/**
- * npm의 실제 codex.cmd와 node_modules를 특수문자 경로에서도 그대로 사용한다. Junction은
- * package를 복제하지 않으면서 cmd shim의 상대 node_modules lookup을 보존한다.
- */
-function createWindowsCodexFixture(executable, temporaryRoot) {
-	if (executable.launcherKind !== 'cmd-one-shot') {
-		throw smokeError('Windows Codex CLI did not resolve to codex.cmd.');
-	}
-	const originalDirectory = path.dirname(executable.executable);
-	const originalNodeModules = path.join(originalDirectory, 'node_modules');
-	if (!fs.statSync(originalNodeModules).isDirectory()) {
-		throw smokeError('Windows Codex npm node_modules is unavailable.');
-	}
-
+/** Creates a self-contained cmd fixture that never resolves its own metacharacter path. */
+function createWindowsLauncherFixture(temporaryRoot) {
 	const fixtureDirectory = path.join(
 		temporaryRoot,
 		'Crispy 한글 공백 100% ! & (Codex)',
 	);
 	fs.mkdirSync(fixtureDirectory, { recursive: true });
+	const probeScript = path.join(temporaryRoot, 'windows-launcher-fixture.js');
 	const fixtureExecutable = path.join(fixtureDirectory, 'codex.cmd');
-	fs.copyFileSync(executable.executable, fixtureExecutable);
-	fs.symlinkSync(
-		originalNodeModules,
-		path.join(fixtureDirectory, 'node_modules'),
-		'junction',
-	);
+	fs.writeFileSync(probeScript, [
+		"'use strict';",
+		"const crypto = require('node:crypto');",
+		`const marker = ${JSON.stringify(windowsArgvMarker)};`,
+		'const args = process.argv.slice(2);',
+		"if (args.length === 1 && args[0] === '--version') {",
+		"	console.log('codex-cli 999.0.0');",
+		'} else {',
+		"	const digest = crypto.createHash('sha256').update(JSON.stringify(args), 'utf8').digest('base64url');",
+		'	console.log(marker + digest);',
+		'}',
+		'',
+	].join('\n'), 'utf8');
+	fs.writeFileSync(fixtureExecutable, createWindowsBatchFixtureSource(
+		process.execPath,
+		probeScript,
+	), 'utf8');
 	return Object.freeze({
 		executable: fixtureExecutable,
 		launcherKind: 'cmd-one-shot',
 	});
+}
+
+function createWindowsBatchFixtureSource(nodeExecutable, probeScript) {
+	const quoteBatchValue = (value) => {
+		if (/[\r\n"]/u.test(value)) {
+			throw smokeError('Windows fixture path is invalid.');
+		}
+		return `"${value.replaceAll('%', '%%')}"`;
+	};
+	return [
+		'@ECHO off',
+		'SETLOCAL DisableDelayedExpansion',
+		`${quoteBatchValue(nodeExecutable)} ${quoteBatchValue(probeScript)} %*`,
+		'',
+	].join('\r\n');
 }
 
 function runPty(request) {
@@ -148,6 +166,46 @@ function runPty(request) {
 	});
 }
 
+async function runWindowsCmdOneShotSmoke(temporaryRoot, environment) {
+	const executable = createWindowsLauncherFixture(temporaryRoot);
+	const compatibility = await probeCodexConfigStyle({
+		executable,
+		cwd: temporaryRoot,
+		platform: 'win32',
+		environment,
+	});
+	if (!compatibility.ok) {
+		throw smokeError(
+			`Windows cmd-one-shot version probe failed (${compatibility.reason}).`,
+		);
+	}
+
+	const expectedArguments = Object.freeze([
+		'--fixture-probe',
+		'space value',
+		'한글',
+		'100% ! & (Codex)',
+	]);
+	const plan = buildCodexBareLaunchPlan({
+		executable,
+		cwd: temporaryRoot,
+		args: expectedArguments,
+	});
+	const request = createAgentProcessSpawnRequest(plan, {
+		platform: 'win32',
+		environment,
+	});
+	const output = await runPty(request);
+	const expectedMarker = windowsArgvMarker + crypto.createHash('sha256')
+		.update(JSON.stringify(expectedArguments), 'utf8')
+		.digest('base64url');
+	if (!output.includes(expectedMarker)) {
+		throw smokeError(
+			'Windows cmd-one-shot did not preserve special-path arguments.',
+		);
+	}
+}
+
 async function main() {
 	const environment = { ...process.env };
 	const temporaryRoot = fs.mkdtempSync(path.join(
@@ -157,18 +215,16 @@ async function main() {
 
 	try {
 		const installed = await resolveInstalledCodex(environment);
-		const executable = process.platform === 'win32'
-			? createWindowsCodexFixture(installed, temporaryRoot)
-			: installed;
-		const shellEnvironmentPolicyStyle = await resolveCodexConfigStyle({
-			executable,
+		const compatibility = await probeCodexConfigStyle({
+			executable: installed,
 			cwd: temporaryRoot,
 			platform: process.platform,
 			environment,
 		});
-		if (shellEnvironmentPolicyStyle === undefined) {
-			throw smokeError('Codex version is not compatible with MCP config selection.');
+		if (!compatibility.ok) {
+			throw smokeError(`Codex version probe failed (${compatibility.reason}).`);
 		}
+		const shellEnvironmentPolicyStyle = compatibility.style;
 
 		const routeId = Buffer.alloc(24, 0x43).toString('base64url');
 		const token = Buffer.alloc(32, 0x54).toString('base64url');
@@ -179,7 +235,7 @@ async function main() {
 			token,
 		);
 		const plan = buildCodexMcpLaunchPlan({
-			executable,
+			executable: installed,
 			cwd: temporaryRoot,
 			connection,
 			argsAfterConfig: ['features', 'list'],
@@ -198,6 +254,13 @@ async function main() {
 		console.log(
 			`[codex-config-compat-smoke] ${shellEnvironmentPolicyStyle} config parsed through node-pty.`,
 		);
+
+		if (process.platform === 'win32') {
+			await runWindowsCmdOneShotSmoke(temporaryRoot, environment);
+			console.log(
+				'[codex-config-compat-smoke] Windows cmd-one-shot special-path launch passed.',
+			);
+		}
 	} finally {
 		fs.rmSync(temporaryRoot, { recursive: true, force: true });
 	}
@@ -210,4 +273,9 @@ if (require.main === module) {
 	});
 }
 
-module.exports = Object.freeze({ createWindowsCodexFixture, runPty });
+module.exports = Object.freeze({
+	createWindowsBatchFixtureSource,
+	createWindowsLauncherFixture,
+	runPty,
+	runWindowsCmdOneShotSmoke,
+});

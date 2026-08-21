@@ -106,9 +106,12 @@ export {
 export {
 	CODEX_KEYED_FILTER_CONSERVATIVE_BASELINE,
 	CODEX_VERSION_PROBE_TIMEOUT_MS,
+	probeCodexConfigStyle,
 	resolveCodexConfigStyle,
 	selectCodexConfigStyleFromVersionOutput,
+	type CodexConfigStyleProbeResult,
 	type CodexConfigStyleResolver,
+	type CodexVersionProbeFailureReason,
 	type ResolveCodexConfigStyleOptions,
 } from './codexCompatibility';
 export {
