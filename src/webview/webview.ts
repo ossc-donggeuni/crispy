@@ -4,7 +4,10 @@ import {
 } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
-import type { WebviewToExtensionMessage } from '../messages';
+import {
+	parseWorkspaceToWebviewMessage,
+	type WebviewToExtensionMessage,
+} from '../messages';
 import { initializeGraphView } from './graph/graphView';
 import { deserializeGraphFromWebview } from './graph/graphTransport';
 import { initializePanelCollapse } from './panel/panelCollapse';
@@ -210,6 +213,13 @@ window.addEventListener('unload', () => {
  * @param message Extension Host에서 수신한 검증 전 메시지
  */
 function handleHostMessage(message: unknown): void {
+	const workspaceMessage = parseWorkspaceToWebviewMessage(message);
+
+	if (workspaceMessage) {
+		graphView.updateGraph(workspaceMessage.graph);
+		return;
+	}
+
 	const parseResult = parseHostToWebviewMessage(message);
 	if (!parseResult.ok) {
 		return;

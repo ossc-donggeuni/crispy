@@ -339,7 +339,7 @@ suite('Webview State', () => {
 });
 
 suite('Webview State Wiring', () => {
-	test('Graph, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다', () => {
+	test('Graph, Workspace 메시지, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다', () => {
 		const initialState = createWebviewState('left', 35, -25, 1.25);
 		const initialWorkspaceGraph: Graph = {
 			roots: [
@@ -367,6 +367,18 @@ suite('Webview State Wiring', () => {
 				},
 			},
 		};
+		const refreshedWorkspaceGraph: Graph = {
+			roots: [{ id: 'root:refreshed', nodeId: 'project:refreshed' }],
+			rootNodes: {
+				'project:refreshed': {
+					kind: 'project',
+					id: 'project:refreshed',
+					name: 'refreshed',
+					status: 'loaded',
+					children: [],
+				},
+			},
+		};
 		const nextGraphState = {
 			camera: { x: 120, y: -60, scale: 2 },
 			nodePositions: { 'folder:src': { x: 800, y: 240 } },
@@ -379,6 +391,8 @@ suite('Webview State Wiring', () => {
 		const postedMessages: WebviewToExtensionMessage[] = [];
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
+		const graphUpdates: Graph[] = [];
+		const terminalHostMessages: unknown[] = [];
 		let currentGraphState: GraphStateSnapshot = {
 			camera: initialState.graph.camera,
 			nodePositions: initialState.graph.nodePositions,
@@ -397,6 +411,8 @@ suite('Webview State Wiring', () => {
 		let resizeFit: (() => void) | undefined;
 		let agentUiLayoutChange: (() => void) | undefined;
 		let unloadHandler: (() => void) | undefined;
+		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
+		let graphInitializeCount = 0;
 		let graphUnsubscribed = false;
 		let graphDisposed = false;
 		let agentPanelUiInitialized = false;
@@ -443,6 +459,7 @@ suite('Webview State Wiring', () => {
 		);
 
 		graphViewModule.initializeGraphView = ((_root, restoredGraphState, graph) => {
+			graphInitializeCount += 1;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
@@ -495,6 +512,9 @@ suite('Webview State Wiring', () => {
 				camera: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['camera'],
+				updateGraph: (nextGraph) => {
+					graphUpdates.push(nextGraph);
+				},
 				dispose: () => {
 					graphDisposed = true;
 				},
@@ -559,7 +579,9 @@ suite('Webview State Wiring', () => {
 
 			resetTab: () => undefined,
 
-			handleHostMessage: () => undefined,
+			handleHostMessage: (message) => {
+				terminalHostMessages.push(message);
+			},
 
 			scheduleActiveTerminalFit(): void {
 				terminalFitCount += 1;
@@ -641,6 +663,9 @@ suite('Webview State Wiring', () => {
 				if (type === 'unload' && typeof listener === 'function') {
 					unloadHandler = listener as () => void;
 				}
+				if (type === 'message' && typeof listener === 'function') {
+					hostMessageHandler = listener as (event: MessageEvent) => void;
+				}
 			},
 		};
 
@@ -670,6 +695,29 @@ suite('Webview State Wiring', () => {
 			]);
 			assert.deepStrictEqual(ensuredTabs, [agentTabId]);
 			assert.deepStrictEqual(activeTabs, [agentTabId]);
+			assert.strictEqual(graphInitializeCount, 1);
+			assert.ok(hostMessageHandler);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.graphUpdated',
+					graph: refreshedWorkspaceGraph,
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
+			assert.deepStrictEqual(terminalHostMessages, []);
+			assert.strictEqual(graphInitializeCount, 1);
+			assert.strictEqual(graphDisposed, false);
+
+			const terminalStartingMessage = {
+				type: 'terminal.starting',
+				tabId: agentTabId,
+			} as const;
+
+			hostMessageHandler({ data: terminalStartingMessage } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
+			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
 
 			const fitCountBeforeLayoutChange = terminalFitCount;
 			agentUiLayoutChange();

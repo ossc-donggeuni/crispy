@@ -33,6 +33,8 @@ export interface GraphView {
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
+	/** 기존 View와 State를 유지하며 새로운 Workspace Graph를 적용한다. */
+	updateGraph(graph: Graph): void;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
 }
@@ -360,6 +362,20 @@ export function initializeGraphView(
 	return {
 		state,
 		camera,
+		updateGraph(graph): void {
+			if (disposed) {
+				return;
+			}
+
+			const snapshot = state.getState();
+
+			currentGraph = applyDetachedGraphRoots(
+				graph,
+				snapshot.detachedRootNodeIds,
+			);
+			applyCurrentLayout(snapshot);
+			syncNavigatorRoots();
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
