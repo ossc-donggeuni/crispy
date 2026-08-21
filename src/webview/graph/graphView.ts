@@ -356,6 +356,7 @@ export function initializeGraphView(
 		{ onRootSelect: handleNavigatorRootSelect },
 	);
 	syncNavigatorRoots();
+	navigator.setWorkspaceGraph(workspaceGraph);
 	let disposed = false;
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
@@ -381,6 +382,7 @@ export function initializeGraphView(
 			);
 			applyCurrentLayout(snapshot);
 			syncNavigatorRoots();
+			navigator.setWorkspaceGraph(workspaceGraph);
 		},
 		dispose(): void {
 			if (disposed) {

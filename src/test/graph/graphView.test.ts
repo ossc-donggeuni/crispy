@@ -451,6 +451,114 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Navigator Filter Checkbox는 Graph State 경로로 표시를 변경하고 Workspace Refresh Tree를 갱신한다', () => {
+		const filteredFile = {
+			kind: 'file' as const,
+			id: 'file:filter-panel/filtered.ts',
+			name: 'filtered.ts',
+		};
+		const siblingFile = {
+			kind: 'file' as const,
+			id: 'file:filter-panel/sibling.ts',
+			name: 'sibling.ts',
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:filter-panel',
+			name: 'filter-panel',
+			status: 'loaded',
+			children: [filteredFile, siblingFile],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true },
+			hiddenNodeIds: {},
+		}, createSingleRootGraph(project));
+		const initialHiddenNodeIds = graphView.state.getState().hiddenNodeIds;
+		let checkbox = getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			filteredFile.id,
+		);
+		const fileRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			filteredFile.id,
+		);
+
+		assert.strictEqual(checkbox.checked, true);
+		assert.strictEqual(fileRow.hidden, false);
+		checkbox.checked = false;
+		checkbox.dispatch('change', createClickEvent(checkbox));
+
+		assert.notStrictEqual(
+			graphView.state.getState().hiddenNodeIds,
+			initialHiddenNodeIds,
+		);
+		assert.deepStrictEqual(initialHiddenNodeIds, {});
+		assert.deepStrictEqual(graphView.state.getState().hiddenNodeIds, {
+			[filteredFile.id]: true,
+		});
+		assert.strictEqual(fileRow.hidden, true);
+
+		checkbox = getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			filteredFile.id,
+		);
+		assert.strictEqual(checkbox.checked, false);
+		checkbox.checked = true;
+		checkbox.dispatch('change', createClickEvent(checkbox));
+		assert.deepStrictEqual(graphView.state.getState().hiddenNodeIds, {});
+		assert.strictEqual(fileRow.hidden, false);
+
+		checkbox = getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			filteredFile.id,
+		);
+		checkbox.checked = false;
+		checkbox.dispatch('change', createClickEvent(checkbox));
+		const newFile = {
+			kind: 'file' as const,
+			id: 'file:filter-panel/new.ts',
+			name: 'new.ts',
+		};
+		const refreshedProject: Project = {
+			...project,
+			children: [filteredFile, siblingFile, newFile],
+		};
+
+		graphView.updateGraph(createSingleRootGraph(refreshedProject));
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			filteredFile.id,
+		).checked, false);
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			newFile.id,
+		).checked, true);
+
+		graphView.updateGraph(createSingleRootGraph({
+			...refreshedProject,
+			children: [siblingFile, newFile],
+		}));
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			filteredFile.id,
+		), undefined);
+		assert.deepStrictEqual(graphView.state.getState().hiddenNodeIds, {
+			[filteredFile.id]: true,
+		});
+		graphView.dispose();
+	});
+
 	test('Folder Filter를 subtree, Edge와 Minimap에 반영하고 해제 시 기존 상태로 복원한다', () => {
 		const hiddenFile = {
 			kind: 'file' as const,
@@ -2479,7 +2587,9 @@ class FakeElement {
 		},
 	};
 	className = '';
+	checked = false;
 	hidden = false;
+	indeterminate = false;
 	textContent = '';
 	type = '';
 	clientWidth = 1000;

@@ -12,6 +12,10 @@ import type {
 	GraphLayoutEdge,
 	GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
+import type {
+	Graph,
+	Project,
+} from '../../webview/graph/graphModel';
 import {
 	initializeGraphNavigator,
 	type GraphNavigatorInteractions,
@@ -668,7 +672,7 @@ suite('Graph Navigator', () => {
 		const fixture = createNavigatorFixture();
 
 		assert.strictEqual(fixture.actionRail.hasClass('graph-navigator-action-rail'), true);
-		assert.strictEqual(fixture.actionRail.children.length, 1);
+		assert.strictEqual(fixture.actionRail.children.length, 2);
 		assert.strictEqual(fixture.actionRail.getAttribute('role'), 'toolbar');
 		assert.strictEqual(
 			fixture.actionRail.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
@@ -696,6 +700,24 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(
 			fixture.rootListIcon.getAttribute('aria-hidden'),
 			'true',
+		);
+		assert.strictEqual(fixture.filterButton.type, 'button');
+		assert.strictEqual(
+			fixture.filterButton.getAttribute('aria-label'),
+			'Workspace Filter',
+		);
+		assert.strictEqual(fixture.filterButton.title, 'Workspace Filter');
+		assert.strictEqual(
+			fixture.filterButton.getAttribute('aria-controls'),
+			fixture.filterPanel.id,
+		);
+		assert.strictEqual(
+			fixture.filterIcon.getAttribute('data-navigator-icon'),
+			'navigator-filter.svg',
+		);
+		assert.strictEqual(
+			fixture.filterPanel.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
+			true,
 		);
 	});
 
@@ -980,6 +1002,447 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
 	});
 
+	test('Filter Action은 지정 SVG를 사용하고 Panel 열림 및 active 상태를 독립적으로 동기화한다', () => {
+		const fixture = createNavigatorFixture();
+
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(fixture.filterTitle.textContent, 'Workspace Filter');
+		assert.strictEqual(
+			fixture.filterButton.getAttribute('aria-expanded'),
+			'false',
+		);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), false);
+		assert.strictEqual(
+			fixture.filterIcon.getAttribute('data-navigator-icon'),
+			'navigator-filter.svg',
+		);
+
+		fixture.rootListButton.dispatch('click', {} as Event);
+		fixture.filterButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(fixture.filterPanel.hidden, false);
+		assert.strictEqual(
+			fixture.filterButton.getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), true);
+
+		fixture.filterButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(
+			fixture.filterButton.getAttribute('aria-expanded'),
+			'false',
+		);
+		assert.strictEqual(fixture.filterButton.hasClass('is-active'), false);
+
+		fixture.navigator.dispose();
+		fixture.filterButton.dispatch('click', {} as Event);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+	});
+
+	test('원본 Workspace Project hierarchy를 Multi-root Tree로 표시하고 synthetic/Detached 중복을 만들지 않는다', () => {
+		const fixture = createNavigatorFixture();
+		const workspace = createFilterWorkspaceFixture();
+		const graphWithDetachedFolderRoot: Graph = {
+			roots: [
+				...workspace.graph.roots,
+				{ id: 'root:detached-src', nodeId: workspace.srcFolder.id },
+			],
+			rootNodes: workspace.graph.rootNodes,
+		};
+
+		fixture.navigator.setWorkspaceGraph(graphWithDetachedFolderRoot);
+
+		assert.strictEqual(fixture.filterTree.getAttribute('role'), 'tree');
+		assert.strictEqual(fixture.filterTree.children.length, 2);
+		assert.deepStrictEqual(
+			fixture.filterTree.children.map((item) => getFilterItemName(item)),
+			['frontend', 'backend'],
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.srcFolder.id).length,
+			1,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			0,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphLayoutFile.id).length,
+			0,
+		);
+		const frontendItem = getFilterItem(
+			fixture.filterTree,
+			workspace.frontendProject.id,
+		);
+
+		assert.strictEqual(
+			getFilterToggle(frontendItem).getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.ok(findFilterItemChildren(frontendItem));
+		assert.strictEqual(
+			getFilterItemRow(frontendItem).children.some(
+				(child) => child.tagName === 'INPUT',
+			),
+			false,
+		);
+		assert.deepStrictEqual(
+			getFilterNodeKinds(fixture.filterTree),
+			['project', 'folder', 'file', 'project', 'file'],
+		);
+
+		const srcToggle = getFilterToggle(getFilterItem(
+			fixture.filterTree,
+			workspace.srcFolder.id,
+		));
+
+		fixture.filterTree.dispatch(
+			'click',
+			createClickEvent(srcToggle.asEventTarget(), 0, 0),
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			1,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			0,
+		);
+
+		const webviewToggle = getFilterToggle(getFilterItem(
+			fixture.filterTree,
+			workspace.webviewFolder.id,
+		));
+
+		fixture.filterTree.dispatch(
+			'click',
+			createClickEvent(webviewToggle.asEventTarget(), 0, 0),
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			1,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphLayoutFile.id).length,
+			1,
+		);
+		assert.deepStrictEqual(
+			getFilterNodeKinds(fixture.filterTree),
+			['project', 'folder', 'folder', 'file', 'file', 'file', 'project', 'file'],
+		);
+	});
+
+	test('Filter Folder expand 상태는 로컬로 유지되며 Graph openedFolders를 변경하지 않는다', () => {
+		const fixture = createNavigatorFixture();
+		const workspace = createFilterWorkspaceFixture();
+
+		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		const openedFolders = fixture.graphState.getState().openedFolders;
+		const initialFolderItem = getFilterItem(fixture.filterTree, workspace.srcFolder.id);
+
+		assert.strictEqual(findFilterItemChildren(initialFolderItem), undefined);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			0,
+		);
+		const expandButton = getFilterToggle(initialFolderItem);
+		const expandEvent = createClickEvent(expandButton.asEventTarget(), 0, 0);
+
+		fixture.filterTree.dispatch('click', expandEvent);
+		const expandedFolderItem = getFilterItem(
+			fixture.filterTree,
+			workspace.srcFolder.id,
+		);
+
+		assert.ok(findFilterItemChildren(expandedFolderItem));
+		assert.strictEqual(
+			getFilterToggle(expandedFolderItem).getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.strictEqual(fixture.graphState.getState().openedFolders, openedFolders);
+		assert.strictEqual(expandEvent.propagationStopped, true);
+		const nestedFolderItem = getFilterItem(
+			fixture.filterTree,
+			workspace.webviewFolder.id,
+		);
+
+		assert.strictEqual(findFilterItemChildren(nestedFolderItem), undefined);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			0,
+		);
+		const nestedExpandButton = getFilterToggle(nestedFolderItem);
+
+		fixture.filterTree.dispatch(
+			'click',
+			createClickEvent(nestedExpandButton.asEventTarget(), 0, 0),
+		);
+		const expandedNestedFolder = getFilterItem(
+			fixture.filterTree,
+			workspace.webviewFolder.id,
+		);
+
+		assert.ok(findFilterItemChildren(expandedNestedFolder));
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			1,
+		);
+		const nestedCollapseButton = getFilterToggle(expandedNestedFolder);
+
+		fixture.filterTree.dispatch(
+			'click',
+			createClickEvent(nestedCollapseButton.asEventTarget(), 0, 0),
+		);
+		assert.strictEqual(
+			findFilterItemChildren(getFilterItem(
+				fixture.filterTree,
+				workspace.webviewFolder.id,
+			)),
+			undefined,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			0,
+		);
+
+		const collapseButton = getFilterToggle(getFilterItem(
+			fixture.filterTree,
+			workspace.srcFolder.id,
+		));
+		fixture.filterTree.dispatch(
+			'click',
+			createClickEvent(collapseButton.asEventTarget(), 0, 0),
+		);
+		assert.strictEqual(
+			findFilterItemChildren(getFilterItem(
+				fixture.filterTree,
+				workspace.srcFolder.id,
+			)),
+			undefined,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			0,
+		);
+		assert.strictEqual(fixture.graphState.getState().openedFolders, openedFolders);
+	});
+
+	test('File Checkbox는 hidden sparse record를 immutable하게 추가하고 제거한다', () => {
+		const fixture = createNavigatorFixture();
+		const workspace = createFilterWorkspaceFixture();
+
+		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		const initialHiddenNodeIds = fixture.graphState.getState().hiddenNodeIds;
+		const checkbox = getFilterCheckbox(
+			fixture.filterTree,
+			workspace.extensionFile.id,
+		);
+
+		assert.strictEqual(checkbox.checked, true);
+		checkbox.checked = false;
+		fixture.filterTree.dispatch('change', createChangeEvent(checkbox));
+
+		const hiddenState = fixture.graphState.getState();
+
+		assert.notStrictEqual(hiddenState.hiddenNodeIds, initialHiddenNodeIds);
+		assert.deepStrictEqual(initialHiddenNodeIds, {});
+		assert.deepStrictEqual(hiddenState.hiddenNodeIds, {
+			[workspace.extensionFile.id]: true,
+		});
+		const restoredCheckbox = getFilterCheckbox(
+			fixture.filterTree,
+			workspace.extensionFile.id,
+		);
+
+		assert.strictEqual(restoredCheckbox.checked, false);
+		restoredCheckbox.checked = true;
+		fixture.filterTree.dispatch('change', createChangeEvent(restoredCheckbox));
+		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {});
+	});
+
+	test('Folder Checkbox는 direct hidden과 descendant indeterminate를 계산하고 subtree 표시를 정리한다', () => {
+		const fixture = createNavigatorFixture();
+		const workspace = createFilterWorkspaceFixture();
+
+		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		let srcCheckbox = getFilterCheckbox(fixture.filterTree, workspace.srcFolder.id);
+
+		assert.strictEqual(srcCheckbox.checked, true);
+		assert.strictEqual(srcCheckbox.indeterminate, false);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			0,
+		);
+		const initialState = fixture.graphState.getState();
+
+		fixture.graphState.setState({
+			camera: initialState.camera,
+			nodePositions: initialState.nodePositions,
+			hiddenNodeIds: { [workspace.graphLayoutFile.id]: true },
+		});
+		srcCheckbox = getFilterCheckbox(fixture.filterTree, workspace.srcFolder.id);
+		assert.strictEqual(srcCheckbox.checked, false);
+		assert.strictEqual(srcCheckbox.indeterminate, true);
+		assert.strictEqual(srcCheckbox.getAttribute('aria-checked'), 'mixed');
+
+		fixture.graphState.setState({
+			camera: initialState.camera,
+			nodePositions: initialState.nodePositions,
+			hiddenNodeIds: {},
+		});
+		srcCheckbox = getFilterCheckbox(fixture.filterTree, workspace.srcFolder.id);
+		const beforeHide = fixture.graphState.getState().hiddenNodeIds;
+
+		srcCheckbox.checked = false;
+		fixture.filterTree.dispatch('change', createChangeEvent(srcCheckbox));
+		assert.deepStrictEqual(beforeHide, {});
+		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {
+			[workspace.srcFolder.id]: true,
+		});
+		srcCheckbox = getFilterCheckbox(fixture.filterTree, workspace.srcFolder.id);
+		assert.strictEqual(srcCheckbox.checked, false);
+		assert.strictEqual(srcCheckbox.indeterminate, false);
+
+		const hiddenState = fixture.graphState.getState();
+
+		fixture.graphState.setState({
+			camera: hiddenState.camera,
+			nodePositions: hiddenState.nodePositions,
+			hiddenNodeIds: {
+				[workspace.srcFolder.id]: true,
+				[workspace.webviewFolder.id]: true,
+				[workspace.graphViewFile.id]: true,
+				[workspace.graphLayoutFile.id]: true,
+				'file:stale-outside-subtree': true,
+			},
+		});
+		srcCheckbox = getFilterCheckbox(fixture.filterTree, workspace.srcFolder.id);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			0,
+		);
+		srcCheckbox.checked = true;
+		fixture.filterTree.dispatch('change', createChangeEvent(srcCheckbox));
+		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {
+			'file:stale-outside-subtree': true,
+		});
+	});
+
+	test('Workspace Refresh는 최신 Tree와 새 File 기본 표시를 반영하고 stale hidden ID를 정리하지 않는다', () => {
+		const fixture = createNavigatorFixture();
+		const workspace = createFilterWorkspaceFixture();
+		const state = fixture.graphState.getState();
+
+		fixture.graphState.setState({
+			camera: state.camera,
+			nodePositions: state.nodePositions,
+			hiddenNodeIds: {
+				[workspace.extensionFile.id]: true,
+				'file:deleted.ts': true,
+			},
+		});
+		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		const srcToggle = getFilterToggle(getFilterItem(
+			fixture.filterTree,
+			workspace.srcFolder.id,
+		));
+
+		fixture.filterTree.dispatch(
+			'click',
+			createClickEvent(srcToggle.asEventTarget(), 0, 0),
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			1,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			0,
+		);
+		const newFile = {
+			kind: 'file' as const,
+			id: 'file:new.ts',
+			name: 'new.ts',
+		};
+		const refreshedProject: Project = {
+			...workspace.frontendProject,
+			children: [workspace.srcFolder, workspace.extensionFile, newFile],
+		};
+		const refreshedGraph: Graph = {
+			roots: [{ id: 'root:frontend', nodeId: refreshedProject.id }],
+			rootNodes: { [refreshedProject.id]: refreshedProject },
+		};
+
+		fixture.navigator.setWorkspaceGraph(refreshedGraph);
+
+		assert.strictEqual(
+			getFilterToggle(getFilterItem(
+				fixture.filterTree,
+				workspace.srcFolder.id,
+			)).getAttribute('aria-expanded'),
+			'true',
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.webviewFolder.id).length,
+			1,
+		);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, workspace.graphViewFile.id).length,
+			0,
+		);
+		assert.strictEqual(
+			getFilterCheckbox(fixture.filterTree, workspace.extensionFile.id).checked,
+			false,
+		);
+		assert.strictEqual(getFilterCheckbox(fixture.filterTree, newFile.id).checked, true);
+		assert.strictEqual(
+			getFilterItemsById(fixture.filterTree, 'file:deleted.ts').length,
+			0,
+		);
+		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {
+			[workspace.extensionFile.id]: true,
+			'file:deleted.ts': true,
+		});
+	});
+
+	test('Filter Panel 입력은 Camera Pan/Wheel로 전달되지 않고 dispose 후 Tree Listener가 제거된다', () => {
+		const fixture = createNavigatorFixture();
+		const workspace = createFilterWorkspaceFixture();
+
+		fixture.navigator.setWorkspaceGraph(workspace.graph);
+		const checkbox = getFilterCheckbox(
+			fixture.filterTree,
+			workspace.extensionFile.id,
+		);
+		const initialCamera = fixture.camera.getState();
+
+		fixture.viewport.dispatch(
+			'pointerdown',
+			createPointerEvent(checkbox.asEventTarget(), 10, 10),
+		);
+		fixture.viewport.dispatch(
+			'pointermove',
+			createPointerEvent(checkbox.asEventTarget(), 160, 120),
+		);
+		fixture.viewport.dispatch(
+			'pointerup',
+			createPointerEvent(checkbox.asEventTarget(), 160, 120),
+		);
+		fixture.viewport.dispatch(
+			'wheel',
+			createWheelEvent(10, 10, -120, checkbox.asEventTarget()),
+		);
+		assert.deepStrictEqual(fixture.camera.getState(), initialCamera);
+
+		fixture.navigator.dispose();
+		checkbox.checked = false;
+		fixture.filterTree.dispatch('change', createChangeEvent(checkbox));
+		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {});
+	});
+
 	test('Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다', () => {
 		const fixture = createNavigatorFixture(
 			undefined,
@@ -1245,6 +1708,11 @@ function createNavigatorFixture(
 	const actionRail = getChild(featureRow, 1);
 	const rootListButton = getChild(actionRail, 0);
 	const rootListIcon = getChild(rootListButton, 0);
+	const filterButton = getChild(actionRail, 1);
+	const filterIcon = getChild(filterButton, 0);
+	const filterPanel = getChild(featureRow, 2);
+	const filterTitle = getChild(filterPanel, 0);
+	const filterTree = getChild(filterPanel, 1);
 	const zoomOutButton = getChild(controls, 0);
 	const scale = getChild(controls, 1);
 	const zoomInButton = getChild(controls, 2);
@@ -1272,6 +1740,11 @@ function createNavigatorFixture(
 		rootListEmpty,
 		rootListButton,
 		rootListIcon,
+		filterButton,
+		filterIcon,
+		filterPanel,
+		filterTitle,
+		filterTree,
 		coordinate,
 		controls,
 		zoomOutButton,
@@ -1297,6 +1770,177 @@ function getRootIcon(item: FakeElement): FakeElement {
 
 function getRootContent(item: FakeElement): FakeElement {
 	return getChild(getRootButton(item), 1);
+}
+
+function getFilterItemsById(root: FakeElement, nodeId: string): FakeElement[] {
+	return getDescendantsByAttribute(root, 'data-filter-node-id', nodeId);
+}
+
+function getFilterItem(root: FakeElement, nodeId: string): FakeElement {
+	const items = getFilterItemsById(root, nodeId);
+
+	assert.strictEqual(items.length, 1);
+	return items[0] as FakeElement;
+}
+
+function getFilterItemRow(item: FakeElement): FakeElement {
+	return getChild(item, 0);
+}
+
+function findFilterItemChildren(item: FakeElement): FakeElement | undefined {
+	return item.children.find((child) => (
+		child.hasClass('graph-navigator-filter-children')
+	));
+}
+
+function getFilterToggle(item: FakeElement): FakeElement {
+	const toggle = getFilterItemRow(item).children.find((child) => (
+		child.hasAttribute('data-filter-toggle-id')
+	));
+
+	assert.ok(toggle);
+	return toggle;
+}
+
+function getFilterCheckbox(root: FakeElement, nodeId: string): FakeElement {
+	const checkbox = getDescendantsByAttribute(
+		root,
+		'data-filter-checkbox-id',
+		nodeId,
+	);
+
+	assert.strictEqual(checkbox.length, 1);
+	return checkbox[0] as FakeElement;
+}
+
+function getFilterItemName(item: FakeElement): string {
+	const names = getDescendantsByClass(item, 'graph-navigator-filter-name');
+
+	assert.ok(names[0]);
+	return names[0].textContent;
+}
+
+function getFilterNodeKinds(root: FakeElement): string[] {
+	return getDescendantsByAttributeName(root, 'data-filter-node-kind')
+		.map((item) => item.getAttribute('data-filter-node-kind') ?? '');
+}
+
+function getDescendantsByAttribute(
+	root: FakeElement,
+	attributeName: string,
+	attributeValue: string,
+): FakeElement[] {
+	return root.children.flatMap((child) => [
+		...(child.getAttribute(attributeName) === attributeValue ? [child] : []),
+		...getDescendantsByAttribute(child, attributeName, attributeValue),
+	]);
+}
+
+function getDescendantsByAttributeName(
+	root: FakeElement,
+	attributeName: string,
+): FakeElement[] {
+	return root.children.flatMap((child) => [
+		...(child.hasAttribute(attributeName) ? [child] : []),
+		...getDescendantsByAttributeName(child, attributeName),
+	]);
+}
+
+function getDescendantsByClass(root: FakeElement, className: string): FakeElement[] {
+	return root.children.flatMap((child) => [
+		...(child.hasClass(className) ? [child] : []),
+		...getDescendantsByClass(child, className),
+	]);
+}
+
+function createFilterWorkspaceFixture() {
+	const graphViewFile = {
+		kind: 'file' as const,
+		id: 'file:frontend/src/webview/graphView.ts',
+		name: 'graphView.ts',
+	};
+	const graphLayoutFile = {
+		kind: 'file' as const,
+		id: 'file:frontend/src/webview/graphLayout.ts',
+		name: 'graphLayout.ts',
+	};
+	const webviewFolder = {
+		kind: 'folder' as const,
+		id: 'folder:frontend/src/webview',
+		name: 'webview',
+		status: 'loaded' as const,
+		children: [graphViewFile, graphLayoutFile],
+	};
+	const srcFolder = {
+		kind: 'folder' as const,
+		id: 'folder:frontend/src',
+		name: 'src',
+		status: 'loaded' as const,
+		children: [webviewFolder],
+	};
+	const extensionFile = {
+		kind: 'file' as const,
+		id: 'file:frontend/extension.ts',
+		name: 'extension.ts',
+	};
+	const frontendProject: Project = {
+		kind: 'project',
+		id: 'project:frontend',
+		name: 'frontend',
+		status: 'loaded',
+		children: [srcFolder, extensionFile],
+	};
+	const packageFile = {
+		kind: 'file' as const,
+		id: 'file:backend/package.json',
+		name: 'package.json',
+	};
+	const backendProject: Project = {
+		kind: 'project',
+		id: 'project:backend',
+		name: 'backend',
+		status: 'loaded',
+		children: [packageFile],
+	};
+	const graph: Graph = {
+		roots: [
+			{ id: 'root:frontend', nodeId: frontendProject.id },
+			{ id: 'root:backend', nodeId: backendProject.id },
+		],
+		rootNodes: {
+			[frontendProject.id]: frontendProject,
+			[backendProject.id]: backendProject,
+		},
+	};
+
+	return {
+		graph,
+		frontendProject,
+		backendProject,
+		srcFolder,
+		webviewFolder,
+		graphViewFile,
+		graphLayoutFile,
+		extensionFile,
+		packageFile,
+	};
+}
+
+function createChangeEvent(
+	target: FakeElement,
+): Event & { readonly propagationStopped: boolean } {
+	let propagationStopped = false;
+
+	return {
+		target: target.asEventTarget(),
+		preventDefault: () => undefined,
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as unknown as Event & { readonly propagationStopped: boolean };
 }
 
 function createPointerEvent(
@@ -1436,8 +2080,10 @@ class FakeElement {
 		},
 	};
 	className = '';
+	checked = false;
 	hidden = false;
 	id = '';
+	indeterminate = false;
 	textContent = '';
 	title = '';
 	type = '';
