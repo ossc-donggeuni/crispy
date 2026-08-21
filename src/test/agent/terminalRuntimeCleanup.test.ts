@@ -220,6 +220,43 @@ suite('Panel dispose cleanup with fake PTY', () => {
 		assert.strictEqual(adapter.spawnCalls.length, 1);
 	});
 
+	test('PID가 0인 ConPTY를 detach해도 handle을 보존하고 준비된 tree를 종료한다', async () => {
+		const adapter = new FakePtyAdapter(0);
+		const controller = new FakeProcessTreeController();
+		const messages: unknown[] = [];
+		const host = new TerminalHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			emitMessage: (message) => messages.push(message),
+			processTreeController: controller,
+		});
+		const cleanup = createTerminalRuntimeCleanup(host, []);
+		const starting = host.startSession('tab-delayed-panel-dispose', 80, 24);
+		await waitUntil(() => adapter.handles.length === 1);
+		const session = host.getActiveSession('tab-delayed-panel-dispose');
+		assert.ok(session !== undefined);
+		const handle = adapter.handles[0];
+
+		cleanup.detach();
+		const terminating = cleanup.terminate();
+		assert.deepStrictEqual(session.state, { kind: 'disposed' });
+		assert.strictEqual(handle.killCallCount, 0);
+		assert.deepStrictEqual(controller.calls, []);
+
+		handle.setReadyPid(4343);
+		await Promise.all([starting, terminating]);
+
+		assert.deepStrictEqual(controller.calls, ['capture:4343', 'terminate:4343']);
+		assert.strictEqual(handle.killCallCount, 0);
+		assert.strictEqual(host.getActiveSession('tab-delayed-panel-dispose'), undefined);
+		assert.strictEqual(messages.some(
+			(message) => typeof message === 'object'
+				&& message !== null
+				&& 'type' in message
+				&& message.type === 'terminal.started',
+		), false);
+	});
+
 	test('detach 중 완료된 launch 준비가 새 PTY나 routing을 다시 만들지 않는다', async () => {
 		const adapter = new FakePtyAdapter();
 		let finishPreparation!: (
@@ -246,6 +283,16 @@ suite('Panel dispose cleanup with fake PTY', () => {
 		assert.strictEqual(host.getActiveSession('tab-detach-during-prepare'), undefined);
 	});
 });
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+	const deadline = Date.now() + 1000;
+	while (!predicate()) {
+		if (Date.now() >= deadline) {
+			throw new Error('test condition timed out');
+		}
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+}
 
 suite('Terminal cleanup timeout', () => {
 	test('기본 상한 시간이 Extension 종료를 막지 않는 3초다', () => {

@@ -1,4 +1,10 @@
 import * as assert from 'node:assert/strict';
+import type {
+	CleanupResult,
+	ProcessTreeCaptureResult,
+	ProcessTreeController,
+	ProcessTreeSnapshot,
+} from '../../agent/host/terminal/processTreeController';
 import {
 	probeCodexConfigStyle,
 	resolveCodexConfigStyle,
@@ -57,5 +63,46 @@ suite('Codex config compatibility', () => {
 		});
 
 		assert.deepStrictEqual(result, { ok: false, reason: 'request_invalid' });
+	});
+
+	test('version probe timeout은 결과를 반환하기 전에 process tree 정리를 기다린다', async () => {
+		class RecordingController implements ProcessTreeController {
+			readonly calls: string[] = [];
+
+			async capture(rootPid: number): Promise<ProcessTreeCaptureResult> {
+				this.calls.push(`capture:${rootPid}`);
+				return {
+					status: 'captured',
+					snapshot: { rootPid, descendants: [] },
+				};
+			}
+
+			async terminate(
+				snapshot: ProcessTreeSnapshot,
+			): Promise<CleanupResult> {
+				this.calls.push(`terminate:${snapshot.rootPid}`);
+				return { outcome: 'force_terminated' };
+			}
+		}
+		const controller = new RecordingController();
+		const result = await probeCodexConfigStyle({
+			executable: {
+				executable: process.execPath,
+				launcherKind: 'direct',
+			},
+			cwd: process.cwd(),
+			platform: process.platform,
+			environment: process.env,
+			processTreeController: controller,
+			versionProbeTimeoutMs: 0,
+		});
+
+		assert.deepStrictEqual(result, { ok: false, reason: 'timeout' });
+		assert.strictEqual(controller.calls.length, 2);
+		assert.match(controller.calls[0], /^capture:\d+$/u);
+		assert.strictEqual(
+			controller.calls[1],
+			controller.calls[0].replace('capture:', 'terminate:'),
+		);
 	});
 });

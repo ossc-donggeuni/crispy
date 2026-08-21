@@ -86,8 +86,8 @@ suite('Agent launch plan process boundary', () => {
 
 	test('Windows cmd shim은 ComSpec /d /s /v:off /c one-shot으로만 실행한다', () => {
 		const plan = createPlan({
-			executable: 'C:\\Program Files\\100% (한글)! & Codex\\codex.cmd',
-			args: ['exec', 'value="quoted"', 'space value'],
+			executable: 'C:\\Program Files\\%CRISPY_FIXTURE% 100% (한글)! & Codex\\codex.cmd',
+			args: ['exec', 'value="quoted"', 'space value', '%CRISPY_FIXTURE%'],
 			launcherKind: 'cmd-one-shot',
 		});
 		const request = createAgentProcessSpawnRequest(plan, {
@@ -95,6 +95,7 @@ suite('Agent launch plan process boundary', () => {
 			environment: {
 				ComSpec: 'C:\\Windows\\System32\\cmd.exe',
 				PATH: 'C:\\safe',
+				CRISPY_FIXTURE: 'EXPANDED',
 			},
 		});
 

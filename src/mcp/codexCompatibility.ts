@@ -2,6 +2,8 @@ import {
 	spawn,
 	type ChildProcess,
 } from 'node:child_process';
+import type { ProcessTreeController } from '../agent/host/terminal/processTreeController';
+import { createHostProcessTreeController } from '../agent/host/terminal/processTreeControllerFactory';
 import type { ResolvedAgentExecutable } from './agentExecutableResolver';
 import {
 	createAgentProcessSpawnOptions,
@@ -17,12 +19,17 @@ export const CODEX_KEYED_FILTER_CONSERVATIVE_BASELINE = Object.freeze({
 });
 export const CODEX_VERSION_PROBE_TIMEOUT_MS = 3_000;
 const CODEX_VERSION_OUTPUT_LIMIT = 1_024;
+const CODEX_VERSION_FALLBACK_KILL_WAIT_MS = 250;
 
 export interface ResolveCodexConfigStyleOptions {
 	readonly executable: ResolvedAgentExecutable;
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
 	readonly environment: NodeJS.ProcessEnv;
+	/** Test seam; production creates the same bounded Host controller lazily on failure. */
+	readonly processTreeController?: ProcessTreeController;
+	readonly versionProbeTimeoutMs?: number;
+	readonly versionOutputLimit?: number;
 }
 
 export type CodexVersionProbeFailureReason =
@@ -78,7 +85,7 @@ export async function probeCodexConfigStyle(
 	} catch {
 		return failure('request_invalid');
 	}
-	const versionResult = await readVersionOutput(request);
+	const versionResult = await readVersionOutput(request, options);
 	if (!versionResult.ok) {
 		return versionResult;
 	}
@@ -111,6 +118,7 @@ export function selectCodexConfigStyleFromVersionOutput(
 
 async function readVersionOutput(
 	request: ReturnType<typeof createAgentProcessSpawnRequest>,
+	options: ResolveCodexConfigStyleOptions,
 ): Promise<
 	| Readonly<{ readonly ok: true; readonly output: string }>
 	| Readonly<{ readonly ok: false; readonly reason: CodexVersionProbeFailureReason }>
@@ -131,6 +139,7 @@ async function readVersionOutput(
 
 	return new Promise((resolve) => {
 		let settled = false;
+		let terminationStarted = false;
 		let output = '';
 		let timer: NodeJS.Timeout | undefined;
 		const settle = (
@@ -151,32 +160,43 @@ async function readVersionOutput(
 			resolve(value);
 		};
 		const append = (chunk: unknown): void => {
-			if (settled) {
+			if (settled || terminationStarted) {
 				return;
 			}
 			output += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-			if (output.length > CODEX_VERSION_OUTPUT_LIMIT) {
-				try {
-					child.kill();
-				} catch {
-					/** A failed compatibility probe only disables MCP for this launch. */
-				}
-				settle(failure('output_limit'));
+			if (output.length > (options.versionOutputLimit
+				?? CODEX_VERSION_OUTPUT_LIMIT)) {
+				void terminateAndSettle('output_limit');
 			}
 		};
-		timer = setTimeout(() => {
-			try {
-				child.kill();
-			} catch {
-				/** A failed compatibility probe only disables MCP for this launch. */
+		const terminateAndSettle = async (
+			reason: 'timeout' | 'output_limit',
+		): Promise<void> => {
+			if (settled || terminationStarted) {
+				return;
 			}
-			settle(failure('timeout'));
-		}, CODEX_VERSION_PROBE_TIMEOUT_MS);
+			terminationStarted = true;
+			if (timer !== undefined) {
+				clearTimeout(timer);
+			}
+			await terminateVersionProcessTree(child, options);
+			settle(failure(reason));
+		};
+		timer = setTimeout(() => {
+			void terminateAndSettle('timeout');
+		}, options.versionProbeTimeoutMs ?? CODEX_VERSION_PROBE_TIMEOUT_MS);
 
 		child.stdout?.on('data', append);
 		child.stderr?.on('data', append);
-		child.once('error', () => settle(failure('spawn_error')));
+		child.once('error', () => {
+			if (!terminationStarted) {
+				settle(failure('spawn_error'));
+			}
+		});
 		child.once('exit', (code, signal) => {
+			if (terminationStarted) {
+				return;
+			}
 			if (signal !== null) {
 				settle(failure('signal'));
 				return;
@@ -186,6 +206,61 @@ async function readVersionOutput(
 				: failure('exit_nonzero'));
 		});
 	});
+}
+
+async function terminateVersionProcessTree(
+	child: ChildProcess,
+	options: ResolveCodexConfigStyleOptions,
+): Promise<void> {
+	const pid = child.pid;
+	if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 1) {
+		await killVersionProcessRoot(child);
+		return;
+	}
+
+	try {
+		const controller = options.processTreeController
+			?? createHostProcessTreeController({
+				readPlatform: () => options.platform,
+				timeoutMs: 1_000,
+			});
+		const capture = await controller.capture(pid as number);
+		if (capture.status === 'captured') {
+			const result = await controller.terminate(capture.snapshot);
+			if (
+				result.outcome === 'gracefully_terminated'
+				|| result.outcome === 'already_terminated'
+				|| result.outcome === 'force_terminated'
+			) {
+				return;
+			}
+		}
+	} catch {
+		/** Root kill below remains the bounded last resort for probe cleanup. */
+	}
+
+	await killVersionProcessRoot(child);
+}
+
+async function killVersionProcessRoot(child: ChildProcess): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) {
+		return;
+	}
+	const exited = new Promise<void>((resolve) => {
+		child.once('exit', () => resolve());
+	});
+	try {
+		child.kill();
+	} catch {
+		return;
+	}
+	await Promise.race([
+		exited,
+		new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, CODEX_VERSION_FALLBACK_KILL_WAIT_MS);
+			timer.unref?.();
+		}),
+	]);
 }
 
 function failure(

@@ -4,8 +4,15 @@ import {
 	TerminalSessionStateError,
 	type TerminalSessionStateErrorCode,
 } from '../../agent/host/terminal/terminalSession';
-import type { PtyExitEvent } from '../../agent/host/terminal/ptyAdapter';
-import { FakePtyAdapter } from './support/fakePtyAdapter';
+import type {
+	PtyAdapter,
+	PtyExitEvent,
+	PtyListenerDisposable,
+} from '../../agent/host/terminal/ptyAdapter';
+import {
+	FakePtyAdapter,
+	FakePtyProcessHandle,
+} from './support/fakePtyAdapter';
 
 const launchPolicy = {
 	executable: '/host/selected/shell',
@@ -136,6 +143,57 @@ suite('TerminalSession state model', () => {
 		assert.deepStrictEqual(session.state, { kind: 'running', pid: 8401 });
 		assert.strictEqual(runningCalls, 1);
 		assert.deepStrictEqual(outputs, ['PowerShell prompt']);
+	});
+
+	test('listener 등록 도중 실패하면 이미 생성한 PTY와 구독을 되돌린다', () => {
+		class ExitListenerFailingHandle extends FakePtyProcessHandle {
+			override onExit(): PtyListenerDisposable {
+				throw new Error('fake exit listener registration failed');
+			}
+		}
+		const handle = new ExitListenerFailingHandle(8501);
+		const adapter: PtyAdapter = { spawn: () => handle };
+		const session = new TerminalSession({
+			tabId: 'tab-listener-failure',
+			sessionId: 'session-listener-failure',
+			ptyAdapter: adapter,
+			onOutput: () => undefined,
+			onExit: () => undefined,
+			onRunning: () => undefined,
+		});
+		session.markStarting();
+
+		assert.throws(
+			() => session.start(launchPolicy, 80, 24),
+			/fake exit listener registration failed/,
+		);
+		assert.strictEqual(handle.killCallCount, 1);
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
+		assert.deepStrictEqual(session.state, { kind: 'starting' });
+	});
+
+	test('PID 준비가 실패하면 partial PTY를 종료하고 starting transaction을 되돌린다', async () => {
+		const adapter = new FakePtyAdapter(0);
+		const session = new TerminalSession({
+			tabId: 'tab-pid-failure',
+			sessionId: 'session-pid-failure',
+			ptyAdapter: adapter,
+			onOutput: () => undefined,
+			onExit: () => undefined,
+			onRunning: () => undefined,
+		});
+		session.markStarting();
+		const starting = session.start(launchPolicy, 80, 24);
+		const handle = adapter.handles[0];
+
+		handle.rejectReadyPid();
+		await assert.rejects(starting, /fake PTY PID was not ready/);
+
+		assert.strictEqual(handle.killCallCount, 1);
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
+		assert.deepStrictEqual(session.state, { kind: 'starting' });
 	});
 
 	test('같은 tick의 PTY output을 순서대로 단순 concat해 다음 microtask에 전달한다', async () => {

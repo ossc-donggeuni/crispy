@@ -77,6 +77,13 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 		}
 	}
 
+	rejectReadyPid(error: Error = new Error('fake PTY PID was not ready')): void {
+		for (const waiter of [...this.readyWaiters]) {
+			this.readyWaiters.delete(waiter);
+			waiter.reject(error);
+		}
+	}
+
 	write(data: string): void {
 		this.writes.push(data);
 	}
@@ -118,6 +125,7 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 export class FakePtyAdapter implements PtyAdapter {
 	readonly spawnCalls: PtySpawnOptions[] = [];
 	readonly handles: FakePtyProcessHandle[] = [];
+	spawnFailuresRemaining = 0;
 
 	constructor(private readonly fakePid = 4242) {}
 
@@ -129,6 +137,10 @@ export class FakePtyAdapter implements PtyAdapter {
 				: [...options.args],
 			env: { ...options.env },
 		});
+		if (this.spawnFailuresRemaining > 0) {
+			this.spawnFailuresRemaining -= 1;
+			throw new Error('fake PTY spawn failed');
+		}
 		const handle = new FakePtyProcessHandle(this.fakePid);
 		this.handles.push(handle);
 		return handle;

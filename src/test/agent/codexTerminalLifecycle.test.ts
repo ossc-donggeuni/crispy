@@ -251,6 +251,9 @@ suite('Codex direct PTY and MCP transaction', () => {
 		assert.strictEqual(spawn.executable, '/resolved/codex');
 		assert.strictEqual(spawn.cwd, '/trusted/workspace');
 		assert.strictEqual(spawn.args.includes('--config'), true);
+		assert.strictEqual(spawn.args.includes(
+			'features.shell_snapshot=false',
+		), true);
 		assert.strictEqual(spawn.env.ELECTRON_RUN_AS_NODE, undefined);
 		assert.strictEqual(spawn.env.crispy_mcp_token, undefined);
 		assert.strictEqual(typeof spawn.env.CRISPY_MCP_TOKEN, 'string');
@@ -282,6 +285,46 @@ suite('Codex direct PTY and MCP transaction', () => {
 			(name) => name.toUpperCase() === 'ELECTRON_RUN_AS_NODE',
 		), false);
 		assert.strictEqual(supervisor.stopCalls.length >= 1, true);
+	});
+
+	test('authenticated PTY spawn 실패는 credential 폐기 후 bare Codex를 최대 한 번 재시도한다', async () => {
+		const fixture = createFixture();
+		fixture.adapter.spawnFailuresRemaining = 1;
+
+		await beginCodex(fixture.host, 'tab-authenticated-spawn-fallback');
+
+		const sessionId = fixture.supervisor.prepareCalls[0];
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 2);
+		assert.strictEqual(fixture.adapter.spawnCalls[0].args.includes('--config'), true);
+		assert.strictEqual(
+			typeof fixture.adapter.spawnCalls[0].env.CRISPY_MCP_TOKEN,
+			'string',
+		);
+		assert.deepStrictEqual(fixture.adapter.spawnCalls[1].args, []);
+		assert.strictEqual(Object.keys(fixture.adapter.spawnCalls[1].env).some(
+			(name) => name.toUpperCase() === 'CRISPY_MCP_TOKEN',
+		), false);
+		assert.strictEqual(fixture.adapter.handles.length, 1);
+		assert.strictEqual(fixture.supervisor.stopCalls.includes(sessionId), true);
+		assert.strictEqual(fixture.supervisor.getSessionRuntime(sessionId), undefined);
+		assert.strictEqual(fixture.messages.filter(
+			(message) => message.type === 'terminal.started',
+		).length, 1);
+	});
+
+	test('authenticated와 bare PTY spawn이 모두 실패해도 세 번째 spawn을 시도하지 않는다', async () => {
+		const fixture = createFixture();
+		fixture.adapter.spawnFailuresRemaining = 2;
+
+		await beginCodex(fixture.host, 'tab-spawn-fallback-bounded');
+
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 2);
+		assert.strictEqual(fixture.adapter.handles.length, 0);
+		assert.strictEqual(fixture.supervisor.stopCalls.length >= 1, true);
+		assert.strictEqual(fixture.messages.filter(
+			(message) => message.type === 'terminal.error'
+				&& message.code === 'start_failed',
+		).length, 1);
 	});
 
 	test('delayed PID가 running이 된 뒤에만 provider started를 표시한다', async () => {
@@ -338,6 +381,59 @@ suite('Codex direct PTY and MCP transaction', () => {
 });
 
 suite('Codex stale attempt and cleanup', () => {
+	test('두 Codex 탭의 session, token, config와 cleanup을 end-to-end 격리한다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-isolated-a');
+		await beginCodex(fixture.host, 'tab-isolated-b');
+		const sessionA = fixture.host.getActiveSession('tab-isolated-a');
+		const sessionB = fixture.host.getActiveSession('tab-isolated-b');
+		assert.ok(sessionA !== undefined);
+		assert.ok(sessionB !== undefined);
+		const spawnA = fixture.adapter.spawnCalls[0];
+		const spawnB = fixture.adapter.spawnCalls[1];
+
+		assert.notStrictEqual(sessionA.sessionId, sessionB.sessionId);
+		assert.notStrictEqual(
+			fixture.supervisor.getSessionRuntime(sessionA.sessionId)?.generation,
+			fixture.supervisor.getSessionRuntime(sessionB.sessionId)?.generation,
+		);
+		assert.notStrictEqual(
+			spawnA.env.CRISPY_MCP_TOKEN,
+			spawnB.env.CRISPY_MCP_TOKEN,
+		);
+		assert.notDeepStrictEqual(spawnA.args, spawnB.args);
+
+		fixture.host.closeTab('tab-isolated-a');
+		await Promise.resolve();
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
+		assert.strictEqual(fixture.adapter.handles[1].killCallCount, 0);
+		assert.strictEqual(
+			fixture.supervisor.stopCalls.includes(sessionA.sessionId),
+			true,
+		);
+		assert.strictEqual(
+			fixture.supervisor.stopCalls.includes(sessionB.sessionId),
+			false,
+		);
+		assert.ok(fixture.supervisor.getSessionRuntime(sessionB.sessionId) !== undefined);
+
+		fixture.host.routeInput({
+			type: 'terminal.input',
+			tabId: sessionB.tabId,
+			sessionId: sessionB.sessionId,
+			data: 'tab-b-input',
+		});
+		fixture.adapter.handles[1].emitData('tab-b-output');
+		await Promise.resolve();
+		assert.deepStrictEqual(fixture.adapter.handles[1].writes, ['tab-b-input']);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'terminal.output'
+				&& message.tabId === sessionB.tabId
+				&& message.sessionId === sessionB.sessionId
+				&& message.data === 'tab-b-output',
+		), true);
+	});
+
 	test('adapter wait 중 provider 변경은 old Codex spawn과 message를 만들지 않는다', async () => {
 		const supervisor = new FakeCodexSupervisor();
 		supervisor.deferPrepare = true;

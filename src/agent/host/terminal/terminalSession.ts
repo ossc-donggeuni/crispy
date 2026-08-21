@@ -303,19 +303,56 @@ export class TerminalSession {
 			this.dataListener = process.onData((data) => this.enqueueOutput(data));
 			this.exitListener = process.onExit((event) => this.handleExit(event));
 		} catch (error: unknown) {
-			this.activeProcess = undefined;
-			this.disposePtyListeners();
+			this.rollbackStart(process);
 			throw error;
 		}
 
 		if (isValidPid(process.pid)) {
-			this.completeStart(process, process.pid);
+			try {
+				this.completeStart(process, process.pid);
+			} catch (error: unknown) {
+				this.rollbackStart(process);
+				throw error;
+			}
 			return Promise.resolve();
 		}
 
-		return process.waitForReadyPid().then((pid) => {
-			this.completeStart(process, pid);
-		});
+		let readyPid: Promise<number>;
+		try {
+			readyPid = process.waitForReadyPid();
+		} catch (error: unknown) {
+			this.rollbackStart(process);
+			throw error;
+		}
+		return readyPid.then(
+			(pid) => {
+				try {
+					this.completeStart(process, pid);
+				} catch (error: unknown) {
+					this.rollbackStart(process);
+					throw error;
+				}
+			},
+			(error: unknown) => {
+				this.rollbackStart(process);
+				throw error;
+			},
+		);
+	}
+
+	/** spawn 뒤 start transaction이 실패하면 생성한 native PTY ownership을 되돌린다. */
+	private rollbackStart(process: PtyProcessHandle): void {
+		if (this.activeProcess !== process) {
+			return;
+		}
+		this.activeProcess = undefined;
+		this.pendingOutput = [];
+		try {
+			process.kill();
+		} catch {
+			/** 종료 요청 실패도 listener와 session ownership 해제를 막지 않는다. */
+		}
+		this.disposePtyListeners();
 	}
 
 	/** 준비 완료가 현재 process와 starting 상태에 속할 때만 running으로 승격한다. */
@@ -422,19 +459,17 @@ export class TerminalSession {
 
 	/**
 	 * Panel detach 경로에서 native 종료 호출 없이 입력·resize와 listener 소유권을 해제한다.
-	 * 반환 PID는 이후 비동기 process-tree adapter가 종료할 runtime 소유 root에만 사용한다.
+	 * process handle ownership은 이후 비동기 경계가 지연 PID까지 기다려 종료하는 데 사용한다.
 	 *
-	 * @returns 분리 직전 session이 소유한 유효한 root PID 또는 process가 없으면 undefined
+	 * @returns 비동기 종료 경계로 ownership을 넘길 process handle 또는 없으면 undefined
 	 */
-	detachProcess(): number | undefined {
+	detachProcess(): PtyProcessHandle | undefined {
 		const process = this.activeProcess;
 		this.activeProcess = undefined;
 		this.pendingOutput = [];
 		this.disposePtyListeners();
 
-		return process !== undefined && isValidPid(process.pid)
-			? process.pid
-			: undefined;
+		return process;
 	}
 
 	/** PTY data/exit listener 구독을 멱등하게 해제한다. */

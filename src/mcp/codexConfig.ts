@@ -8,6 +8,8 @@ export const CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
 export const CODEX_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
 export const CODEX_MCP_SERVER_NAME_RANDOM_BYTES = 16;
 export const CODEX_CONFIG_OVERRIDE_ARGUMENT = '--config';
+export const CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT =
+	'features.shell_snapshot=false';
 
 export type CodexShellEnvironmentPolicyStyle =
 	| 'keyed-filters'
@@ -51,6 +53,7 @@ export function createCodexMcpConfig(
 		`${serverKey}.bearer_token_env_var=${serializeCodexTomlString(CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE)}`,
 		`${serverKey}.required=false`,
 		`${serverKey}.enabled_tools=[${serializeCodexTomlString(CRISPY_PING_TOOL_NAME)}]`,
+		CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 		createShellEnvironmentPolicyAssignment(shellEnvironmentPolicyStyle),
 	];
 	const args = Object.freeze(assignments.flatMap((assignment) => [

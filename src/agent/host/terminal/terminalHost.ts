@@ -31,7 +31,11 @@ import {
 	resolveDetectedAgentAutoRunInput,
 	type AgentAutoRunInputResolver,
 } from '../agent/agentProviderLaunch';
-import type { PtyAdapter, PtyExitEvent } from './ptyAdapter';
+import type {
+	PtyAdapter,
+	PtyExitEvent,
+	PtyProcessHandle,
+} from './ptyAdapter';
 import {
 	prepareTerminalLaunch,
 	type PrepareTerminalLaunch,
@@ -142,6 +146,10 @@ const START_ERROR_MESSAGES = Object.freeze({
 /** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
 const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
 
+function isValidProcessTreeRootPid(pid: number): boolean {
+	return Number.isSafeInteger(pid) && pid > 1;
+}
+
 /**
  * 탭별 현재 세션 저장소와 Host 소유 PTY 시작·입력·크기 변경·출력·종료 경로를 관리한다.
  * 재시작 및 process lifecycle 정리 조정은 후속 단계의 책임이다.
@@ -209,8 +217,8 @@ export class TerminalHost {
 	/** Panel runtime에서 분리된 뒤 새 요청과 in-flight spawn을 거부하는 gate다. */
 	private lifecycleActive = true;
 
-	/** detach에서 native 호출 없이 확보한 runtime 소유 root PID 목록이다. */
-	private detachedRootPids: readonly number[] = [];
+	/** detach에서 native 호출 없이 넘겨받아 비동기 종료까지 보존하는 PTY ownership이다. */
+	private detachedProcesses: readonly PtyProcessHandle[] = [];
 
 	/** 반복 terminate 호출이 공유하는 최초 비동기 cleanup Promise다. */
 	private terminationPromise: Promise<void> | undefined;
@@ -818,11 +826,50 @@ export class TerminalHost {
 		try {
 			await this.spawnProviderPty(session, request, cols, rows);
 		} catch {
+			const authenticatedSpawnFailed = generation !== undefined;
 			this.codexPtySpawnStarted.delete(session.sessionId);
 			await this.cleanupMcpSession(session.sessionId);
 			if (!this.isCurrentProviderSession(session, 'codex')) {
 				return;
 			}
+
+			if (authenticatedSpawnFailed) {
+				let bareRequest: AgentProcessSpawnRequest | undefined;
+				try {
+					const barePlan = await this.buildCodexBarePlan({
+						executable: preparation.executable,
+						cwd: preparation.cwd,
+					});
+					if (barePlan.providerId !== 'codex' || barePlan.expectsMcp) {
+						throw new Error('Invalid bare Codex launch plan.');
+					}
+					bareRequest = await this.createAgentSpawnRequest(barePlan, {
+						platform: preparation.platform,
+						environment: preparation.environment,
+					});
+				} catch {
+					/** Authenticated native spawn failure receives at most one bare retry. */
+				}
+
+				if (!this.isCurrentProviderSession(session, 'codex')) {
+					return;
+				}
+				if (bareRequest !== undefined) {
+					this.codexPtySpawnStarted.add(session.sessionId);
+					try {
+						await this.spawnProviderPty(
+							session,
+							bareRequest,
+							cols,
+							rows,
+						);
+						return;
+					} catch {
+						this.codexPtySpawnStarted.delete(session.sessionId);
+					}
+				}
+			}
+
 			this.failSession(
 				session,
 				'start_failed',
@@ -1041,7 +1088,7 @@ export class TerminalHost {
 	/**
 	 * Panel과 Webview routing을 native 종료 작업에서 동기적으로 분리한다.
 	 * 이 경로에서는 PTY kill이나 외부 명령을 호출하지 않으며, 최초 호출에서 확보한
-	 * runtime 소유 root PID만 `terminate()`가 이후 비동기 snapshot에 사용한다.
+	 * runtime 소유 process handle만 `terminate()`가 이후 PID 준비와 snapshot에 사용한다.
 	 */
 	detach(): void {
 		if (!this.lifecycleActive) {
@@ -1051,7 +1098,7 @@ export class TerminalHost {
 		this.lifecycleActive = false;
 		this.stopMessageDelivery();
 		this.beginMcpTermination();
-		const rootPids: number[] = [];
+		const processes: PtyProcessHandle[] = [];
 		for (const session of [...this.sessionsById.values()]) {
 			if (session.state.kind === 'running') {
 				try {
@@ -1062,9 +1109,9 @@ export class TerminalHost {
 			}
 
 			try {
-				const pid = session.detachProcess();
-				if (pid !== undefined) {
-					rootPids.push(pid);
+				const process = session.detachProcess();
+				if (process !== undefined) {
+					processes.push(process);
 				}
 			} catch {
 				/** listener 해제 실패도 다른 session 분리를 막지 않는다. */
@@ -1077,7 +1124,7 @@ export class TerminalHost {
 			}
 		}
 
-		this.detachedRootPids = Object.freeze([...new Set(rootPids)]);
+		this.detachedProcesses = Object.freeze([...new Set(processes)]);
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.providerAutoRunInputBySession.clear();
@@ -1090,7 +1137,7 @@ export class TerminalHost {
 	}
 
 	/**
-	 * detach에서 확보한 root마다 종료 전 snapshot을 얻고 비동기 OS adapter로 정리한다.
+	 * detach에서 확보한 process마다 PID 준비를 기다린 뒤 snapshot과 OS adapter로 정리한다.
 	 * 여러 session 중 하나가 실패해도 나머지를 계속하며 반복 호출은 같은 Promise를 반환한다.
 	 *
 	 * @returns 모든 root 정리가 완료되면 이행되는 최초 cleanup Promise
@@ -1099,19 +1146,56 @@ export class TerminalHost {
 		this.detach();
 		this.terminationPromise ??= Promise.all([
 			this.mcpTerminationPromise ?? Promise.resolve(),
-			...this.detachedRootPids.map(async (rootPid) => {
-				try {
-					const capture = await this.processTreeController.capture(rootPid);
-					if (capture.status !== 'captured') {
-						return;
-					}
-					await this.processTreeController.terminate(capture.snapshot);
-				} catch {
-					/** 원본 process/command 오류를 호출자나 로그로 전파하지 않는다. */
-				}
-			}),
+			...this.detachedProcesses.map((process) =>
+				this.terminateDetachedProcess(process)
+			),
 		]).then(() => undefined, () => undefined);
 		return this.terminationPromise;
+	}
+
+	/** PID가 지연되는 ConPTY도 handle을 보존해 준비 후 process tree를 종료한다. */
+	private async terminateDetachedProcess(
+		process: PtyProcessHandle,
+	): Promise<void> {
+		let rootPid = process.pid;
+		if (!isValidProcessTreeRootPid(rootPid)) {
+			try {
+				rootPid = await process.waitForReadyPid();
+			} catch {
+				this.killDetachedProcess(process);
+				return;
+			}
+		}
+		if (!isValidProcessTreeRootPid(rootPid)) {
+			this.killDetachedProcess(process);
+			return;
+		}
+
+		try {
+			const capture = await this.processTreeController.capture(rootPid);
+			if (capture.status !== 'captured') {
+				this.killDetachedProcess(process);
+				return;
+			}
+			const result = await this.processTreeController.terminate(capture.snapshot);
+			if (
+				result.outcome !== 'gracefully_terminated'
+				&& result.outcome !== 'already_terminated'
+				&& result.outcome !== 'force_terminated'
+			) {
+				this.killDetachedProcess(process);
+			}
+		} catch {
+			this.killDetachedProcess(process);
+		}
+	}
+
+	private killDetachedProcess(process: PtyProcessHandle): void {
+		try {
+			process.kill();
+		} catch {
+			/** 비동기 fallback kill 실패도 다른 process와 MCP 정리를 막지 않는다. */
+		}
 	}
 
 	/**

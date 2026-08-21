@@ -53,6 +53,9 @@ suite('Codex AgentLaunchPlan builder', () => {
 		assert.match(plan.mcpServerName ?? '', /^crispy_canvas_[a-f0-9]{32}$/);
 		assert.strictEqual(plan.args[0], 'exec');
 		assert.strictEqual(plan.args.at(-1), 'ping');
+		assert.strictEqual(plan.args.includes(
+			'features.shell_snapshot=false',
+		), true);
 		assert.strictEqual(plan.args.some((argument) => argument.includes(token)), false);
 		assert.strictEqual(JSON.stringify(plan).includes(token), false);
 		assert.strictEqual(Object.keys(plan).includes('envOverlay'), false);

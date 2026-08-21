@@ -82,7 +82,7 @@ suite('Codex config compatibility smoke script', () => {
 			assert.strictEqual(path.basename(fixture.executable), 'codex.cmd');
 			assert.strictEqual(
 				path.basename(path.dirname(fixture.executable)),
-				'Crispy 한글 공백 100% ! & (Codex)',
+				'Crispy 한글 공백 %CRISPY_FIXTURE% 100% ! & (Codex)',
 			);
 			assert.match(scriptSource, /codex-cli 999\.0\.0/u);
 			assert.match(scriptSource, /CRISPY_WINDOWS_ARGV:/u);

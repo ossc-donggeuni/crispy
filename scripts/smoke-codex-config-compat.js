@@ -84,7 +84,7 @@ async function resolveInstalledCodex(environment) {
 function createWindowsLauncherFixture(temporaryRoot) {
 	const fixtureDirectory = path.join(
 		temporaryRoot,
-		'Crispy 한글 공백 100% ! & (Codex)',
+		'Crispy 한글 공백 %CRISPY_FIXTURE% 100% ! & (Codex)',
 	);
 	fs.mkdirSync(fixtureDirectory, { recursive: true });
 	const probeScript = path.join(temporaryRoot, 'windows-launcher-fixture.js');
@@ -199,11 +199,15 @@ function runPty(request) {
 
 async function runWindowsCmdOneShotSmoke(temporaryRoot, environment) {
 	const executable = createWindowsLauncherFixture(temporaryRoot);
+	const fixtureEnvironment = {
+		...environment,
+		CRISPY_FIXTURE: 'EXPANDED',
+	};
 	const compatibility = await probeCodexConfigStyle({
 		executable,
 		cwd: temporaryRoot,
 		platform: 'win32',
-		environment,
+		environment: fixtureEnvironment,
 	});
 	if (!compatibility.ok) {
 		throw smokeError(
@@ -216,6 +220,8 @@ async function runWindowsCmdOneShotSmoke(temporaryRoot, environment) {
 		'space value',
 		'한글',
 		'100% ! & (Codex)',
+		'%CRISPY_FIXTURE%',
+		'%PATH%',
 	]);
 	const plan = buildCodexBareLaunchPlan({
 		executable,
@@ -224,7 +230,7 @@ async function runWindowsCmdOneShotSmoke(temporaryRoot, environment) {
 	});
 	const request = createAgentProcessSpawnRequest(plan, {
 		platform: 'win32',
-		environment,
+		environment: fixtureEnvironment,
 	});
 	const output = await runPty(request);
 	const expectedMarker = windowsArgvMarker + crypto.createHash('sha256')
