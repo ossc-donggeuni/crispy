@@ -18,6 +18,7 @@ import {
 	saveWebviewState,
 	serializeWebviewState,
 	type PersistedWebviewState,
+	type WebviewSessionState,
 	type WebviewStateApi,
 } from '../webview/webviewState';
 
@@ -267,109 +268,88 @@ suite('Webview State', () => {
 		);
 	});
 
-	test('저장 시 Panel과 Graph를 함께 독립적인 snapshot으로 setState에 전달한다', () => {
-		let savedState: PersistedWebviewState | undefined;
+	test('저장 시 Panel과 Camera만 독립적인 Session snapshot으로 setState에 전달한다', () => {
+		let savedState: WebviewSessionState | undefined;
 		const api: WebviewStateApi = {
 			getState: () => undefined,
 			setState: (state) => {
 				savedState = state;
 			},
 		};
-		const state = createWebviewState('right', 120, -60, 3);
+		const state: WebviewSessionState = {
+			panel: {
+				preferredDock: 'right',
+				sideSize: 440,
+				verticalSize: 260,
+				collapsed: false,
+			},
+			camera: { x: 120, y: -60, scale: 3 },
+		};
 
 		saveWebviewState(api, state);
 
 		assert.deepStrictEqual(savedState, state);
 		assert.notStrictEqual(savedState, state);
 		assert.notStrictEqual(savedState?.panel, state.panel);
-		assert.notStrictEqual(savedState?.graph, state.graph);
-		assert.notStrictEqual(savedState?.graph.camera, state.graph.camera);
-		assert.notStrictEqual(
-			savedState?.graph.nodePositions,
-			state.graph.nodePositions,
-		);
-		assert.notStrictEqual(
-			savedState?.graph.fileGroupPages,
-			state.graph.fileGroupPages,
-		);
-		assert.notStrictEqual(
-			savedState?.graph.openedFolders,
-			state.graph.openedFolders,
-		);
-		assert.notStrictEqual(
-			savedState?.graph.detachedRootNodeIds,
-			state.graph.detachedRootNodeIds,
+		assert.notStrictEqual(savedState?.camera, state.camera);
+		assert.deepStrictEqual(Object.keys(savedState ?? {}), ['panel', 'camera']);
+		assert.strictEqual(Object.hasOwn(savedState ?? {}, 'nodePositions'), false);
+		assert.strictEqual(Object.hasOwn(savedState ?? {}, 'fileGroupPages'), false);
+		assert.strictEqual(Object.hasOwn(savedState ?? {}, 'openedFolders'), false);
+		assert.strictEqual(
+			Object.hasOwn(savedState ?? {}, 'detachedRootNodeIds'),
+			false,
 		);
 	});
 
-	test('Graph snapshot을 저장하고 새 Store로 Round Trip한다', () => {
-		let savedState: PersistedWebviewState | undefined;
+	test('Session Camera는 setState에서 복원하고 Workspace 필드는 Host 초기 상태를 유지한다', () => {
+		let savedState: WebviewSessionState | undefined;
 		const api: WebviewStateApi = {
 			getState: () => savedState,
 			setState: (state) => {
 				savedState = state;
 			},
 		};
-		const initialState = restoreWebviewState(api);
-		const graphState = createGraphState(initialState.graph);
-		const unsubscribe = graphState.subscribe((graph) => {
-			saveWebviewState(api, {
-				panel: initialState.panel,
-				graph,
-			});
-		});
-
-		graphState.setState({
-			camera: { x: 513, y: 324, scale: 1.2 },
-			nodePositions: {
-				'folder:app': { x: 720, y: 180 },
-				'folder:app/src:files': { x: 1040, y: 360 },
-			},
-			detachedRootNodeIds: { 'folder:app': true },
-		});
-		graphState.showMoreFiles('folder:app/src:files');
-		graphState.showMoreFiles('folder:app/src:files');
-		graphState.toggleFolder('folder:app');
-
-		assert.deepStrictEqual(api.getState(), {
-			panel: DEFAULT_PANEL_LAYOUT_STATE,
-			graph: {
-				camera: { x: 513, y: 324, scale: 1.2 },
-				nodePositions: {
-					'folder:app': { x: 720, y: 180 },
-					'folder:app/src:files': { x: 1040, y: 360 },
-				},
-				fileGroupPages: { 'folder:app/src:files': 3 },
-				openedFolders: { 'folder:app': true },
-				detachedRootNodeIds: { 'folder:app': true },
-			},
-		});
-		unsubscribe();
-
-		const restoredState = restoreWebviewState(api);
-		const reinitializedGraphState = createGraphState(restoredState.graph);
-
-		assert.notStrictEqual(reinitializedGraphState, graphState);
-		assert.deepStrictEqual(reinitializedGraphState.getState().camera, {
-			x: 513,
-			y: 324,
-			scale: 1.2,
-		});
-		assert.deepStrictEqual(reinitializedGraphState.getState().nodePositions, {
+		const hostInitialState = createWebviewState('left', 10, 20, 1);
+		hostInitialState.graph.nodePositions = {
 			'folder:app': { x: 720, y: 180 },
-			'folder:app/src:files': { x: 1040, y: 360 },
-		});
-		assert.strictEqual(
-			reinitializedGraphState.getFileGroupPage('folder:app/src:files'),
-			3,
+		};
+		hostInitialState.graph.fileGroupPages = { 'folder:app:files': 3 };
+		hostInitialState.graph.openedFolders = { 'folder:app': true };
+		hostInitialState.graph.detachedRootNodeIds = { 'folder:app': true };
+		const sessionState: WebviewSessionState = {
+			panel: {
+				...hostInitialState.panel,
+				preferredDock: 'bottom',
+			},
+			camera: { x: 513, y: 324, scale: 1.2 },
+		};
+
+		saveWebviewState(api, sessionState);
+
+		assert.deepStrictEqual(api.getState(), sessionState);
+		const restoredState = restoreWebviewState(
+			api,
+			serializeWebviewState(hostInitialState),
 		);
-		assert.strictEqual(
-			reinitializedGraphState.isFolderOpened('folder:app'),
-			true,
+
+		assert.deepStrictEqual(restoredState.panel, sessionState.panel);
+		assert.deepStrictEqual(restoredState.graph.camera, sessionState.camera);
+		assert.deepStrictEqual(
+			restoredState.graph.nodePositions,
+			hostInitialState.graph.nodePositions,
 		);
 		assert.deepStrictEqual(
-			reinitializedGraphState.getState().detachedRootNodeIds,
-			{ 'folder:app': true },
+			restoredState.graph.fileGroupPages,
+			hostInitialState.graph.fileGroupPages,
+		);
+		assert.deepStrictEqual(
+			restoredState.graph.openedFolders,
+			hostInitialState.graph.openedFolders,
+		);
+		assert.deepStrictEqual(
+			restoredState.graph.detachedRootNodeIds,
+			hostInitialState.graph.detachedRootNodeIds,
 		);
 	});
 
@@ -450,15 +430,8 @@ suite('Webview State Wiring', () => {
 				},
 			},
 		};
-		const nextGraphState = {
-			camera: { x: 120, y: -60, scale: 2 },
-			nodePositions: { 'folder:src': { x: 800, y: 240 } },
-			fileGroupPages: {},
-			openedFolders: { 'folder:src': true as const },
-			detachedRootNodeIds: { 'folder:src': true as const },
-		};
 		const agentTabId = 'agent-tab-test';
-		const savedStates: PersistedWebviewState[] = [];
+		const savedStates: WebviewSessionState[] = [];
 		const postedMessages: WebviewToExtensionMessage[] = [];
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
@@ -798,23 +771,135 @@ suite('Webview State Wiring', () => {
 
 			assert.ok(postedMessages.some(({ type }) => type === 'webview.ready'));
 			assert.ok(graphSubscriber);
-			currentGraphState = nextGraphState;
-			graphSubscriber(nextGraphState);
+			const cameraState: GraphStateSnapshot = {
+				...currentGraphState,
+				camera: { x: 120, y: -60, scale: 2 },
+			};
+			currentGraphState = cameraState;
+			graphSubscriber(cameraState);
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.deepStrictEqual(savedStates[0], {
 				panel: initialState.panel,
-				graph: nextGraphState,
+				camera: cameraState.camera,
 			});
+			assert.deepStrictEqual(Object.keys(savedStates[0] ?? {}), [
+				'panel',
+				'camera',
+			]);
+			assert.deepStrictEqual(
+				getWorkspaceStateChangedMessages(postedMessages),
+				[],
+			);
 
-			const graphMessages = getStateChangedMessages(postedMessages);
-			assert.strictEqual(graphMessages.length, 1);
-			const graphMessage = graphMessages[0];
-			assert.ok(graphMessage);
-			assert.deepStrictEqual(graphMessage, {
+			const sessionMessages = getStateChangedMessages(postedMessages);
+			assert.strictEqual(sessionMessages.length, 1);
+			assert.deepStrictEqual(sessionMessages[0], {
 				type: 'webview.stateChanged',
 				state: savedStates[0],
 			});
+
+			const nodePositionState: GraphStateSnapshot = {
+				...cameraState,
+				nodePositions: { 'folder:src': { x: 800, y: 240 } },
+			};
+			currentGraphState = nodePositionState;
+			graphSubscriber(nodePositionState);
+
+			assert.strictEqual(savedStates.length, 1);
+			assert.deepStrictEqual(getWorkspaceStateChangedMessages(postedMessages), [{
+				type: 'workspace.stateChanged',
+				state: {
+					version: 1,
+					nodePositions: { 'folder:src': { x: 800, y: 240 } },
+					fileGroupPages: {},
+					openedFolders: {},
+					detachedRootNodeIds: {},
+				},
+			}]);
+
+			const fileGroupPageState: GraphStateSnapshot = {
+				...nodePositionState,
+				fileGroupPages: { 'folder:src:files': 2 },
+			};
+			currentGraphState = fileGroupPageState;
+			graphSubscriber(fileGroupPageState);
+
+			assert.strictEqual(savedStates.length, 1);
+			assert.strictEqual(
+				getWorkspaceStateChangedMessages(postedMessages).length,
+				2,
+			);
+			assert.deepStrictEqual(
+				getWorkspaceStateChangedMessages(postedMessages)[1]?.state.fileGroupPages,
+				{ 'folder:src:files': 2 },
+			);
+
+			const openedFolderState: GraphStateSnapshot = {
+				...fileGroupPageState,
+				openedFolders: { 'folder:src': true },
+			};
+			currentGraphState = openedFolderState;
+			graphSubscriber(openedFolderState);
+
+			assert.strictEqual(savedStates.length, 1);
+			assert.strictEqual(
+				getWorkspaceStateChangedMessages(postedMessages).length,
+				3,
+			);
+			assert.deepStrictEqual(
+				getWorkspaceStateChangedMessages(postedMessages)[2]?.state.openedFolders,
+				{ 'folder:src': true },
+			);
+
+			const detachedRootState: GraphStateSnapshot = {
+				...openedFolderState,
+				detachedRootNodeIds: { 'folder:src': true },
+			};
+			currentGraphState = detachedRootState;
+			graphSubscriber(detachedRootState);
+
+			assert.strictEqual(savedStates.length, 1);
+			assert.strictEqual(
+				getWorkspaceStateChangedMessages(postedMessages).length,
+				4,
+			);
+			assert.deepStrictEqual(
+				getWorkspaceStateChangedMessages(postedMessages)[3]?.state,
+				{
+					version: 1,
+					nodePositions: { 'folder:src': { x: 800, y: 240 } },
+					fileGroupPages: { 'folder:src:files': 2 },
+					openedFolders: { 'folder:src': true },
+					detachedRootNodeIds: { 'folder:src': true },
+				},
+			);
+			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
+
+			const reattachedRootState: GraphStateSnapshot = {
+				...detachedRootState,
+				nodePositions: {},
+				detachedRootNodeIds: {},
+			};
+			currentGraphState = reattachedRootState;
+			graphSubscriber(reattachedRootState);
+
+			assert.strictEqual(savedStates.length, 1);
+			assert.strictEqual(
+				getWorkspaceStateChangedMessages(postedMessages).length,
+				5,
+			);
+			assert.deepStrictEqual(
+				getWorkspaceStateChangedMessages(postedMessages)[4]?.state,
+				{
+					version: 1,
+					nodePositions: {},
+					fileGroupPages: { 'folder:src:files': 2 },
+					openedFolders: { 'folder:src': true },
+					detachedRootNodeIds: {},
+				},
+			);
+			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
 			assert.ok(panelState);
 			assert.ok(persistPanelState);
@@ -829,7 +914,7 @@ suite('Webview State Wiring', () => {
 					preferredDock: 'bottom',
 					verticalSize: 320,
 				},
-				graph: nextGraphState,
+				camera: cameraState.camera,
 			});
 
 			const panelMessages = getStateChangedMessages(postedMessages);
@@ -862,7 +947,7 @@ suite('Webview State Wiring', () => {
 					sideSize: 500,
 					verticalSize: 320,
 				},
-				graph: nextGraphState,
+				camera: cameraState.camera,
 			});
 
 			const resizeMessages = getStateChangedMessages(postedMessages);
@@ -893,7 +978,7 @@ suite('Webview State Wiring', () => {
 					verticalSize: 320,
 					collapsed: true,
 				},
-				graph: nextGraphState,
+				camera: cameraState.camera,
 			});
 
 			const collapseMessages = getStateChangedMessages(postedMessages);
@@ -902,6 +987,10 @@ suite('Webview State Wiring', () => {
 				type: 'webview.stateChanged',
 				state: savedStates[3],
 			});
+			assert.strictEqual(
+				getWorkspaceStateChangedMessages(postedMessages).length,
+				5,
+			);
 
 			const fitCountBeforeExpand = terminalFitCount;
 			collapseFit();
@@ -965,6 +1054,17 @@ function getStateChangedMessages(
 			WebviewToExtensionMessage,
 			{ type: 'webview.stateChanged' }
 		> => message.type === 'webview.stateChanged',
+	);
+}
+
+function getWorkspaceStateChangedMessages(
+	messages: WebviewToExtensionMessage[],
+): Array<Extract<WebviewToExtensionMessage, { type: 'workspace.stateChanged' }>> {
+	return messages.filter(
+		(message): message is Extract<
+			WebviewToExtensionMessage,
+			{ type: 'workspace.stateChanged' }
+		> => message.type === 'workspace.stateChanged',
 	);
 }
 

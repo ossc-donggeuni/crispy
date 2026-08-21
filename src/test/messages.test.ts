@@ -2,11 +2,30 @@ import * as assert from 'assert';
 import {
 	parseWorkspaceToWebviewMessage,
 	type ExtensionToWebviewMessage,
+	type WebviewToExtensionMessage,
+	type WorkspaceStateChangedMessage,
 	type WorkspaceToWebviewMessage,
 } from '../messages';
 import type { Graph, Project } from '../webview/graph/graphModel';
 
 suite('Extension to Webview Workspace messages', () => {
+	test('Workspace Persistent State 전체 snapshot을 Webview에서 Host로 전달한다', () => {
+		const workspaceMessage = {
+			type: 'workspace.stateChanged',
+			state: {
+				version: 1,
+				nodePositions: { 'folder:file:///workspace/app/src': { x: 10, y: 20 } },
+				fileGroupPages: { 'folder:file:///workspace/app/src:files': 2 },
+				openedFolders: { 'folder:file:///workspace/app/src': true },
+				detachedRootNodeIds: { 'file:file:///workspace/app/index.ts': true },
+			},
+		} satisfies WorkspaceStateChangedMessage;
+		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
+
+		assert.strictEqual(webviewMessage.type, 'workspace.stateChanged');
+		assert.deepStrictEqual(webviewMessage.state, workspaceMessage.state);
+	});
+
 	test('Workspace 도메인 메시지가 기존 Graph 모델로 최상위 Host union에 연결된다', () => {
 		const graph = createWorkspaceGraph();
 		const workspaceMessage = {

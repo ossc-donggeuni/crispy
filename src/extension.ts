@@ -20,10 +20,12 @@ import type {
 	WorkspaceToWebviewMessage,
 } from './messages';
 import {
-	parseWebviewState,
+	createDefaultWebviewSessionState,
+	parseWebviewSessionState,
 	serializeWebviewState,
 	type PersistedWebviewState,
 } from './webview/webviewState';
+import { parseWorkspacePersistentState } from './workspace/workspaceMetadata';
 import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
 import {
@@ -285,10 +287,46 @@ export function handleWebviewMessage(
 		const candidate = message as Record<string, unknown>;
 
 		if (candidate.type === 'webview.stateChanged') {
-			const state = parseWebviewState(candidate.state);
+			const state = parseWebviewSessionState(candidate.state);
 
 			if (state) {
-				lastWebviewState = state;
+				lastWebviewState = {
+					panel: state.panel,
+					graph: {
+						camera: state.camera,
+						nodePositions: lastWebviewState?.graph.nodePositions ?? {},
+						fileGroupPages: lastWebviewState?.graph.fileGroupPages ?? {},
+						openedFolders: lastWebviewState?.graph.openedFolders ?? {},
+						detachedRootNodeIds:
+							lastWebviewState?.graph.detachedRootNodeIds ?? {},
+					},
+				};
+			}
+
+			return undefined;
+		}
+
+		if (candidate.type === 'workspace.stateChanged') {
+			const state = parseWorkspacePersistentState(candidate.state);
+
+			if (state) {
+				const sessionState = lastWebviewState
+					? {
+						panel: lastWebviewState.panel,
+						camera: lastWebviewState.graph.camera,
+					}
+					: createDefaultWebviewSessionState();
+
+				lastWebviewState = {
+					panel: sessionState.panel,
+					graph: {
+						camera: sessionState.camera,
+						nodePositions: state.nodePositions,
+						fileGroupPages: state.fileGroupPages,
+						openedFolders: state.openedFolders,
+						detachedRootNodeIds: state.detachedRootNodeIds,
+					},
+				};
 			}
 
 			return undefined;

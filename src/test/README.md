@@ -9,7 +9,8 @@
 - 열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다
 - Panel을 dispose한 뒤 Canvas command가 새 Panel을 생성한다
 - deactivate가 열린 Panel과 참조를 정리해 다음 생성에 영향을 주지 않는다
-- Panel dispose 후 전체 Webview state를 복원하고 deactivate 시 초기화한다
+- Panel dispose 후 Session 및 Workspace 메모리 상태를 복원하고 deactivate 시 초기화한다
+- Session 변경과 Workspace 변경이 서로의 필드를 덮어쓰지 않는다
 - 잘못된 `webview.stateChanged` snapshot은 마지막 유효 상태를 덮어쓰지 않는다
 - `handleWebviewMessage`가 `webview.ready`에 `extension.ready`로 응답한다
 
@@ -21,8 +22,8 @@
 - 이전 저장 상태에 부가 Graph 필드가 없어도 빈 상태로 호환 복원한다
 - 잘못된 저장 상태와 HTML 상태는 안전하게 기본값으로 처리한다
 - 잘못된 `getState()` 대신 유효한 HTML 초기 상태를 사용한다
-- 저장 시 Panel과 Graph를 함께 독립적인 snapshot으로 `setState()`에 전달한다
-- Graph snapshot을 저장하고 새 Store로 Round Trip한다
+- 저장 시 Panel과 Camera만 독립적인 Session snapshot으로 `setState()`에 전달한다
+- Workspace 상태 변경만 `workspace.stateChanged` 전체 snapshot으로 전달한다
 - serialize 후 restore해도 File Group page와 열린 Folder 상태를 유지한다
 - Graph, Panel, Agent와 Terminal wiring을 전체 Webview lifecycle에 연결한다
 
