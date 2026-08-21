@@ -135,6 +135,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			{
 				enableScripts: true,
 				localResourceRoots: [webviewRoot],
+				retainContextWhenHidden: true,
 			},
 		);
 		const readProviderCliPath = (providerId: ProviderId): string | undefined =>
