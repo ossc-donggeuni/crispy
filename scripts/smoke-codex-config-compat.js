@@ -25,9 +25,40 @@ const {
 const smokeTimeoutMs = 15_000;
 const maximumOutputLength = 1024 * 1024;
 const windowsArgvMarker = 'CRISPY_WINDOWS_ARGV:';
+const windowsTransientCleanupErrorCodes = new Set([
+	'EBUSY',
+	'ENOTEMPTY',
+	'EPERM',
+]);
 
 function smokeError(reason) {
 	return new Error(`[codex-config-compat-smoke] ${reason}`);
+}
+
+function shouldDeferTemporaryCleanup(error, platform) {
+	return platform === 'win32'
+		&& error !== null
+		&& typeof error === 'object'
+		&& 'code' in error
+		&& windowsTransientCleanupErrorCodes.has(error.code);
+}
+
+function removeTemporaryRoot(temporaryRoot, platform = process.platform) {
+	try {
+		fs.rmSync(temporaryRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 3,
+			retryDelay: 100,
+		});
+	} catch (error) {
+		if (!shouldDeferTemporaryCleanup(error, platform)) {
+			throw error;
+		}
+		console.warn(
+			`[codex-config-compat-smoke] Temporary cleanup deferred (${error.code}).`,
+		);
+	}
 }
 
 async function resolveInstalledCodex(environment) {
@@ -262,7 +293,7 @@ async function main() {
 			);
 		}
 	} finally {
-		fs.rmSync(temporaryRoot, { recursive: true, force: true });
+		removeTemporaryRoot(temporaryRoot);
 	}
 }
 
@@ -279,6 +310,7 @@ if (require.main === module) {
 module.exports = Object.freeze({
 	createWindowsBatchFixtureSource,
 	createWindowsLauncherFixture,
+	shouldDeferTemporaryCleanup,
 	runPty,
 	runWindowsCmdOneShotSmoke,
 });

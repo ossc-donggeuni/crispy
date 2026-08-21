@@ -12,11 +12,13 @@ interface CodexConfigCompatSmokeModule {
 		readonly executable: string;
 		readonly launcherKind: 'cmd-one-shot';
 	}>;
+	shouldDeferTemporaryCleanup(error: unknown, platform: NodeJS.Platform): boolean;
 }
 
 const {
 	createWindowsBatchFixtureSource,
 	createWindowsLauncherFixture,
+	shouldDeferTemporaryCleanup,
 } = require('../../../scripts/smoke-codex-config-compat') as CodexConfigCompatSmokeModule;
 
 suite('Codex config compatibility smoke script', () => {
@@ -28,6 +30,28 @@ suite('Codex config compatibility smoke script', () => {
 
 		assert.match(source, /\(\) => process\.exit\(0\)/u);
 		assert.match(source, /process\.exit\(1\)/u);
+	});
+
+	test('Windows ConPTY가 남긴 일시적 파일 잠금은 smoke 결과를 실패시키지 않는다', () => {
+		for (const code of ['EBUSY', 'ENOTEMPTY', 'EPERM']) {
+			const error = Object.assign(new Error('locked'), { code });
+			assert.strictEqual(
+				shouldDeferTemporaryCleanup(error, 'win32'),
+				true,
+			);
+			assert.strictEqual(
+				shouldDeferTemporaryCleanup(error, 'linux'),
+				false,
+			);
+		}
+
+		assert.strictEqual(
+			shouldDeferTemporaryCleanup(
+				Object.assign(new Error('access denied'), { code: 'EACCES' }),
+				'win32',
+			),
+			false,
+		);
 	});
 
 	test('전용 cmd fixture는 npm shim의 self-path lookup에 의존하지 않는다', () => {
