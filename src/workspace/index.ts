@@ -20,6 +20,11 @@ export {
 	type WorkspaceFilterRuleKind,
 	type WorkspaceFolderFilterRule,
 } from './workspaceFilter';
+export {
+	loadOrCreateWorkspaceFilter,
+	loadOrCreateWorkspaceFilters,
+	type WorkspaceRootFilter,
+} from './workspaceFilterPersistence';
 export type { WorkspacePersistentState } from './workspaceMetadata';
 export {
 	mergeWorkspacePersistentStates,
