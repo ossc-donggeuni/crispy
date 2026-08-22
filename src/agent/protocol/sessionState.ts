@@ -23,6 +23,10 @@ export interface TerminalSessionStateSnapshot {
 	readonly providerId: ProviderId;
 	readonly state: TerminalSessionState;
 	readonly disposed: boolean;
+	/** MCP 명시적 재시작 state validation에 필요한 Host 소유 표시 상태다. */
+	readonly mcpStatus?: 'none' | 'connected' | 'failed';
+	readonly mcpFailureRetryable?: boolean;
+	readonly mcpRestartInProgress?: boolean;
 }
 
 /**

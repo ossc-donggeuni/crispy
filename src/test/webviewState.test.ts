@@ -606,6 +606,7 @@ suite('Webview State Wiring', () => {
 			return {
 				model,
 				getSnapshot: () => model.getSnapshot(),
+				handleHostMessage: () => undefined,
 				dispose(): void {
 					agentPanelUiDisposed = true;
 				},

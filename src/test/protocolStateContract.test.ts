@@ -53,6 +53,18 @@ suite('Host session lifecycle completion contract', () => {
 			}
 		});
 
+		test('running Codex의 retryable MCP failure에서 mcp.restart를 허용한다', () => {
+			const message = mcpRestartMessage();
+			assertStateSuccess(
+				validateWebviewToHostMessageState(message, createSnapshot('running', {
+					providerId: 'codex',
+					mcpStatus: 'failed',
+					mcpFailureRetryable: true,
+				})),
+				message,
+			);
+		});
+
 		test('알려진 tab의 terminal.visible을 허용하고 session snapshot을 변경하지 않는다', () => {
 			const session = Object.freeze(createSession('running'));
 			const snapshot: TerminalStateValidationSnapshot = Object.freeze({
@@ -95,6 +107,28 @@ suite('Host session lifecycle completion contract', () => {
 					'duplicate_restart',
 				);
 			}
+		});
+
+		test('mcp.restart는 non-retryable, non-failed, non-Codex와 중복 요청을 거부한다', () => {
+			for (const overrides of [
+				{ providerId: 'claude' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: true },
+				{ providerId: 'codex' as const, mcpStatus: 'connected' as const, mcpFailureRetryable: true },
+				{ providerId: 'codex' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: false },
+			]) {
+				assertStateFailure(validateWebviewToHostMessageState(
+					mcpRestartMessage(),
+					createSnapshot('running', overrides),
+				), 'mcp_restart_unavailable');
+			}
+			assertStateFailure(validateWebviewToHostMessageState(
+				mcpRestartMessage(),
+				createSnapshot('running', {
+					providerId: 'codex',
+					mcpStatus: 'failed',
+					mcpFailureRetryable: true,
+					mcpRestartInProgress: true,
+				}),
+			), 'duplicate_restart');
 		});
 
 		test('tabId와 sessionId의 양방향 소유 관계 불일치를 거부한다', () => {
@@ -148,6 +182,7 @@ suite('Host session lifecycle completion contract', () => {
 			for (const message of [
 				readyMessage(),
 				restartMessage(),
+				mcpRestartMessage(),
 				inputMessage(),
 				resizeMessage(),
 			]) {
@@ -215,6 +250,14 @@ function readyMessage(): WebviewToHostWireMessage {
 function restartMessage(): WebviewToHostWireMessage {
 	return parseMessage({
 		type: 'terminal.restart',
+		tabId: TAB_ID,
+		sessionId: SESSION_ID,
+	});
+}
+
+function mcpRestartMessage(): WebviewToHostWireMessage {
+	return parseMessage({
+		type: 'mcp.restart',
 		tabId: TAB_ID,
 		sessionId: SESSION_ID,
 	});

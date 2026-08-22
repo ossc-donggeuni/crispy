@@ -16,11 +16,13 @@ export const AGENT_CREATE_TAB_TITLE = 'New agent tab';
 /** 재시작 버튼의 접근성 이름이며 Agent 선택 화면으로 돌아가는 동작임을 밝힌다. */
 export const AGENT_RESTART_TITLE = 'Restart and choose an agent';
 
+export const MCP_RESTART_LABEL = 'MCP와 Agent 다시 시작';
+
 /**
  * 상단 bar가 상위 계층으로 전달하는 사용자 동작이다.
  *
  * 상단 bar는 탭 자체를 다루는 동작만 담당한다.
-	 * 활성 탭의 provider 선택은 xterm 중앙 선택기가 별도로 담당한다.
+ * 활성 탭의 provider 선택은 xterm 중앙 선택기가 별도로 담당한다.
  */
 export interface AgentTopBarCallbacks {
 	/** `+` 버튼으로 provider 미선택 상태의 새 탭을 요청한 경우다. */
@@ -28,6 +30,9 @@ export interface AgentTopBarCallbacks {
 
 	/** 재시작 버튼으로 현재 CLI 종료와 provider 재선택을 요청한 경우다. */
 	onRestartActiveTab(): void;
+
+	/** retryable MCP failure에서 current Codex와 MCP의 명시적 재시작을 요청한다. */
+	onRestartMcpActiveTab(): void;
 }
 
 /** 상단 bar를 상태 변화에 맞춰 갱신하는 표시 경계다. */
@@ -73,8 +78,23 @@ export function initializeAgentTopBar(
 	restartButton.setAttribute('aria-label', AGENT_RESTART_TITLE);
 	restartButton.addEventListener('click', () => callbacks.onRestartActiveTab());
 
+	const mcpStatus = dependencies.createElement('div');
+	mcpStatus.className = 'agent-mcp-status';
+	mcpStatus.hidden = true;
+
+	const mcpStatusText = dependencies.createElement('span');
+	mcpStatusText.className = 'agent-mcp-status-text';
+
+	const mcpRestartButton = dependencies.createElement('button');
+	mcpRestartButton.type = 'button';
+	mcpRestartButton.className = 'agent-mcp-restart';
+	mcpRestartButton.textContent = MCP_RESTART_LABEL;
+	mcpRestartButton.setAttribute('aria-label', MCP_RESTART_LABEL);
+	mcpRestartButton.addEventListener('click', () => callbacks.onRestartMcpActiveTab());
+	mcpStatus.append(mcpStatusText, mcpRestartButton);
+
 	actions.append(createTabButton, restartButton);
-	container.replaceChildren(actions);
+	container.replaceChildren(mcpStatus, actions);
 
 	return {
 		render(snapshot): void {
@@ -84,6 +104,26 @@ export function initializeAgentTopBar(
 
 			/** 재시작은 이미 provider가 정해진 탭에서만 의미가 있다. */
 			restartButton.disabled = activeTab?.providerId === undefined;
+
+			const visibleStatus = activeTab?.mcpStatus;
+			if (visibleStatus === undefined || visibleStatus.kind !== 'failed') {
+				mcpStatus.hidden = true;
+				mcpStatus.removeAttribute('role');
+				mcpStatus.removeAttribute('aria-label');
+				mcpStatus.removeAttribute('data-kind');
+				mcpStatusText.textContent = '';
+				mcpRestartButton.hidden = true;
+				mcpRestartButton.disabled = false;
+				return;
+			}
+
+			mcpStatus.hidden = false;
+			mcpStatus.dataset.kind = 'failed';
+			mcpStatus.setAttribute('role', 'alert');
+			mcpStatus.setAttribute('aria-label', visibleStatus.message);
+			mcpStatusText.textContent = visibleStatus.message;
+			mcpRestartButton.hidden = !visibleStatus.retryable;
+			mcpRestartButton.disabled = activeTab?.mcpRestartPending === true;
 		},
 
 		dispose(): void {

@@ -1,5 +1,6 @@
 import { TERMINAL_ERROR_CODES } from './errors';
 import { PROVIDER_IDS } from './providers';
+import { MCP_FAILURE_REASONS } from '../../mcp/failureReason';
 import {
 	ID_MAX_LENGTH,
 	ID_PATTERN,
@@ -91,6 +92,15 @@ const providerIdSchema = stringAllowlistSchema(
 	PROVIDER_IDS,
 	'provider_not_allowed',
 );
+/** MCP 실패 reason은 공유 domain allowlist에서만 가져온다. */
+const mcpFailureReasonSchema = stringAllowlistSchema(
+	MCP_FAILURE_REASONS,
+	'invalid_field',
+);
+const mcpVisibleStatusSchema = stringAllowlistSchema(
+	['connected', 'failed'] as const,
+	'invalid_field',
+);
 
 /** Terminal 열 수가 protocol 범위 안의 정수인지 검증한다. */
 const colsSchema = integerRangeSchema(TERMINAL_COLS_MIN, TERMINAL_COLS_MAX);
@@ -158,6 +168,11 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		tabId: idSchema,
 		sessionId: idSchema,
 	},
+	/** 실행 계약과 retry 판단은 Host가 소유하고 Webview는 현재 소유 관계만 보낸다. */
+	'mcp.restart': {
+		tabId: idSchema,
+		sessionId: idSchema,
+	},
 	'terminal.visible': {
 		tabId: idSchema,
 		visible: booleanSchema,
@@ -222,6 +237,17 @@ export const HOST_TO_WEBVIEW_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		tabId: idSchema,
 		sessionId: idSchema,
 		message: stringSchema,
+	},
+	'mcp.statusChanged': {
+		tabId: idSchema,
+		sessionId: idSchema,
+		status: mcpVisibleStatusSchema,
+		reason: optionalFieldSchema(mcpFailureReasonSchema),
+		retryable: optionalFieldSchema(booleanSchema),
+	},
+	'mcp.statusCleared': {
+		tabId: idSchema,
+		sessionId: idSchema,
 	},
 });
 

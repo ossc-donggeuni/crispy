@@ -69,6 +69,7 @@ export interface TerminalMessageHost {
 		rows: number,
 	): Promise<unknown>;
 	restartSession(tabId: string, sessionId: string): Promise<unknown>;
+	restartMcpSession(tabId: string, sessionId: string): Promise<unknown>;
 	createTab(tabId: string): void;
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
@@ -358,6 +359,12 @@ function handleTerminalMessage(
 			break;
 		case 'terminal.restart':
 			void terminalHost.restartSession(
+				message.tabId,
+				message.sessionId,
+			).catch(() => undefined);
+			break;
+		case 'mcp.restart':
+			void terminalHost.restartMcpSession(
 				message.tabId,
 				message.sessionId,
 			).catch(() => undefined);

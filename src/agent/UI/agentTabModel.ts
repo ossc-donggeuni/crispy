@@ -1,4 +1,5 @@
-import { type ProviderId } from '../protocol';
+import { type ProviderId, type SessionId } from '../protocol';
+import type { McpFailureReason } from '../../mcp/failureReason';
 import {
 	UNSELECTED_TAB_LABEL,
 	formatAgentTabLabel,
@@ -9,6 +10,19 @@ import {
  * Phase 2에서 Host 세션과 연결할 때 protocol의 `TabId`와 대응시킨다.
  */
 export type AgentTabId = string;
+
+/** 탭 UI가 보관하는 credential-free MCP 표시 상태다. */
+export type VisibleMcpStatus =
+	| { readonly kind: 'none' }
+	| { readonly kind: 'connected' }
+	| {
+		readonly kind: 'failed';
+		readonly reason: McpFailureReason;
+		readonly message: string;
+		readonly retryable: boolean;
+	};
+
+const NO_VISIBLE_MCP_STATUS: VisibleMcpStatus = Object.freeze({ kind: 'none' });
 
 /** 탭 하나의 표시 상태이며 외부에서 변경할 수 없는 snapshot이다. */
 export interface AgentTabSnapshot {
@@ -23,6 +37,15 @@ export interface AgentTabSnapshot {
 
 	/** 탭 strip에 표시할 라벨이다. */
 	readonly label: string;
+
+	/** Host가 알린 현재 Terminal session이며 MCP status ownership 검증에만 사용한다. */
+	readonly sessionId?: SessionId;
+
+	/** token, route, generation을 포함하지 않는 현재 탭 전용 MCP 표시 상태다. */
+	readonly mcpStatus: VisibleMcpStatus;
+
+	/** 확인 또는 Host 요청이 진행 중인 같은 탭의 MCP restart 연타 방어다. */
+	readonly mcpRestartPending: boolean;
 }
 
 /** 탭 목록과 활성 탭을 함께 담는 UI 상태 snapshot이다. */
@@ -57,6 +80,29 @@ export interface AgentTabModel {
 	/** 탭을 유지한 채 provider 배정을 지워 다시 선택할 수 있는 상태로 되돌린다. */
 	clearProvider(tabId: AgentTabId): void;
 
+	/** Host가 시작한 fresh Terminal session을 탭에 연결하고 이전 MCP 표시를 지운다. */
+	setSession(tabId: AgentTabId, sessionId: SessionId): void;
+
+	/** 정확한 current session의 표시 상태만 갱신한다. */
+	setMcpStatus(
+		tabId: AgentTabId,
+		sessionId: SessionId,
+		status: VisibleMcpStatus,
+	): void;
+
+	/** 정확한 current session의 indicator와 restart pending을 제거한다. */
+	clearMcpStatus(tabId: AgentTabId, sessionId: SessionId): void;
+
+	/** 정확한 current session의 MCP restart pending guard를 갱신한다. */
+	setMcpRestartPending(
+		tabId: AgentTabId,
+		sessionId: SessionId,
+		pending: boolean,
+	): void;
+
+	/** 정상 종료된 current session의 ownership과 표시 상태를 함께 지운다. */
+	clearSession(tabId: AgentTabId, sessionId: SessionId): void;
+
 	/** 탭을 닫고 필요하면 이웃 탭으로 활성 탭을 옮긴다. */
 	closeTab(tabId: AgentTabId): void;
 }
@@ -71,6 +117,9 @@ interface MutableAgentTab {
 	readonly id: AgentTabId;
 	providerId?: ProviderId;
 	sequence?: number;
+	sessionId?: SessionId;
+	mcpStatus: VisibleMcpStatus;
+	mcpRestartPending: boolean;
 }
 
 /**
@@ -81,7 +130,13 @@ interface MutableAgentTab {
  */
 function toTabSnapshot(tab: MutableAgentTab): AgentTabSnapshot {
 	if (tab.providerId === undefined || tab.sequence === undefined) {
-		return Object.freeze({ id: tab.id, label: UNSELECTED_TAB_LABEL });
+		return Object.freeze({
+			id: tab.id,
+			label: UNSELECTED_TAB_LABEL,
+			mcpStatus: tab.mcpStatus,
+			mcpRestartPending: tab.mcpRestartPending,
+			...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
+		});
 	}
 
 	return Object.freeze({
@@ -89,6 +144,9 @@ function toTabSnapshot(tab: MutableAgentTab): AgentTabSnapshot {
 		providerId: tab.providerId,
 		sequence: tab.sequence,
 		label: formatAgentTabLabel(tab.providerId, tab.sequence),
+		mcpStatus: tab.mcpStatus,
+		mcpRestartPending: tab.mcpRestartPending,
+		...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
 	});
 }
 
@@ -155,7 +213,11 @@ export function createAgentTabModel(
 		},
 
 		createTab(): AgentTabId {
-			const tab: MutableAgentTab = { id: createTabId() };
+			const tab: MutableAgentTab = {
+				id: createTabId(),
+				mcpStatus: NO_VISIBLE_MCP_STATUS,
+				mcpRestartPending: false,
+			};
 			tabs.push(tab);
 			activeTabId = tab.id;
 			notify();
@@ -181,6 +243,9 @@ export function createAgentTabModel(
 			sequenceCounters.set(providerId, nextSequence);
 			tab.providerId = providerId;
 			tab.sequence = nextSequence;
+			delete tab.sessionId;
+			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+			tab.mcpRestartPending = false;
 			notify();
 		},
 
@@ -192,6 +257,68 @@ export function createAgentTabModel(
 
 			delete tab.providerId;
 			delete tab.sequence;
+			delete tab.sessionId;
+			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+			tab.mcpRestartPending = false;
+			notify();
+		},
+
+		setSession(tabId, sessionId): void {
+			const tab = findTab(tabId);
+			if (tab === undefined || tab.sessionId === sessionId) {
+				return;
+			}
+			tab.sessionId = sessionId;
+			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+			tab.mcpRestartPending = false;
+			notify();
+		},
+
+		setMcpStatus(tabId, sessionId, status): void {
+			const tab = findTab(tabId);
+			if (tab === undefined || tab.sessionId !== sessionId) {
+				return;
+			}
+			tab.mcpStatus = Object.freeze({ ...status }) as VisibleMcpStatus;
+			if (status.kind !== 'failed' || !status.retryable) {
+				tab.mcpRestartPending = false;
+			}
+			notify();
+		},
+
+		clearMcpStatus(tabId, sessionId): void {
+			const tab = findTab(tabId);
+			if (tab === undefined || tab.sessionId !== sessionId) {
+				return;
+			}
+			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+			tab.mcpRestartPending = false;
+			notify();
+		},
+
+		setMcpRestartPending(tabId, sessionId, pending): void {
+			const tab = findTab(tabId);
+			if (
+				tab === undefined
+				|| tab.sessionId !== sessionId
+				|| tab.mcpStatus.kind !== 'failed'
+				|| !tab.mcpStatus.retryable
+				|| tab.mcpRestartPending === pending
+			) {
+				return;
+			}
+			tab.mcpRestartPending = pending;
+			notify();
+		},
+
+		clearSession(tabId, sessionId): void {
+			const tab = findTab(tabId);
+			if (tab === undefined || tab.sessionId !== sessionId) {
+				return;
+			}
+			delete tab.sessionId;
+			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+			tab.mcpRestartPending = false;
 			notify();
 		},
 

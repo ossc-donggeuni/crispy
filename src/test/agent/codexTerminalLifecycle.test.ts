@@ -15,6 +15,8 @@ import type {
 } from '../../mcp/sessionRuntime';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
 import { createCaptureFailureProcessTreeController } from './support/fakeProcessTreeController';
+import { FakeProcessTreeController } from './support/fakeProcessTreeController';
+import type { ProcessTreeController } from '../../agent/host/terminal/processTreeController';
 
 const shellPolicy: ShellLaunchPolicy = {
 	executable: '/host/shell',
@@ -122,6 +124,16 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 		};
 	}
 
+	activity(sessionId: string): McpSessionRuntimeEvent {
+		const runtime = this.runtimes.get(sessionId);
+		assert.ok(runtime !== undefined);
+		return {
+			type: 'session.mcpActivityObserved',
+			generation: runtime.generation,
+			sessionId,
+		};
+	}
+
 	private createSuccess(sessionId: string): McpPrepareResult {
 		this.generationIndex += 1;
 		const generation = `generation-${this.generationIndex}`;
@@ -147,6 +159,7 @@ function createFixture(options: {
 	readonly buildPlan?: ConstructorParameters<typeof TerminalHost>[0][
 		'buildCodexMcpLaunchPlan'
 	];
+	readonly processTreeController?: ProcessTreeController;
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -184,7 +197,8 @@ function createFixture(options: {
 			},
 		}),
 		mcpSupervisor: supervisor,
-		processTreeController: createCaptureFailureProcessTreeController(),
+		processTreeController: options.processTreeController
+			?? createCaptureFailureProcessTreeController(),
 		...(options.buildPlan === undefined
 			? {}
 			: { buildCodexMcpLaunchPlan: options.buildPlan }),
@@ -203,6 +217,29 @@ async function beginCodex(
 }
 
 suite('Codex direct PTY and MCP transaction', () => {
+	test('authenticated activity 전에는 표시하지 않고 current activity 뒤 초록을 한 번만 보낸다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-status-connected');
+		const session = fixture.host.getActiveSession('tab-status-connected');
+		assert.ok(session !== undefined);
+
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged',
+		), false);
+		const activity = fixture.supervisor.activity(session.sessionId);
+		fixture.host.handleMcpRuntimeEvent(activity);
+		fixture.host.handleMcpRuntimeEvent(activity);
+
+		assert.deepStrictEqual(fixture.messages.filter(
+			(message) => message.type === 'mcp.statusChanged',
+		), [{
+			type: 'mcp.statusChanged',
+			tabId: 'tab-status-connected',
+			sessionId: session.sessionId,
+			status: 'connected',
+		}]);
+	});
+
 	test('version 호환성을 확인하지 못하면 adapter 없이 bare Codex를 한 번만 실행한다', async () => {
 		const fixture = createFixture({ configStyle: null });
 
@@ -287,6 +324,12 @@ suite('Codex direct PTY and MCP transaction', () => {
 			(name) => name.toUpperCase() === 'ELECTRON_RUN_AS_NODE',
 		), false);
 		assert.strictEqual(supervisor.stopCalls.length >= 1, true);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.status === 'failed'
+				&& message.reason === 'adapter_ready_timeout'
+				&& message.retryable,
+		), true);
 	});
 
 	test('authenticated PTY spawn 실패는 credential 폐기 후 bare Codex를 최대 한 번 재시도한다', async () => {
@@ -491,6 +534,144 @@ suite('Codex stale attempt and cleanup', () => {
 			(message) => message.type === 'terminal.output'
 				&& message.data === 'output-after-crash',
 		), true);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === session.sessionId
+				&& message.status === 'failed'
+				&& message.reason === 'adapter_exited'
+				&& message.retryable,
+		), true);
+	});
+
+	test('retryable failure의 명시적 restart는 old tree 정리 후 fresh 전체 session을 만든다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-mcp-restart');
+		const first = fixture.host.getActiveSession('tab-mcp-restart');
+		assert.ok(first !== undefined);
+		const firstRuntime = fixture.supervisor.getSessionRuntime(first.sessionId);
+		assert.ok(firstRuntime !== undefined);
+		const firstGeneration = firstRuntime.generation;
+		const firstArgs = fixture.adapter.spawnCalls[0].args;
+		const firstToken = fixture.adapter.spawnCalls[0].env.CRISPY_MCP_TOKEN;
+		const oldActivity = fixture.supervisor.activity(first.sessionId);
+		const oldFailure = fixture.supervisor.crash(first.sessionId);
+		fixture.host.handleMcpRuntimeEvent(oldFailure);
+
+		const restart = fixture.host.restartMcpSession(first.tabId, first.sessionId);
+		const duplicate = fixture.host.restartMcpSession(first.tabId, first.sessionId);
+		assert.strictEqual(duplicate, restart);
+		await restart;
+
+		const second = fixture.host.getActiveSession('tab-mcp-restart');
+		assert.ok(second !== undefined);
+		assert.notStrictEqual(second.sessionId, first.sessionId);
+		assert.notStrictEqual(
+			fixture.supervisor.getSessionRuntime(second.sessionId)?.generation,
+			firstGeneration,
+		);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 2);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
+		assert.notDeepStrictEqual(fixture.adapter.spawnCalls[1].args, firstArgs);
+		assert.notStrictEqual(
+			fixture.adapter.spawnCalls[1].env.CRISPY_MCP_TOKEN,
+			firstToken,
+		);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusCleared'
+				&& message.sessionId === first.sessionId,
+		), true);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === second.sessionId,
+		), false);
+		fixture.host.handleMcpRuntimeEvent(oldActivity);
+		fixture.host.handleMcpRuntimeEvent(oldFailure);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === second.sessionId,
+		), false);
+
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.activity(second.sessionId),
+		);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === second.sessionId
+				&& message.status === 'connected',
+		), true);
+	});
+
+	test('restart cleanup 중 tab close는 fresh child와 PTY spawn을 취소한다', async () => {
+		let releaseCleanup!: () => void;
+		const cleanupGate = new Promise<void>((resolve) => {
+			releaseCleanup = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => cleanupGate,
+		});
+		const fixture = createFixture({ processTreeController: controller });
+		await beginCodex(fixture.host, 'tab-close-during-restart');
+		const session = fixture.host.getActiveSession('tab-close-during-restart');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(fixture.supervisor.crash(session.sessionId));
+
+		const restart = fixture.host.restartMcpSession(session.tabId, session.sessionId);
+		await waitUntil(() => controller.calls.includes('terminate:7201'));
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		fixture.host.closeTab(session.tabId);
+		releaseCleanup();
+		await restart;
+
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), undefined);
+		assert.strictEqual(fixture.host.hasTab(session.tabId), false);
+	});
+
+	test('두 탭의 MCP restart transaction은 서로 다른 fresh session으로 독립 실행된다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-concurrent-a');
+		await beginCodex(fixture.host, 'tab-concurrent-b');
+		const firstA = fixture.host.getActiveSession('tab-concurrent-a');
+		const firstB = fixture.host.getActiveSession('tab-concurrent-b');
+		assert.ok(firstA !== undefined);
+		assert.ok(firstB !== undefined);
+		fixture.host.handleMcpRuntimeEvent(fixture.supervisor.crash(firstA.sessionId));
+		fixture.host.handleMcpRuntimeEvent(fixture.supervisor.crash(firstB.sessionId));
+
+		await Promise.all([
+			fixture.host.restartMcpSession(firstA.tabId, firstA.sessionId),
+			fixture.host.restartMcpSession(firstB.tabId, firstB.sessionId),
+		]);
+		const secondA = fixture.host.getActiveSession('tab-concurrent-a');
+		const secondB = fixture.host.getActiveSession('tab-concurrent-b');
+		assert.ok(secondA !== undefined);
+		assert.ok(secondB !== undefined);
+		assert.notStrictEqual(secondA.sessionId, firstA.sessionId);
+		assert.notStrictEqual(secondB.sessionId, firstB.sessionId);
+		assert.notStrictEqual(secondA.sessionId, secondB.sessionId);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 4);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
+		assert.strictEqual(fixture.adapter.handles[1].killCallCount, 1);
+		assert.strictEqual(fixture.adapter.handles[2].killCallCount, 0);
+		assert.strictEqual(fixture.adapter.handles[3].killCallCount, 0);
+	});
+
+	test('non-retryable 또는 connected session의 mcp.restart는 CLI를 종료하지 않는다', async () => {
+		const supervisor = new FakeCodexSupervisor();
+		supervisor.prepareFailure = {
+			ok: false,
+			failure: { reason: 'unsupported_runtime', retryable: false },
+			providerAction: 'continue_without_mcp',
+		};
+		const fixture = createFixture({ supervisor });
+		await beginCodex(fixture.host, 'tab-no-mcp-restart');
+		const session = fixture.host.getActiveSession('tab-no-mcp-restart');
+		assert.ok(session !== undefined);
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), session);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
 	});
 
 	test('normal exit, tab close와 Panel dispose가 해당 MCP와 PTY를 멱등 정리한다', async () => {
