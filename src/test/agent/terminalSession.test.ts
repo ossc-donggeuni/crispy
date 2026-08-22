@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import {
+	TerminalProcessExitedBeforeReadyError,
 	TerminalSession,
 	TerminalSessionStateError,
 	type TerminalSessionStateErrorCode,
@@ -191,6 +192,42 @@ suite('TerminalSession state model', () => {
 		await assert.rejects(starting, /fake PTY PID was not ready/);
 
 		assert.strictEqual(handle.killCallCount, 1);
+		assert.strictEqual(handle.dataListenerCount, 0);
+		assert.strictEqual(handle.exitListenerCount, 0);
+		assert.deepStrictEqual(session.state, { kind: 'starting' });
+	});
+
+	test('PID 준비 전 process exit은 buffered output과 함께 spawn 실패와 구분한다', async () => {
+		const adapter = new FakePtyAdapter(0);
+		const session = new TerminalSession({
+			tabId: 'tab-exit-before-pid',
+			sessionId: 'session-exit-before-pid',
+			ptyAdapter: adapter,
+			onOutput: () => undefined,
+			onExit: () => undefined,
+			onRunning: () => undefined,
+		});
+		session.markStarting();
+		const starting = session.start(launchPolicy, 80, 24);
+		const handle = adapter.handles[0];
+		handle.emitData('Authentication failed before PID readiness.');
+
+		handle.emitExit({ exitCode: 1 });
+
+		await assert.rejects(starting, (error: unknown) => {
+			assert.ok(error instanceof TerminalProcessExitedBeforeReadyError);
+			assert.deepStrictEqual(error.event, { exitCode: 1 });
+			assert.strictEqual(
+				error.withBufferedOutput((output) => output),
+				'Authentication failed before PID readiness.',
+			);
+			assert.strictEqual(
+				JSON.stringify(error).includes('Authentication failed'),
+				false,
+			);
+			return true;
+		});
+		assert.strictEqual(handle.killCallCount, 0);
 		assert.strictEqual(handle.dataListenerCount, 0);
 		assert.strictEqual(handle.exitListenerCount, 0);
 		assert.deepStrictEqual(session.state, { kind: 'starting' });
