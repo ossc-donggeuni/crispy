@@ -9,6 +9,7 @@ import {
 	getFileGroupHeight,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
+	GRAPH_LAYOUT_ROOT_GAP,
 } from '../../webview/graph/graphLayout';
 import {
 	GRAPH_MOCK,
@@ -51,6 +52,33 @@ import {
 } from '../../webview/graph/graphVisibleArea';
 
 suite('Graph View', () => {
+	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const hiddenRule = graphViewCss.match(
+			/\.graph-detached-root-actions\s*\{[^}]*\}/,
+		);
+		const hoverRule = graphViewCss.match(
+			/\.graph-node:hover\s*>\s*\.graph-detached-root-actions,[^{]*\{[^}]*\}/,
+		);
+
+		assert.ok(hiddenRule);
+		assert.match(hiddenRule[0], /position:\s*absolute;/);
+		assert.match(hiddenRule[0], /top:\s*100%;/);
+		assert.match(hiddenRule[0], /padding-top:\s*12px;/);
+		assert.match(hiddenRule[0], /pointer-events:\s*none;/);
+		assert.ok(hoverRule);
+		assert.match(hoverRule[0], /pointer-events:\s*auto;/);
+		assert.ok(graphViewCss.includes(
+			"url('./assets/ui-icons/duplicate.svg')",
+		));
+		assert.ok(graphViewCss.includes(
+			"url('./assets/ui-icons/delete.svg')",
+		));
+	});
+
 	test('Graph Node와 File Row의 hidden 속성은 flex layout보다 우선한다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
@@ -3338,6 +3366,280 @@ suite('Graph View', () => {
 			undefined,
 		);
 		graphView.dispose();
+	});
+
+	test('Hover Duplicate/Delete는 Multiple Detach/Reattach 경로와 subtree 위치·ordinal을 공유한다', () => {
+		const child = {
+			kind: 'file' as const,
+			id: 'file:hover-action-flow/child.ts',
+			name: 'child.ts',
+		};
+		const source = {
+			kind: 'folder' as const,
+			id: 'folder:hover-action-flow',
+			name: 'hover-action-flow',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:hover-action-flow',
+			name: 'hover-action-flow',
+			status: 'loaded',
+			children: [source],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true, [source.id]: true },
+		}, createSingleRootGraph(project));
+		const rootId = (ordinal: number) => createDetachedRootId(source.id, ordinal);
+		const rootNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			rootId(ordinal),
+			source.id,
+		);
+		const childNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			rootId(ordinal),
+			child.id,
+		);
+		const getDetachedRoot = (ordinal: number) => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			rootNodeId(ordinal),
+		);
+		const clickAction = (
+			ordinal: number,
+			action: 'duplicate' | 'delete',
+		): void => {
+			const button = getDescendantByAttribute(
+				getDetachedRoot(ordinal),
+				'data-detached-root-action',
+				action,
+			);
+
+			button.dispatch('click', createClickEvent(button));
+		};
+		const detachFrom = (
+			node: FakeElement,
+			target: { readonly x: number; readonly y: number },
+		): void => {
+			const handle = getDescendantByClass(node, 'graph-detach-handle');
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, target.x, target.y),
+			);
+		};
+
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		), { x: 600, y: 320 });
+		const firstRootTransform = getDetachedRoot(1).style.transform;
+		const firstChildTransform = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childNodeId(1),
+		).style.transform;
+		const firstRootPosition = readTranslate(firstRootTransform);
+		const firstChildPosition = readTranslate(firstChildTransform);
+
+		clickAction(1, 'duplicate');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(2)]: true,
+		});
+		assert.strictEqual(getDetachedRoot(1).style.transform, firstRootTransform);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				childNodeId(1),
+			).style.transform,
+			firstChildTransform,
+		);
+		assert.deepStrictEqual(readTranslate(getDetachedRoot(2).style.transform), {
+			x: firstRootPosition.x,
+			y: Math.max(
+				firstRootPosition.y + GRAPH_FOLDER_NODE_HEIGHT,
+				firstChildPosition.y + GRAPH_FOLDER_NODE_HEIGHT,
+			) + GRAPH_LAYOUT_ROOT_GAP,
+		});
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childNodeId(2),
+		));
+		for (const ordinal of [1, 2]) {
+			assert.strictEqual(
+				getDescendantByClass(
+					getDetachedRoot(ordinal),
+					'graph-detached-root-badge',
+				).textContent,
+				String(ordinal),
+			);
+		}
+
+		clickAction(2, 'duplicate');
+		clickAction(2, 'delete');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(3)]: true,
+		});
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(source.id),
+		));
+		clickAction(1, 'duplicate');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(3)]: true,
+			[rootId(4)]: true,
+		});
+		for (const ordinal of [1, 3, 4]) {
+			assert.strictEqual(
+				getDescendantByClass(
+					getDetachedRoot(ordinal),
+					'graph-detached-root-badge',
+				).textContent,
+				String(ordinal),
+			);
+		}
+
+		clickAction(1, 'delete');
+		clickAction(3, 'delete');
+		assert.strictEqual(
+			findDescendantByClass(
+				getDetachedRoot(4),
+				'graph-detached-root-badge',
+			),
+			undefined,
+		);
+		clickAction(4, 'delete');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(source.id),
+		), undefined);
+		const restoredSource = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		);
+
+		detachFrom(restoredSource, { x: 700, y: 400 });
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+		});
+		graphView.dispose();
+	});
+
+	test('standalone/grouped File Detached Root도 동일 Hover Duplicate/Delete를 사용한다', () => {
+		for (const presentation of ['standalone', 'grouped'] as const) {
+			const source = {
+				kind: 'file' as const,
+				id: `file:hover-file-action/${presentation}.ts`,
+				name: `${presentation}.ts`,
+			};
+			const sibling = {
+				kind: 'file' as const,
+				id: `file:hover-file-action/${presentation}-sibling.ts`,
+				name: `${presentation}-sibling.ts`,
+			};
+			const project: Project = {
+				kind: 'project',
+				id: `project:hover-file-action/${presentation}`,
+				name: `hover-file-action-${presentation}`,
+				status: 'loaded',
+				children: presentation === 'grouped'
+					? [source, sibling]
+					: [source],
+			};
+			const ownerDocument = new FakeDocument();
+			const root = ownerDocument.createElement('section');
+			const graphView = initializeGraphView(root.asHtmlElement(), {
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				openedFolders: { [project.id]: true },
+			}, createSingleRootGraph(project));
+			const sourceElement = getDescendantByAttribute(
+				root,
+				'data-file-id',
+				source.id,
+			);
+			const detachHandle = getDescendantByClass(
+				sourceElement,
+				'graph-detach-handle',
+			);
+
+			detachHandle.dispatch(
+				'pointerdown',
+				createPointerEvent(detachHandle, 10, 10),
+			);
+			detachHandle.dispatch(
+				'pointermove',
+				createPointerEvent(detachHandle, 30, 30),
+			);
+			detachHandle.dispatch(
+				'pointerup',
+				createPointerEvent(detachHandle, 600, 320),
+			);
+			const rootId = (ordinal: number) => createDetachedRootId(
+				source.id,
+				ordinal,
+			);
+			const getDetachedFile = (ordinal: number) => getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				createGraphLayoutNodeId(rootId(ordinal), source.id),
+			);
+			const clickAction = (
+				ordinal: number,
+				action: 'duplicate' | 'delete',
+			): void => {
+				const button = getDescendantByAttribute(
+					getDetachedFile(ordinal),
+					'data-detached-root-action',
+					action,
+				);
+
+				button.dispatch('click', createClickEvent(button));
+			};
+
+			clickAction(1, 'duplicate');
+			assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+				[rootId(1)]: true,
+				[rootId(2)]: true,
+			});
+			assert.ok(getDetachedFile(1));
+			assert.ok(getDetachedFile(2));
+			clickAction(1, 'delete');
+			assert.strictEqual(
+				findDescendantByClass(
+					getDetachedFile(2),
+					'graph-detached-root-badge',
+				),
+				undefined,
+			);
+			clickAction(2, 'delete');
+			assert.deepStrictEqual(
+				graphView.state.getState().detachedRootNodeIds,
+				{},
+			);
+			assert.ok(getDescendantByAttribute(
+				root,
+				'data-file-id',
+				source.id,
+			));
+			graphView.dispose();
+		}
 	});
 
 	test('Folder open과 하위 File Detach/Reattach는 시작한 Root Instance에만 적용된다', () => {

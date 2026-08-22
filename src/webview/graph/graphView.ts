@@ -12,6 +12,7 @@ import {
 	type GraphLayout,
 } from './graphLayout';
 import {
+	calculateDetachedRootDuplicatePosition,
 	classifyGraphLayoutNodeArrangement,
 	rebaseNodePositions,
 	translateDetachedSubtree,
@@ -32,6 +33,7 @@ import {
 import { createGraphNavigatorRoots } from './graphNavigatorRoots';
 import {
 	initializeGraphRenderer,
+	type GraphLayoutApplyOptions,
 	type GraphRenderer,
 	type GraphNodeArrangementRequest,
 	type GraphRootReattachRequest,
@@ -460,8 +462,9 @@ export function applyGraphLayout(
 	navigator: Pick<GraphNavigator, 'setLayout'>,
 	layout: GraphLayout,
 	nodePositions?: GraphStateSnapshot['nodePositions'],
+	options?: GraphLayoutApplyOptions,
 ): void {
-	renderer.applyLayout(layout, nodePositions);
+	renderer.applyLayout(layout, nodePositions, options);
 	navigator.setLayout(layout);
 }
 
@@ -968,12 +971,19 @@ export function initializeGraphView(
 
 		return currentLayout;
 	};
-	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
+	/** Drag Detach와 Hover Duplicate가 공유하는 Multiple Detach Instance 추가 경로다. */
+	const addDetachedRootInstance = (
+		request: Pick<GraphDetachDropRequest, 'nodeId' | 'instanceRootId'>,
+		targetPosition: { readonly x: number; readonly y: number },
+		templateRootIdOverride?: string,
+		animationSourceRootId?: string,
+	): boolean => {
 		const occurrenceRoots = currentGraph.roots.filter((root) => (
 			root.nodeId === request.nodeId
 			&& getDetachedRootOriginId(root.id) === request.instanceRootId
 		));
-		const templateRootId = occurrenceRoots.at(-1)?.id
+		const templateRootId = templateRootIdOverride
+			?? occurrenceRoots.at(-1)?.id
 			?? request.instanceRootId;
 		const sourceRootNodeId = toInstanceStateId(
 			templateRootId,
@@ -986,99 +996,112 @@ export function initializeGraphView(
 			request.instanceRootId,
 		);
 
-		if (addition) {
-			const snapshot = state.getState();
-			const detachedRootNode = addition.graph.rootNodes[addition.root.nodeId];
-
-			if (!detachedRootNode) {
-				interactions.onDetachDrop?.(request);
-				return;
-			}
-			const visualState = cloneDetachedInstanceVisualState(
-				snapshot,
-				detachedRootNode,
-				templateRootId,
-				addition.root.id,
-				request.instanceRootId,
-				removeReplacedOccurrence,
-			);
-			const nextSnapshot = { ...snapshot, ...visualState };
-			const viewportBounds = viewport.getBoundingClientRect();
-			const targetPosition = camera.viewportToWorld({
-				x: request.clientX - viewportBounds.left,
-				y: request.clientY - viewportBounds.top,
-			});
-			const previousLayout = currentLayout;
-			const unarrangedNodeIds = cloneDetachedSubtreeArrangement(
-				currentUnarrangedNodeIds,
-				sourceRootNodeId,
-				addition.root.id,
-				currentLogicalParentByChild,
-				removeReplacedOccurrence,
-			);
-
-			const detachedRootNodeId = getGraphRootLayoutNodeId(addition.root);
-
-			unarrangedNodeIds.add(detachedRootNodeId);
-			currentUnarrangedNodeIds = unarrangedNodeIds;
-			const nextLayout = createLayout(
-				addition.graph,
-				nextSnapshot,
-				unarrangedNodeIds,
-			);
-			const rebasedNodePositions = normalizeGraphNodePositions(
-				nextLayout,
-				rebaseNodePositions(
-					previousLayout,
-					nextLayout,
-					snapshot.nodePositions,
-					{
-						logicalParentByChild: createGraphLogicalParentByChild(
-							addition.graph,
-						),
-					},
-				),
-			);
-			const translatedNodePositions = translateDetachedSubtree(
-				previousLayout,
-				nextLayout,
-				snapshot.nodePositions,
-				detachedRootNodeId,
-				targetPosition,
-				{ baseNodePositions: rebasedNodePositions },
-			);
-			const nodePositions = cloneDetachedSubtreePositions(
-				translatedNodePositions,
-				snapshot.nodePositions,
-				previousLayout,
-				sourceRootNodeId,
-				addition.root.id,
-				targetPosition,
-				currentLogicalParentByChild,
-				removeReplacedOccurrence,
-			);
-			const detachedRootNodeIds = {
-				...snapshot.detachedRootNodeIds,
-				[addition.root.id]: true as const,
-			};
-
-			currentGraph = addition.graph;
-			currentLogicalParentByChild = createGraphLogicalParentByChild(
-				currentGraph,
-			);
-			currentLayout = nextLayout;
-			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
-			state.setState({
-				camera: snapshot.camera,
-				nodePositions,
-				fileGroupPages: visualState.fileGroupPages,
-				openedFolders: visualState.openedFolders,
-				detachedRootNodeIds,
-				hiddenNodeIds: snapshot.hiddenNodeIds,
-			});
-			syncNavigatorRoots();
+		if (!addition) {
+			return false;
 		}
 
+		const snapshot = state.getState();
+		const detachedRootNode = addition.graph.rootNodes[addition.root.nodeId];
+
+		if (!detachedRootNode) {
+			return false;
+		}
+		const visualState = cloneDetachedInstanceVisualState(
+			snapshot,
+			detachedRootNode,
+			templateRootId,
+			addition.root.id,
+			request.instanceRootId,
+			removeReplacedOccurrence,
+		);
+		const nextSnapshot = { ...snapshot, ...visualState };
+		const previousLayout = currentLayout;
+		const unarrangedNodeIds = cloneDetachedSubtreeArrangement(
+			currentUnarrangedNodeIds,
+			sourceRootNodeId,
+			addition.root.id,
+			currentLogicalParentByChild,
+			removeReplacedOccurrence,
+		);
+
+		const detachedRootNodeId = getGraphRootLayoutNodeId(addition.root);
+
+		unarrangedNodeIds.add(detachedRootNodeId);
+		currentUnarrangedNodeIds = unarrangedNodeIds;
+		const nextLayout = createLayout(
+			addition.graph,
+			nextSnapshot,
+			unarrangedNodeIds,
+		);
+		const rebasedNodePositions = normalizeGraphNodePositions(
+			nextLayout,
+			rebaseNodePositions(
+				previousLayout,
+				nextLayout,
+				snapshot.nodePositions,
+				{
+					logicalParentByChild: createGraphLogicalParentByChild(
+						addition.graph,
+					),
+				},
+			),
+		);
+		const translatedNodePositions = translateDetachedSubtree(
+			previousLayout,
+			nextLayout,
+			snapshot.nodePositions,
+			detachedRootNodeId,
+			targetPosition,
+			{ baseNodePositions: rebasedNodePositions },
+		);
+		const nodePositions = cloneDetachedSubtreePositions(
+			translatedNodePositions,
+			snapshot.nodePositions,
+			previousLayout,
+			sourceRootNodeId,
+			addition.root.id,
+			targetPosition,
+			currentLogicalParentByChild,
+			removeReplacedOccurrence,
+		);
+		const detachedRootNodeIds = {
+			...snapshot.detachedRootNodeIds,
+			[addition.root.id]: true as const,
+		};
+
+		currentGraph = addition.graph;
+		currentLogicalParentByChild = createGraphLogicalParentByChild(
+			currentGraph,
+		);
+		currentLayout = nextLayout;
+		applyGraphLayout(
+			renderer,
+			navigator,
+			nextLayout,
+			nodePositions,
+			animationSourceRootId
+				? { enteringSourceRootId: animationSourceRootId }
+				: undefined,
+		);
+		state.setState({
+			camera: snapshot.camera,
+			nodePositions,
+			fileGroupPages: visualState.fileGroupPages,
+			openedFolders: visualState.openedFolders,
+			detachedRootNodeIds,
+			hiddenNodeIds: snapshot.hiddenNodeIds,
+		});
+		syncNavigatorRoots();
+		return true;
+	};
+	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
+		const viewportBounds = viewport.getBoundingClientRect();
+		const targetPosition = camera.viewportToWorld({
+			x: request.clientX - viewportBounds.left,
+			y: request.clientY - viewportBounds.top,
+		});
+
+		addDetachedRootInstance(request, targetPosition);
 		interactions.onDetachDrop?.(request);
 	};
 	const handleBacklinkClick = (targetRootId: string): void => {
@@ -1268,6 +1291,46 @@ export function initializeGraphView(
 
 		return 'deferred';
 	};
+	const handleDetachedRootDuplicate = (rootId: string): void => {
+		const targetRoot = currentGraph.roots.find((root) => (
+			root.id === rootId && isDetachedRootId(root.id)
+		));
+
+		if (!targetRoot) {
+			return;
+		}
+
+		const targetPosition = calculateDetachedRootDuplicatePosition(
+			currentLayout,
+			state.getState().nodePositions,
+			getGraphRootLayoutNodeId(targetRoot),
+		);
+
+		if (!targetPosition) {
+			return;
+		}
+
+		const originRootId = getDetachedRootOriginId(targetRoot.id);
+
+		addDetachedRootInstance(
+			{
+				nodeId: targetRoot.nodeId,
+				...(originRootId ? { instanceRootId: originRootId } : {}),
+			},
+			targetPosition,
+			targetRoot.id,
+			targetRoot.id,
+		);
+	};
+	const handleDetachedRootDelete = (rootId: string): void => {
+		const targetRoot = currentGraph.roots.find((root) => (
+			root.id === rootId && isDetachedRootId(root.id)
+		));
+
+		if (targetRoot) {
+			handleRootReattach({ rootId, nodeId: targetRoot.nodeId });
+		}
+	};
 	const handleNodeArrangementChange = ({
 		nodeId,
 		arranged,
@@ -1335,8 +1398,10 @@ export function initializeGraphView(
 			onDetachDrop: handleDetachDrop,
 			onBacklinkClick: handleBacklinkClick,
 			onRootContextClick: handleRootContextClick,
-				onRootReattach: handleRootReattach,
-				onNodeArrangementChange: handleNodeArrangementChange,
+			onDetachedRootDuplicate: handleDetachedRootDuplicate,
+			onDetachedRootDelete: handleDetachedRootDelete,
+			onRootReattach: handleRootReattach,
+			onNodeArrangementChange: handleNodeArrangementChange,
 			resolveNodeSubtreeIds: (nodeId) => collectGraphLogicalSubtreeNodeIds(
 				nodeId,
 				currentLogicalParentByChild,

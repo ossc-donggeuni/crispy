@@ -8,6 +8,7 @@ import {
 import {
 	createFileGroupId,
 	createGraphLayout,
+	createGraphLayoutNodeId,
 	getGraphRootLayoutNodeId,
 	getFileGroupHeight,
 	GRAPH_FOLDER_NODE_WIDTH,
@@ -1012,6 +1013,122 @@ suite('Graph Renderer / Node Drag', () => {
 			'3',
 		);
 		renderer.dispose();
+	});
+
+	test('Detached Root에만 asset 기반 Hover Action을 붙이고 Button 입력을 Graph Drag에서 격리한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:hover-actions',
+			name: 'hover-actions',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:hover-actions',
+			name: 'hover-actions',
+			status: 'loaded',
+			children: [folder],
+		};
+		const addition = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(addition);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true },
+		});
+		const duplicateRequests: string[] = [];
+		const deleteRequests: string[] = [];
+		const folderClicks: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			createGraphLayout(addition.graph, {
+				openedFolders: graphState.getState().openedFolders,
+			}),
+			graphState,
+			{
+				onFolderClick: (folderId) => folderClicks.push(folderId),
+				onDetachedRootDuplicate: (rootId) => duplicateRequests.push(rootId),
+				onDetachedRootDelete: (rootId) => deleteRequests.push(rootId),
+			},
+		);
+		const original = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			project.id,
+		);
+		const backlink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			createFolderBacklinkId(folder.id),
+		);
+		const detached = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			getGraphRootLayoutNodeId(addition.root),
+		);
+
+		assert.strictEqual(
+			findDescendantByClass(original, 'graph-detached-root-actions'),
+			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByClass(backlink, 'graph-detached-root-actions'),
+			undefined,
+		);
+		const actions = getDescendantByClass(detached, 'graph-detached-root-actions');
+		const duplicate = getDescendantByAttribute(
+			actions,
+			'data-detached-root-action',
+			'duplicate',
+		);
+		const remove = getDescendantByAttribute(
+			actions,
+			'data-detached-root-action',
+			'delete',
+		);
+
+		assert.strictEqual(
+			getDescendantByClass(duplicate, 'graph-detached-root-action-icon')
+				.getAttribute('data-ui-icon'),
+			'duplicate.svg',
+		);
+		assert.strictEqual(
+			getDescendantByClass(remove, 'graph-detached-root-action-icon')
+				.getAttribute('data-ui-icon'),
+			'delete.svg',
+		);
+		assert.strictEqual(actions.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), true);
+		assert.strictEqual(actions.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE), true);
+		const pointerDown = createPointerEvent(duplicate, 10, 10);
+
+		duplicate.dispatch('pointerdown', pointerDown);
+		assert.strictEqual(pointerDown.defaultPrevented, true);
+		assert.strictEqual(pointerDown.propagationStopped, true);
+		assert.strictEqual(detached.hasPointerCapture(1), false);
+		const duplicateClick = createClickEvent(duplicate);
+		const deleteClick = createClickEvent(remove);
+
+		duplicate.dispatch('click', duplicateClick);
+		remove.dispatch('click', deleteClick);
+		assert.deepStrictEqual(duplicateRequests, [addition.root.id]);
+		assert.deepStrictEqual(deleteRequests, [addition.root.id]);
+		assert.deepStrictEqual(folderClicks, []);
+		assert.strictEqual(duplicateClick.propagationStopped, true);
+		assert.strictEqual(deleteClick.propagationStopped, true);
+
+		renderer.dispose();
+		assert.strictEqual(actions.getEventListenerCount(), 0);
+		assert.strictEqual(duplicate.getEventListenerCount(), 0);
+		assert.strictEqual(remove.getEventListenerCount(), 0);
 	});
 
 	test('Root Drag의 자기 Backlink Target은 진입/이탈하고 cancel·layout·dispose에서 정리된다', () => {
@@ -2261,6 +2378,126 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(fixture.edgeLayer.children.includes(edge), false);
 		assert.strictEqual(scheduler.pendingCount, 0);
 		fixture.renderer.dispose();
+	});
+
+	test('Duplicate는 선택 Instance에서 새 subtree를 출발시키고 Delete는 Backlink로 수렴 후 제거한다', () => {
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:action-animation/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:action-animation',
+			name: 'action-animation',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:action-animation',
+			name: 'action-animation',
+			status: 'loaded',
+			children: [folder],
+		};
+		const first = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(first);
+		const second = addGraphRoot(first.graph, folder.id);
+		assert.ok(second);
+		const firstRootNodeId = getGraphRootLayoutNodeId(first.root);
+		const secondRootNodeId = getGraphRootLayoutNodeId(second.root);
+		const firstChildNodeId = createGraphLayoutNodeId(first.root.id, child.id);
+		const secondChildNodeId = createGraphLayoutNodeId(second.root.id, child.id);
+		const positions = {
+			[firstRootNodeId]: { x: 600, y: 320 },
+			[firstChildNodeId]: { x: 902, y: 320 },
+			[secondRootNodeId]: { x: 600, y: 620 },
+			[secondChildNodeId]: { x: 902, y: 620 },
+		};
+		const openedFolders = {
+			[project.id]: true as const,
+			[firstRootNodeId]: true as const,
+			[secondRootNodeId]: true as const,
+		};
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: positions,
+			openedFolders,
+		});
+		const scheduler = new FakeAnimationFrameScheduler();
+		const firstLayout = createGraphLayout(first.graph, { openedFolders });
+		const secondLayout = createGraphLayout(second.graph, { openedFolders });
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			firstLayout,
+			graphState,
+			{},
+			{
+				animationFrameScheduler: scheduler,
+				transitionDuration: 200,
+			},
+		);
+		const getNode = (nodeId: string) => getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			nodeId,
+		);
+		const firstRoot = getNode(firstRootNodeId);
+		const firstChild = getNode(firstChildNodeId);
+		const firstRootTransform = firstRoot.style.transform;
+		const firstChildTransform = firstChild.style.transform;
+
+		renderer.applyLayout(secondLayout, positions, {
+			enteringSourceRootId: first.root.id,
+		});
+		const secondRoot = getNode(secondRootNodeId);
+		const secondChild = getNode(secondChildNodeId);
+
+		assert.strictEqual(secondRoot.style.transform, firstRootTransform);
+		assert.strictEqual(secondChild.style.transform, firstChildTransform);
+		assert.strictEqual(firstRoot.style.transform, firstRootTransform);
+		assert.strictEqual(firstChild.style.transform, firstChildTransform);
+		scheduler.runNext(0);
+		scheduler.runNext(100);
+		assert.ok(readTranslate(secondRoot.style.transform).y > 320);
+		assert.ok(readTranslate(secondRoot.style.transform).y < 620);
+		assert.strictEqual(firstRoot.style.transform, firstRootTransform);
+		scheduler.runNext(200);
+		assert.deepStrictEqual(readTranslate(secondRoot.style.transform), {
+			x: 600,
+			y: 620,
+		});
+		assert.deepStrictEqual(readTranslate(secondChild.style.transform), {
+			x: 902,
+			y: 620,
+		});
+
+		renderer.applyLayout(firstLayout, positions);
+		assert.strictEqual(nodeLayer.children.includes(secondRoot), true);
+		assert.strictEqual(secondRoot.hasClass('is-layout-exiting'), true);
+		assert.strictEqual(
+			findDescendantByClass(secondRoot, 'graph-detached-root-actions'),
+			undefined,
+		);
+		scheduler.runNext(200);
+		scheduler.runNext(300);
+		assert.ok(readTranslate(secondRoot.style.transform).y < 620);
+		assert.strictEqual(firstRoot.style.transform, firstRootTransform);
+		scheduler.runNext(400);
+		assert.strictEqual(nodeLayer.children.includes(secondRoot), false);
+		assert.strictEqual(nodeLayer.children.includes(secondChild), false);
+		assert.strictEqual(scheduler.pendingCount, 0);
+		renderer.dispose();
 	});
 
 	test('새 Layout은 진행 중 전환을 현재 위치에서 취소하고 새 목표로 이어간다', () => {

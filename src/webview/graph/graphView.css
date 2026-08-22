@@ -286,6 +286,90 @@
 	pointer-events: none;
 }
 
+.graph-detached-root-actions {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	z-index: 3;
+	display: flex;
+	width: 100%;
+	box-sizing: border-box;
+	gap: 4px;
+	justify-content: flex-end;
+	padding-top: 12px;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	touch-action: none;
+	transition: opacity 100ms ease;
+}
+
+.graph-node:hover > .graph-detached-root-actions,
+.graph-node:focus-within > .graph-detached-root-actions {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.graph-node:has(> .graph-detached-root-actions):hover,
+.graph-node:has(> .graph-detached-root-actions):focus-within {
+	z-index: 2;
+}
+
+.graph-detached-root-action {
+	display: flex;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	color: var(--vscode-descriptionForeground, #c4c4c4);
+	background: oklch(0.225 0.007 270);
+	border: 1px solid oklch(0.38 0.01 270);
+	border-radius: 6px;
+	box-shadow: 0 10px 24px -8px rgb(0 0 0 / 78%);
+	touch-action: none;
+	cursor: pointer;
+}
+
+.graph-detached-root-action:hover,
+.graph-detached-root-action:focus-visible {
+	color: #fcfcfc;
+	background: #363738;
+	border-color: var(--graph-viewport-accent-color);
+	outline: none;
+}
+
+.graph-detached-root-action:active {
+	background: #404142;
+	transform: translateY(1px);
+}
+
+.graph-detached-root-action-icon {
+	display: block;
+	width: 16px;
+	height: 16px;
+	background-color: currentColor;
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+	pointer-events: none;
+}
+
+.graph-detached-root-action-icon[data-ui-icon='duplicate.svg'] {
+	mask-image: url('./assets/ui-icons/duplicate.svg');
+	-webkit-mask-image: url('./assets/ui-icons/duplicate.svg');
+}
+
+.graph-detached-root-action-icon[data-ui-icon='delete.svg'] {
+	mask-image: url('./assets/ui-icons/delete.svg');
+	-webkit-mask-image: url('./assets/ui-icons/delete.svg');
+}
+
 .graph-project-node,
 .graph-folder-node,
 .graph-file-group-node[data-file-group-presentation='standalone'] {

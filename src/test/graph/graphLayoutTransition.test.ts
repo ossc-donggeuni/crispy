@@ -4,13 +4,47 @@ import type {
 	GraphLayoutEdge,
 	GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
+import { GRAPH_LAYOUT_ROOT_GAP } from '../../webview/graph/graphLayout';
 import {
+	calculateDetachedRootDuplicatePosition,
 	classifyGraphLayoutNodeArrangement,
 	rebaseNodePositions,
 	translateDetachedSubtree,
 } from '../../webview/graph/graphLayoutTransition';
 
 suite('Graph Layout Transition', () => {
+	test('Duplicate 위치는 선택 Detached subtree의 실제 bounds 아래에 기존 Root 간격을 사용한다', () => {
+		const layout = createLayout([
+			createNode('root', 100, 100),
+			createNode('child-a', 402, 80),
+			createNode('child-b', 402, 220),
+			createNode('unrelated', 900, 1_000),
+		], [
+			createEdge('root', 'child-a'),
+			createEdge('root', 'child-b'),
+		]);
+		const positions = {
+			root: { x: 500, y: 300 },
+			'child-a': { x: 802, y: 280 },
+			'child-b': { x: 802, y: 470 },
+			unrelated: { x: 900, y: 2_000 },
+		};
+
+		assert.deepStrictEqual(calculateDetachedRootDuplicatePosition(
+			layout,
+			positions,
+			'root',
+		), {
+			x: 500,
+			y: 470 + 42 + GRAPH_LAYOUT_ROOT_GAP,
+		});
+		assert.strictEqual(calculateDetachedRootDuplicatePosition(
+			layout,
+			positions,
+			'child-a',
+		), undefined);
+	});
+
 	test('Parent와 다른 수동 Offset을 가진 직접 이동 Node만 unarranged로 분류한다', () => {
 		const layout = createSubtreeLayout({
 			root: { x: 300, y: 200 },

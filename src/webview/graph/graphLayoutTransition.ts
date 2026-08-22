@@ -1,4 +1,5 @@
 import {
+	GRAPH_LAYOUT_ROOT_GAP,
 	getGraphLayoutSourceId,
 	resolveGraphLayoutNodePosition,
 	type GraphLayout,
@@ -367,6 +368,43 @@ export function translateDetachedSubtree(
 	}
 
 	return translatedPositions;
+}
+
+/**
+ * 선택한 Detached Root의 현재 표시 subtree 바로 아래에 같은 X로 새 Root 위치를 잡는다.
+ * Root 간격은 기본 Layout과 같은 값을 사용하며 absolute Action UI는 bounds에 포함하지 않는다.
+ */
+export function calculateDetachedRootDuplicatePosition(
+	layout: GraphLayout,
+	nodePositions: GraphNodePositions,
+	rootNodeId: string,
+): GraphLayoutPosition | undefined {
+	const nodesById = indexNodes(layout);
+	const rootNode = nodesById.get(rootNodeId);
+
+	if (!rootNode || !layout.rootNodeIds.has(rootNodeId)) {
+		return undefined;
+	}
+
+	const rootPosition = resolveGraphLayoutNodePosition(rootNode, nodePositions);
+	let subtreeBottom = rootPosition.y + rootNode.height;
+
+	for (const nodeId of collectGraphLayoutSubtreeNodeIds(layout, rootNodeId)) {
+		const node = nodesById.get(nodeId);
+
+		if (!node || node.hidden === true) {
+			continue;
+		}
+
+		const position = resolveGraphLayoutNodePosition(node, nodePositions);
+
+		subtreeBottom = Math.max(subtreeBottom, position.y + node.height);
+	}
+
+	return {
+		x: rootPosition.x,
+		y: subtreeBottom + GRAPH_LAYOUT_ROOT_GAP,
+	};
 }
 
 /** Parent → Child Edge만 따라 Root 자신과 현재 Layout subtree ID를 수집한다. */

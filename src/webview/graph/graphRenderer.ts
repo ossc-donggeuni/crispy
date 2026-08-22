@@ -73,6 +73,11 @@ interface RootContextLabelRenderer {
 	dispose(): void;
 }
 
+interface DetachedRootActionRenderer {
+	readonly rootId: string;
+	dispose(): void;
+}
+
 /** 같은 Parent 아래 정렬된 Card/Placeholder들이 만드는 하나의 복구 영역이다. */
 interface GraphArrangementDropZone {
 	readonly hitBounds: readonly DOMRect[];
@@ -85,6 +90,7 @@ export interface GraphRenderer {
 	applyLayout(
 		layout: GraphLayout,
 		nodePositions?: Readonly<Record<string, GraphLayoutPosition>>,
+		options?: GraphLayoutApplyOptions,
 	): void;
 	/** 현재 렌더링된 Backlink DOM의 client rect를 반환한다. */
 	getBacklinkClientRect(targetRootId: string): DOMRect | undefined;
@@ -111,6 +117,10 @@ export interface GraphRendererInteractions {
 	onBacklinkClick?: (targetRootId: string) => void;
 	/** Context Label Click 시 현재 Graph Root ID를 전달한다. */
 	onRootContextClick?: (rootId: string) => void;
+	/** Detached Root Hover Action의 Duplicate 요청을 Instance ID로 전달한다. */
+	onDetachedRootDuplicate?: (rootId: string) => void;
+	/** Detached Root Hover Action의 Delete 요청을 Instance ID로 전달한다. */
+	onDetachedRootDelete?: (rootId: string) => void;
 	/** Layout Root Node ID를 최신 Graph Root ID로 해석한다. */
 	resolveRootId?: (rootNodeId: string) => string | undefined;
 	/** 자신의 Backlink Target에 Drop된 Root의 제거 또는 확인 대기를 상위 View에 요청한다. */
@@ -143,6 +153,11 @@ export interface GraphRendererOptions {
 	animationFrameScheduler?: GraphAnimationFrameScheduler;
 	transitionDuration?: number;
 	prefersReducedMotion?: boolean;
+}
+
+/** 특정 Layout 전환에서 새 Detached subtree가 출발할 기존 Instance를 지정한다. */
+export interface GraphLayoutApplyOptions {
+	readonly enteringSourceRootId?: string;
 }
 
 /** 단일 Layout transition에서 보간할 Node의 시작/목표 위치다. */
@@ -185,6 +200,8 @@ const DEFAULT_LAYOUT_TRANSITION_DURATION = 220;
 const LAYOUT_NODE_MIN_SCALE = 0.96;
 const LAYOUT_TRANSITION_CLASS = 'is-layout-transitioning';
 const LAYOUT_EXIT_CLASS = 'is-layout-exiting';
+const DUPLICATE_ICON_ASSET = 'duplicate.svg';
+const DELETE_ICON_ASSET = 'delete.svg';
 
 /**
  * 기존 Edge/Node Layer에 프로젝트 Layout을 렌더링하고 저장 위치와 동기화한다.
@@ -233,6 +250,7 @@ export function initializeGraphRenderer(
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
 	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
 	const detachedRootBadges = new Map<string, HTMLElement>();
+	const detachedRootActions = new Map<string, DetachedRootActionRenderer>();
 	let rootNodeIds = layout.rootNodeIds;
 	let disposed = false;
 	let layoutAnimation: GraphLayoutAnimationSession | undefined;
@@ -830,6 +848,36 @@ export function initializeGraphRenderer(
 
 		label.render(context, getRenderedNodeWidth(element, layoutNode.width));
 	};
+	/** Detached Root Card에만 Layout 비참여 Hover Action을 추가하고 나머지에서는 정리한다. */
+	const syncDetachedRootActions = (
+		layoutNode: GraphLayoutNode,
+		element: HTMLElement,
+	): void => {
+		const rootId = rootNodeIds.has(layoutNode.id)
+			? getGraphLayoutRootId(layoutNode.id)
+			: undefined;
+		const current = detachedRootActions.get(layoutNode.id);
+
+		if (!rootId) {
+			current?.dispose();
+			detachedRootActions.delete(layoutNode.id);
+			return;
+		}
+		if (current?.rootId === rootId) {
+			return;
+		}
+
+		current?.dispose();
+		detachedRootActions.set(
+			layoutNode.id,
+			initializeDetachedRootActions(
+				element,
+				rootId,
+				ownerDocument,
+				interactions,
+			),
+		);
+	};
 	/** 같은 Source의 Detached Root가 둘 이상일 때만 Instance 순번 Badge를 붙인다. */
 	const syncDetachedRootBadge = (
 		layoutNode: GraphLayoutNode,
@@ -935,6 +983,7 @@ export function initializeGraphRenderer(
 
 		nodeLayer.append(element);
 		nodeElements.set(layoutNode.id, element);
+		syncDetachedRootActions(layoutNode, element);
 		syncRootContextLabel(
 			layoutNode,
 			element,
@@ -1156,6 +1205,8 @@ export function initializeGraphRenderer(
 		rootContextLabels.get(nodeId)?.dispose();
 		rootContextLabels.delete(nodeId);
 		detachedRootBadges.delete(nodeId);
+		detachedRootActions.get(nodeId)?.dispose();
+		detachedRootActions.delete(nodeId);
 		if (!preserveElement) {
 			element?.remove();
 		}
@@ -1288,6 +1339,7 @@ export function initializeGraphRenderer(
 		applyLayout(
 			nextLayout,
 			nodePositions = graphState.getState().nodePositions,
+			applyOptions = {},
 		): void {
 			if (disposed) {
 				return;
@@ -1470,14 +1522,15 @@ export function initializeGraphRenderer(
 					element.style.height = `${nextNode.height}px`;
 				}
 
-					if (element) {
-						syncRootContextLabel(
-							nextNode,
-							element,
-							nextLayout.rootContexts[nextNode.id],
-						);
-						syncDetachedRootBadge(nextNode, element, nextLayout);
-					}
+				if (element) {
+					syncDetachedRootActions(nextNode, element);
+					syncRootContextLabel(
+						nextNode,
+						element,
+						nextLayout.rootContexts[nextNode.id],
+					);
+					syncDetachedRootBadge(nextNode, element, nextLayout);
+				}
 
 				if (
 					!previousNode
@@ -1500,23 +1553,31 @@ export function initializeGraphRenderer(
 						previousNodesById,
 					)
 					: undefined;
-					const enteringAncestorPosition = enteringAncestorId
-						? previousRenderedPositions.get(enteringAncestorId)
-						: undefined;
-					const detachedBacklinkPosition = !previousNode
-						? findDetachedBacklinkPosition(
-							nextNode.id,
-							nextLayout,
-							nextParentByChild,
-							previousLayout,
-							Object.fromEntries(previousRenderedPositions),
-						)
-						: undefined;
-					const currentPosition = previousNode
-						? previousRenderedPositions.get(nextNode.id)
-						: detachedBacklinkPosition
-							?? enteringAncestorPosition
-							?? renderedPositions.get(nextNode.id);
+				const enteringAncestorPosition = enteringAncestorId
+					? previousRenderedPositions.get(enteringAncestorId)
+					: undefined;
+				const detachedBacklinkPosition = !previousNode
+					? findDetachedBacklinkPosition(
+						nextNode.id,
+						nextLayout,
+						nextParentByChild,
+						previousLayout,
+						Object.fromEntries(previousRenderedPositions),
+					)
+					: undefined;
+				const enteringSourcePosition = !previousNode
+					&& applyOptions.enteringSourceRootId
+					? previousRenderedPositions.get(createGraphLayoutNodeId(
+						applyOptions.enteringSourceRootId,
+						getGraphLayoutSourceId(nextNode.id),
+					))
+					: undefined;
+				const currentPosition = previousNode
+					? previousRenderedPositions.get(nextNode.id)
+					: enteringSourcePosition
+						?? detachedBacklinkPosition
+						?? enteringAncestorPosition
+						?? renderedPositions.get(nextNode.id);
 				const reconciledPosition = renderedPositions.get(nextNode.id);
 
 				if (
@@ -1823,6 +1884,92 @@ function createClientRect(
 		height,
 		toJSON: () => ({}),
 	};
+}
+
+/** Detached Root와 함께 hover되는 absolute Action 영역을 붙이고 그래프 입력을 차단한다. */
+function initializeDetachedRootActions(
+	rootNode: HTMLElement,
+	rootId: string,
+	ownerDocument: Document,
+	interactions: GraphRendererInteractions,
+): DetachedRootActionRenderer {
+	const actions = ownerDocument.createElement('div');
+	const duplicate = createDetachedRootActionButton(
+		ownerDocument,
+		'복사',
+		DUPLICATE_ICON_ASSET,
+		'duplicate',
+	);
+	const remove = createDetachedRootActionButton(
+		ownerDocument,
+		'삭제',
+		DELETE_ICON_ASSET,
+		'delete',
+	);
+	const handlePointerDown = (event: Event): void => {
+		event.preventDefault();
+		event.stopPropagation();
+	};
+	const handleActionsClick = (event: Event): void => {
+		event.stopPropagation();
+	};
+	const handleDuplicateClick = (event: Event): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		interactions.onDetachedRootDuplicate?.(rootId);
+	};
+	const handleDeleteClick = (event: Event): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		interactions.onDetachedRootDelete?.(rootId);
+	};
+
+	actions.className = 'graph-detached-root-actions';
+	actions.setAttribute('data-detached-root-actions', rootId);
+	actions.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	actions.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	actions.addEventListener('pointerdown', handlePointerDown);
+	actions.addEventListener('click', handleActionsClick);
+	duplicate.addEventListener('click', handleDuplicateClick);
+	remove.addEventListener('click', handleDeleteClick);
+	actions.append(duplicate, remove);
+	rootNode.append(actions);
+
+	return {
+		rootId,
+		dispose(): void {
+			actions.removeEventListener('pointerdown', handlePointerDown);
+			actions.removeEventListener('click', handleActionsClick);
+			duplicate.removeEventListener('click', handleDuplicateClick);
+			remove.removeEventListener('click', handleDeleteClick);
+			actions.remove();
+		},
+	};
+}
+
+/** 기존 SVG asset을 CSS mask로 표시하는 Detached Root Action Button을 만든다. */
+function createDetachedRootActionButton(
+	ownerDocument: Document,
+	label: string,
+	iconAsset: string,
+	action: 'duplicate' | 'delete',
+): HTMLButtonElement {
+	const button = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
+
+	button.className = 'graph-detached-root-action';
+	button.type = 'button';
+	button.title = label;
+	button.setAttribute('aria-label', label);
+	button.setAttribute('data-detached-root-action', action);
+	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	icon.className = 'graph-detached-root-action-icon';
+	icon.setAttribute('data-ui-icon', iconAsset);
+	icon.setAttribute('aria-hidden', 'true');
+	button.append(icon);
+
+	return button;
 }
 
 /** Root 카드에 Layout 비참여 absolute Context Label과 입력 차단 정책을 추가한다. */

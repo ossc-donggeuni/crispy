@@ -153,7 +153,8 @@ const GRAPH_LAYOUT_COLUMN_GAP = 62;
 const GRAPH_LAYOUT_ROW_GAP = 6;
 const GRAPH_LAYOUT_COLUMN_WIDTH = GRAPH_FILE_GROUP_NODE_WIDTH;
 const GRAPH_NODE_BORDER_SIZE = 4;
-const GRAPH_LAYOUT_ROOT_GAP = 96;
+/** 독립 Graph Root subtree 사이에 두는 세로 간격이다. */
+export const GRAPH_LAYOUT_ROOT_GAP = 96;
 const GRAPH_LAYOUT_ROOT_SCOPE_DELIMITER = '::node:';
 
 /** Detached Root 안의 Source ID를 Root Instance별 Visual ID로 변환한다. */
