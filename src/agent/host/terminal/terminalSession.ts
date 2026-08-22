@@ -117,6 +117,26 @@ export class TerminalSessionStateError extends Error {
 	}
 }
 
+/**
+ * Native PTY creation succeeded, but the process exited before a usable PID became available.
+ * Buffered output stays private so callers can classify it without reflecting it through logs.
+ */
+export class TerminalProcessExitedBeforeReadyError extends Error {
+	readonly event: PtyExitEvent;
+	readonly #bufferedOutput: string;
+
+	constructor(event: PtyExitEvent, bufferedOutput: string) {
+		super('Terminal process exited before its identifier became ready.');
+		this.name = 'TerminalProcessExitedBeforeReadyError';
+		this.event = Object.freeze({ ...event });
+		this.#bufferedOutput = bufferedOutput;
+	}
+
+	withBufferedOutput<Result>(consumer: (output: string) => Result): Result {
+		return consumer(this.#bufferedOutput);
+	}
+}
+
 /** TerminalSession이 생성 시 받는 Host 소유 identity와 의존성이다. */
 export interface TerminalSessionOptions {
 	/** Webview가 생성하고 Host validator가 검증한 tab 식별자다. */
@@ -230,6 +250,12 @@ export class TerminalSession {
 	/** 다음 microtask에 전달할 원본 output 조각을 도착 순서대로 보관한다. */
 	private pendingOutput: string[] = [];
 
+	/** PID 준비 전에 종료된 현재 process와 안전한 내부 종료 snapshot이다. */
+	private exitBeforeReady: Readonly<{
+		readonly process: PtyProcessHandle;
+		readonly error: TerminalProcessExitedBeforeReadyError;
+	}> | undefined;
+
 	/** output flush microtask가 이미 예약되었는지 나타낸다. */
 	private outputFlushScheduled = false;
 
@@ -306,6 +332,10 @@ export class TerminalSession {
 			this.rollbackStart(process);
 			throw error;
 		}
+		const synchronousExit = this.takeExitBeforeReady(process);
+		if (synchronousExit !== undefined) {
+			return Promise.reject(synchronousExit);
+		}
 
 		if (isValidPid(process.pid)) {
 			try {
@@ -326,6 +356,10 @@ export class TerminalSession {
 		}
 		return readyPid.then(
 			(pid) => {
+				const exitBeforeReady = this.takeExitBeforeReady(process);
+				if (exitBeforeReady !== undefined) {
+					throw exitBeforeReady;
+				}
 				try {
 					this.completeStart(process, pid);
 				} catch (error: unknown) {
@@ -334,16 +368,40 @@ export class TerminalSession {
 				}
 			},
 			(error: unknown) => {
+				const exitBeforeReady = this.takeExitBeforeReady(process);
+				if (exitBeforeReady !== undefined) {
+					throw exitBeforeReady;
+				}
 				this.rollbackStart(process);
 				throw error;
 			},
 		);
 	}
 
+	/** 이미 종료된 pre-ready process를 kill하지 않고 listener와 ownership만 해제한다. */
+	private takeExitBeforeReady(
+		process: PtyProcessHandle,
+	): TerminalProcessExitedBeforeReadyError | undefined {
+		const exitBeforeReady = this.exitBeforeReady;
+		if (exitBeforeReady?.process !== process) {
+			return undefined;
+		}
+		this.exitBeforeReady = undefined;
+		if (this.activeProcess === process) {
+			this.activeProcess = undefined;
+		}
+		this.pendingOutput = [];
+		this.disposePtyListeners();
+		return exitBeforeReady.error;
+	}
+
 	/** spawn 뒤 start transaction이 실패하면 생성한 native PTY ownership을 되돌린다. */
 	private rollbackStart(process: PtyProcessHandle): void {
 		if (this.activeProcess !== process) {
 			return;
+		}
+		if (this.exitBeforeReady?.process === process) {
+			this.exitBeforeReady = undefined;
 		}
 		this.activeProcess = undefined;
 		this.pendingOutput = [];
@@ -416,6 +474,16 @@ export class TerminalSession {
 	/** 마지막 output을 먼저 전달한 뒤 exit routing을 호출하고 listener를 해제한다. */
 	private handleExit(event: PtyExitEvent): void {
 		if (this.currentState.kind === 'starting') {
+			const process = this.activeProcess;
+			if (process !== undefined) {
+				this.exitBeforeReady = Object.freeze({
+					process,
+					error: new TerminalProcessExitedBeforeReadyError(
+						event,
+						this.pendingOutput.join(''),
+					),
+				});
+			}
 			this.pendingOutput = [];
 			this.disposePtyListeners();
 			return;
@@ -447,6 +515,7 @@ export class TerminalSession {
 		const process = this.activeProcess;
 		/** activeProcess를 먼저 비워 남은 입력과 크기 변경을 PTY에 전달하지 않는다. */
 		this.activeProcess = undefined;
+		this.exitBeforeReady = undefined;
 		this.pendingOutput = [];
 
 		try {
@@ -466,6 +535,7 @@ export class TerminalSession {
 	detachProcess(): PtyProcessHandle | undefined {
 		const process = this.activeProcess;
 		this.activeProcess = undefined;
+		this.exitBeforeReady = undefined;
 		this.pendingOutput = [];
 		this.disposePtyListeners();
 

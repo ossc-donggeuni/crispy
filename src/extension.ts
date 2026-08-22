@@ -9,6 +9,7 @@ import { TerminalHost } from './agent/host/terminal/terminalHost';
 import { createAgentAutoRunInputResolver } from './agent/host/agent/agentProviderLaunch';
 import { McpAdapterSupervisor } from './mcp/adapterSupervisor';
 import { createPrepareCodexTerminalLaunch } from './mcp/codexTerminalLaunch';
+import { createPrepareClaudeTerminalLaunch } from './mcp/claudeTerminalLaunch';
 import { resolveAgentExecutable } from './mcp/agentExecutableResolver';
 import { resolveCurrentWorkspace } from './agent/host/workspace/workspaceResolver';
 import {
@@ -159,6 +160,13 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				readPlatform: () => process.platform,
 				readEnvironment: () => ({ ...process.env }),
 				getCliPath: () => readProviderCliPath('codex'),
+			}),
+			prepareClaudeLaunch: createPrepareClaudeTerminalLaunch({
+				workspaceResolver: resolveCurrentWorkspace,
+				resolveExecutable: resolveAgentExecutable,
+				readPlatform: () => process.platform,
+				readEnvironment: () => ({ ...process.env }),
+				getCliPath: () => readProviderCliPath('claude'),
 			}),
 			mcpSupervisor,
 			emitMessage: (message) => {

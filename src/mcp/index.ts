@@ -165,6 +165,12 @@ export {
 	type PreparedCodexTerminalLaunch,
 } from './codexTerminalLaunch';
 export {
+	createPrepareClaudeTerminalLaunch,
+	type PrepareClaudeTerminalLaunch,
+	type PrepareClaudeTerminalLaunchDependencies,
+	type PreparedClaudeTerminalLaunch,
+} from './claudeTerminalLaunch';
+export {
 	createCrispyToolServer,
 	CRISPY_MCP_SERVER_NAME,
 	CRISPY_MCP_SERVER_VERSION,

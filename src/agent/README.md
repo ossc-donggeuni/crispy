@@ -410,17 +410,20 @@ Codex를 같은 provider로 다시 해석하는 별도 protocol이며 두 동작
 
 ## provider 자동 실행 정책
 
-세션은 항상 Host가 정한 기본 Shell로 시작한다. Host는 세션 시작 전에 Windows 후보를
-가볍게 검증하고, Shell이 실행된 뒤 선택한 provider 커맨드를 Shell 입력으로 전달한다.
+Codex와 Claude는 Host가 executable과 version compatibility를 확인한 뒤 provider CLI 자체를
+PTY root process로 실행한다. Windows npm-style `.cmd`만 `ComSpec` one-shot wrapper를 사용한다.
+Antigravity는 현재 MCP 범위 밖이므로 기존 기본 Shell을 시작한 뒤 `agy` 입력을 전달한다.
 
-| provider | 자동 실행 |
-| --- | --- |
-| Codex | Codex CLI를 자동으로 실행한다 |
-| Claude | Claude Code CLI를 자동으로 실행한다 |
-| Antigravity | 공식 Antigravity CLI `agy`를 자동으로 실행한다 |
+| provider | PTY root | 현재 MCP 동작 |
+| --- | --- | --- |
+| Codex | `codex` 또는 Windows one-shot wrapper | session MCP 자동 준비·연결, C5 상태/retry UI |
+| Claude | `claude` 또는 Windows one-shot wrapper | `>=2.1.121`에서 session MCP 자동 준비·연결, L2에서는 상태/retry UI 미연결 |
+| Antigravity | 기존 interactive Shell | `agy` 자동 입력, MCP config/token 주입 없음 |
 
-세 provider는 커맨드만 다르고 탭/session ownership, Shell PTY 시작, PID 준비, 입출력 routing,
-restart와 process-tree cleanup을 포함한 같은 Terminal lifecycle을 사용한다.
+Codex와 Claude는 공통 `AgentLaunchPlan`, final environment sanitizer, session별 MCP supervisor,
+generation gate, direct PTY spawn과 process-tree cleanup을 공유한다. Claude version probe가 실패,
+timeout, unparsable이거나 최소 기능 호환 버전 미만이면 MCP child/token/config를 만들지 않고
+credential 없는 bare Claude를 실행한다. 이 경우 `provider_update_required`를 emit하지 않는다.
 
 ## ANSI 색상 계약
 
@@ -489,3 +492,20 @@ config rejection 또는 HTTP `401` 관찰을 뜻하지 않는다. signal 종료�
 version probe 실패·timeout·unparsable 또는 최소 미만은
 credential/config를 만들지 않고 L2에서 bare Claude로 fail-open할 근거만 반환한다.
 `provider_update_required` emit과 사용자-visible 업데이트 안내는 여전히 별도 제품 결정이다.
+
+## Claude MCP Phase L2 자동 실행 기록 — 2026-08-22
+
+L2는 Claude 선택을 `executable resolve → bounded version probe → adapter ready → auth registered →
+inline config plan → final environment sanitizer → direct PTY spawn` transaction에 연결한다. 각 await
+뒤 current tab/session/provider를 다시 확인하므로 probe나 adapter 준비 중 reset, provider 변경,
+tab close가 발생한 stale attempt는 Claude PTY나 MCP credential을 만들지 않는다.
+
+Authenticated spawn이 실패하면 token과 child를 정리한 뒤 같은 resolved executable로 bare Claude를
+최대 한 번 실행한다. 두 spawn이 모두 실패하면 세 번째 시도 없이 `start_failed`로 끝난다. 실행 전
+adapter crash도 bare로 전환하지만 실행 후 crash는 Claude PTY와 Terminal 입출력을 유지하고 token과
+adapter ownership만 정리한다.
+
+자동 bare relaunch는 non-zero exit, signal 없음, interactive input/authenticated activity 미관찰과
+exact managed-policy 또는 current session server의 exact schema diagnostic이 모두 일치할 때만 한 번
+수행한다. 정상 종료, login/auth, 일반 network 오류와 MCP request silence는 relaunch 근거가 아니다.
+L2는 Claude 상태 indicator와 MCP 재시작 UI를 아직 연결하지 않으며 해당 범위는 L3 gate로 남긴다.
