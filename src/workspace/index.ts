@@ -8,6 +8,23 @@ export type {
 } from './workspaceModel';
 export { createWorkspaceSnapshot } from './workspaceSnapshot';
 export { convertWorkspaceSnapshotToGraph } from './workspaceToGraph';
+export { readDefaultWorkspaceFilter } from './workspaceDefaultFilter';
+export {
+	matchesWorkspaceFilterRule,
+	parseWorkspaceFilter,
+	parseWorkspaceFilterJson,
+	WORKSPACE_FILTER_VERSION,
+	type WorkspaceFileFilterRule,
+	type WorkspaceFilter,
+	type WorkspaceFilterRule,
+	type WorkspaceFilterRuleKind,
+	type WorkspaceFolderFilterRule,
+} from './workspaceFilter';
+export {
+	loadOrCreateWorkspaceFilter,
+	loadOrCreateWorkspaceFilters,
+	type WorkspaceRootFilter,
+} from './workspaceFilterPersistence';
 export type { WorkspacePersistentState } from './workspaceMetadata';
 export {
 	mergeWorkspacePersistentStates,

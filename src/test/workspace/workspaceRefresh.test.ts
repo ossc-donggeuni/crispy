@@ -139,6 +139,39 @@ suite('Workspace Refresh Coordinator', () => {
 		}]);
 	});
 
+	test('Filter 로드 실패는 빈 Filter로 격리하고 Workspace Graph 생성을 계속한다', async () => {
+		const messages: WorkspaceToWebviewMessage[] = [];
+		let receivedFilterCount = -1;
+		const dependencies = {
+			async loadWorkspaceFilters() {
+				throw new Error('filter load failed');
+			},
+			async createWorkspaceSnapshot(rootFilters: readonly unknown[]) {
+				receivedFilterCount = rootFilters.length;
+				return createSnapshot('filter-fallback');
+			},
+			convertWorkspaceSnapshotToGraph: () => createGraph('filter-fallback'),
+			async postMessage(message: WorkspaceToWebviewMessage) {
+				messages.push(message);
+				return true;
+			},
+		};
+
+		assert.deepStrictEqual(
+			await createCurrentWorkspaceGraph(dependencies),
+			createGraph('filter-fallback'),
+		);
+		const coordinator = createWorkspaceRefreshCoordinator(dependencies);
+
+		await coordinator.requestWorkspaceRefresh();
+
+		assert.strictEqual(receivedFilterCount, 0);
+		assert.deepStrictEqual(messages, [{
+			type: 'workspace.graphUpdated',
+			graph: createGraph('filter-fallback'),
+		}]);
+	});
+
 	test('실행 중 요청을 실행별 후속 Refresh 한 번으로 병합하고 탐색을 직렬화한다', async () => {
 		const snapshots = [
 			createDeferred<WorkspaceSnapshot>(),

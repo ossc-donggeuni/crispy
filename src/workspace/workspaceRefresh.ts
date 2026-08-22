@@ -1,10 +1,14 @@
 import type { WorkspaceToWebviewMessage } from '../messages';
 import type { Graph } from '../webview/graph/graphModel';
 import type { WorkspaceSnapshot } from './workspaceModel';
+import type { WorkspaceRootFilter } from './workspaceFilterPersistence';
 
 /** 현재 Workspace Graph 생성과 Webview 전송에 필요한 좁은 의존성 경계다. */
 export interface WorkspaceRefreshDependencies {
-	createWorkspaceSnapshot(): Promise<WorkspaceSnapshot>;
+	loadWorkspaceFilters?(): Promise<readonly WorkspaceRootFilter[]>;
+	createWorkspaceSnapshot(
+		rootFilters: readonly WorkspaceRootFilter[],
+	): Promise<WorkspaceSnapshot>;
 	convertWorkspaceSnapshotToGraph(snapshot: WorkspaceSnapshot): Graph;
 	postMessage(message: WorkspaceToWebviewMessage): PromiseLike<boolean>;
 }
@@ -21,10 +25,22 @@ export interface WorkspaceRefreshCoordinator {
 export async function createCurrentWorkspaceGraph(
 	dependencies: Pick<
 		WorkspaceRefreshDependencies,
-		'createWorkspaceSnapshot' | 'convertWorkspaceSnapshotToGraph'
+		| 'loadWorkspaceFilters'
+		| 'createWorkspaceSnapshot'
+		| 'convertWorkspaceSnapshotToGraph'
 	>,
 ): Promise<Graph> {
-	const snapshot = await dependencies.createWorkspaceSnapshot();
+	let rootFilters: readonly WorkspaceRootFilter[] = [];
+
+	if (dependencies.loadWorkspaceFilters) {
+		try {
+			rootFilters = await dependencies.loadWorkspaceFilters();
+		} catch {
+			/** Filter 로드 실패는 Filter 없는 탐색으로 격리해 Graph 생성을 유지한다. */
+		}
+	}
+
+	const snapshot = await dependencies.createWorkspaceSnapshot(rootFilters);
 
 	return dependencies.convertWorkspaceSnapshotToGraph(snapshot);
 }

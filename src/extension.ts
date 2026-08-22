@@ -37,11 +37,13 @@ import {
 	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
+	loadOrCreateWorkspaceFilters,
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
 	writeWorkspacePersistentState,
 	type WorkspaceRefreshCoordinator,
+	type WorkspaceRootFilter,
 } from './workspace';
 
 /** MCP Host APIs remain exported for integration and deterministic tests. */
@@ -176,7 +178,18 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		);
 		
 		const workspaceGraphDependencies = {
-			createWorkspaceSnapshot,
+			loadWorkspaceFilters: () => loadOrCreateWorkspaceFilters(
+				getCurrentWorkspaceRootUris(),
+				context.extensionUri,
+			),
+			createWorkspaceSnapshot: (
+				rootFilters: readonly WorkspaceRootFilter[],
+			) => createWorkspaceSnapshot(
+				vscode.workspace,
+				vscode.workspace.fs,
+				console,
+				rootFilters,
+			),
 			convertWorkspaceSnapshotToGraph,
 		};
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({

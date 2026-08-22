@@ -7,6 +7,11 @@ import type {
 	WorkspaceRoot,
 	WorkspaceSnapshot,
 } from './workspaceModel';
+import {
+	matchesWorkspaceFilterRule,
+	type WorkspaceFilter,
+} from './workspaceFilter';
+import type { WorkspaceRootFilter } from './workspaceFilterPersistence';
 
 type WorkspaceFoldersSource = Pick<typeof vscode.workspace, 'workspaceFolders'>;
 type WorkspaceFileSystem = Pick<typeof vscode.workspace.fs, 'readDirectory'>;
@@ -23,13 +28,20 @@ interface WorkspaceDirectoryResult {
  * @param workspaceFoldersSource Workspace Folder 목록을 제공하는 VS Code Workspace
  * @param fileSystem Directory 항목을 읽는 최소 Workspace FileSystem 의존성
  * @param logger Directory 탐색 실패 warning을 기록할 Extension Host logger
+ * @param rootFilters Workspace Root URI별로 적용할 검증된 Filter 목록
  * @returns 재귀 탐색을 완료한 Workspace Snapshot
  */
 export async function createWorkspaceSnapshot(
 	workspaceFoldersSource: WorkspaceFoldersSource = vscode.workspace,
 	fileSystem: WorkspaceFileSystem = vscode.workspace.fs,
 	logger: WorkspaceLogger = console,
+	rootFilters: readonly WorkspaceRootFilter[] = [],
 ): Promise<WorkspaceSnapshot> {
+	const filtersByRootUri = new Map(rootFilters.map(({ rootUri, filter }) => [
+		rootUri.toString(),
+		filter,
+	]));
+
 	return {
 		roots: await Promise.all(
 			(workspaceFoldersSource.workspaceFolders ?? []).map(
@@ -37,6 +49,7 @@ export async function createWorkspaceSnapshot(
 					workspaceFolder,
 					fileSystem,
 					logger,
+					filtersByRootUri.get(workspaceFolder.uri.toString()),
 				),
 			),
 		),
@@ -48,12 +61,18 @@ async function createWorkspaceRoot(
 	workspaceFolder: vscode.WorkspaceFolder,
 	fileSystem: WorkspaceFileSystem,
 	logger: WorkspaceLogger,
+	filter: WorkspaceFilter | undefined,
 ): Promise<WorkspaceRoot> {
 	return {
 		id: `workspace-root:${workspaceFolder.uri.toString()}`,
 		name: workspaceFolder.name,
 		uri: workspaceFolder.uri,
-		...(await readWorkspaceDirectory(workspaceFolder.uri, fileSystem, logger)),
+		...(await readWorkspaceDirectory(
+			workspaceFolder.uri,
+			fileSystem,
+			logger,
+			filter,
+		)),
 	};
 }
 
@@ -62,6 +81,7 @@ async function readWorkspaceDirectory(
 	parentUri: vscode.Uri,
 	fileSystem: WorkspaceFileSystem,
 	logger: WorkspaceLogger,
+	filter: WorkspaceFilter | undefined,
 ): Promise<WorkspaceDirectoryResult> {
 	let directoryEntries: [string, vscode.FileType][];
 
@@ -81,14 +101,24 @@ async function readWorkspaceDirectory(
 				return undefined;
 			}
 
-			const uri = vscode.Uri.joinPath(parentUri, name);
-
 			if (fileType === vscode.FileType.Directory) {
-				return createFolder(name, uri, fileSystem, logger);
+				if (isFiltered(filter, 'folder', name)) {
+					return undefined;
+				}
+
+				return createFolder(
+					name,
+					vscode.Uri.joinPath(parentUri, name),
+					fileSystem,
+					logger,
+					filter,
+				);
 			}
 
 			if (fileType === vscode.FileType.File) {
-				return createFile(name, uri);
+				return isFiltered(filter, 'file', name)
+					? undefined
+					: createFile(name, vscode.Uri.joinPath(parentUri, name));
 			}
 
 			return undefined;
@@ -109,13 +139,14 @@ async function createFolder(
 	uri: vscode.Uri,
 	fileSystem: WorkspaceFileSystem,
 	logger: WorkspaceLogger,
+	filter: WorkspaceFilter | undefined,
 ): Promise<Folder> {
 	return {
 		kind: 'folder',
 		id: `folder:${uri.toString()}`,
 		name,
 		uri,
-		...(await readWorkspaceDirectory(uri, fileSystem, logger)),
+		...(await readWorkspaceDirectory(uri, fileSystem, logger, filter)),
 	};
 }
 
@@ -127,4 +158,15 @@ function createFile(name: string, uri: vscode.Uri): File {
 		name,
 		uri,
 	};
+}
+
+/** 검증된 Root Filter가 대상 종류와 basename을 제외하는지 확인한다. */
+function isFiltered(
+	filter: WorkspaceFilter | undefined,
+	kind: 'folder' | 'file',
+	basename: string,
+): boolean {
+	return filter?.rules.some(
+		(rule) => matchesWorkspaceFilterRule(rule, kind, basename),
+	) ?? false;
 }

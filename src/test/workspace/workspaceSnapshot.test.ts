@@ -1,5 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import type { WorkspaceFilterRule } from '../../workspace/workspaceFilter';
+import type { WorkspaceRootFilter } from '../../workspace/workspaceFilterPersistence';
 import { createWorkspaceSnapshot } from '../../workspace/workspaceSnapshot';
 
 type FakeDirectoryEntry = readonly [string, vscode.FileType];
@@ -326,6 +328,161 @@ suite('Workspace Snapshot', () => {
 		);
 	});
 
+	test('Folder/File basename Rule을 Snapshot에 적용하고 제외 Folder는 탐색하지 않는다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/app');
+		const excludedFolderUri = vscode.Uri.joinPath(rootUri, 'node_modules');
+		const includedFolderUri = vscode.Uri.joinPath(rootUri, 'src');
+		const includedFileUri = vscode.Uri.joinPath(rootUri, 'index.ts');
+		const fake = createFakeFileSystem({
+			[rootUri.toString()]: [
+				['node_modules', vscode.FileType.Directory],
+				['src', vscode.FileType.Directory],
+				['debug.log', vscode.FileType.File],
+				['index.ts', vscode.FileType.File],
+			],
+			[excludedFolderUri.toString()]: [['package.json', vscode.FileType.File]],
+			[includedFolderUri.toString()]: [],
+		});
+
+		const snapshot = await createWorkspaceSnapshot(
+			{ workspaceFolders: [createWorkspaceFolder('app', rootUri, 0)] },
+			fake.fileSystem,
+			console,
+			[createRootFilter(rootUri, [
+				{ kind: 'folder', pattern: 'node_modules' },
+				{ kind: 'file', pattern: '*.log' },
+			])],
+		);
+
+		assert.deepStrictEqual(snapshot.roots[0]?.children, [
+			{
+				kind: 'folder',
+				id: `folder:${includedFolderUri.toString()}`,
+				name: 'src',
+				uri: includedFolderUri,
+				status: 'loaded',
+				children: [],
+			},
+			{
+				kind: 'file',
+				id: `file:${includedFileUri.toString()}`,
+				name: 'index.ts',
+				uri: includedFileUri,
+			},
+		]);
+		assert.deepStrictEqual(
+			fake.readDirectoryCalls.map((uri) => uri.toString()),
+			[rootUri.toString(), includedFolderUri.toString()],
+		);
+	});
+
+	test('Workspace Root 자체는 Folder Rule과 이름이 일치해도 유지한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/node_modules');
+		const fileUri = vscode.Uri.joinPath(rootUri, 'index.js');
+		const fake = createFakeFileSystem({
+			[rootUri.toString()]: [['index.js', vscode.FileType.File]],
+		});
+
+		const snapshot = await createWorkspaceSnapshot(
+			{
+				workspaceFolders: [createWorkspaceFolder('node_modules', rootUri, 0)],
+			},
+			fake.fileSystem,
+			console,
+			[createRootFilter(rootUri, [{
+				kind: 'folder',
+				pattern: 'node_modules',
+			}])],
+		);
+
+		assert.strictEqual(snapshot.roots[0]?.name, 'node_modules');
+		assert.strictEqual(snapshot.roots[0]?.status, 'loaded');
+		assert.deepStrictEqual(snapshot.roots[0]?.children, [{
+			kind: 'file',
+			id: `file:${fileUri.toString()}`,
+			name: 'index.js',
+			uri: fileUri,
+		}]);
+		assert.deepStrictEqual(fake.readDirectoryCalls, [rootUri]);
+	});
+
+	test('Multi-root의 서로 다른 Filter를 각 Root에만 적용한다', async () => {
+		const appUri = vscode.Uri.file('/workspace/app');
+		const apiUri = vscode.Uri.file('/workspace/api');
+		const appDistUri = vscode.Uri.joinPath(appUri, 'dist');
+		const apiDistUri = vscode.Uri.joinPath(apiUri, 'dist');
+		const fake = createFakeFileSystem({
+			[appUri.toString()]: [
+				['dist', vscode.FileType.Directory],
+				['debug.log', vscode.FileType.File],
+			],
+			[appDistUri.toString()]: [],
+			[apiUri.toString()]: [
+				['dist', vscode.FileType.Directory],
+				['debug.log', vscode.FileType.File],
+			],
+			[apiDistUri.toString()]: [],
+		});
+
+		const snapshot = await createWorkspaceSnapshot(
+			{
+				workspaceFolders: [
+					createWorkspaceFolder('app', appUri, 0),
+					createWorkspaceFolder('api', apiUri, 1),
+				],
+			},
+			fake.fileSystem,
+			console,
+			[
+				createRootFilter(appUri, [{ kind: 'folder', pattern: 'dist' }]),
+				createRootFilter(apiUri, [{ kind: 'file', pattern: '*.log' }]),
+			],
+		);
+
+		assert.deepStrictEqual(
+			snapshot.roots[0]?.children.map(({ name }) => name),
+			['debug.log'],
+		);
+		assert.deepStrictEqual(
+			snapshot.roots[1]?.children.map(({ name }) => name),
+			['dist'],
+		);
+		assert.deepStrictEqual(
+			fake.readDirectoryCalls.map((uri) => uri.toString()),
+			[appUri.toString(), apiUri.toString(), apiDistUri.toString()],
+		);
+	});
+
+	test('Filter를 사용할 수 없는 Root는 다른 Root의 Filter 적용을 막지 않는다', async () => {
+		const unavailableUri = vscode.Uri.file('/workspace/unavailable-filter');
+		const filteredUri = vscode.Uri.file('/workspace/filtered');
+		const fake = createFakeFileSystem({
+			[unavailableUri.toString()]: [['debug.log', vscode.FileType.File]],
+			[filteredUri.toString()]: [['debug.log', vscode.FileType.File]],
+		});
+
+		const snapshot = await createWorkspaceSnapshot(
+			{
+				workspaceFolders: [
+					createWorkspaceFolder('unavailable', unavailableUri, 0),
+					createWorkspaceFolder('filtered', filteredUri, 1),
+				],
+			},
+			fake.fileSystem,
+			console,
+			[
+				{ rootUri: unavailableUri, filter: undefined },
+				createRootFilter(filteredUri, [{ kind: 'file', pattern: '*.log' }]),
+			],
+		);
+
+		assert.deepStrictEqual(
+			snapshot.roots[0]?.children.map(({ name }) => name),
+			['debug.log'],
+		);
+		assert.deepStrictEqual(snapshot.roots[1]?.children, []);
+	});
+
 	test('Multi-root Workspace의 각 Tree를 독립적으로 생성한다', async () => {
 		const appUri = vscode.Uri.file('/workspace/app');
 		const apiUri = vscode.Uri.file('/workspace/api');
@@ -434,6 +591,16 @@ function createWorkspaceFolder(
 	index: number,
 ): vscode.WorkspaceFolder {
 	return { name, uri, index };
+}
+
+function createRootFilter(
+	rootUri: vscode.Uri,
+	rules: readonly WorkspaceFilterRule[],
+): WorkspaceRootFilter {
+	return {
+		rootUri,
+		filter: { version: 1, rules },
+	};
 }
 
 function createFakeFileSystem(

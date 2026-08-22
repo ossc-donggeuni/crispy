@@ -379,6 +379,70 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Workspace Filter로 Graph에서 사라진 Node의 모든 Persistent State를 보존한다', () => {
+		const filteredFolder = {
+			kind: 'folder' as const,
+			id: 'folder:filter-state/generated',
+			name: 'generated',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:filter-state/generated/output.js',
+				name: 'output.js',
+			}],
+		};
+		const createFilteredGraph = (includeFilteredFolder: boolean): Graph => {
+			const project: Project = {
+				kind: 'project',
+				id: 'project:filter-state',
+				name: 'workspace',
+				status: 'loaded',
+				children: includeFilteredFolder ? [filteredFolder] : [],
+			};
+
+			return createSingleRootGraph(project, 'root:filter-state');
+		};
+		const fileGroupId = createFileGroupId(filteredFolder.id);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 10, y: 20, scale: 1 },
+			nodePositions: {
+				[filteredFolder.id]: { x: 320, y: 180 },
+			},
+			openedFolders: { [filteredFolder.id]: true },
+			fileGroupPages: { [fileGroupId]: 2 },
+			detachedRootNodeIds: { [filteredFolder.id]: true },
+			hiddenNodeIds: { [filteredFolder.id]: true },
+		}, createFilteredGraph(true));
+		const initialState = graphView.state.getState();
+
+		graphView.updateGraph(createFilteredGraph(false));
+
+		assert.strictEqual(graphView.state.getState(), initialState);
+		assert.deepStrictEqual(initialState.nodePositions, {
+			[filteredFolder.id]: { x: 320, y: 180 },
+		});
+		assert.deepStrictEqual(initialState.openedFolders, {
+			[filteredFolder.id]: true,
+		});
+		assert.deepStrictEqual(initialState.fileGroupPages, {
+			[fileGroupId]: 2,
+		});
+		assert.deepStrictEqual(initialState.detachedRootNodeIds, {
+			[filteredFolder.id]: true,
+		});
+		assert.deepStrictEqual(initialState.hiddenNodeIds, {
+			[filteredFolder.id]: true,
+		});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			filteredFolder.id,
+		), undefined);
+		graphView.dispose();
+	});
+
 	test('Graph 갱신마다 persisted Detached Root를 재적용하고 누락 상태는 보존한다', () => {
 		const detachedFolder = {
 			kind: 'folder' as const,
