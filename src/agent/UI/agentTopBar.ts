@@ -31,7 +31,7 @@ export interface AgentTopBarCallbacks {
 	/** 재시작 버튼으로 현재 CLI 종료와 provider 재선택을 요청한 경우다. */
 	onRestartActiveTab(): void;
 
-	/** retryable MCP failure에서 current Codex와 MCP의 명시적 재시작을 요청한다. */
+	/** retryable MCP failure에서 current Agent와 MCP의 명시적 재시작을 요청한다. */
 	onRestartMcpActiveTab(): void;
 }
 

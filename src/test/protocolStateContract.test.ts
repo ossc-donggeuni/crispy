@@ -53,16 +53,18 @@ suite('Host session lifecycle completion contract', () => {
 			}
 		});
 
-		test('running Codex의 retryable MCP failure에서 mcp.restart를 허용한다', () => {
-			const message = mcpRestartMessage();
-			assertStateSuccess(
-				validateWebviewToHostMessageState(message, createSnapshot('running', {
-					providerId: 'codex',
-					mcpStatus: 'failed',
-					mcpFailureRetryable: true,
-				})),
-				message,
-			);
+		test('running Codex와 Claude의 retryable MCP failure에서 mcp.restart를 허용한다', () => {
+			for (const providerId of ['codex', 'claude'] as const) {
+				const message = mcpRestartMessage();
+				assertStateSuccess(
+					validateWebviewToHostMessageState(message, createSnapshot('running', {
+						providerId,
+						mcpStatus: 'failed',
+						mcpFailureRetryable: true,
+					})),
+					message,
+				);
+			}
 		});
 
 		test('알려진 tab의 terminal.visible을 허용하고 session snapshot을 변경하지 않는다', () => {
@@ -109,9 +111,9 @@ suite('Host session lifecycle completion contract', () => {
 			}
 		});
 
-		test('mcp.restart는 non-retryable, non-failed, non-Codex와 중복 요청을 거부한다', () => {
+		test('mcp.restart는 non-retryable, non-failed, non-MCP provider와 중복 요청을 거부한다', () => {
 			for (const overrides of [
-				{ providerId: 'claude' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: true },
+				{ providerId: 'antigravity' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: true },
 				{ providerId: 'codex' as const, mcpStatus: 'connected' as const, mcpFailureRetryable: true },
 				{ providerId: 'codex' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: false },
 			]) {

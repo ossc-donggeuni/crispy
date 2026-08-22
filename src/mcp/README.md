@@ -44,14 +44,14 @@ Call the crispy_ping MCP tool once. Do not run shell commands and do not modify 
   stderr, executable, args, port, route, token 또는 config가 아닌 reason별 고정 문구만 나온다.
 
 retryable 빨간 상태에만 `MCP와 Agent 다시 시작` 버튼이 보인다. 확인 문구는 이 탭의 현재
-Codex와 CLI 대화가 종료됨을 명시한다. 수락하면 old CLI process tree와 MCP child를 먼저
+Codex 또는 Claude와 CLI 대화가 종료됨을 명시한다. 수락하면 old CLI process tree와 MCP child를 먼저
 정리하고 old token을 revoke한 뒤 fresh sessionId/child/random port/route/token/generation/
-config/PTY로 Codex를 자동 실행한다. 다른 탭의 PTY와 MCP runtime은 영향을 받지 않는다.
+config/PTY로 같은 provider를 자동 실행한다. 다른 탭의 PTY와 MCP runtime은 영향을 받지 않는다.
 
-Codex PTY가 실행된 뒤 MCP child가 비정상 종료되면 현재 Codex 입출력은 유지되고
+Codex 또는 Claude PTY가 실행된 뒤 MCP child가 비정상 종료되면 현재 provider 입출력은 유지되고
 `adapter_exited` 빨간 상태만 표시된다. 사용자 확인 전에는 bare relaunch나 adapter 자동
 재생성을 하지 않는다. 반대로 startup MCP 실패는 기존 정책대로 credential 없는 bare
-Codex를 한 번 실행하므로 CLI 자체는 계속 사용할 수 있다.
+provider를 한 번 실행하므로 CLI 자체는 계속 사용할 수 있다.
 
 ## 보안 및 지원 경계
 
@@ -271,5 +271,18 @@ PTY 뒤 adapter가 죽으면 Claude PTY와 input/output/resize는 유지하면�
 startup output만 보며 어디에도 기록하지 않는다. non-zero exit, signal 없음, interactive input 및
 authenticated activity 미관찰과 exact managed-policy/current-server schema diagnostic이 함께 맞을 때만
 fresh bare session을 한 번 만든다. login/auth, network, 정상 종료, 사용자가 입력한 뒤의 종료와 MCP
-silence는 자동 fallback으로 분류하지 않는다. Claude indicator/retry UI는 L3 범위라 L2에는 노출하지
-않는다.
+silence는 자동 fallback으로 분류하지 않는다.
+
+## Claude Phase L3 공통 상태와 재시작 — 2026-08-22
+
+Claude도 Codex와 같은 Host/Webview 상태 계약을 사용한다. 인증된 protocol-valid result를 처음
+관찰한 뒤에만 초록 indicator를 표시하고, 명시적인 MCP failure만 빨강으로 표시한다. compatibility
+minimum 미만이나 version probe 실패·timeout·unparsable은 계속 indicator 없이 bare Claude로
+fail-open하며 `provider_update_required` 또는 업데이트 안내를 내보내지 않는다.
+
+PTY 시작 뒤 adapter가 종료되면 Claude PTY와 input/output/resize를 유지하고 retryable
+`adapter_exited`만 표시한다. 사용자가 확인한 retry는 current Claude 탭의 old process tree와 child를
+정리한 뒤 fresh sessionId, child, port, route, token, generation, inline config와 PTY를 만든다. Host와
+Webview 양쪽이 중복 요청을 막고, Codex/Claude 동시 탭의 status와 restart transaction은 서로 영향을
+주지 않는다. 검증된 managed-policy 또는 current-server schema 거부로 bare Claude를 한 번 재실행한
+경우에는 새 bare session에 non-retryable 고정 실패 문구를 표시한다.

@@ -72,7 +72,7 @@ export function validateWebviewToHostMessageState(
 	}
 }
 
-/** mcp.restart는 실행 중인 current Codex session의 retryable failure에서만 허용한다. */
+/** mcp.restart는 실행 중인 current MCP provider의 retryable failure에서만 허용한다. */
 function validateMcpRestart<Message extends Extract<
 	WebviewToHostWireMessage,
 	{ type: 'mcp.restart' }
@@ -92,7 +92,7 @@ function validateMcpRestart<Message extends Extract<
 		return stateValidationFailure('duplicate_restart');
 	}
 	if (
-		session.providerId !== 'codex'
+		(session.providerId !== 'codex' && session.providerId !== 'claude')
 		|| session.state !== 'running'
 		|| session.mcpStatus !== 'failed'
 		|| session.mcpFailureRetryable !== true
