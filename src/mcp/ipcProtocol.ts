@@ -60,6 +60,11 @@ export type McpChildToHostMessage =
 		readonly sessionId: string;
 	}
 	| {
+		readonly type: 'session.crispyPingObserved';
+		readonly generation: string;
+		readonly sessionId: string;
+	}
+	| {
 		readonly type: 'operation.failed';
 		readonly requestId?: string;
 		readonly generation: string;
@@ -134,6 +139,10 @@ const CHILD_TO_HOST_SCHEMAS = registry({
 		sessionId: id,
 	},
 	'session.mcpActivityObserved': {
+		generation: id,
+		sessionId: id,
+	},
+	'session.crispyPingObserved': {
 		generation: id,
 		sessionId: id,
 	},

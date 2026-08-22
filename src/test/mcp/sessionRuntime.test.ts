@@ -408,8 +408,26 @@ suite('MCP session runtime lifecycle', () => {
 				sessionId: 'session-runtime',
 			});
 		}
+		child.emitMessage({
+			type: 'session.crispyPingObserved',
+			generation: 'generation-stale',
+			sessionId: 'session-runtime',
+		});
+		child.emitMessage({
+			type: 'session.crispyPingObserved',
+			generation: 'generation-runtime',
+			sessionId: 'session-other',
+		});
+		for (let index = 0; index < 2; index += 1) {
+			child.emitMessage({
+				type: 'session.crispyPingObserved',
+				generation: 'generation-runtime',
+				sessionId: 'session-runtime',
+			});
+		}
 		assert.deepStrictEqual(events.map((event) => event.type), [
 			'session.mcpActivityObserved',
+			'session.crispyPingObserved',
 		]);
 		await runtime.stop();
 	});

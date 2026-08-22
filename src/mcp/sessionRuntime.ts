@@ -63,9 +63,16 @@ export interface McpRuntimeActivityEvent {
 	readonly sessionId: string;
 }
 
+export interface McpRuntimePingEvent {
+	readonly type: 'session.crispyPingObserved';
+	readonly generation: string;
+	readonly sessionId: string;
+}
+
 export type McpSessionRuntimeEvent =
 	| McpRuntimeFailureEvent
-	| McpRuntimeActivityEvent;
+	| McpRuntimeActivityEvent
+	| McpRuntimePingEvent;
 
 export type McpPrepareResult =
 	| {
@@ -318,6 +325,7 @@ export class McpSessionRuntime {
 	private connection: McpConnectionDescriptor | undefined;
 	private providerStarted = false;
 	private activityObserved = false;
+	private pingObserved = false;
 	private failureEmitted = false;
 
 	private readonly childMessageListener = (message: unknown): void => {
@@ -569,6 +577,20 @@ export class McpSessionRuntime {
 					&& !this.activityObserved
 				) {
 					this.activityObserved = true;
+					this.emit({
+						type: message.type,
+						generation: message.generation,
+						sessionId: message.sessionId,
+					});
+				}
+				return;
+			case 'session.crispyPingObserved':
+				if (
+					this.lifecycleValue === 'running'
+					&& message.sessionId === this.sessionId
+					&& !this.pingObserved
+				) {
+					this.pingObserved = true;
 					this.emit({
 						type: message.type,
 						generation: message.generation,

@@ -25,6 +25,13 @@ function startChild(childGeneration: string): void {
 				sessionId: event.sessionId,
 			});
 		},
+		onPingObserved: (event) => {
+			sendSafe({
+				type: event.type,
+				generation: event.generation,
+				sessionId: event.sessionId,
+			});
+		},
 	});
 
 	const shutdown = (exitCode: number): Promise<void> => {

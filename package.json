@@ -64,6 +64,8 @@
     "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
+    "prepare:codex-mcp-smoke": "pnpm run compile-tests && pnpm run package",
+    "smoke:codex-mcp": "node out/mcp/codexSmoke.js",
     "smoke:pty-kill": "pnpm run compile-tests && node out/test/smoke/ptyKillProcessTree.smoke.js",
     "test:process-tree-cleanup": "pnpm run compile-tests && node out/test/agent/processTreeCleanup.test.js && node out/test/agent/processTreeControllerFactory.test.js",
     "test": "vscode-test"

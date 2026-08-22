@@ -12,6 +12,7 @@ export {
 export {
 	CrispyMcpProtocolServer,
 	type McpActivityObservedEvent,
+	type McpPingObservedEvent,
 	type McpProtocolServerOptions,
 	type McpServerReady,
 	type RegisteredMcpSession,
@@ -62,6 +63,7 @@ export {
 	type McpRuntimeActivityEvent,
 	type McpRuntimeFailureEvent,
 	type McpRuntimeLifecycle,
+	type McpRuntimePingEvent,
 	type McpRuntimeTimeouts,
 	type McpSessionRuntimeEvent,
 	type McpSessionRuntimeOptions,
@@ -71,6 +73,41 @@ export {
 	type McpAdapterSupervisorOptions,
 	type McpSessionRuntimeFactory,
 } from './adapterSupervisor';
+export {
+	createAgentProcessEnvironment,
+	createAgentProcessSpawnOptions,
+	createAgentProcessSpawnRequest,
+	MCP_PROVIDER_ENVIRONMENT_REMOVALS,
+	type AgentLauncherKind,
+	type AgentLaunchPlan,
+	type AgentProcessSpawnRequest,
+	type CreateAgentProcessSpawnRequestOptions,
+} from './agentLaunchPlan';
+export {
+	resolveAgentExecutable,
+	type AgentExecutableResolution,
+	type AgentExecutableResolutionFailureReason,
+	type AgentExecutableResolver,
+	type ResolveAgentExecutableOptions,
+	type ResolvedAgentExecutable,
+} from './agentExecutableResolver';
+export {
+	CODEX_CONFIG_OVERRIDE_ARGUMENT,
+	CODEX_MCP_SERVER_NAME_PREFIX,
+	CODEX_MCP_SERVER_NAME_RANDOM_BYTES,
+	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+	createCodexMcpConfig,
+	createCodexMcpServerName,
+	createCodexProviderEnvironment,
+	sanitizeCodexProviderEnvironment,
+	type CodexMcpConfig,
+} from './codexConfig';
+export {
+	buildCodexBareLaunchPlan,
+	buildCodexMcpLaunchPlan,
+	type BuildCodexBareLaunchPlanOptions,
+	type BuildCodexMcpLaunchPlanOptions,
+} from './codexLaunchPlan';
 export {
 	createCrispyToolServer,
 	CRISPY_MCP_SERVER_NAME,

@@ -27,7 +27,10 @@ import {
 	isValidMcpOpaqueId,
 	type McpSessionCredentials,
 } from './sessionCredentials';
-import { createCrispyToolServer } from './toolServer';
+import {
+	createCrispyToolServer,
+	CRISPY_PING_TOOL_NAME,
+} from './toolServer';
 
 export interface McpActivityObservedEvent {
 	readonly type: 'session.mcpActivityObserved';
@@ -35,9 +38,16 @@ export interface McpActivityObservedEvent {
 	readonly sessionId: string;
 }
 
+export interface McpPingObservedEvent {
+	readonly type: 'session.crispyPingObserved';
+	readonly generation: string;
+	readonly sessionId: string;
+}
+
 export interface McpProtocolServerOptions {
 	readonly generation: string;
 	readonly onActivityObserved?: (event: McpActivityObservedEvent) => void;
+	readonly onPingObserved?: (event: McpPingObservedEvent) => void;
 }
 
 export interface McpServerReady {
@@ -56,6 +66,7 @@ type ServerLifecycle = 'idle' | 'starting' | 'running' | 'stopping' | 'stopped';
 interface ActiveRegistration extends McpSessionCredentials {
 	revoked: boolean;
 	activityObserved: boolean;
+	pingObserved: boolean;
 }
 
 /**
@@ -67,6 +78,7 @@ export class CrispyMcpProtocolServer {
 	private readonly onActivityObserved: (
 		event: McpActivityObservedEvent,
 	) => void;
+	private readonly onPingObserved: (event: McpPingObservedEvent) => void;
 	private readonly sdkHandler: McpHttpHandler;
 	private lifecycle: ServerLifecycle = 'idle';
 	private startPromise: Promise<McpServerReady> | undefined;
@@ -82,6 +94,7 @@ export class CrispyMcpProtocolServer {
 		}
 		this.generation = options.generation;
 		this.onActivityObserved = options.onActivityObserved ?? (() => undefined);
+		this.onPingObserved = options.onPingObserved ?? (() => undefined);
 		this.sdkHandler = createMcpHandler(
 			() => createCrispyToolServer(),
 			{
@@ -172,6 +185,7 @@ export class CrispyMcpProtocolServer {
 			...credentials,
 			revoked: false,
 			activityObserved: false,
+			pingObserved: false,
 		};
 		return Object.freeze({
 			generation: credentials.generation,
@@ -279,10 +293,13 @@ export class CrispyMcpProtocolServer {
 		const nodeHandler = toNodeHandler({
 			fetch: async (webRequest, options) => {
 				const sdkResponse = await this.sdkHandler.fetch(webRequest, options);
-				if (this.shouldObserveActivity(registration)) {
+				if (
+					this.shouldObserveActivity(registration)
+					|| this.shouldObservePing(registration, body.parsedBody)
+				) {
 					try {
 						const observationResponse = sdkResponse.clone();
-						void this.observeActivity(
+						await this.observeMcpResponse(
 							registration,
 							body.parsedBody,
 							observationResponse,
@@ -297,18 +314,28 @@ export class CrispyMcpProtocolServer {
 		await nodeHandler(request, response, body.parsedBody);
 	}
 
-	private async observeActivity(
+	private async observeMcpResponse(
 		registration: ActiveRegistration,
 		requestBody: unknown,
 		response: Response,
 	): Promise<void> {
-		if (!this.shouldObserveActivity(registration)) {
+		if (
+			!this.shouldObserveActivity(registration)
+			&& !this.shouldObservePing(registration, requestBody)
+		) {
 			cancelResponseBody(response.body);
 			return;
 		}
 		if (!await responseProvesMcpActivity(requestBody, response)) {
 			return;
 		}
+		this.emitActivityObserved(registration);
+		if (isCrispyPingCall(requestBody)) {
+			this.emitPingObserved(registration);
+		}
+	}
+
+	private emitActivityObserved(registration: ActiveRegistration): void {
 		/** Response를 읽는 동안 revoke/shutdown되거나 다른 요청이 먼저 관찰될 수 있다. */
 		if (
 			registration.revoked
@@ -337,6 +364,61 @@ export class CrispyMcpProtocolServer {
 			&& this.registration === registration
 			&& this.lifecycle === 'running';
 	}
+
+	private shouldObservePing(
+		registration: ActiveRegistration,
+		requestBody: unknown,
+	): boolean {
+		return isCrispyPingCall(requestBody)
+			&& !registration.revoked
+			&& !registration.pingObserved
+			&& this.registration === registration
+			&& this.lifecycle === 'running';
+	}
+
+	private emitPingObserved(registration: ActiveRegistration): void {
+		if (
+			this.lifecycle !== 'running'
+			|| registration.revoked
+			|| registration.pingObserved
+			|| this.registration !== registration
+		) {
+			return;
+		}
+		registration.pingObserved = true;
+		try {
+			this.onPingObserved(Object.freeze({
+				type: 'session.crispyPingObserved',
+				generation: registration.generation,
+				sessionId: registration.sessionId,
+			}));
+		} catch {
+			/** Diagnostic observer 실패가 MCP tool result를 오염시키지 않는다. */
+		}
+	}
+}
+
+function isCrispyPingCall(value: unknown): boolean {
+	if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+		return false;
+	}
+	const request = value as Record<string, unknown>;
+	const params = request.params;
+	if (params === null || typeof params !== 'object' || Array.isArray(params)) {
+		return false;
+	}
+	const argumentsValue = (params as Record<string, unknown>).arguments;
+	return request.method === 'tools/call'
+		&& (params as Record<string, unknown>).name === CRISPY_PING_TOOL_NAME
+		&& (
+			argumentsValue === undefined
+			|| (
+				argumentsValue !== null
+				&& typeof argumentsValue === 'object'
+				&& !Array.isArray(argumentsValue)
+				&& Object.keys(argumentsValue).length === 0
+			)
+		);
 }
 
 function cancelResponseBody(body: ReadableStream<Uint8Array> | null): void {
