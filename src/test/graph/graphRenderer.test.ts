@@ -545,6 +545,10 @@ suite('Graph Renderer / Node Drag', () => {
 		const initialTransform = folder.style.transform;
 		const pointerDown = createPointerEvent(handle, 10, 20);
 
+		assert.strictEqual(
+			handle.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			true,
+		);
 		handle.dispatch('pointerdown', pointerDown);
 		assert.strictEqual(pointerDown.defaultPrevented, true);
 		assert.strictEqual(pointerDown.propagationStopped, true);
@@ -1593,6 +1597,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(more.textContent, '+ 12개 더보기');
 		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-collapse'), undefined);
 		assert.strictEqual(more.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), true);
+		assert.strictEqual(more.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE), true);
 		more.dispatch('pointerdown', createPointerEvent(more, 10, 10));
 		more.dispatch('pointermove', createPointerEvent(more, 60, 40));
 		assert.strictEqual(fileGroup.hasPointerCapture(1), false);
@@ -1611,6 +1616,10 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(collapse.getAttribute('aria-label'), '파일 목록 접기');
 		assert.strictEqual(
 			collapse.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.strictEqual(
+			collapse.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
 			true,
 		);
 		assert.strictEqual(
@@ -1861,7 +1870,7 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('Folder, File Group, File Row 위 Wheel은 Cursor 기준 Camera Zoom을 수행한다', () => {
+	test('Folder, File Group, File Row 위 Wheel Pan과 Zoom Gesture를 모두 처리한다', () => {
 		const fixture = createRendererFixture();
 		const viewport = fixture.document.createSizedElement(1000, 800);
 		const world = fixture.document.createElement('div');
@@ -1876,9 +1885,21 @@ suite('Graph Renderer / Node Drag', () => {
 		const cursor = { x: 160, y: 120 };
 
 		for (const target of [folder, fileGroup, fileRow]) {
+			const cameraBeforePan = camera.getState();
+			const panEvent = createWheelEvent(target, cursor.x, cursor.y, 24);
+
+			viewport.dispatch('wheel', panEvent);
+
+			assert.deepStrictEqual(camera.getState(), {
+				x: cameraBeforePan.x,
+				y: cameraBeforePan.y - 24,
+				scale: cameraBeforePan.scale,
+			});
+			assert.strictEqual(panEvent.defaultPrevented, true);
+
 			const scaleBefore = camera.getState().scale;
 			const worldBefore = camera.viewportToWorld(cursor);
-			const wheelEvent = createWheelEvent(target, cursor.x, cursor.y, -120);
+			const wheelEvent = createWheelEvent(target, cursor.x, cursor.y, -120, true);
 
 			viewport.dispatch('wheel', wheelEvent);
 
@@ -3552,6 +3573,7 @@ function createWheelEvent(
 	clientX: number,
 	clientY: number,
 	deltaY: number,
+	ctrlKey = false,
 ): WheelEvent & { defaultPrevented: boolean } {
 	let defaultPrevented = false;
 
@@ -3559,6 +3581,8 @@ function createWheelEvent(
 		target: target.asEventTarget(),
 		clientX,
 		clientY,
+		ctrlKey,
+		deltaX: 0,
 		deltaY,
 		deltaMode: 0,
 		preventDefault: () => {

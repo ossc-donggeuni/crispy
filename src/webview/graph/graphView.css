@@ -26,7 +26,12 @@
 	cursor: grab;
 }
 
-.graph-viewport.is-panning {
+.graph-viewport.is-space-pan-mode .graph-node {
+	cursor: grab;
+}
+
+.graph-viewport.is-panning,
+.graph-viewport.is-panning .graph-node {
 	cursor: grabbing;
 }
 

@@ -1641,7 +1641,7 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {});
 	});
 
-	test('Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다', () => {
+	test('Camera Pan과 Zoom Gesture 상태 변경을 즉시 표시한다', () => {
 		const fixture = createNavigatorFixture(
 			undefined,
 			{},
@@ -1670,7 +1670,7 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
 		const pannedWidth = Number(indicator.getAttribute('width'));
 
-		fixture.viewport.dispatch('wheel', createWheelEvent(400, 300, -120));
+		fixture.viewport.dispatch('wheel', createWheelEvent(400, 300, -120, null, true));
 		assert.strictEqual(
 			fixture.scale.textContent,
 			`${Math.round(fixture.camera.getState().scale * 100)}%`,
@@ -2224,10 +2224,13 @@ function createWheelEvent(
 	clientY: number,
 	deltaY: number,
 	target: EventTarget | null = null,
+	ctrlKey = false,
 ): WheelEvent {
 	return {
 		clientX,
 		clientY,
+		ctrlKey,
+		deltaX: 0,
 		deltaY,
 		deltaMode: 0,
 		target,

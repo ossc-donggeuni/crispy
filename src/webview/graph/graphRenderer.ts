@@ -2287,6 +2287,7 @@ function initializeFileGroupContent(
 					more.type = 'button';
 					more.textContent = `+ ${remainingCount}개 더보기`;
 					more.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+					more.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 					more.addEventListener('click', handleMoreClick);
 					cleanups.push(() => {
 						more.removeEventListener('click', handleMoreClick);
@@ -2307,6 +2308,7 @@ function initializeFileGroupContent(
 					collapse.type = 'button';
 					collapse.setAttribute('aria-label', '파일 목록 접기');
 					collapse.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+					collapse.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 					collapse.append(createCollapseIcon(ownerDocument));
 					collapse.addEventListener('click', handleCollapseClick);
 					cleanups.push(() => {
@@ -2559,6 +2561,7 @@ function createDetachHandle(ownerDocument: Document): HTMLButtonElement {
 	handle.type = 'button';
 	handle.setAttribute('aria-label', 'Graph Root로 분리');
 	handle.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	handle.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	icon.classList.add('graph-detach-icon');
 	icon.setAttribute('viewBox', '0 0 16 16');
 	icon.setAttribute('fill', 'none');

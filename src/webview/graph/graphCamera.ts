@@ -62,9 +62,9 @@ export interface GraphCamera {
 	dispose(): void;
 }
 
-/** 하위 요소에서 시작한 Camera Pan과 Wheel Zoom을 모두 차단하는 attribute다. */
+/** 하위 요소에서 시작한 Camera Pointer/Wheel 입력을 모두 차단하는 attribute다. */
 export const GRAPH_CAMERA_IGNORE_ATTRIBUTE = 'data-graph-camera-ignore';
-/** 하위 요소에서 시작한 Camera Pan만 차단하고 Wheel Zoom은 허용하는 attribute다. */
+/** 하위 요소에서 시작한 Pointer Pan만 차단하고 Wheel 입력은 허용하는 attribute다. */
 export const GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE = 'data-graph-camera-pan-ignore';
 
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
@@ -81,6 +81,7 @@ interface PanSession {
 	startClientY: number;
 	startCameraX: number;
 	startCameraY: number;
+	startedWithSpace: boolean;
 }
 
 /** 단일 Focus Animation의 시작/목표 상태와 예약 Frame이다. */
@@ -162,6 +163,7 @@ export function initializeGraphCamera(
 		?? resolveAnimationFrameScheduler(viewport);
 	let panSession: PanSession | undefined;
 	let focusAnimation: FocusAnimationSession | undefined;
+	let isSpacePanMode = false;
 	let disposed = false;
 
 	/** Camera transform과 Viewport의 World Grid 표시를 함께 갱신한다. */
@@ -337,14 +339,32 @@ export function initializeGraphCamera(
 			&& target.closest(selector) !== null;
 	};
 
-	/** 완전 차단 또는 Pan-only 차단 영역에서 시작한 Camera Pan을 거부한다. */
-	const shouldIgnoreCameraPan = (event: Event): boolean => {
-		return matchesCameraInputPolicy(event, GRAPH_CAMERA_IGNORE_SELECTOR)
-			|| matchesCameraInputPolicy(event, GRAPH_CAMERA_PAN_IGNORE_SELECTOR);
+	/**
+	 * 완전 차단 영역과 Pan-only 차단 영역을 구분한다.
+	 * Space Pan은 Node 자체의 Pan 차단만 우회하고, 그 안쪽 Button/Handle 규약은 유지한다.
+	 */
+	const shouldIgnoreCameraPan = (event: Event, allowGraphNode: boolean): boolean => {
+		if (matchesCameraInputPolicy(event, GRAPH_CAMERA_IGNORE_SELECTOR)) {
+			return true;
+		}
+
+		const target = event.target;
+
+		if (!isElement(target)) {
+			return false;
+		}
+
+		const panIgnoredElement = target.closest(GRAPH_CAMERA_PAN_IGNORE_SELECTOR);
+
+		if (!panIgnoredElement) {
+			return false;
+		}
+
+		return !allowGraphNode || panIgnoredElement !== target.closest('.graph-node');
 	};
 
-	/** 완전 차단 영역에서 시작한 Wheel Zoom만 거부한다. */
-	const shouldIgnoreCameraZoom = (event: Event): boolean => {
+	/** 완전 차단 영역에서 시작한 Camera Wheel 입력을 거부한다. */
+	const shouldIgnoreCameraWheel = (event: Event): boolean => {
 		return matchesCameraInputPolicy(event, GRAPH_CAMERA_IGNORE_SELECTOR);
 	};
 
@@ -360,17 +380,23 @@ export function initializeGraphCamera(
 
 	/** 기본 버튼 Pointer 입력으로 Viewport Pan session을 시작한다. */
 	const handlePointerDown = (event: PointerEvent) => {
+		const startedWithSpace = isSpacePanMode;
+
 		if (
 			disposed
 			|| panSession
 			|| !event.isPrimary
 			|| event.button !== 0
-			|| shouldIgnoreCameraPan(event)
+			|| shouldIgnoreCameraPan(event, startedWithSpace)
 		) {
 			return;
 		}
 
 		event.preventDefault();
+		if (startedWithSpace) {
+			// Capture 단계에서 Node/Detach handler가 같은 Pointer를 시작하지 않게 한다.
+			event.stopPropagation();
+		}
 		cancelFocusAnimation();
 		panSession = {
 			pointerId: event.pointerId,
@@ -378,6 +404,7 @@ export function initializeGraphCamera(
 			startClientY: event.clientY,
 			startCameraX: graphState.getState().camera.x,
 			startCameraY: graphState.getState().camera.y,
+			startedWithSpace,
 		};
 		viewport.classList.add('is-panning');
 		viewport.setPointerCapture(event.pointerId);
@@ -416,35 +443,120 @@ export function initializeGraphCamera(
 		stopPanning(event.pointerId, false);
 	};
 
-	/** Wheel delta를 정규화해 Cursor 위치 기준 Camera Zoom을 수행한다. */
+	/** Space 입력이 끝나거나 Window가 Focus를 잃으면 Pan Mode와 활성 Drag를 정리한다. */
+	const stopSpacePanMode = (): void => {
+		if (!isSpacePanMode) {
+			return;
+		}
+
+		isSpacePanMode = false;
+		viewport.classList.remove('is-space-pan-mode');
+
+		if (panSession?.startedWithSpace) {
+			stopPanning(panSession.pointerId, true);
+		}
+	};
+
+	/** 텍스트 편집 및 기본 keyboard control에서는 Space shortcut을 사용하지 않는다. */
+	const shouldIgnoreSpaceShortcut = (event: KeyboardEvent): boolean => {
+		const target = event.target;
+
+		return isElement(target) && target.closest([
+			'input',
+			'textarea',
+			'select',
+			'button',
+			'a[href]',
+			'[contenteditable]:not([contenteditable="false"])',
+			'[role="textbox"]',
+		].join(', ')) !== null;
+	};
+
+	/** 편집 영역 밖의 Space를 일시적인 Camera Pan Mode로 전환한다. */
+	const handleKeyDown = (event: KeyboardEvent): void => {
+		if (
+			disposed
+			|| !isSpaceKey(event)
+			|| event.defaultPrevented
+			|| shouldIgnoreSpaceShortcut(event)
+		) {
+			return;
+		}
+
+		event.preventDefault();
+		if (!isSpacePanMode) {
+			isSpacePanMode = true;
+			viewport.classList.add('is-space-pan-mode');
+		}
+	};
+
+	/** 활성 Space shortcut의 Key Up만 소비하고 즉시 Pan Mode를 끝낸다. */
+	const handleKeyUp = (event: KeyboardEvent): void => {
+		if (!isSpaceKey(event) || !isSpacePanMode) {
+			return;
+		}
+
+		event.preventDefault();
+		stopSpacePanMode();
+	};
+
+	/**
+	 * Wheel gesture를 Pan과 Zoom으로 분리한다.
+	 * Chromium/VS Code Webview가 Ctrl modifier로 전달하는 pinch/page-zoom gesture만
+	 * 기존 cursor-anchor Zoom에 연결하고, 나머지 Scroll delta는 Camera Pan에 쓴다.
+	 */
 	const handleWheel = (event: WheelEvent) => {
-		if (shouldIgnoreCameraZoom(event)) {
+		if (shouldIgnoreCameraWheel(event)) {
 			return;
 		}
 
 		event.preventDefault();
 		cancelFocusAnimation();
 
-		const bounds = viewport.getBoundingClientRect();
-		const cursor = {
-			x: event.clientX - bounds.left,
-			y: event.clientY - bounds.top,
-		};
-		const wheelDelta = normalizeWheelDelta(event, viewport.clientHeight);
+		const wheelDelta = normalizeWheelDelta(
+			event,
+			viewport.clientWidth,
+			viewport.clientHeight,
+		);
 		const currentCamera = graphState.getState().camera;
 
-		setScaleAt(
-			currentCamera.scale * Math.exp(-wheelDelta * WHEEL_ZOOM_SENSITIVITY),
-			cursor,
-		);
+		if (isZoomGesture(event)) {
+			const bounds = viewport.getBoundingClientRect();
+
+			setScaleAt(
+				currentCamera.scale * Math.exp(
+					-wheelDelta.y * WHEEL_ZOOM_SENSITIVITY,
+				),
+				{
+					x: event.clientX - bounds.left,
+					y: event.clientY - bounds.top,
+				},
+			);
+			return;
+		}
+
+		// Camera x/y는 viewport pixel translation이므로 browser scroll과 같은 방향으로
+		// content를 이동시키기 위해 정규화된 scroll offset을 그대로 뺀다.
+		setState({
+			x: currentCamera.x - wheelDelta.x,
+			y: currentCamera.y - wheelDelta.y,
+			scale: currentCamera.scale,
+		});
 	};
 
-	viewport.addEventListener('pointerdown', handlePointerDown);
+	// Space Pan이 Node Drag보다 먼저 Pointer 소유권을 결정해야 한다.
+	viewport.addEventListener('pointerdown', handlePointerDown, true);
 	viewport.addEventListener('pointermove', handlePointerMove);
 	viewport.addEventListener('pointerup', handlePointerEnd);
 	viewport.addEventListener('pointercancel', handlePointerEnd);
 	viewport.addEventListener('lostpointercapture', handleLostPointerCapture);
 	viewport.addEventListener('wheel', handleWheel, { passive: false });
+	const ownerDocument = viewport.ownerDocument as Document | undefined;
+	const ownerWindow = ownerDocument?.defaultView;
+
+	ownerDocument?.addEventListener?.('keydown', handleKeyDown);
+	ownerDocument?.addEventListener?.('keyup', handleKeyUp);
+	ownerWindow?.addEventListener('blur', stopSpacePanMode);
 	const unsubscribeState = graphState.subscribe(applyTransform);
 	applyTransform();
 
@@ -463,12 +575,16 @@ export function initializeGraphCamera(
 			disposed = true;
 			cancelFocusAnimation();
 			unsubscribeState();
-			viewport.removeEventListener('pointerdown', handlePointerDown);
+			viewport.removeEventListener('pointerdown', handlePointerDown, true);
 			viewport.removeEventListener('pointermove', handlePointerMove);
 			viewport.removeEventListener('pointerup', handlePointerEnd);
 			viewport.removeEventListener('pointercancel', handlePointerEnd);
 			viewport.removeEventListener('lostpointercapture', handleLostPointerCapture);
 			viewport.removeEventListener('wheel', handleWheel);
+			ownerDocument?.removeEventListener?.('keydown', handleKeyDown);
+			ownerDocument?.removeEventListener?.('keyup', handleKeyUp);
+			ownerWindow?.removeEventListener('blur', stopSpacePanMode);
+			stopSpacePanMode();
 
 			if (panSession) {
 				stopPanning(panSession.pointerId, true);
@@ -521,16 +637,36 @@ function clampScale(scale: number): number {
 	return Math.min(Math.max(scale, MIN_CAMERA_SCALE), MAX_CAMERA_SCALE);
 }
 
-/** Wheel deltaMode을 pixel 단위로 정규화한다. */
-function normalizeWheelDelta(event: WheelEvent, viewportHeight: number): number {
+/** Wheel deltaMode의 2차원 delta를 viewport pixel 단위로 정규화한다. */
+function normalizeWheelDelta(
+	event: WheelEvent,
+	viewportWidth: number,
+	viewportHeight: number,
+): GraphPoint {
 	switch (event.deltaMode) {
 		case 1:
-			return event.deltaY * WHEEL_LINE_HEIGHT;
+			return {
+				x: (event.deltaX ?? 0) * WHEEL_LINE_HEIGHT,
+				y: event.deltaY * WHEEL_LINE_HEIGHT,
+			};
 		case 2:
-			return event.deltaY * viewportHeight;
+			return {
+				x: (event.deltaX ?? 0) * viewportWidth,
+				y: event.deltaY * viewportHeight,
+			};
 		default:
-			return event.deltaY;
+			return { x: event.deltaX ?? 0, y: event.deltaY };
 	}
+}
+
+/** Browser가 Wheel을 page zoom 의미로 표시했는지 해석한다. */
+function isZoomGesture(event: WheelEvent): boolean {
+	return event.ctrlKey;
+}
+
+/** Keyboard layout과 무관한 code를 우선해 Space key를 판별한다. */
+function isSpaceKey(event: KeyboardEvent): boolean {
+	return event.code === 'Space' || event.key === ' ';
 }
 
 /** EventTarget이 Element의 closest API를 제공하는지 판별한다. */
