@@ -122,11 +122,11 @@ export function resolveGraphLayoutNodePosition(
 }
 
 /** Project Root 및 Folder Node의 고정 폭이다. */
-export const GRAPH_FOLDER_NODE_WIDTH = 200;
+export const GRAPH_FOLDER_NODE_WIDTH = 240;
 /** Project Root 및 Folder Node의 고정 높이다. */
 export const GRAPH_FOLDER_NODE_HEIGHT = 42;
 /** File Group Node의 고정 폭이다. */
-export const GRAPH_FILE_GROUP_NODE_WIDTH = 200;
+export const GRAPH_FILE_GROUP_NODE_WIDTH = 240;
 /** Standalone presentation File Group의 고정 높이다. */
 export const GRAPH_FILE_GROUP_STANDALONE_HEIGHT = 42;
 /** File Group 내부 File Row 한 줄의 높이다. */

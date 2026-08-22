@@ -842,12 +842,12 @@ suite('Graph Model / Layout', () => {
 		const fileGroup = layout.nodes.find((node) => node.kind === 'file-group');
 
 		assert.ok(root && folder && fileGroup);
-		assert.strictEqual(GRAPH_FOLDER_NODE_WIDTH, 200);
+		assert.strictEqual(GRAPH_FOLDER_NODE_WIDTH, 240);
 		assert.strictEqual(GRAPH_FOLDER_NODE_HEIGHT, 42);
-		assert.strictEqual(GRAPH_FILE_GROUP_NODE_WIDTH, 200);
+		assert.strictEqual(GRAPH_FILE_GROUP_NODE_WIDTH, 240);
 		assert.strictEqual(root.width, folder.width);
 		assert.strictEqual(folder.width, fileGroup.width);
-		assert.strictEqual(folder.position.x - root.position.x, 262);
+		assert.strictEqual(folder.position.x - root.position.x, 302);
 	});
 
 	test('Filter 표시 상태를 Project를 제외한 Folder subtree와 File presentation에 계산한다', () => {

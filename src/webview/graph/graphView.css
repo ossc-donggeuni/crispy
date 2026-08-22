@@ -6,6 +6,11 @@
 }
 
 .graph-viewport {
+	--graph-viewport-accent-color: var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--vscode-descriptionForeground))
+	);
+
 	position: relative;
 	width: 100%;
 	height: 100%;
@@ -50,7 +55,10 @@
 }
 
 .graph-node {
-	--graph-node-outline-color: #a3a3a3;
+	--graph-node-outline-color: oklch(0.34 0.01 270);
+	--graph-node-border-color: transparent;
+	--graph-node-background: oklch(0.22 0.0065 270);
+	--graph-node-shadow: 0 18px 48px -16px rgb(0 0 0 / 72%);
 
 	position: absolute;
 	top: 0;
@@ -59,9 +67,10 @@
 	box-sizing: border-box;
 	min-width: 0;
 	color: #fcfcfc;
-	background: #1a1b1c;
-	border: 2px solid var(--graph-node-outline-color);
-	border-radius: 6px;
+	background: var(--graph-node-background);
+	border: 1px solid var(--graph-node-border-color);
+	border-radius: 11px;
+	box-shadow: var(--graph-node-shadow);
 	font-family: Inter, var(--vscode-font-family);
 	font-size: 16px;
 	font-weight: 400;
@@ -70,6 +79,16 @@
 	touch-action: none;
 	user-select: none;
 	cursor: grab;
+	transition:
+		background 180ms ease,
+		border-color 180ms ease,
+		box-shadow 180ms ease;
+}
+
+.graph-project-node {
+	--graph-node-outline-color: oklch(0.36 0.012 270);
+	--graph-node-background: oklch(0.228 0.0075 270);
+	--graph-node-shadow: 0 20px 52px -16px rgb(0 0 0 / 78%);
 }
 
 .graph-node.is-dragging {
@@ -80,40 +99,79 @@
 .graph-project-node:hover,
 .graph-folder-node:hover,
 .graph-file-group-node:hover {
-	--graph-node-outline-color: #c4c4c4;
+	--graph-node-outline-color: var(--graph-viewport-accent-color);
+	--graph-node-border-color: var(--graph-viewport-accent-color);
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 6%,
+		oklch(0.23 0.007 270)
+	);
+	--graph-node-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 14%,
+			transparent
+		),
+		0 22px 54px -16px rgb(0 0 0 / 80%);
 
-	background: #222324;
 	cursor: pointer;
 }
 
 .graph-project-node:active,
 .graph-folder-node:active,
 .graph-file-group-node:active:not(:has(.graph-file-item:active, .graph-file-control:active)) {
-	--graph-node-outline-color: #d6d6d6;
-
-	background: #28292a;
+	--graph-node-outline-color: var(--graph-viewport-accent-color);
+	--graph-node-border-color: var(--graph-viewport-accent-color);
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 10%,
+		oklch(0.235 0.007 270)
+	);
+	--graph-node-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 20%,
+			transparent
+		),
+		0 24px 58px -16px rgb(0 0 0 / 84%);
 }
 
 .graph-project-node.is-unreadable,
 .graph-folder-node.is-unreadable {
-	--graph-node-outline-color: #c95f68;
+	--graph-node-outline-color: oklch(0.55 0.12 20);
+	--graph-node-border-color: oklch(0.55 0.12 20);
+	--graph-node-background: oklch(0.23 0.04 20);
+	--graph-node-shadow: 0 20px 52px -16px rgb(0 0 0 / 78%);
 
 	color: #ffd9dc;
-	background: #351b1f;
 }
 
 .graph-project-node.is-unreadable:hover,
 .graph-folder-node.is-unreadable:hover {
-	--graph-node-outline-color: #e27780;
-
-	background: #432126;
+	--graph-node-outline-color: var(--graph-viewport-accent-color);
+	--graph-node-border-color: var(--graph-viewport-accent-color);
+	--graph-node-background: oklch(0.255 0.05 20);
+	--graph-node-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 14%,
+			transparent
+		),
+		0 22px 54px -16px rgb(0 0 0 / 80%);
 }
 
 .graph-project-node.is-unreadable:active,
 .graph-folder-node.is-unreadable:active {
-	--graph-node-outline-color: #ef8a92;
-
-	background: #4b252a;
+	--graph-node-outline-color: var(--graph-viewport-accent-color);
+	--graph-node-border-color: var(--graph-viewport-accent-color);
+	--graph-node-background: oklch(0.275 0.055 20);
+	--graph-node-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 20%,
+			transparent
+		),
+		0 24px 58px -16px rgb(0 0 0 / 84%);
 }
 
 .graph-node.is-dragging,
@@ -296,11 +354,16 @@
 .graph-folder-backlink-node.is-reattach-target,
 .graph-file-group-node.is-backlink.is-reattach-target,
 .graph-file-item.is-backlink.is-reattach-target {
-	--graph-node-outline-color: #a8a8a8;
+	--graph-node-outline-color: oklch(0.62 0.11 285);
+	--graph-node-border-color: oklch(0.62 0.11 285);
+	--graph-node-background: oklch(0.248 0.022 280);
 
 	opacity: 1;
-	background: #343536;
-	box-shadow: 0 0 0 2px rgb(168 168 168 / 55%);
+	background: var(--graph-node-background);
+	box-shadow:
+		0 0 0 3px oklch(0.62 0.11 285 / 16%),
+		0 0 28px oklch(0.62 0.11 285 / 22%),
+		0 20px 46px -12px rgb(0 0 0 / 84%);
 }
 
 .graph-backlink-indicator {
@@ -690,10 +753,7 @@
 .graph-navigator-minimap-viewport-indicator {
 	fill: var(--vscode-editor-selectionBackground, transparent);
 	fill-opacity: 0.12;
-	stroke: var(
-		--vscode-focusBorder,
-		var(--vscode-contrastActiveBorder, var(--vscode-descriptionForeground))
-	);
+	stroke: var(--graph-viewport-accent-color);
 	stroke-width: 1.5;
 	stroke-opacity: 0.8;
 	cursor: grab;
