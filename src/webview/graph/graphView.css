@@ -21,7 +21,7 @@
 		var(--vscode-editorWhitespace-foreground, rgba(128, 128, 128, 0.35)) 1px,
 		transparent 1px
 	);
-	background-size: 20px 20px;
+	background-size: 40px 40px;
 	touch-action: none;
 	cursor: grab;
 }

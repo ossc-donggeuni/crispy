@@ -246,7 +246,7 @@ suite('Graph Camera', () => {
 			'translate(-80px, 65px) scale(2)',
 		);
 		assert.strictEqual(fixture.viewport.style.backgroundPosition, '-80px 65px');
-		assert.strictEqual(fixture.viewport.style.backgroundSize, '40px 40px');
+		assert.strictEqual(fixture.viewport.style.backgroundSize, '80px 80px');
 	});
 
 	test('focusOn은 scale을 유지하고 Root 중심을 향해 ease-out 보간한 뒤 정확히 완료한다', () => {
