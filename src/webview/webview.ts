@@ -73,6 +73,12 @@ const graphView = initializeGraphView(
 	initialState.graph,
 	workspaceGraph,
 	{
+		onFileOpenRequest: (fileId) => {
+			vscodeApi.postMessage({
+				type: 'workspace.openFile',
+				fileId,
+			});
+		},
 		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
 			viewport,
 			chatPanel,

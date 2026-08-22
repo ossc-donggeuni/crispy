@@ -111,6 +111,8 @@ export interface GraphRendererInteractions {
 	onFileGroupClick?: (folderId: string) => void;
 	/** Standalone presentation 또는 File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
 	onFileClick?: (fileId: string) => void;
+	/** 일반 File Row가 Double Click됐을 때 안정적인 File ID를 전달한다. */
+	onFileOpenRequest?: (fileId: string) => void;
 	/** Handle Drag가 완료됐을 때 대상 ID와 client 좌표를 상위로 전달한다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 	/** Folder/File Backlink Click 시 연결된 Graph Root ID를 전달한다. */
@@ -2367,7 +2369,7 @@ function initializeFileGroupContent(
 	};
 }
 
-/** File Row DOM과 Click feedback listener lifecycle을 만든다. */
+/** File Row DOM과 Click/Open feedback listener lifecycle을 만든다. */
 function createFileRow(
 	file: GraphFileNode,
 	ownerDocument: Document,
@@ -2414,6 +2416,16 @@ function createFileRow(
 		animateFileClick();
 		interactions.onFileClick?.(getGraphLayoutSourceId(file.id));
 	};
+	const handleFileDoubleClick = (event: MouseEvent): void => {
+		event.stopPropagation();
+		event.preventDefault();
+
+		if (file.presentation === 'backlink') {
+			return;
+		}
+
+		interactions.onFileOpenRequest?.(getGraphLayoutSourceId(file.id));
+	};
 	const handleFileClickAnimationEnd = (event: AnimationEvent): void => {
 		if (event.target === item) {
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
@@ -2421,6 +2433,7 @@ function createFileRow(
 	};
 
 	item.addEventListener('click', handleFileClick);
+	item.addEventListener('dblclick', handleFileDoubleClick);
 	item.addEventListener('animationend', handleFileClickAnimationEnd);
 
 	return {
@@ -2429,6 +2442,7 @@ function createFileRow(
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
 			item.removeEventListener('click', handleFileClick);
+			item.removeEventListener('dblclick', handleFileDoubleClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
 		},

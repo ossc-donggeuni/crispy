@@ -4394,6 +4394,32 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('grouped File Row의 Open 요청을 원본 File ID로 상위에 전달한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const fileOpenRequests: string[] = [];
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK, {
+			onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
+		});
+		const fileRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			'file:app/src/graphView.ts',
+		);
+
+		fileRow.dispatch('dblclick', createClickEvent(fileRow));
+
+		assert.deepStrictEqual(fileOpenRequests, ['file:app/src/graphView.ts']);
+		graphView.dispose();
+	});
+
 	test('접힌 Parent를 이동한 뒤 열면 하위 Node도 같은 Offset으로 나타난다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');

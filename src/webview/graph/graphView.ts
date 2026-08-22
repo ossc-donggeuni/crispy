@@ -70,6 +70,8 @@ export interface GraphView {
 export interface GraphViewInteractions {
 	/** 내부 Promotion 처리 뒤 Detach 완료 요청을 관찰하는 선택적 callback이다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
+	/** 일반 File Row의 Editor 열기 요청을 안정적인 File ID로 전달한다. */
+	onFileOpenRequest?: (fileId: string) => void;
 	/** Floating Overlay를 제외한 현재 Graph 표시 영역을 Viewport local 좌표로 계산한다. */
 	resolveVisibleGraphArea?: (viewport: HTMLElement) => GraphVisibleArea;
 }
@@ -1394,6 +1396,9 @@ export function initializeGraphView(
 		{
 			onFolderClick: (folderId) => {
 				state.toggleFolder(folderId);
+			},
+			onFileOpenRequest: (fileId) => {
+				interactions.onFileOpenRequest?.(fileId);
 			},
 			onDetachDrop: handleDetachDrop,
 			onBacklinkClick: handleBacklinkClick,

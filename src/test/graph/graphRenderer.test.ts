@@ -25,6 +25,7 @@ import {
 } from '../../webview/graph/graphModel';
 import {
 	addGraphRoot,
+	createDetachedRootId,
 	createFileBacklinkGroupId,
 	createFolderBacklinkId,
 	removeGraphRoot,
@@ -677,6 +678,7 @@ suite('Graph Renderer / Node Drag', () => {
 			openedFolders: graphState.getState().openedFolders,
 		});
 		const fileClicks: string[] = [];
+		const fileOpenRequests: string[] = [];
 		const backlinkClicks: string[] = [];
 		const rootContextClicks: string[] = [];
 		const renderer = initializeGraphRenderer(
@@ -686,6 +688,7 @@ suite('Graph Renderer / Node Drag', () => {
 			graphState,
 			{
 				onFileClick: (fileId) => fileClicks.push(fileId),
+				onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
 				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
 				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
 				resolveRootId: (rootNodeId) => addition.graph.roots.find(
@@ -745,9 +748,14 @@ suite('Graph Renderer / Node Drag', () => {
 		backlinkRow.dispatch('pointermove', createPointerEvent(backlinkRow, 50, 60));
 		backlinkRow.dispatch('pointerup', createPointerEvent(backlinkRow, 50, 60));
 		backlinkRow.dispatch('click', createClickEvent(backlinkRow));
+		const backlinkDoubleClick = createClickEvent(backlinkRow);
+		backlinkRow.dispatch('dblclick', backlinkDoubleClick);
 		assert.strictEqual(fileGroup.hasPointerCapture(1), false);
 		assert.deepStrictEqual(graphState.getState().nodePositions, {});
 		assert.deepStrictEqual(fileClicks, []);
+		assert.deepStrictEqual(fileOpenRequests, []);
+		assert.strictEqual(backlinkDoubleClick.defaultPrevented, true);
+		assert.strictEqual(backlinkDoubleClick.propagationStopped, true);
 		assert.deepStrictEqual(backlinkClicks, [addition.root.id]);
 		assert.strictEqual(
 			backlinkRow.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
@@ -1675,9 +1683,15 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(fixture.graphState.getFileGroupPage(secondId), 1);
 		assert.strictEqual(getDescendantsByClass(first, 'graph-file-item').length, 10);
 		assert.strictEqual(getDescendantsByClass(second, 'graph-file-item').length, 5);
+		assert.strictEqual(firstRow.getEventListenerCount(), 0);
+		const refreshedFirstRow = getDescendantByClass(first, 'graph-file-item');
+		assert.notStrictEqual(refreshedFirstRow, firstRow);
+		assert.strictEqual(refreshedFirstRow.getEventListenerCount(), 3);
 		assert.strictEqual(getDescendantByClass(second, 'graph-file-item'), secondRow);
 		assert.strictEqual(getDescendantByClass(second, 'graph-file-more'), secondMore);
 		fixture.renderer.dispose();
+		assert.strictEqual(refreshedFirstRow.getEventListenerCount(), 0);
+		assert.strictEqual(secondRow.getEventListenerCount(), 0);
 	});
 
 	test('Folder, File Group, File Row Click을 각각 Callback으로 구분한다', () => {
@@ -1714,6 +1728,90 @@ suite('Graph Renderer / Node Drag', () => {
 			true,
 		);
 		fixture.renderer.dispose();
+	});
+
+	test('grouped File Row Double Click은 원본 File ID로 Open 요청하고 상위 전파를 막는다', () => {
+		const firstFileId = 'file:file:///workspace/src/first.ts';
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: firstFileId,
+				name: 'first.ts',
+			}, {
+				kind: 'file' as const,
+				id: 'file:file:///workspace/src/second.ts',
+				name: 'second.ts',
+			}],
+		};
+		const rootId = createDetachedRootId(folder.id, 1);
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [folder.id]: true },
+		});
+		const layout = createGraphLayout(createSingleRootGraph(folder, rootId), {
+			openedFolders: graphState.getState().openedFolders,
+		});
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const fileClicks: string[] = [];
+		const fileOpenRequests: string[] = [];
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			layout,
+			graphState,
+			{
+				onFileClick: (fileId) => fileClicks.push(fileId),
+				onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
+			},
+		);
+		const fileGroupId = createGraphLayoutNodeId(
+			rootId,
+			createFileGroupId(folder.id),
+		);
+		const fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const fileRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			firstFileId,
+		);
+		const layoutFileId = createGraphLayoutNodeId(rootId, firstFileId);
+		const layoutFileGroup = getLayoutNode(layout, fileGroupId);
+
+		assert.strictEqual(layoutFileGroup.kind, 'file-group');
+		assert.ok(layoutFileGroup.kind === 'file-group');
+		assert.strictEqual(layoutFileGroup.children[0]?.id, layoutFileId);
+		assert.notStrictEqual(layoutFileId, firstFileId);
+		let bubbledDoubleClicks = 0;
+		fileGroup.addEventListener('dblclick', () => {
+			bubbledDoubleClicks += 1;
+		});
+		const doubleClick = createClickEvent(fileRow);
+
+		fileRow.dispatch('dblclick', doubleClick);
+
+		assert.deepStrictEqual(fileOpenRequests, [firstFileId]);
+		assert.strictEqual(bubbledDoubleClicks, 0);
+		assert.strictEqual(doubleClick.defaultPrevented, true);
+		assert.strictEqual(doubleClick.propagationStopped, true);
+		assert.deepStrictEqual(fileClicks, []);
+
+		fileRow.dispatch('click', createClickEvent(fileRow));
+		assert.deepStrictEqual(fileClicks, [firstFileId]);
+		assert.strictEqual(fileRow.hasClass('is-file-clicking'), true);
+		fileRow.dispatch('animationend', createAnimationEvent(fileRow));
+		assert.strictEqual(fileRow.hasClass('is-file-clicking'), false);
+		renderer.dispose();
 	});
 
 	test('Threshold를 넘긴 Node Drag 뒤 Click Callback을 실행하지 않는다', () => {
@@ -1902,7 +2000,7 @@ suite('Graph Renderer / Node Drag', () => {
 		);
 		assert.ok(restoredEdge.getAttribute('d'));
 		assert.strictEqual(restoredFolder.getEventListenerCount(), 6);
-		assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+		assert.strictEqual(restoredFileRow.getEventListenerCount(), 3);
 
 		restoredFolder.dispatch('click', createClickEvent(restoredFolder));
 		restoredFileRow.dispatch('click', createClickEvent(restoredFileRow));
@@ -1965,7 +2063,7 @@ suite('Graph Renderer / Node Drag', () => {
 			getDescendantsByClass(fileGroup, 'graph-file-item'),
 			retainedRows,
 		);
-		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 2));
+		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 3));
 
 		const addedFile = {
 			kind: 'file' as const,
@@ -2054,12 +2152,16 @@ suite('Graph Renderer / Node Drag', () => {
 		const fileGroupId = createFileGroupId(folderId);
 		let fileGroupClicks = 0;
 		let fileClicks = 0;
+		let fileOpenRequests = 0;
 		const fixture = createRendererFixture(1, undefined, {
 			onFileGroupClick: () => {
 				fileGroupClicks += 1;
 			},
 			onFileClick: () => {
 				fileClicks += 1;
+			},
+			onFileOpenRequest: () => {
+				fileOpenRequests += 1;
 			},
 		}, project);
 		const openLayout = fixture.layout;
@@ -2083,20 +2185,22 @@ suite('Graph Renderer / Node Drag', () => {
 
 			assert.notStrictEqual(restoredFileGroup, activeFileGroup);
 			assert.strictEqual(restoredFileGroup.getEventListenerCount(), 6);
-			assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+			assert.strictEqual(restoredFileRow.getEventListenerCount(), 3);
 
 			fixture.renderer.applyLayout(openLayout);
 			assert.strictEqual(fixture.getNode(fileGroupId), restoredFileGroup);
 			assert.strictEqual(restoredFileGroup.getEventListenerCount(), 6);
-			assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+			assert.strictEqual(restoredFileRow.getEventListenerCount(), 3);
 
 			restoredFileGroup.dispatch(
 				'click',
 				createClickEvent(restoredFileGroup),
 			);
 			restoredFileRow.dispatch('click', createClickEvent(restoredFileRow));
+			restoredFileRow.dispatch('dblclick', createClickEvent(restoredFileRow));
 			assert.strictEqual(fileGroupClicks, cycle);
 			assert.strictEqual(fileClicks, cycle);
+			assert.strictEqual(fileOpenRequests, cycle);
 			activeFileGroup = restoredFileGroup;
 			activeFileRow = restoredFileRow;
 		}
@@ -2110,9 +2214,11 @@ suite('Graph Renderer / Node Drag', () => {
 
 		activeFileGroup.dispatch('click', createClickEvent(activeFileGroup));
 		activeFileRow.dispatch('click', createClickEvent(activeFileRow));
+		activeFileRow.dispatch('dblclick', createClickEvent(activeFileRow));
 		fixture.renderer.applyLayout(openLayout);
 		assert.strictEqual(fileGroupClicks, 3);
 		assert.strictEqual(fileClicks, 3);
+		assert.strictEqual(fileOpenRequests, 3);
 		assert.strictEqual(fixture.nodeLayer.children.length, 0);
 		assert.strictEqual(fixture.edgeLayer.children.length, 0);
 	});
