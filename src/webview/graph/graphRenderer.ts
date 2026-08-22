@@ -81,6 +81,12 @@ interface RootContextLabelRenderer {
 	dispose(): void;
 }
 
+/** 정렬 가능한 실제 Card/Placeholder 하나와 그 client hit rect다. */
+interface GraphArrangementTarget {
+	readonly element: HTMLElement;
+	readonly bounds: DOMRect;
+}
+
 /** Graph Node/Edge DOM과 interaction lifecycle을 관리한다. */
 export interface GraphRenderer {
 	/** 기존 Node/Edge DOM을 새로운 Layout geometry와 동기화한다. */
@@ -243,12 +249,11 @@ export function initializeGraphRenderer(
 	let activeArrangementDrag: {
 		readonly nodeId: string;
 		readonly wasUnarranged: boolean;
-		readonly targetBounds?: DOMRect;
-		readonly targetElements: readonly HTMLElement[];
+		readonly targets: readonly GraphArrangementTarget[];
 		readonly placeholder?: HTMLElement;
 		readonly sourceElement?: HTMLElement;
 		readonly preview?: HTMLElement;
-		isTarget: boolean;
+		activeTarget?: HTMLElement;
 	} | undefined;
 	/** 정렬 Drag placeholder와 hover target 표시를 모두 제거한다. */
 	const clearArrangementDrag = (): void => {
@@ -256,8 +261,8 @@ export function initializeGraphRenderer(
 			return;
 		}
 
-		for (const target of activeArrangementDrag.targetElements) {
-			target.classList.remove(ARRANGEMENT_TARGET_CLASS);
+		for (const target of activeArrangementDrag.targets) {
+			target.element.classList.remove(ARRANGEMENT_TARGET_CLASS);
 		}
 
 		activeArrangementDrag.placeholder?.remove();
@@ -327,12 +332,14 @@ export function initializeGraphRenderer(
 				&& fileGroup.presentation === 'grouped';
 
 			if (isGroupedTarget && targetElement) {
+				const targetBounds = getNodeClientRect(fileGroupId);
+
 				activeArrangementDrag = {
 					nodeId,
 					wasUnarranged,
-					targetBounds: getNodeClientRect(fileGroupId),
-					targetElements: [targetElement],
-					isTarget: false,
+					targets: targetBounds
+						? [{ element: targetElement, bounds: targetBounds }]
+						: [],
 				};
 				return;
 			}
@@ -350,14 +357,13 @@ export function initializeGraphRenderer(
 					nodeElements.get(siblingId)?.hidden === false
 				))
 			: [];
-		const siblingElements = siblingIds
-			.map((siblingId) => nodeElements.get(siblingId))
-			.filter((element): element is HTMLElement => element !== undefined);
 		let placeholder: HTMLElement | undefined;
-		const targetElements: HTMLElement[] = [...siblingElements];
-		const targetRects = siblingIds
-			.map(getNodeClientRect)
-			.filter((rect): rect is DOMRect => rect !== undefined);
+		const targets: GraphArrangementTarget[] = siblingIds.flatMap((siblingId) => {
+			const element = nodeElements.get(siblingId);
+			const bounds = getNodeClientRect(siblingId);
+
+			return element && bounds ? [{ element, bounds }] : [];
+		});
 
 		if (!wasUnarranged) {
 			if (sourceNode) {
@@ -368,24 +374,22 @@ export function initializeGraphRenderer(
 				placeholder.style.height = `${sourceNode.height}px`;
 				placeholder.style.transform = `translate(${sourcePosition.x}px, ${sourcePosition.y}px)`;
 				nodeLayer.append(placeholder);
-				targetElements.push(placeholder);
 				const sourceBounds = getNodeClientRect(nodeId);
 
 				if (sourceBounds) {
-					targetRects.push(sourceBounds);
+					targets.push({ element: placeholder, bounds: sourceBounds });
 				}
 			}
 		}
 
-		if (targetRects.length === 0 && parentId) {
+		if (targets.length === 0 && parentId) {
 			const parentElement = nodeElements.get(parentId);
 
 			if (parentElement && !parentElement.hidden) {
-				targetElements.push(parentElement);
 				const parentBounds = getNodeClientRect(parentId);
 
 				if (parentBounds) {
-					targetRects.push(parentBounds);
+					targets.push({ element: parentElement, bounds: parentBounds });
 				}
 			}
 		}
@@ -393,10 +397,8 @@ export function initializeGraphRenderer(
 		activeArrangementDrag = {
 			nodeId,
 			wasUnarranged,
-			targetBounds: unionClientRects(targetRects),
-			targetElements,
+			targets,
 			placeholder,
-			isTarget: false,
 		};
 	};
 	/** Grouped File Row Drag용 원래 목록 target과 standalone preview를 만든다. */
@@ -411,6 +413,7 @@ export function initializeGraphRenderer(
 		if (!targetElement) {
 			return undefined;
 		}
+		const targetBounds = getNodeClientRect(fileGroupId);
 
 		const preview = ownerDocument.createElement('div');
 		const name = ownerDocument.createElement('span');
@@ -427,11 +430,11 @@ export function initializeGraphRenderer(
 		activeArrangementDrag = {
 			nodeId: file.id,
 			wasUnarranged: false,
-			targetBounds: getNodeClientRect(fileGroupId),
-			targetElements: [targetElement],
+			targets: targetBounds
+				? [{ element: targetElement, bounds: targetBounds }]
+				: [],
 			sourceElement,
 			preview,
-			isTarget: false,
 		};
 		return preview;
 	};
@@ -453,34 +456,29 @@ export function initializeGraphRenderer(
 		preview.style.transform = `translate(${position.x}px, ${position.y}px)`;
 		return position;
 	};
-	/** Pointer가 정렬 child 목록 영역에 들어왔는지 판별하고 반투명 강조를 갱신한다. */
+	/** Pointer가 실제 정렬 Card/Placeholder에 들어왔는지 판별하고 해당 슬롯만 강조한다. */
 	const updateArrangementTarget = (
 		clientX: number,
 		clientY: number,
 	): boolean => {
 		const session = activeArrangementDrag;
-		const isTarget = session?.targetBounds
-			? isPointInsideExpandedRect(
+		const target = session
+			? findClosestArrangementTarget(
+				session.targets,
 				clientX,
 				clientY,
-				session.targetBounds,
 				ARRANGEMENT_TARGET_MARGIN,
 			)
-			: false;
+			: undefined;
+		const isTarget = target !== undefined;
 
-		if (!session || session.isTarget === isTarget) {
+		if (!session || session.activeTarget === target?.element) {
 			return isTarget;
 		}
 
-		session.isTarget = isTarget;
-
-		for (const target of session.targetElements) {
-			if (isTarget) {
-				target.classList.add(ARRANGEMENT_TARGET_CLASS);
-			} else {
-				target.classList.remove(ARRANGEMENT_TARGET_CLASS);
-			}
-		}
+		session.activeTarget?.classList.remove(ARRANGEMENT_TARGET_CLASS);
+		session.activeTarget = target?.element;
+		session.activeTarget?.classList.add(ARRANGEMENT_TARGET_CLASS);
 
 		return isTarget;
 	};
@@ -1980,37 +1978,75 @@ function isPointInsideExpandedRect(
 		&& clientY <= rect.bottom + margin;
 }
 
-/** 여러 정렬 sibling client rect를 하나의 연속된 목록 hit area로 합친다. */
-function unionClientRects(rects: readonly DOMRect[]): DOMRect | undefined {
-	const first = rects[0];
+/**
+ * 확장된 개별 hit rect 안의 슬롯만 반환한다.
+ * Margin이 겹치면 실제 rect까지의 거리, 그다음 중심 거리가 가까운 슬롯을 고른다.
+ */
+function findClosestArrangementTarget(
+	targets: readonly GraphArrangementTarget[],
+	clientX: number,
+	clientY: number,
+	margin: number,
+): GraphArrangementTarget | undefined {
+	let closest: GraphArrangementTarget | undefined;
+	let closestRectDistance = Number.POSITIVE_INFINITY;
+	let closestCenterDistance = Number.POSITIVE_INFINITY;
 
-	if (!first) {
-		return undefined;
+	for (const target of targets) {
+		if (!isPointInsideExpandedRect(
+			clientX,
+			clientY,
+			target.bounds,
+			margin,
+		)) {
+			continue;
+		}
+		const rectDistance = squaredDistanceToRect(
+			clientX,
+			clientY,
+			target.bounds,
+		);
+		const centerDeltaX = clientX
+			- (target.bounds.left + target.bounds.right) / 2;
+		const centerDeltaY = clientY
+			- (target.bounds.top + target.bounds.bottom) / 2;
+		const centerDistance = centerDeltaX * centerDeltaX
+			+ centerDeltaY * centerDeltaY;
+
+		if (
+			rectDistance < closestRectDistance
+			|| (
+				rectDistance === closestRectDistance
+				&& centerDistance < closestCenterDistance
+			)
+		) {
+			closest = target;
+			closestRectDistance = rectDistance;
+			closestCenterDistance = centerDistance;
+		}
 	}
 
-	const bounds = rects.slice(1).reduce((current, rect) => ({
-		left: Math.min(current.left, rect.left),
-		top: Math.min(current.top, rect.top),
-		right: Math.max(current.right, rect.right),
-		bottom: Math.max(current.bottom, rect.bottom),
-	}), {
-		left: first.left,
-		top: first.top,
-		right: first.right,
-		bottom: first.bottom,
-	});
+	return closest;
+}
 
-	return {
-		x: bounds.left,
-		y: bounds.top,
-		left: bounds.left,
-		top: bounds.top,
-		right: bounds.right,
-		bottom: bounds.bottom,
-		width: bounds.right - bounds.left,
-		height: bounds.bottom - bounds.top,
-		toJSON: () => ({}),
-	};
+/** Pointer와 rect 사이의 축별 최단 거리 제곱을 반환한다. */
+function squaredDistanceToRect(
+	clientX: number,
+	clientY: number,
+	rect: DOMRect,
+): number {
+	const deltaX = clientX < rect.left
+		? rect.left - clientX
+		: clientX > rect.right
+			? clientX - rect.right
+			: 0;
+	const deltaY = clientY < rect.top
+		? rect.top - clientY
+		: clientY > rect.bottom
+			? clientY - rect.bottom
+			: 0;
+
+	return deltaX * deltaX + deltaY * deltaY;
 }
 
 function createClientRect(

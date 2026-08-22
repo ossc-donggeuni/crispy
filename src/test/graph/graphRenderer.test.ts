@@ -2575,10 +2575,19 @@ suite('Graph Renderer / Node Drag', () => {
 			siblingPosition.y + 8,
 		));
 		assert.strictEqual(sibling.hasClass('is-arrangement-target'), true);
+		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), false);
+
+		node.dispatch('pointermove', createPointerEvent(
+			node,
+			nodePosition.x + 8,
+			nodePosition.y + 8,
+		));
+		assert.strictEqual(sibling.hasClass('is-arrangement-target'), false);
 		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), true);
 
 		node.dispatch('pointermove', createPointerEvent(node, -500, -500));
 		assert.strictEqual(sibling.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), false);
 		node.dispatch('pointerup', createPointerEvent(node, -500, -500));
 
 		assert.deepStrictEqual(requests, [{ nodeId, arranged: false }]);
@@ -2587,6 +2596,91 @@ suite('Graph Renderer / Node Drag', () => {
 			'data-graph-arrangement-placeholder-id',
 			nodeId,
 		), undefined);
+		fixture.renderer.dispose();
+	});
+
+	test('열린 Subtree로 벌어진 형제 Card 사이 공백은 정렬 대상이 아니다', () => {
+		const expanded = {
+			kind: 'folder' as const,
+			id: 'folder:arrangement-gap/expanded',
+			name: 'expanded',
+			status: 'loaded' as const,
+			children: Array.from({ length: 8 }, (_, index) => ({
+				kind: 'folder' as const,
+				id: `folder:arrangement-gap/expanded/child-${index + 1}`,
+				name: `child-${index + 1}`,
+				status: 'loaded' as const,
+				children: [],
+			})),
+		};
+		const source = {
+			kind: 'folder' as const,
+			id: 'folder:arrangement-gap/source',
+			name: 'source',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const trailing = {
+			kind: 'folder' as const,
+			id: 'folder:arrangement-gap/trailing',
+			name: 'trailing',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:arrangement-gap',
+			name: 'arrangement-gap',
+			status: 'loaded',
+			children: [expanded, source, trailing],
+		};
+		const requests: GraphNodeArrangementRequest[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onNodeArrangementChange: (request) => {
+				requests.push(request);
+				return true;
+			},
+		}, project);
+		const sourceNode = fixture.getNode(source.id);
+		const expandedNode = fixture.getNode(expanded.id);
+		const trailingNode = fixture.getNode(trailing.id);
+		const sourcePosition = getLayoutNode(fixture.layout, source.id).position;
+		const expandedLayoutNode = getLayoutNode(fixture.layout, expanded.id);
+		const gapTop = expandedLayoutNode.position.y + expandedLayoutNode.height + 10;
+		const gapBottom = sourcePosition.y - 10;
+
+		assert.ok(gapBottom > gapTop);
+		const gapPoint = {
+			x: sourcePosition.x + 8,
+			y: (gapTop + gapBottom) / 2,
+		};
+
+		sourceNode.dispatch('pointerdown', createPointerEvent(
+			sourceNode,
+			sourcePosition.x + 8,
+			sourcePosition.y + 8,
+		));
+		sourceNode.dispatch('pointermove', createPointerEvent(
+			sourceNode,
+			gapPoint.x,
+			gapPoint.y,
+		));
+		const placeholder = getDescendantByAttribute(
+			fixture.nodeLayer,
+			'data-graph-arrangement-placeholder-id',
+			source.id,
+		);
+
+		assert.strictEqual(expandedNode.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(trailingNode.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), false);
+		sourceNode.dispatch('pointerup', createPointerEvent(
+			sourceNode,
+			gapPoint.x,
+			gapPoint.y,
+		));
+
+		assert.deepStrictEqual(requests, [{ nodeId: source.id, arranged: false }]);
 		fixture.renderer.dispose();
 	});
 
