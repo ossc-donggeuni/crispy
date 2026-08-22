@@ -7,7 +7,11 @@ export const MCP_REQUEST_BODY_MAX_BYTES = 64 * 1024;
 
 export type McpBodyReadResult =
 	| { readonly ok: true; readonly parsedBody: unknown }
-	| { readonly ok: false; readonly status: 400 | 413 };
+	| {
+		readonly ok: false;
+		readonly status: 400 | 413;
+		readonly closeConnection?: true;
+	};
 
 /** application/json과 선택적인 UTF-8 charset 하나만 허용한다. */
 export function isAllowedMcpContentType(value: string | undefined): boolean {
@@ -41,47 +45,68 @@ export async function readBoundedJsonBody(
 ): Promise<McpBodyReadResult> {
 	const declaredLength = parseContentLength(request.headers['content-length']);
 	if (declaredLength === 'invalid') {
-		request.resume();
-		return { ok: false, status: 400 };
+		request.pause();
+		return { ok: false, status: 400, closeConnection: true };
 	}
 	if (declaredLength !== undefined && declaredLength > MCP_REQUEST_BODY_MAX_BYTES) {
-		request.resume();
-		return { ok: false, status: 413 };
+		request.pause();
+		return { ok: false, status: 413, closeConnection: true };
 	}
 
-	const chunks: Buffer[] = [];
-	let length = 0;
-	let exceeded = false;
-	try {
-		for await (const rawChunk of request) {
+	return new Promise((resolve) => {
+		const chunks: Buffer[] = [];
+		let length = 0;
+		let settled = false;
+
+		const finish = (result: McpBodyReadResult, pause = false): void => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			request.off('data', onData);
+			request.off('end', onEnd);
+			request.off('error', onError);
+			request.off('aborted', onAborted);
+			if (pause) {
+				request.pause();
+			}
+			resolve(result);
+		};
+
+		const onData = (rawChunk: Buffer | Uint8Array): void => {
 			const chunk = Buffer.isBuffer(rawChunk)
 				? rawChunk
-				: Buffer.from(rawChunk as Uint8Array);
+				: Buffer.from(rawChunk);
 			length += chunk.byteLength;
 			if (length > MCP_REQUEST_BODY_MAX_BYTES) {
-				exceeded = true;
-				continue;
+				finish({ ok: false, status: 413, closeConnection: true }, true);
+				return;
 			}
 			chunks.push(chunk);
-		}
-	} catch {
-		return { ok: false, status: 400 };
-	}
-	if (exceeded) {
-		return { ok: false, status: 413 };
-	}
-
-	try {
-		const bodyText = new TextDecoder('utf-8', { fatal: true }).decode(
-			Buffer.concat(chunks, length),
-		);
-		return {
-			ok: true,
-			parsedBody: JSON.parse(bodyText) as unknown,
 		};
-	} catch {
-		return { ok: false, status: 400 };
-	}
+
+		const onEnd = (): void => {
+			try {
+				const bodyText = new TextDecoder('utf-8', { fatal: true }).decode(
+					Buffer.concat(chunks, length),
+				);
+				finish({
+					ok: true,
+					parsedBody: JSON.parse(bodyText) as unknown,
+				});
+			} catch {
+				finish({ ok: false, status: 400 });
+			}
+		};
+
+		const onError = (): void => finish({ ok: false, status: 400 });
+		const onAborted = (): void => finish({ ok: false, status: 400 });
+
+		request.on('data', onData);
+		request.once('end', onEnd);
+		request.once('error', onError);
+		request.once('aborted', onAborted);
+	});
 }
 
 export function writeSafeHttpResponse(

@@ -174,6 +174,19 @@ suite('Crispy MCP protocol server', () => {
 		assert.deepStrictEqual(fixture.activity, []);
 	});
 
+	test('chunked body가 상한을 넘으면 client end를 기다리지 않고 413으로 연결을 닫는다', async () => {
+		const fixture = await startFixture();
+		const oversized = await settlesWithin(
+			postOversizedChunkedWithoutEnding(fixture),
+			1_000,
+		);
+
+		assert.strictEqual(oversized.status, 413);
+		assert.strictEqual(oversized.headers.connection, 'close');
+		assert.doesNotMatch(oversized.body, new RegExp(fixture.token));
+		assert.deepStrictEqual(fixture.activity, []);
+	});
+
 	test('legacy initialize가 최초 성공 요청이면 activity를 한 번만 관찰한다', async () => {
 		const fixture = await startFixture();
 		const initialized = await postJson(fixture.url, fixture.token, {
@@ -234,6 +247,32 @@ suite('Crispy MCP protocol server', () => {
 		await waitForActivityCount(fixture.activity, 1);
 		await settleActivityObservers();
 		assert.strictEqual(fixture.activity.length, 1);
+	});
+
+	test('activity 관찰 뒤 후속 MCP response는 observation clone을 만들지 않는다', async () => {
+		const fixture = await startFixture();
+		const originalClone = Response.prototype.clone;
+		let cloneCount = 0;
+		Response.prototype.clone = function cloneForObservationTest(): Response {
+			cloneCount += 1;
+			return originalClone.call(this);
+		};
+
+		try {
+			const first = await postJson(fixture.url, fixture.token, toolsListRequest(14));
+			await first.text();
+			await waitForActivityCount(fixture.activity, 1);
+			const cloneCountAfterActivity = cloneCount;
+
+			const followUp = await postJson(fixture.url, fixture.token, toolsListRequest(15));
+			await followUp.text();
+			await settleActivityObservers();
+
+			assert.strictEqual(cloneCount, cloneCountAfterActivity);
+			assert.strictEqual(fixture.activity.length, 1);
+		} finally {
+			Response.prototype.clone = originalClone;
+		}
 	});
 
 	test('notification, invalid JSON-RPC와 unsupported method는 activity가 아니다', async () => {
@@ -539,6 +578,46 @@ function rawRequest(
 	});
 }
 
+function postOversizedChunkedWithoutEnding(
+	fixture: StartedFixture,
+): Promise<RawHttpResponse> {
+	const target = new URL(fixture.url);
+	return new Promise((resolve, reject) => {
+		let responseStarted = false;
+		const request = httpRequest({
+			hostname: target.hostname,
+			port: Number(target.port),
+			path: target.pathname,
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${fixture.token}`,
+				'Content-Type': 'application/json',
+				Accept: 'application/json, text/event-stream',
+				Expect: '100-continue',
+			},
+		}, (response) => {
+			responseStarted = true;
+			const chunks: Buffer[] = [];
+			response.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+			response.once('error', reject);
+			response.once('end', () => resolve({
+				status: response.statusCode ?? 0,
+				headers: response.headers,
+				body: Buffer.concat(chunks).toString('utf8'),
+			}));
+		});
+		request.on('error', (error) => {
+			if (!responseStarted) {
+				reject(error);
+			}
+		});
+		request.once('continue', () => {
+			request.write(Buffer.alloc(MCP_REQUEST_BODY_MAX_BYTES + 1, 0x20));
+		});
+		request.flushHeaders();
+	});
+}
+
 function openSlowUpload(fixture: StartedFixture): Promise<ClientRequest> {
 	const target = new URL(fixture.url);
 	return new Promise((resolve, reject) => {
@@ -571,14 +650,14 @@ function openSlowUpload(fixture: StartedFixture): Promise<ClientRequest> {
 	});
 }
 
-async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+async function settlesWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		await Promise.race([
+		return await Promise.race([
 			promise,
 			new Promise<never>((_resolve, reject) => {
 				timeout = setTimeout(
-					() => reject(new Error('Operation exceeded its shutdown deadline.')),
+					() => reject(new Error('Operation exceeded its deadline.')),
 					timeoutMs,
 				);
 			}),
