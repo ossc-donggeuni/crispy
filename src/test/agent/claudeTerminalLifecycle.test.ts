@@ -116,11 +116,22 @@ class FakeClaudeSupervisor implements McpSupervisor {
 				: 'continue_without_mcp',
 		};
 	}
+
+	activity(sessionId: string): McpSessionRuntimeEvent {
+		const runtime = this.runtimes.get(sessionId);
+		assert.ok(runtime !== undefined);
+		return {
+			type: 'session.mcpActivityObserved',
+			generation: runtime.generation,
+			sessionId,
+		};
+	}
 }
 
 function createFixture(options: {
 	readonly mcpCompatible?: boolean;
 	readonly fakePid?: number;
+	readonly withCodex?: boolean;
 	readonly prepareClaudeLaunch?: ConstructorParameters<typeof TerminalHost>[0][
 		'prepareClaudeLaunch'
 	];
@@ -159,6 +170,23 @@ function createFixture(options: {
 				mcpCompatible: options.mcpCompatible ?? true,
 			},
 		})),
+		...(options.withCodex
+			? {
+				prepareCodexLaunch: async () => ({
+					ok: true as const,
+					preparation: {
+						executable: {
+							executable: '/resolved/codex',
+							launcherKind: 'direct' as const,
+						},
+						cwd: '/trusted/workspace',
+						environment: { PATH: '/bin' },
+						platform: 'linux' as const,
+						shellEnvironmentPolicyStyle: 'keyed-filters' as const,
+					},
+				}),
+			}
+			: {}),
 		mcpSupervisor: supervisor,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
@@ -225,6 +253,18 @@ suite('Claude direct PTY and MCP transaction', () => {
 		assert.strictEqual(fixture.messages.some(
 			(message) => message.type === 'mcp.statusChanged',
 		), false);
+
+		const activity = fixture.supervisor.activity(session.sessionId);
+		fixture.host.handleMcpRuntimeEvent(activity);
+		fixture.host.handleMcpRuntimeEvent(activity);
+		assert.deepStrictEqual(fixture.messages.filter(
+			(message) => message.type === 'mcp.statusChanged',
+		), [{
+			type: 'mcp.statusChanged',
+			tabId: 'tab-authenticated',
+			sessionId: session.sessionId,
+			status: 'connected',
+		}]);
 	});
 
 	test('authenticated spawn 실패는 bare를 한 번만 재시도하고 credential을 폐기한다', async () => {
@@ -261,8 +301,11 @@ suite('Claude direct PTY and MCP transaction', () => {
 			(name) => name.toUpperCase() === 'CRISPY_MCP_TOKEN',
 		), false);
 		assert.strictEqual(fixture.messages.some(
-			(message) => message.type === 'mcp.statusChanged',
-		), false);
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.status === 'failed'
+				&& message.reason === 'auth_registration_failed'
+				&& message.retryable,
+		), true);
 	});
 
 	test('authenticated와 bare spawn이 모두 실패하면 세 번째 시도 없이 start_failed다', async () => {
@@ -375,19 +418,172 @@ suite('Claude direct PTY and MCP transaction', () => {
 			sessionId: session.sessionId,
 			data: 'input-after-crash',
 		});
+		afterSpawn.host.routeResize({
+			type: 'terminal.resize',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			cols: 132,
+			rows: 44,
+		});
 		afterSpawn.adapter.handles[0].emitData('output-after-crash');
 		await Promise.resolve();
 
 		assert.strictEqual(afterSpawn.adapter.spawnCalls.length, 1);
 		assert.strictEqual(afterSpawn.adapter.handles[0].killCallCount, 0);
 		assert.deepStrictEqual(afterSpawn.adapter.handles[0].writes, ['input-after-crash']);
+		assert.deepStrictEqual(afterSpawn.adapter.handles[0].resizes, [{
+			cols: 132,
+			rows: 44,
+		}]);
 		assert.strictEqual(afterSpawn.messages.some(
 			(message) => message.type === 'terminal.output'
 				&& message.data === 'output-after-crash',
 		), true);
 		assert.strictEqual(afterSpawn.messages.some(
-			(message) => message.type === 'mcp.statusChanged',
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === session.sessionId
+				&& message.status === 'failed'
+				&& message.reason === 'adapter_exited'
+				&& message.retryable,
+		), true);
+	});
+});
+
+suite('Claude MCP status, restart, and multi-tab isolation', () => {
+	test('retryable failure restart는 Claude만 fresh session/token/config로 교체하고 stale event를 무시한다', async () => {
+		const fixture = createFixture();
+		await beginClaude(fixture.host, 'tab-claude-restart');
+		const first = fixture.host.getActiveSession('tab-claude-restart');
+		assert.ok(first !== undefined);
+		const firstRuntime = fixture.supervisor.getSessionRuntime(first.sessionId);
+		assert.ok(firstRuntime !== undefined);
+		const firstArgs = fixture.adapter.spawnCalls[0].args;
+		const firstToken = fixture.adapter.spawnCalls[0].env.CRISPY_MCP_TOKEN;
+		const staleActivity = fixture.supervisor.activity(first.sessionId);
+		const staleFailure = fixture.supervisor.crash(first.sessionId);
+		fixture.host.handleMcpRuntimeEvent(staleFailure);
+
+		const restart = fixture.host.restartMcpSession(first.tabId, first.sessionId);
+		const duplicate = fixture.host.restartMcpSession(first.tabId, first.sessionId);
+		assert.strictEqual(duplicate, restart);
+		await restart;
+
+		const second = fixture.host.getActiveSession('tab-claude-restart');
+		assert.ok(second !== undefined);
+		assert.notStrictEqual(second.sessionId, first.sessionId);
+		assert.notStrictEqual(
+			fixture.supervisor.getSessionRuntime(second.sessionId)?.generation,
+			firstRuntime.generation,
+		);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 2);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
+		assert.notDeepStrictEqual(fixture.adapter.spawnCalls[1].args, firstArgs);
+		assert.notStrictEqual(
+			fixture.adapter.spawnCalls[1].env.CRISPY_MCP_TOKEN,
+			firstToken,
+		);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusCleared'
+				&& message.sessionId === first.sessionId,
+		), true);
+
+		fixture.host.handleMcpRuntimeEvent(staleActivity);
+		fixture.host.handleMcpRuntimeEvent(staleFailure);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === second.sessionId,
 		), false);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.activity(second.sessionId),
+		);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === second.sessionId
+				&& message.status === 'connected',
+		), true);
+	});
+
+	test('동시 Codex/Claude 탭의 I/O, resize, status와 Claude retry를 서로 격리한다', async () => {
+		const fixture = createFixture({ withCodex: true });
+		fixture.host.createTab('tab-codex');
+		await fixture.host.handleTerminalReady('tab-codex', 100, 30);
+		await fixture.host.switchAgent('tab-codex', 'codex');
+		await beginClaude(fixture.host, 'tab-claude');
+		const codex = fixture.host.getActiveSession('tab-codex');
+		const claude = fixture.host.getActiveSession('tab-claude');
+		assert.ok(codex !== undefined);
+		assert.ok(claude !== undefined);
+
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.activity(codex.sessionId),
+		);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.activity(claude.sessionId),
+		);
+		fixture.host.routeInput({
+			type: 'terminal.input',
+			tabId: codex.tabId,
+			sessionId: codex.sessionId,
+			data: 'codex-input',
+		});
+		fixture.host.routeInput({
+			type: 'terminal.input',
+			tabId: claude.tabId,
+			sessionId: claude.sessionId,
+			data: 'claude-input',
+		});
+		fixture.host.routeResize({
+			type: 'terminal.resize',
+			tabId: codex.tabId,
+			sessionId: codex.sessionId,
+			cols: 111,
+			rows: 31,
+		});
+		fixture.host.routeResize({
+			type: 'terminal.resize',
+			tabId: claude.tabId,
+			sessionId: claude.sessionId,
+			cols: 122,
+			rows: 42,
+		});
+		fixture.adapter.handles[0].emitData('codex-output');
+		fixture.adapter.handles[1].emitData('claude-output');
+		await Promise.resolve();
+
+		assert.deepStrictEqual(fixture.adapter.handles[0].writes, ['codex-input']);
+		assert.deepStrictEqual(fixture.adapter.handles[1].writes, ['claude-input']);
+		assert.deepStrictEqual(fixture.adapter.handles[0].resizes, [{ cols: 111, rows: 31 }]);
+		assert.deepStrictEqual(fixture.adapter.handles[1].resizes, [{ cols: 122, rows: 42 }]);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'terminal.output'
+				&& message.tabId === codex.tabId
+				&& message.data === 'codex-output',
+		), true);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'terminal.output'
+				&& message.tabId === claude.tabId
+				&& message.data === 'claude-output',
+		), true);
+		assert.deepStrictEqual(fixture.messages.filter(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.status === 'connected',
+		).map((message) => message.tabId), ['tab-codex', 'tab-claude']);
+
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(claude.sessionId),
+		);
+		await fixture.host.restartMcpSession(claude.tabId, claude.sessionId);
+		const freshClaude = fixture.host.getActiveSession('tab-claude');
+		assert.ok(freshClaude !== undefined);
+		assert.notStrictEqual(freshClaude.sessionId, claude.sessionId);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.strictEqual(fixture.adapter.handles[1].killCallCount, 1);
+		assert.strictEqual(fixture.adapter.handles[2].killCallCount, 0);
+		assert.strictEqual(fixture.host.getActiveSession('tab-codex'), codex);
+		assert.strictEqual(
+			fixture.supervisor.getSessionRuntime(codex.sessionId)?.lifecycle,
+			'running',
+		);
 	});
 });
 
@@ -418,6 +614,13 @@ suite('Claude narrow startup rejection fallback', () => {
 				&& message.sessionId !== authenticated.sessionId,
 		));
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 2);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId !== authenticated.sessionId
+				&& message.status === 'failed'
+				&& message.reason === 'provider_policy_blocked'
+				&& !message.retryable,
+		), true);
 		assert.strictEqual(fixture.messages.some(
 			(message) => message.type === 'terminal.error',
 		), false);
@@ -452,6 +655,13 @@ suite('Claude narrow startup rejection fallback', () => {
 			(message) => message.type === 'terminal.exited'
 				&& message.sessionId === authenticated.sessionId,
 		), false);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged'
+				&& message.sessionId === bare.sessionId
+				&& message.status === 'failed'
+				&& message.reason === 'provider_policy_blocked'
+				&& !message.retryable,
+		), true);
 	});
 
 	test('network/login-like 오류와 interactive input 뒤 오류는 자동 relaunch하지 않는다', async () => {
