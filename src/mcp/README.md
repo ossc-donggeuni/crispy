@@ -197,8 +197,9 @@ protocol integration test가 검증한다.
 
 - workstation에 system `managed-mcp.json`이 있고 dynamic `--mcp-config`를 전달하면 공식 문서는
   startup exit와 정확한 문구 `You cannot dynamically configure MCP servers when an enterprise MCP
-  config is present`를 명시한다. L1/L2에서 설치 버전의 non-zero exit, interactive prompt 미도달,
-  redacted stderr가 모두 일치할 때만 `provider_policy_blocked` 후보로 사용한다.
+  config is present`를 명시한다. L1 smoke에서는 redacted stderr를, direct PTY인 L2에서는 bounded
+  in-memory startup output을 사용하며 non-zero exit와 interactive prompt 미도달까지 모두 일치할
+  때만 `provider_policy_blocked` 후보로 사용한다.
 - allowlist/denylist에 의해 Crispy server만 filter된 경우, 401/일반 network failure, login/auth
   failure, 정상 사용자 종료, `alwaysLoad`의 최대 5초 대기는 startup config rejection이 아니다.
   자동 bare relaunch 근거로 사용하지 않는다.
@@ -246,3 +247,29 @@ preparation을 추가한다. L3 전에는 Claude status/retry UI를 연결하지
 - [Claude Code MCP](https://code.claude.com/docs/en/mcp)
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Claude Code managed MCP](https://code.claude.com/docs/en/managed-mcp)
+
+## Claude Phase L2 자동 lifecycle — 2026-08-22
+
+Extension Host는 Claude 선택 시 workspace와 executable을 먼저 확정하고 credential-free
+`claude --version` probe를 bounded child process로 실행한다. `>=2.1.121`일 때만 공통
+`McpAdapterSupervisor`에서 session child/port/route/token을 만들고 `auth.registered` 이후 inline
+config plan과 최종 provider environment를 생성한다. probe 실패·timeout·unparsable 또는 minimum
+미만은 adapter와 token을 만들지 않고 bare Claude로 fail-open하며 `provider_update_required`를
+emit하지 않는다.
+
+TerminalHost의 기존 Codex generation map과 direct-spawn transaction은 provider-neutral ownership으로
+일반화했다. Codex와 Claude 모두 current tab/session/provider/generation이 모든 await 뒤 일치해야 PTY를
+spawn하고, `CRISPY_MCP_TOKEN`은 authenticated plan의 final environment에만 들어간다. stale base token의
+대소문자 변형과 `ELECTRON_RUN_AS_NODE`는 bare/authenticated 경로 모두에서 제거된다.
+
+Authenticated Claude spawn 실패는 token/child cleanup 후 bare spawn 한 번만 허용한다. 두 spawn이
+모두 실패하면 `start_failed`이며 세 번째 spawn은 없다. PTY 전에 adapter가 죽으면 bare로 전환하고,
+PTY 뒤 adapter가 죽으면 Claude PTY와 input/output/resize는 유지하면서 credential/runtime만 정리한다.
+정상 Claude exit, tab close, reset, provider 변경, Panel dispose와 deactivate는 공통 cleanup을 사용한다.
+
+제품 PTY는 stdout/stderr가 합쳐지므로 startup fallback classifier는 최대 16 KiB의 in-memory PTY
+startup output만 보며 어디에도 기록하지 않는다. non-zero exit, signal 없음, interactive input 및
+authenticated activity 미관찰과 exact managed-policy/current-server schema diagnostic이 함께 맞을 때만
+fresh bare session을 한 번 만든다. login/auth, network, 정상 종료, 사용자가 입력한 뒤의 종료와 MCP
+silence는 자동 fallback으로 분류하지 않는다. Claude indicator/retry UI는 L3 범위라 L2에는 노출하지
+않는다.

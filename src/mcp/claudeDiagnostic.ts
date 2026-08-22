@@ -6,7 +6,7 @@ export const CLAUDE_STARTUP_DIAGNOSTIC_MAX_BYTES = 16 * 1024;
 
 export interface ClaudeStartupDiagnosticInput {
 	readonly exitCode: number | null;
-	readonly signal: NodeJS.Signals | null;
+	readonly signal: NodeJS.Signals | number | null;
 	readonly reachedInteractivePrompt: boolean;
 	readonly stderr: string;
 	readonly expectedMcpServerName?: string;
