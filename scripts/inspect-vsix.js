@@ -224,6 +224,7 @@ function findUnexpectedVsixPayloadEntries(entryNames) {
 		'extension/THIRD_PARTY_NOTICES.md',
 		'extension/package.json',
 		'extension/readme.md',
+		'extension/resources/defaultWorkspaceFilter.json',
 	]);
 
 	return Object.freeze([...entryNames].filter((entryName) => (
