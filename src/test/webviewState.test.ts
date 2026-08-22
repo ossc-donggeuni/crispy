@@ -486,11 +486,13 @@ suite('Webview State Wiring', () => {
 		let collapseFit: (() => void) | undefined;
 		let collapseRefreshCount = 0;
 		let persistResizeState: (() => void) | undefined;
+		let resizeRefresh: (() => void) | undefined;
 		let resizeFit: (() => void) | undefined;
 		let agentUiLayoutChange: (() => void) | undefined;
 		let unloadHandler: (() => void) | undefined;
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
 		let graphInitializeCount = 0;
+		let graphVisibleRefreshCount = 0;
 		let graphUnsubscribed = false;
 		let graphDisposed = false;
 		let agentPanelUiInitialized = false;
@@ -595,6 +597,9 @@ suite('Webview State Wiring', () => {
 				camera: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['camera'],
+				refreshVisibleGraphArea: () => {
+					graphVisibleRefreshCount += 1;
+				},
 				updateGraph: (nextGraph) => {
 					graphUpdates.push(nextGraph);
 				},
@@ -623,10 +628,11 @@ suite('Webview State Wiring', () => {
 			_layout,
 			_resizeHandle,
 			_state,
-			_onSizeChange,
+			onSizeChange,
 			onResizeEnd,
 			onLayoutResize,
 		) => {
+			resizeRefresh = onSizeChange;
 			persistResizeState = onResizeEnd;
 			resizeFit = onLayoutResize;
 		}) as typeof panelResizeModule.initializePanelResize;
@@ -780,6 +786,7 @@ suite('Webview State Wiring', () => {
 			assert.deepStrictEqual(ensuredTabs, [agentTabId]);
 			assert.deepStrictEqual(activeTabs, [agentTabId]);
 			assert.strictEqual(graphInitializeCount, 1);
+			assert.strictEqual(graphVisibleRefreshCount, 1);
 			assert.ok(hostMessageHandler);
 
 			hostMessageHandler({
@@ -996,13 +1003,22 @@ suite('Webview State Wiring', () => {
 			assert.ok(dockFit);
 			const fitCountBeforeDock = terminalFitCount;
 			const collapseRefreshBeforeDock = collapseRefreshCount;
+			const graphRefreshBeforeDock = graphVisibleRefreshCount;
 			dockFit();
 
 			assert.strictEqual(terminalFitCount, fitCountBeforeDock + 1);
 			assert.strictEqual(collapseRefreshCount, collapseRefreshBeforeDock + 1);
+			assert.strictEqual(graphVisibleRefreshCount, graphRefreshBeforeDock + 1);
 
 			assert.ok(persistResizeState);
+			assert.ok(resizeRefresh);
 			assert.ok(resizeFit);
+			const graphRefreshBeforeResize = graphVisibleRefreshCount;
+			resizeRefresh();
+			assert.strictEqual(
+				graphVisibleRefreshCount,
+				graphRefreshBeforeResize + 1,
+			);
 			panelState.sideSize = 500;
 			persistResizeState();
 
@@ -1034,7 +1050,12 @@ suite('Webview State Wiring', () => {
 			assert.ok(persistCollapsedState);
 			assert.ok(collapseFit);
 			panelState.collapsed = true;
+			const graphRefreshBeforeCollapse = graphVisibleRefreshCount;
 			persistCollapsedState();
+			assert.strictEqual(
+				graphVisibleRefreshCount,
+				graphRefreshBeforeCollapse + 1,
+			);
 
 			assert.strictEqual(savedStates.length, 4);
 			assert.deepStrictEqual(savedStates[3], {

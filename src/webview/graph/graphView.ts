@@ -21,6 +21,10 @@ import {
 } from './graphRenderer';
 import type { GraphDetachDropRequest } from './graphDetachDrag';
 import {
+	createFullGraphVisibleArea,
+	type GraphVisibleArea,
+} from './graphVisibleArea';
+import {
 	createGraphState,
 	type GraphState,
 	type GraphStateSnapshot,
@@ -33,6 +37,8 @@ export interface GraphView {
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
+	/** Panel/Dock/Webview 변화 뒤 Visible Graph 기반 Overlay를 즉시 다시 배치한다. */
+	refreshVisibleGraphArea(): void;
 	/** 기존 View와 State를 유지하며 새로운 Workspace Graph를 적용한다. */
 	updateGraph(graph: Graph): void;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
@@ -43,6 +49,8 @@ export interface GraphView {
 export interface GraphViewInteractions {
 	/** 내부 Promotion 처리 뒤 Detach 완료 요청을 관찰하는 선택적 callback이다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
+	/** Floating Overlay를 제외한 현재 Graph 표시 영역을 Viewport local 좌표로 계산한다. */
+	resolveVisibleGraphArea?: (viewport: HTMLElement) => GraphVisibleArea;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -234,7 +242,16 @@ export function initializeGraphView(
 		workspaceGraph,
 		initialGraphState.detachedRootNodeIds,
 	);
-	const camera = initializeGraphCamera(viewport, world, state);
+	const getVisibleGraphArea = (): GraphVisibleArea => (
+		interactions.resolveVisibleGraphArea?.(viewport)
+		?? createFullGraphVisibleArea({
+			width: viewport.clientWidth,
+			height: viewport.clientHeight,
+		})
+	);
+	const camera = initializeGraphCamera(viewport, world, state, {
+		getVisibleGraphArea,
+	});
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
 	let currentLayout: GraphLayout;
@@ -354,6 +371,7 @@ export function initializeGraphView(
 		camera,
 		initialLayout,
 		{ onRootSelect: handleNavigatorRootSelect },
+		getVisibleGraphArea,
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
@@ -368,6 +386,11 @@ export function initializeGraphView(
 	return {
 		state,
 		camera,
+		refreshVisibleGraphArea(): void {
+			if (!disposed) {
+				navigator.refreshVisibleGraphArea();
+			}
+		},
 		updateGraph(graph): void {
 			if (disposed) {
 				return;

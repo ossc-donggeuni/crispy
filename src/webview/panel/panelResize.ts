@@ -212,8 +212,11 @@ export function initializePanelResize(
 	resizeHandle.addEventListener('pointercancel', handleResizeCancel);
 	resizeHandle.addEventListener('lostpointercapture', handleLostPointerCapture);
 
-	/** Webview가 좁아져도 Floating Panel이 화면 밖으로 나가지 않도록 표시 크기만 다시 제한한다. */
-	const resizeObserver = new ResizeObserver(() => applyPanelSize(layout, state));
+	/** Webview Resize 뒤 표시 크기와 Visible Graph 의존 UI를 같은 callback에서 갱신한다. */
+	const resizeObserver = new ResizeObserver(() => {
+		applyPanelSize(layout, state);
+		onSizeChange();
+	});
 	resizeObserver.observe(layout);
 }
 

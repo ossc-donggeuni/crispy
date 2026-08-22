@@ -163,6 +163,7 @@ suite('Panel Resize', () => {
 
 		fixture.layout.setSize(300, 200);
 		FakeResizeObserver.trigger(fixture.layout);
+		assert.strictEqual(fixture.getSizeChangeCount(), 1);
 
 		assert.strictEqual(fixture.state.sideSize, INITIAL_SIDE_SIZE);
 		assert.strictEqual(fixture.state.verticalSize, INITIAL_VERTICAL_SIZE);
@@ -219,6 +220,7 @@ interface ResizeFixture {
 	layout: FakeElement;
 	resizeHandle: FakeElement;
 	state: PanelLayoutState;
+	getSizeChangeCount(): number;
 	getResizeEndCount(): number;
 	getLayoutResizeCount(): number;
 }
@@ -231,6 +233,7 @@ function createResizeFixture(
 	const layout = new FakeElement(width, height);
 	const resizeHandle = new FakeElement();
 	const state = createState(dock);
+	let sizeChangeCount = 0;
 	let resizeEndCount = 0;
 	let layoutResizeCount = 0;
 
@@ -239,7 +242,7 @@ function createResizeFixture(
 		layout.asHtmlElement(),
 		resizeHandle.asHtmlElement(),
 		state,
-		() => undefined,
+		() => sizeChangeCount++,
 		() => resizeEndCount++,
 		() => layoutResizeCount++,
 	);
@@ -248,6 +251,7 @@ function createResizeFixture(
 		layout,
 		resizeHandle,
 		state,
+		getSizeChangeCount: () => sizeChangeCount,
 		getResizeEndCount: () => resizeEndCount,
 		getLayoutResizeCount: () => layoutResizeCount,
 	};

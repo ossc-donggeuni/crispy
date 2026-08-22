@@ -9,6 +9,10 @@ import {
 	type GraphAnimationFrameScheduler,
 } from '../../webview/graph/graphCamera';
 import { createGraphState } from '../../webview/graph/graphState';
+import {
+	calculateGraphVisibleArea,
+	type GraphVisibleAreaProvider,
+} from '../../webview/graph/graphVisibleArea';
 
 suite('Graph Camera', () => {
 	test('초기 상태와 setState를 graph-world transform에 적용한다', () => {
@@ -276,6 +280,46 @@ suite('Graph Camera', () => {
 		assert.strictEqual(scheduler.pendingCount, 0);
 	});
 
+	test('focusOn은 호출 시점의 Visible Graph 중앙을 사용하고 Panel 변화도 다시 조회한다', () => {
+		let visibleArea = calculateGraphVisibleArea(
+			{ width: 1000, height: 800 },
+			{ left: 0, top: 0, width: 1000, height: 800 },
+			{ left: 528, top: 12, right: 988, bottom: 788, width: 460, height: 776 },
+			'right',
+			false,
+		);
+		const fixture = createCameraFixture(
+			1000,
+			800,
+			0,
+			0,
+			undefined,
+			() => visibleArea,
+		);
+
+		fixture.camera.setState({ x: 0, y: 0, scale: 2 });
+		fixture.camera.focusOn({ x: 100, y: 200 }, { duration: 0 });
+		assert.deepStrictEqual(fixture.camera.getState(), {
+			x: 64,
+			y: 0,
+			scale: 2,
+		});
+
+		visibleArea = calculateGraphVisibleArea(
+			{ width: 1000, height: 800 },
+			{ left: 0, top: 0, width: 1000, height: 800 },
+			{ left: 12, top: 12, right: 572, bottom: 788, width: 560, height: 776 },
+			'left',
+			false,
+		);
+		fixture.camera.focusOn({ x: 100, y: 200 }, { duration: 0 });
+		assert.deepStrictEqual(fixture.camera.getState(), {
+			x: 586,
+			y: 0,
+			scale: 2,
+		});
+	});
+
 	test('새 focusOn은 기존 Frame을 취소하고 현재 Camera 상태에서 단일 Animation을 시작한다', () => {
 		const scheduler = new FakeAnimationFrameScheduler();
 		const fixture = createCameraFixture(1000, 800, 0, 0, scheduler);
@@ -407,6 +451,7 @@ function createCameraFixture(
 	left = 0,
 	top = 0,
 	animationFrameScheduler?: GraphAnimationFrameScheduler,
+	getVisibleGraphArea?: GraphVisibleAreaProvider,
 ) {
 	const viewport = new FakeElement(width, height, left, top);
 	const world = new FakeElement();
@@ -415,7 +460,7 @@ function createCameraFixture(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),
 		graphState,
-		{ animationFrameScheduler },
+		{ animationFrameScheduler, getVisibleGraphArea },
 	);
 
 	return { viewport, world, camera, graphState };

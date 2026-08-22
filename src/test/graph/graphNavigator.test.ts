@@ -21,6 +21,11 @@ import {
 	type GraphNavigatorInteractions,
 } from '../../webview/graph/graphNavigator';
 import { createGraphState } from '../../webview/graph/graphState';
+import {
+	calculateGraphVisibleArea,
+	createFullGraphVisibleArea,
+	type GraphVisibleAreaProvider,
+} from '../../webview/graph/graphVisibleArea';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../../webview/panel/panelState';
 import {
 	restoreWebviewState,
@@ -67,6 +72,46 @@ suite('Graph Navigator', () => {
 			fixture.controls,
 		]);
 		assert.strictEqual(fixture.featureRow.children[1], fixture.actionRail);
+	});
+
+	test('Navigator를 최신 Visible Graph 영역의 우하단 안쪽으로 즉시 재배치한다', () => {
+		let visibleArea = calculateGraphVisibleArea(
+			{ width: 800, height: 600 },
+			{ left: 0, top: 0, width: 800, height: 600 },
+			{ left: 520, top: 12, right: 788, bottom: 588, width: 268, height: 576 },
+			'right',
+			false,
+		);
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+			undefined,
+			() => visibleArea,
+		);
+		const navigatorStyle = fixture.navigatorElement.style as unknown as Record<
+			string,
+			string
+		>;
+
+		assert.strictEqual(navigatorStyle.right, '296px');
+		assert.strictEqual(navigatorStyle.bottom, '16px');
+
+		visibleArea = calculateGraphVisibleArea(
+			{ width: 800, height: 600 },
+			{ left: 0, top: 0, width: 800, height: 600 },
+			{ left: 12, top: 300, right: 788, bottom: 588, width: 776, height: 288 },
+			'bottom',
+			false,
+		);
+		fixture.navigator.refreshVisibleGraphArea();
+		assert.strictEqual(navigatorStyle.right, '16px');
+		assert.strictEqual(navigatorStyle.bottom, '316px');
+
+		visibleArea = createFullGraphVisibleArea({ width: 800, height: 600 });
+		fixture.navigator.refreshVisibleGraphArea();
+		assert.strictEqual(navigatorStyle.right, '16px');
+		assert.strictEqual(navigatorStyle.bottom, '16px');
 	});
 
 	test('초기 Layout을 SVG Line과 Rect로 렌더링하고 Text를 생성하지 않는다', () => {
@@ -357,6 +402,36 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(focusTargets.length, 2);
 		assert.notDeepStrictEqual(focusTargets[1], focusTargets[0]);
 		assert.strictEqual(fixture.camera.getState().scale, 1.5);
+	});
+
+	test('Minimap Focus도 Camera와 공유한 Visible Graph 중앙에 Target을 배치한다', () => {
+		const visibleArea = calculateGraphVisibleArea(
+			{ width: 800, height: 600 },
+			{ left: 0, top: 0, width: 800, height: 600 },
+			{ left: 520, top: 12, right: 788, bottom: 588, width: 268, height: 576 },
+			'right',
+			false,
+		);
+		const fixture = createNavigatorFixture(
+			{ x: 0, y: 0, scale: 1.5 },
+			{},
+			createLargeMinimapLayout(),
+			undefined,
+			() => visibleArea,
+		);
+		const focusOn = fixture.camera.focusOn.bind(fixture.camera);
+
+		fixture.camera.focusOn = (point) => focusOn(point, { duration: 0 });
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			80,
+			48,
+		));
+
+		assertPointAlmostEqual(
+			fixture.camera.worldToViewport({ x: 1_050, y: 620 }),
+			visibleArea.center,
+		);
 	});
 
 	test('Empty Graph와 Minimap 바깥 또는 invalid Click은 Camera Navigation을 무시한다', () => {
@@ -1738,6 +1813,7 @@ function createNavigatorFixture(
 	interactions: GraphNavigatorInteractions = {},
 	initialLayout: GraphLayout = createEmptyLayout(),
 	animationFrameScheduler?: GraphAnimationFrameScheduler,
+	getVisibleGraphArea?: GraphVisibleAreaProvider,
 ) {
 	const ownerDocument = new FakeDocument();
 	const viewport = ownerDocument.createSizedElement(800, 600);
@@ -1751,7 +1827,7 @@ function createNavigatorFixture(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),
 		graphState,
-		{ animationFrameScheduler },
+		{ animationFrameScheduler, getVisibleGraphArea },
 	);
 	const navigator = initializeGraphNavigator(
 		overlay.asHtmlElement(),
@@ -1760,6 +1836,7 @@ function createNavigatorFixture(
 		camera,
 		initialLayout,
 		interactions,
+		getVisibleGraphArea,
 	);
 	const navigatorElement = getChild(overlay, 0);
 	const bottomRow = getChild(navigatorElement, 0);

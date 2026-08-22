@@ -1,4 +1,5 @@
 import type { GraphCamera } from './graphCamera';
+import type { GraphVisibleArea } from './graphVisibleArea';
 import {
 	resolveGraphLayoutNodePosition,
 	type GraphLayout,
@@ -173,6 +174,7 @@ export function createMinimapProjection(
 export function calculateCameraWorldBounds(
 	camera: Pick<GraphCamera, 'viewportToWorld'>,
 	viewportSize: MinimapSize,
+	visibleArea?: GraphVisibleArea,
 ): GraphBounds | undefined {
 	if (
 		!areFiniteNumbers(viewportSize.width, viewportSize.height)
@@ -186,10 +188,13 @@ export function calculateCameraWorldBounds(
 	let second: MinimapPoint;
 
 	try {
-		first = camera.viewportToWorld({ x: 0, y: 0 });
+		first = camera.viewportToWorld({
+			x: visibleArea?.left ?? 0,
+			y: visibleArea?.top ?? 0,
+		});
 		second = camera.viewportToWorld({
-			x: viewportSize.width,
-			y: viewportSize.height,
+			x: visibleArea?.right ?? viewportSize.width,
+			y: visibleArea?.bottom ?? viewportSize.height,
 		});
 	} catch {
 		return undefined;

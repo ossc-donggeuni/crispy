@@ -15,6 +15,7 @@ import {
 import { initializeGraphView } from './graph/graphView';
 import { deserializeGraphFromWebview } from './graph/graphTransport';
 import type { GraphStateSnapshot } from './graph/graphState';
+import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
 import { initializePanelCollapse } from './panel/panelCollapse';
 import { initializePanelDock } from './panel/panelDock';
 import { applyPanelSize, initializePanelResize } from './panel/panelResize';
@@ -67,7 +68,19 @@ const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
-const graphView = initializeGraphView(graphArea, initialState.graph, workspaceGraph);
+const graphView = initializeGraphView(
+	graphArea,
+	initialState.graph,
+	workspaceGraph,
+	{
+		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
+			viewport,
+			chatPanel,
+			panelState.preferredDock,
+			panelState.collapsed,
+		),
+	},
+);
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
@@ -203,7 +216,10 @@ const refreshCollapse = initializePanelCollapse(
 		stickerOpener,
 	},
 	panelState,
-	persistWebviewSessionState,
+	() => {
+		persistWebviewSessionState();
+		graphView.refreshVisibleGraphArea();
+	},
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
 /** Dock 초기화 */
@@ -217,6 +233,7 @@ const refreshDock = initializePanelDock(
 		/** Dock이 바뀌면 새 방향 기준으로 표시 크기와 Sticker 위치를 다시 맞춘다. */
 		applyPanelSize(layout, panelState);
 		refreshCollapse();
+		graphView.refreshVisibleGraphArea();
 		terminalPool.scheduleActiveTerminalFit();
 	},
 );
@@ -225,10 +242,16 @@ initializePanelResize(
 	layout,
 	resizeHandle,
 	panelState,
-	refreshDock,
+	() => {
+		refreshDock();
+		graphView.refreshVisibleGraphArea();
+	},
 	persistWebviewSessionState,
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
+
+/** 초기 Dock/크기/접힘 상태가 DOM에 모두 반영된 뒤 Overlay 기준을 한 번 확정한다. */
+graphView.refreshVisibleGraphArea();
 
 let previousGraphState = graphView.state.getState();
 const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {

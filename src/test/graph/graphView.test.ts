@@ -36,6 +36,10 @@ import {
 	initializeGraphView,
 	promoteToGraphRoot,
 } from '../../webview/graph/graphView';
+import {
+	calculateGraphVisibleArea,
+	createFullGraphVisibleArea,
+} from '../../webview/graph/graphVisibleArea';
 
 suite('Graph View', () => {
 	test('Graph Node와 File Row의 hidden 속성은 flex layout보다 우선한다', () => {
@@ -1680,6 +1684,13 @@ suite('Graph View', () => {
 	test('Navigator Root 선택은 저장 위치와 Layout fallback을 Focus하고 Camera scale을 유지한다', () => {
 		const savedFolderPosition = { x: 900, y: 520 };
 		const initialScale = 1.4;
+		let visibleArea = calculateGraphVisibleArea(
+			{ width: 1000, height: 800 },
+			{ left: 0, top: 0, width: 1000, height: 800 },
+			{ left: 528, top: 12, right: 988, bottom: 788, width: 460, height: 776 },
+			'right',
+			false,
+		);
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
@@ -1691,6 +1702,7 @@ suite('Graph View', () => {
 				},
 			},
 			GRAPH_MOCK,
+			{ resolveVisibleGraphArea: () => visibleArea },
 		);
 		const layout = createGraphLayout(GRAPH_MOCK);
 		const folderLayout = layout.nodes.find(
@@ -1724,8 +1736,14 @@ suite('Graph View', () => {
 				x: savedFolderPosition.x + folderLayout.width / 2,
 				y: savedFolderPosition.y + folderLayout.height / 2,
 			}),
-			{ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 },
+			visibleArea.center,
 		);
+
+		visibleArea = createFullGraphVisibleArea({
+			width: viewport.clientWidth,
+			height: viewport.clientHeight,
+		});
+		graphView.refreshVisibleGraphArea();
 
 		const fileButton = rootButtons[2];
 
@@ -1737,7 +1755,7 @@ suite('Graph View', () => {
 				x: fileLayout.position.x + fileLayout.width / 2,
 				y: fileLayout.position.y + fileLayout.height / 2,
 			}),
-			{ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 },
+			visibleArea.center,
 		);
 		graphView.dispose();
 	});

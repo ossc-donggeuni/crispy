@@ -6,23 +6,24 @@ import {
 	type GraphStateSnapshot,
 	type GraphStateStore,
 } from './graphState';
+import {
+	createFullGraphVisibleArea,
+	type GraphViewportSize,
+	type GraphVisibleArea,
+	type GraphVisibleAreaProvider,
+} from './graphVisibleArea';
 
 export {
 	MAX_CAMERA_SCALE,
 	MIN_CAMERA_SCALE,
 	type GraphCameraState,
+	type GraphViewportSize,
 };
 
 /** Viewport 또는 Graph World의 2차원 좌표다. */
 export interface GraphPoint {
 	x: number;
 	y: number;
-}
-
-/** Camera가 World 중심을 배치할 Graph Viewport의 화면 크기다. */
-export interface GraphViewportSize {
-	readonly width: number;
-	readonly height: number;
 }
 
 /** Camera Focus 이동 시간을 선택적으로 지정한다. */
@@ -39,6 +40,8 @@ export interface GraphAnimationFrameScheduler {
 /** Camera 초기화 시 선택적으로 주입하는 platform dependency다. */
 export interface GraphCameraOptions {
 	animationFrameScheduler?: GraphAnimationFrameScheduler;
+	/** Focus가 목표로 삼을 현재 Visible Graph 영역을 반환한다. */
+	getVisibleGraphArea?: GraphVisibleAreaProvider;
 }
 
 /** Camera 상태, 좌표 변환, 기준점 Zoom 및 lifecycle을 제공한다. */
@@ -95,22 +98,37 @@ export function createCenteredGraphCameraState(
 	viewportSize: GraphViewportSize,
 	scale: number,
 ): GraphCameraState | undefined {
+	return createVisibleGraphCameraState(
+		point,
+		createFullGraphVisibleArea(viewportSize),
+		scale,
+	);
+}
+
+/** World Point가 Visible Graph 영역 중앙에 오도록 현재 scale의 Camera State를 계산한다. */
+export function createVisibleGraphCameraState(
+	point: GraphPoint,
+	visibleArea: GraphVisibleArea,
+	scale: number,
+): GraphCameraState | undefined {
 	if (
 		!Number.isFinite(point.x)
 		|| !Number.isFinite(point.y)
-		|| !Number.isFinite(viewportSize.width)
-		|| !Number.isFinite(viewportSize.height)
+		|| !Number.isFinite(visibleArea.center.x)
+		|| !Number.isFinite(visibleArea.center.y)
+		|| !Number.isFinite(visibleArea.width)
+		|| !Number.isFinite(visibleArea.height)
 		|| !Number.isFinite(scale)
-		|| viewportSize.width < 0
-		|| viewportSize.height < 0
+		|| visibleArea.width < 0
+		|| visibleArea.height < 0
 		|| scale <= 0
 	) {
 		return undefined;
 	}
 
 	const state = {
-		x: viewportSize.width / 2 - point.x * scale,
-		y: viewportSize.height / 2 - point.y * scale,
+		x: visibleArea.center.x - point.x * scale,
+		y: visibleArea.center.y - point.y * scale,
 		scale,
 	};
 
@@ -243,9 +261,14 @@ export function initializeGraphCamera(
 		cancelFocusAnimation();
 		const startState = getState();
 		const duration = Math.max(0, focusOptions.duration ?? DEFAULT_FOCUS_DURATION);
-		const targetState = createCenteredGraphCameraState(
+		const visibleArea = options.getVisibleGraphArea?.()
+			?? createFullGraphVisibleArea({
+				width: viewport.clientWidth,
+				height: viewport.clientHeight,
+			});
+		const targetState = createVisibleGraphCameraState(
 			point,
-			{ width: viewport.clientWidth, height: viewport.clientHeight },
+			visibleArea,
 			startState.scale,
 		);
 
