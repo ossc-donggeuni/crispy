@@ -121,6 +121,42 @@ export {
 	type BuildCodexBareLaunchPlanOptions,
 	type BuildCodexMcpLaunchPlanOptions,
 } from './codexLaunchPlan';
+export {
+	CLAUDE_MCP_CONFIG_ARGUMENT,
+	CLAUDE_MCP_SERVER_NAME_PREFIX,
+	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
+	CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+	CLAUDE_MCP_TOKEN_PLACEHOLDER,
+	createClaudeMcpConfig,
+	createClaudeMcpServerName,
+	type ClaudeMcpConfig,
+} from './claudeConfig';
+export {
+	CLAUDE_MCP_MINIMUM_COMPATIBLE_VERSION,
+	CLAUDE_VERSION_PROBE_TIMEOUT_MS,
+	compareClaudeVersions,
+	parseClaudeVersionOutput,
+	probeClaudeMcpCompatibility,
+	resolveClaudeMcpCompatibility,
+	type ClaudeMcpCompatibility,
+	type ClaudeMcpCompatibilityProbeResult,
+	type ClaudeMcpCompatibilityResolver,
+	type ClaudeSemanticVersion,
+	type ClaudeVersionProbeFailureReason,
+	type ResolveClaudeMcpCompatibilityOptions,
+} from './claudeCompatibility';
+export {
+	CLAUDE_MANAGED_MCP_DYNAMIC_CONFIG_REJECTION,
+	CLAUDE_STARTUP_DIAGNOSTIC_MAX_BYTES,
+	classifyClaudeStartupDiagnostic,
+	type ClaudeStartupDiagnosticInput,
+} from './claudeDiagnostic';
+export {
+	buildClaudeBareLaunchPlan,
+	buildClaudeMcpLaunchPlan,
+	type BuildClaudeBareLaunchPlanOptions,
+	type BuildClaudeMcpLaunchPlanOptions,
+} from './claudeLaunchPlan';
 export { spawnAgentPty } from './agentPtyLaunch';
 export {
 	createPrepareCodexTerminalLaunch,

@@ -444,3 +444,45 @@ xterm DOM renderer가 기본 팔레트용 동적 `<style>`과 truecolor용 `styl
 `Developer: Open Webview Developer Tools` 콘솔에서
 `getComputedStyle(document.body).getPropertyValue('--vscode-terminal-ansiRed')`로 팔레트 쪽을
 각각 확인한다.
+
+## Claude MCP Phase L1 검증 기록 — 2026-08-22
+
+L1은 TerminalHost 자동 실행에 연결하지 않고 `src/mcp/**`의 session-only inline serializer,
+bare/authenticated launch plan, bounded version probe, managed-policy diagnostic과 node-pty 수동
+smoke까지만 구현한다. Claude config는 `type: "http"`, loopback URL, literal
+`Bearer ${CRISPY_MCP_TOKEN}`, `alwaysLoad: true`만 포함한다. `--strict-mcp-config`, discovery-cache
+override, broad tool deny 또는 user MCP를 제외하는 설정은 넣지 않는다.
+
+기술적 최소 기능 호환 버전은 `2.1.121`로 확정했다. 공식
+[Claude Code changelog](https://code.claude.com/docs/en/changelog)는 이 버전에서 config-level
+`alwaysLoad`를 추가했다고 기록한다. macOS Apple Silicon에서 아래 두 binary로 같은 검증을
+실행했다.
+
+| binary | 결과 |
+| --- | --- |
+| 현재 사용자 설치 `2.1.234` | inline config 인식, header env expansion, `crispy_ping`, authenticated activity 성공; token env 제거 negative control은 activity 없음 |
+| 격리한 공식 `2.1.121` | 위와 동일하게 positive/negative control 통과 |
+
+`2.1.121`은 사용자 설치를 덮어쓰지 않고 `/tmp`에 다운로드했다. 공식 manifest의
+`darwin-arm64` SHA-256 `3810e55d47ed4d413de6dc037e34d58948f779a4c6bdeeacf1748d850c5daad6`과
+binary checksum이 일치한 뒤 실행했다. smoke의 exact `--allowedTools` 값은 random Crispy server의
+`crispy_ping` 하나를 non-interactive run에서 승인하기 위한 진단 전용 값이다. 제품 serializer와
+후속 L2 launch에는 이 flag를 넣지 않으며 다른 user MCP를 deny하거나 숨기지 않는다.
+
+Token 없는 intentionally-invalid inline server 대조에서는 `2.1.234`가 잘못된 entry를 건너뛰고
+계속 실행했으며, `2.1.121`은 prompt 전에 `Invalid MCP configuration`의 고정 schema rejection으로
+종료했다. diagnostic은 broad 문구가 아니라 non-zero exit, prompt 미도달, 두 줄의 exact 문구와
+current random server name이 모두 일치할 때만 `provider_config_rejected`로 분류한다. 공식 managed
+MCP workstation rejection도 문서의 exact 문구가 일치할 때만 `provider_policy_blocked`로 분류한다.
+
+```bash
+pnpm run prepare:claude-mcp-smoke
+pnpm run smoke:claude-mcp
+pnpm run smoke:claude-mcp -- --claude-executable /path/to/isolated/claude
+```
+
+정상 실행은 각 positive/negative transaction에서 `version_compatible`, `adapter_ready`,
+`awaiting_activity` 뒤 각각 `activity_observed`, `negative_control_passed`를 출력한다. token, URL,
+route와 inline config는 출력하지 않는다. version probe 실패·timeout·unparsable 또는 최소 미만은
+credential/config를 만들지 않고 L2에서 bare Claude로 fail-open할 근거만 반환한다.
+`provider_update_required` emit과 사용자-visible 업데이트 안내는 여전히 별도 제품 결정이다.
