@@ -872,6 +872,46 @@ suite('Graph Navigator', () => {
 		);
 	});
 
+	test('Detached ordinal은 Root 목록 이름과 접근성 이름에 괄호로 표시한다', () => {
+		const fixture = createNavigatorFixture();
+
+		fixture.navigator.setRoots([
+			{
+				rootId: 'folder:docs::detached:1',
+				nodeId: 'folder:docs',
+				name: 'docs',
+				kind: 'folder',
+				detachedOrdinal: 1,
+			},
+			{
+				rootId: 'file:webview.css::detached:3',
+				nodeId: 'file:webview.css',
+				name: 'webview.css',
+				kind: 'file',
+				detachedOrdinal: 3,
+			},
+		]);
+		const [folderItem, fileItem] = fixture.rootList.children;
+
+		assert.ok(folderItem && fileItem);
+		assert.strictEqual(
+			getChild(getRootContent(folderItem), 0).textContent,
+			'docs/ (1)',
+		);
+		assert.strictEqual(
+			getRootButton(folderItem).getAttribute('aria-label'),
+			'docs/ (1)',
+		);
+		assert.strictEqual(
+			getChild(getRootContent(fileItem), 0).textContent,
+			'webview.css (3)',
+		);
+		assert.strictEqual(
+			getRootIcon(fileItem).getAttribute('data-file-icon'),
+			resolveFileIcon('webview.css'),
+		);
+	});
+
 	test('Project, Folder와 File Root Button은 rootId 선택을 전달하고 Panel을 열린 채 유지한다', () => {
 		const selectedRootIds: string[] = [];
 		const fixture = createNavigatorFixture(

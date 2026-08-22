@@ -6,6 +6,7 @@ import type {
 	Project,
 } from '../../webview/graph/graphModel';
 import { createGraphNavigatorRoots } from '../../webview/graph/graphNavigatorRoots';
+import { createDetachedRootId } from '../../webview/graph/graphRootPromotion';
 
 const PROJECT: Project = {
 	kind: 'project',
@@ -144,6 +145,46 @@ suite('Graph Navigator Root Data', () => {
 				name: 'folder-a',
 				kind: 'folder',
 				relativePath: '',
+			},
+		]);
+	});
+
+	test('동일 Source Detached Root가 여러 개일 때만 보존된 ordinal을 표시 데이터에 넣는다', () => {
+		const firstRootId = createDetachedRootId(FOLDER_A.id, 1);
+		const thirdRootId = createDetachedRootId(FOLDER_A.id, 3);
+		const singleRootId = createDetachedRootId(FOLDER_B.id, 1);
+		const roots = createGraphNavigatorRoots({
+			roots: [
+				{ id: firstRootId, nodeId: FOLDER_A.id },
+				{ id: thirdRootId, nodeId: FOLDER_A.id },
+				{ id: singleRootId, nodeId: FOLDER_B.id },
+			],
+			rootNodes: {
+				[FOLDER_A.id]: FOLDER_A,
+				[FOLDER_B.id]: FOLDER_B,
+			},
+		});
+
+		assert.deepStrictEqual(roots, [
+			{
+				rootId: firstRootId,
+				nodeId: FOLDER_A.id,
+				name: FOLDER_A.name,
+				kind: 'folder',
+				detachedOrdinal: 1,
+			},
+			{
+				rootId: thirdRootId,
+				nodeId: FOLDER_A.id,
+				name: FOLDER_A.name,
+				kind: 'folder',
+				detachedOrdinal: 3,
+			},
+			{
+				rootId: singleRootId,
+				nodeId: FOLDER_B.id,
+				name: FOLDER_B.name,
+				kind: 'folder',
 			},
 		]);
 	});

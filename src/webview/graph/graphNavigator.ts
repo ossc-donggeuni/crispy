@@ -185,7 +185,10 @@ function createRootListItem(
 	const icon = ownerDocument.createElement('span');
 	const content = ownerDocument.createElement('div');
 	const name = ownerDocument.createElement('span');
-	const displayName = root.kind === 'folder' ? `${root.name}/` : root.name;
+	const baseDisplayName = root.kind === 'folder' ? `${root.name}/` : root.name;
+	const displayName = root.detachedOrdinal === undefined
+		? baseDisplayName
+		: `${baseDisplayName} (${root.detachedOrdinal})`;
 	const rootId = root.rootId;
 	const handleSelect = (): void => {
 		onRootSelect?.(rootId);

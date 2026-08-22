@@ -3156,6 +3156,12 @@ suite('Graph View', () => {
 			[rootId(2)]: true,
 			[rootId(3)]: true,
 		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (2)',
+			'multiple-detach/ (3)',
+		]);
 		for (const ordinal of [1, 2, 3]) {
 			assert.ok(getDetachedRoot(ordinal));
 			assert.ok(
@@ -3229,6 +3235,11 @@ suite('Graph View', () => {
 			[rootId(1)]: true,
 			[rootId(3)]: true,
 		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (3)',
+		]);
 		assert.ok(getBacklink());
 		assert.strictEqual(findDescendantByAttribute(
 			root,
@@ -3242,6 +3253,12 @@ suite('Graph View', () => {
 			[rootId(3)]: true,
 			[rootId(4)]: true,
 		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (3)',
+			'multiple-detach/ (4)',
+		]);
 		assert.strictEqual(
 			getDescendantByClass(
 				getDetachedRoot(4),
@@ -3254,6 +3271,7 @@ suite('Graph View', () => {
 		reattach(3);
 		reattach(4);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['multiple-detach']);
 		assert.strictEqual(findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -3269,6 +3287,10 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
 			[rootId(1)]: true,
 		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/',
+		]);
 		assert.strictEqual(
 			findDescendantByClass(
 				getDetachedRoot(1),
