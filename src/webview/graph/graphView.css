@@ -718,8 +718,8 @@
 	box-sizing: border-box;
 	flex: none;
 	overflow: hidden;
-	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-	border: 1px solid var(--graph-navigator-border-color);
+	background-color: rgb(128 128 128 / 8%);
+	border: 0;
 	border-radius: 6px;
 	pointer-events: auto;
 }
