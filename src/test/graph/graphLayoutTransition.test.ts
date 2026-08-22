@@ -6,9 +6,7 @@ import type {
 } from '../../webview/graph/graphLayout';
 import {
 	classifyGraphLayoutNodeArrangement,
-	rebaseArrangedSubtree,
 	rebaseNodePositions,
-	rebaseReattachedSubtree,
 	translateDetachedSubtree,
 } from '../../webview/graph/graphLayoutTransition';
 
@@ -58,8 +56,9 @@ suite('Graph Layout Transition', () => {
 				moved: { x: 140, y: 180 },
 				'missing-from-layout': { x: 900, y: 700 },
 			},
+			{ unarrangedNodeIds: new Set(['moved']) },
 		), {
-			moved: { x: 200, y: 330 },
+			moved: { x: 140, y: 180 },
 			'missing-from-layout': { x: 900, y: 700 },
 		});
 	});
@@ -77,15 +76,17 @@ suite('Graph Layout Transition', () => {
 			collapsedLayout,
 			expandedLayout,
 			{ 'moved-sibling': { x: 390, y: 220 } },
+			{ unarrangedNodeIds: new Set(['moved-sibling']) },
 		);
 
 		assert.deepStrictEqual(expandedPositions, {
-			'moved-sibling': { x: 390, y: 520 },
+			'moved-sibling': { x: 390, y: 220 },
 		});
 		assert.deepStrictEqual(rebaseNodePositions(
 			expandedLayout,
 			collapsedLayout,
 			expandedPositions,
+			{ unarrangedNodeIds: new Set(['moved-sibling']) },
 		), {
 			'moved-sibling': { x: 390, y: 220 },
 		});
@@ -108,7 +109,7 @@ suite('Graph Layout Transition', () => {
 			collapsedLayout,
 			expandedLayout,
 			{ root: { x: 160, y: 130 } },
-			{ inheritAncestorOffsets: true },
+			{ unarrangedNodeIds: new Set(['root']) },
 		), {
 			root: { x: 160, y: 130 },
 			child: { x: 460, y: 150 },
@@ -118,31 +119,86 @@ suite('Graph Layout Transition', () => {
 
 	test('Layout에서 접힌 저장 Descendant는 현재 Parent의 이동량을 따른다', () => {
 		const previousLayout = createLayout([
-			createNode('parent', 100, 100),
-		]);
+			createNode('root', 100, 100),
+			createNode('parent', 400, 100),
+		], [createEdge('root', 'parent')]);
 		const nextLayout = createLayout([
-			createNode('parent', 160, 140),
-		]);
+			createNode('root', 160, 140),
+			createNode('parent', 560, 180),
+		], [createEdge('root', 'parent')]);
 
 		assert.deepStrictEqual(rebaseNodePositions(
 			previousLayout,
 			nextLayout,
 			{
-				parent: { x: 120, y: 130 },
-				'collapsed-child': { x: 620, y: 360 },
-				'collapsed-grandchild': { x: 920, y: 390 },
+				root: { x: 120, y: 130 },
+				parent: { x: 420, y: 130 },
+				'collapsed-child': { x: 720, y: 360 },
+				'collapsed-grandchild': { x: 1_020, y: 390 },
 			},
 			{
+				unarrangedNodeIds: new Set(['root']),
 				logicalParentByChild: new Map([
+					['parent', 'root'],
 					['collapsed-child', 'parent'],
 					['collapsed-grandchild', 'collapsed-child'],
 				]),
 			},
 		), {
-			parent: { x: 180, y: 170 },
-			'collapsed-child': { x: 680, y: 400 },
-			'collapsed-grandchild': { x: 980, y: 430 },
+			root: { x: 120, y: 130 },
+			parent: { x: 520, y: 170 },
+			'collapsed-child': { x: 820, y: 400 },
+			'collapsed-grandchild': { x: 1_120, y: 430 },
 		});
+	});
+
+	test('닫힐 때 arranged descendant의 직계 Parent local을 저장하고 다시 열 때 복원한다', () => {
+		const expandedLayout = createLayout([
+			createNode('root', 100, 100),
+			createNode('parent', 400, 100),
+			createNode('child', 700, 120),
+			createNode('grandchild', 1_000, 140),
+		], [
+			createEdge('root', 'parent'),
+			createEdge('parent', 'child'),
+			createEdge('child', 'grandchild'),
+		]);
+		const collapsedLayout = createLayout([
+			createNode('root', 100, 100),
+			createNode('parent', 400, 100),
+		], [createEdge('root', 'parent')]);
+		const logicalParentByChild = new Map([
+			['parent', 'root'],
+			['child', 'parent'],
+			['grandchild', 'child'],
+		]);
+		const movedSubtreePositions = {
+			root: { x: 600, y: 400 },
+			parent: { x: 900, y: 400 },
+			child: { x: 1_200, y: 420 },
+			grandchild: { x: 1_500, y: 440 },
+		};
+		const collapsedPositions = rebaseNodePositions(
+			expandedLayout,
+			collapsedLayout,
+			movedSubtreePositions,
+			{
+				captureCollapsedNodePositions: true,
+				logicalParentByChild,
+				unarrangedNodeIds: new Set(['root']),
+			},
+		);
+
+		assert.deepStrictEqual(collapsedPositions, movedSubtreePositions);
+		assert.deepStrictEqual(rebaseNodePositions(
+			collapsedLayout,
+			expandedLayout,
+			collapsedPositions,
+			{
+				logicalParentByChild,
+				unarrangedNodeIds: new Set(['root']),
+			},
+		), movedSubtreePositions);
 	});
 
 	test('Detach는 Edge subtree 전체 실제 위치에 같은 Delta를 적용한다', () => {
@@ -218,7 +274,7 @@ suite('Graph Layout Transition', () => {
 			previousLayout,
 			nextLayout,
 			positions,
-			{ inheritAncestorOffsets: true },
+			{ unarrangedNodeIds: new Set(['parent', 'child']) },
 		);
 
 		assert.deepStrictEqual(translateDetachedSubtree(
@@ -235,69 +291,46 @@ suite('Graph Layout Transition', () => {
 		});
 	});
 
-	test('Reattach는 Group Translation과 Root override를 제거하고 Child 수동 Offset만 보존한다', () => {
-		const detachedLayout = createSubtreeLayout({
-			root: { x: 48, y: 100 },
-			childA: { x: 350, y: 80 },
-			childB: { x: 350, y: 140 },
-			grandchild: { x: 652, y: 140 },
-			unrelated: { x: 48, y: 700 },
-		});
-		const reattachedLayout = createSubtreeLayout({
-			root: { x: 350, y: 200 },
-			childA: { x: 652, y: 180 },
-			childB: { x: 652, y: 240 },
-			grandchild: { x: 954, y: 240 },
-			unrelated: { x: 48, y: 700 },
-		});
-		const positions = rebaseReattachedSubtree(
-			detachedLayout,
-			reattachedLayout,
-			{
-				root: { x: 900, y: 500 },
-				'child-a': { x: 1_202, y: 480 },
-				'child-b': { x: 1_242, y: 520 },
-				grandchild: { x: 1_504, y: 540 },
-				unrelated: { x: 1_000, y: 900 },
-			},
-			'root',
-		);
-
-		assert.strictEqual(positions.root, undefined);
-		assert.deepStrictEqual(positions, {
-			'child-b': { x: 692, y: 220 },
-			unrelated: { x: 1_000, y: 900 },
-		});
-	});
-
-	test('재정렬은 Node 독립 Offset만 제거하고 이동된 Parent Offset을 유지한다', () => {
+	test('재정렬은 Parent Layout local을 사용하고 내부 비정렬 Node local은 유지한다', () => {
 		const previousLayout = createLayout([
-			createNode('parent', 100, 100),
-			createNode('file-group', 400, 100),
-		], [createEdge('parent', 'file-group')]);
+			createNode('root', 100, 100),
+			createNode('target', 400, 200),
+			createNode('child', 700, 220),
+			createNode('grandchild', 1_000, 230),
+		], [
+			createEdge('root', 'target'),
+			createEdge('target', 'child'),
+			createEdge('child', 'grandchild'),
+		]);
 		const nextLayout = createLayout([
-			createNode('parent', 100, 100),
-			createNode('file-group', 400, 220),
-		], [createEdge('parent', 'file-group')]);
+			createNode('root', 100, 100),
+			createNode('target', 400, 220),
+			createNode('child', 700, 260),
+			createNode('grandchild', 1_000, 280),
+		], [
+			createEdge('root', 'target'),
+			createEdge('target', 'child'),
+			createEdge('child', 'grandchild'),
+		]);
 		const positions = {
-			parent: { x: 600, y: 400 },
-			'file-group': { x: 900, y: 800 },
+			root: { x: 600, y: 400 },
+			target: { x: 900, y: 800 },
+			child: { x: 1_200, y: 820 },
+			grandchild: { x: 1_500, y: 1_000 },
 		};
-		const rebasedPositions = rebaseNodePositions(
-			previousLayout,
-			nextLayout,
-			positions,
-		);
 
-		assert.deepStrictEqual(rebaseArrangedSubtree(
+		assert.deepStrictEqual(rebaseNodePositions(
 			previousLayout,
 			nextLayout,
 			positions,
-			rebasedPositions,
-			'file-group',
+			{
+				unarrangedNodeIds: new Set(['root', 'grandchild']),
+			},
 		), {
-			parent: { x: 600, y: 400 },
-			'file-group': { x: 900, y: 520 },
+			root: { x: 600, y: 400 },
+			target: { x: 900, y: 520 },
+			child: { x: 1_200, y: 560 },
+			grandchild: { x: 1_500, y: 740 },
 		});
 	});
 });

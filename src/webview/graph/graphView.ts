@@ -12,11 +12,8 @@ import {
 	type GraphLayout,
 } from './graphLayout';
 import {
-	collectGraphLayoutSubtreeNodeIds,
 	classifyGraphLayoutNodeArrangement,
-	rebaseArrangedSubtree,
 	rebaseNodePositions,
-	rebaseReattachedSubtree,
 	translateDetachedSubtree,
 } from './graphLayoutTransition';
 import type { Graph, GraphRoot, GraphRootNode } from './graphModel';
@@ -323,11 +320,11 @@ function reattachDetachedSubtreeArrangement(
 	return nextUnarrangedNodeIds;
 }
 
-/** 마지막 Reattach의 접힌 저장 Descendant를 원래 Root 위치 기준으로 복원한다. */
-function reattachCollapsedSubtreePositions(
+/** Reattach Source의 실제 좌표를 Destination ID로 옮겨 직계 Parent local 입력을 만든다. */
+function transferReattachedSubtreePositions(
 	basePositions: GraphStateSnapshot['nodePositions'],
 	sourcePositions: GraphStateSnapshot['nodePositions'],
-	unarrangedNodeIds: ReadonlySet<string>,
+	previousLayout: GraphLayout,
 	nextLayout: GraphLayout,
 	sourceRootNodeId: string,
 	destinationRootNodeId: string,
@@ -337,32 +334,29 @@ function reattachCollapsedSubtreePositions(
 	const positions = Object.fromEntries(Object.entries(basePositions).map(
 		([nodeId, position]) => [nodeId, { ...position }],
 	));
-	const sourceRootPosition = sourcePositions[sourceRootNodeId];
+	const previousNodesById = new Map(
+		previousLayout.nodes.map((node) => [node.id, node]),
+	);
+	const sourceRootPosition = sourcePositions[sourceRootNodeId]
+		?? previousNodesById.get(sourceRootNodeId)?.position;
 	const destinationRoot = nextLayout.nodes.find(
 		(node) => node.id === destinationRootNodeId,
 	);
-	const destinationRootPosition = positions[destinationRootNodeId]
-		?? destinationRoot?.position;
+	const destinationRootSeed = destinationRoot?.position;
 
 	for (const sourceNodeId of collectGraphLogicalSubtreeNodeIds(
 		sourceRootNodeId,
 		logicalParentByChild,
 	)) {
 		delete positions[sourceNodeId];
-		const sourcePosition = sourcePositions[sourceNodeId];
+		const sourcePosition = sourcePositions[sourceNodeId]
+			?? previousNodesById.get(sourceNodeId)?.position;
 
 		if (
 			!restoreOccurrence
-			|| sourceNodeId === sourceRootNodeId
-			|| !hasUnarrangedAncestorBeforeRoot(
-				sourceNodeId,
-				sourceRootNodeId,
-				logicalParentByChild,
-				unarrangedNodeIds,
-			)
 			|| !sourcePosition
 			|| !sourceRootPosition
-			|| !destinationRootPosition
+			|| !destinationRootSeed
 		) {
 			continue;
 		}
@@ -371,88 +365,14 @@ function reattachCollapsedSubtreePositions(
 			getGraphLayoutSourceId(sourceNodeId),
 		);
 		positions[destinationNodeId] = {
-			x: destinationRootPosition.x
+			x: destinationRootSeed.x
 				+ sourcePosition.x - sourceRootPosition.x,
-			y: destinationRootPosition.y
+			y: destinationRootSeed.y
 				+ sourcePosition.y - sourceRootPosition.y,
 		};
 	}
 
 	return positions;
-}
-
-/** Root 자체의 공통 이동을 제외하고 독립 이동된 자신/Ancestor가 있는지 확인한다. */
-function hasUnarrangedAncestorBeforeRoot(
-	nodeId: string,
-	rootNodeId: string,
-	parentByChild: ReadonlyMap<string, string>,
-	unarrangedNodeIds: ReadonlySet<string>,
-): boolean {
-	let candidateId: string | undefined = nodeId;
-
-	while (candidateId && candidateId !== rootNodeId) {
-		if (unarrangedNodeIds.has(candidateId)) {
-			return true;
-		}
-		candidateId = parentByChild.get(candidateId);
-	}
-
-	return false;
-}
-
-/** 재정렬 시 Layout에 없는 저장 Descendant를 Root의 최종 이동량만큼 옮긴다. */
-function preserveCollapsedSubtreeRelativePositions(
-	previousLayout: GraphLayout,
-	nextLayout: GraphLayout,
-	sourcePositions: GraphStateSnapshot['nodePositions'],
-	targetPositions: Record<string, { x: number; y: number }>,
-	rootNodeId: string,
-	logicalParentByChild: ReadonlyMap<string, string>,
-): void {
-	const previousRoot = previousLayout.nodes.find(
-		(node) => node.id === rootNodeId,
-	);
-	const nextRoot = nextLayout.nodes.find((node) => node.id === rootNodeId);
-
-	if (!previousRoot || !nextRoot) {
-		return;
-	}
-	const previousRootPosition = sourcePositions[rootNodeId]
-		?? previousRoot.position;
-	const nextRootPosition = targetPositions[rootNodeId]
-		?? nextRoot.position;
-	const delta = {
-		x: nextRootPosition.x - previousRootPosition.x,
-		y: nextRootPosition.y - previousRootPosition.y,
-	};
-	const visibleNodeIds = new Set(nextLayout.nodes.map((node) => node.id));
-
-	for (const nodeId of collectGraphLogicalSubtreeNodeIds(
-		rootNodeId,
-		logicalParentByChild,
-	)) {
-		const sourcePosition = sourcePositions[nodeId];
-
-		if (
-			nodeId === rootNodeId
-			|| visibleNodeIds.has(nodeId)
-			|| !sourcePosition
-		) {
-			continue;
-		}
-
-		targetPositions[nodeId] = {
-			x: sourcePosition.x + delta.x,
-			y: sourcePosition.y + delta.y,
-		};
-	}
-}
-
-/** Parent가 없는 독립 Graph Root만 Layout 전환 중 절대 위치를 고정한다. */
-function getStationaryGraphRootNodeIds(layout: GraphLayout): ReadonlySet<string> {
-	return new Set([...layout.unarrangedNodeIds].filter(
-		(nodeId) => layout.rootNodeIds.has(nodeId),
-	));
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -486,25 +406,22 @@ export function initializeGraphLayoutReflow(
 			return;
 		}
 
-		const hasNewlyOpenedFolder = Object.entries(nextState.openedFolders).some(
-			([nodeId, isOpened]) => isOpened && !renderedOpenedFolders[nodeId],
+		const hasNewlyClosedFolder = Object.entries(renderedOpenedFolders).some(
+			([nodeId, wasOpened]) => wasOpened && !nextState.openedFolders[nodeId],
 		);
 		renderedFileGroupPages = nextState.fileGroupPages;
 		renderedOpenedFolders = nextState.openedFolders;
 		renderedHiddenNodeIds = nextState.hiddenNodeIds;
 		const previousLayout = getCurrentLayout();
 		const nextLayout = createLayout(nextState);
-		const rebasedNodePositions = rebaseBacklinkNodePositions(
+		const rebasedNodePositions = normalizeGraphNodePositions(
 			nextLayout,
 			rebaseNodePositions(
 				previousLayout,
 				nextLayout,
 				nextState.nodePositions,
 				{
-					inheritAncestorOffsets: hasNewlyOpenedFolder,
-					stationaryRootNodeIds: getStationaryGraphRootNodeIds(
-						nextLayout,
-					),
+					captureCollapsedNodePositions: hasNewlyClosedFolder,
 					logicalParentByChild: getLogicalParentByChild(),
 				},
 			),
@@ -543,8 +460,8 @@ export function applyGraphLayout(
 	navigator.setLayout(layout);
 }
 
-/** 정적 Backlink Card는 저장된 독립 위치를 버리고 Parent의 정렬 offset만 상속한다. */
-function rebaseBacklinkNodePositions(
+/** Parent-relative 좌표를 정규화하고 정적 Backlink의 독립 저장 좌표는 제거한다. */
+function normalizeGraphNodePositions(
 	layout: GraphLayout,
 	nodePositions: GraphStateSnapshot['nodePositions'],
 ): Record<string, { x: number; y: number }> {
@@ -561,23 +478,26 @@ function rebaseBacklinkNodePositions(
 		))
 		.map((node) => node.id));
 
-	if (backlinkNodeIds.size === 0) {
-		return Object.fromEntries(Object.entries(nodePositions).map(
-			([nodeId, position]) => [nodeId, { ...position }],
-		));
-	}
-
 	const positionsWithoutBacklinks = Object.fromEntries(
 		Object.entries(nodePositions).filter(
 			([nodeId]) => !backlinkNodeIds.has(nodeId),
 		),
+	);
+	const detectedArrangement = classifyGraphLayoutNodeArrangement(
+		layout,
+		positionsWithoutBacklinks,
 	);
 
 	return rebaseNodePositions(
 		layout,
 		layout,
 		positionsWithoutBacklinks,
-		{ inheritAncestorOffsets: true },
+		{
+			unarrangedNodeIds: new Set([
+				...layout.unarrangedNodeIds,
+				...detectedArrangement.unarrangedNodeIds,
+			]),
+		},
 	);
 }
 
@@ -969,7 +889,7 @@ export function initializeGraphView(
 	);
 	state.setState({
 		camera: initialGraphState.camera,
-		nodePositions: rebaseBacklinkNodePositions(
+		nodePositions: normalizeGraphNodePositions(
 			initialBaselineLayout,
 			scopedInitialNodePositions,
 		),
@@ -983,7 +903,12 @@ export function initializeGraphView(
 		initialBaselineLayout,
 		initialGraphState.nodePositions,
 	);
-	let currentUnarrangedNodeIds = new Set(initialArrangement.unarrangedNodeIds);
+	let currentUnarrangedNodeIds = new Set([
+		...initialArrangement.unarrangedNodeIds,
+		...currentGraph.roots
+			.filter((root) => isDetachedRootId(root.id))
+			.map(getGraphRootLayoutNodeId),
+	]);
 	let currentLayout = currentUnarrangedNodeIds.size === 0
 		? initialBaselineLayout
 		: createLayout(
@@ -1065,17 +990,13 @@ export function initializeGraphView(
 				nextSnapshot,
 				unarrangedNodeIds,
 			);
-			const rebasedNodePositions = rebaseBacklinkNodePositions(
+			const rebasedNodePositions = normalizeGraphNodePositions(
 				nextLayout,
 				rebaseNodePositions(
 					previousLayout,
 					nextLayout,
 					snapshot.nodePositions,
 					{
-						inheritAncestorOffsets: true,
-						stationaryRootNodeIds: getStationaryGraphRootNodeIds(
-							nextLayout,
-						),
 						logicalParentByChild: createGraphLogicalParentByChild(
 							addition.graph,
 						),
@@ -1203,22 +1124,35 @@ export function initializeGraphView(
 			nextSnapshot,
 			unarrangedNodeIds,
 		);
-		const rebasedNodePositions = rebaseReattachedSubtree(
+		const transferredNodePositions = transferReattachedSubtreePositions(
+			snapshot.nodePositions,
+			snapshot.nodePositions,
 			previousLayout,
-			nextLayout,
-			snapshot.nodePositions,
-			detachedRootNodeId,
-		);
-		const nodePositions = reattachCollapsedSubtreePositions(
-			rebasedNodePositions,
-			snapshot.nodePositions,
-			previousUnarrangedNodeIds,
 			nextLayout,
 			detachedRootNodeId,
 			destinationRootNodeId,
 			currentLogicalParentByChild,
 			restoreOccurrence,
 		);
+		const nodePositions = normalizeGraphNodePositions(
+			nextLayout,
+			rebaseNodePositions(
+				previousLayout,
+				nextLayout,
+				transferredNodePositions,
+				{
+					logicalParentByChild: nextLogicalParentByChild,
+					unarrangedNodeIds,
+				},
+			),
+		);
+		if (
+			rootNode.kind === 'file'
+			&& !nextLayout.nodes.some((node) => node.id === destinationRootNodeId)
+		) {
+			// grouped File Row는 Layout Node가 아니므로 독립 좌표를 소유하지 않는다.
+			delete nodePositions[destinationRootNodeId];
+		}
 		const detachedRootNodeIds = { ...snapshot.detachedRootNodeIds };
 
 		delete detachedRootNodeIds[rootId];
@@ -1327,41 +1261,15 @@ export function initializeGraphView(
 			nextLayout,
 			snapshot.nodePositions,
 			{
-				stationaryRootNodeIds: nextUnarrangedNodeIds,
 				logicalParentByChild: currentLogicalParentByChild,
 			},
 		);
-
-		if (arranged) {
-			const arrangedPositions = rebaseArrangedSubtree(
-				previousLayout,
-				nextLayout,
-				snapshot.nodePositions,
-				nodePositions,
-				nodeId,
-			);
-			const subtreeNodeIds = new Set([
-				...collectGraphLayoutSubtreeNodeIds(previousLayout, nodeId),
-				...collectGraphLayoutSubtreeNodeIds(nextLayout, nodeId),
-			]);
-
-			for (const subtreeNodeId of subtreeNodeIds) {
-				const arrangedPosition = arrangedPositions[subtreeNodeId];
-
-				if (arrangedPosition) {
-					nodePositions[subtreeNodeId] = arrangedPosition;
-				} else {
-					delete nodePositions[subtreeNodeId];
-				}
-			}
-			preserveCollapsedSubtreeRelativePositions(
-				previousLayout,
-				nextLayout,
-				snapshot.nodePositions,
-				nodePositions,
-				nodeId,
-				currentLogicalParentByChild,
-			);
+		if (
+			arranged
+			&& !nextLayout.nodes.some((node) => node.id === nodeId)
+		) {
+			// standalone File Card가 grouped Row로 돌아가면 Layout 좌표 소유권도 제거한다.
+			delete nodePositions[nodeId];
 		}
 
 		currentUnarrangedNodeIds = nextUnarrangedNodeIds;
@@ -1455,31 +1363,78 @@ export function initializeGraphView(
 			const nextLogicalParentByChild = createGraphLogicalParentByChild(
 				nextGraph,
 			);
-			const nextLayout = createLayout(
+			const nextUnarrangedNodeIds = new Set([
+				...currentUnarrangedNodeIds,
+				...nextGraph.roots
+					.filter((root) => isDetachedRootId(root.id))
+					.map(getGraphRootLayoutNodeId),
+			]);
+			let nextLayout = createLayout(
 				nextGraph,
 				nextSnapshot,
-				currentUnarrangedNodeIds,
+				nextUnarrangedNodeIds,
 			);
 			const scopedNodePositions = scopeDetachedNodePositions(
 				nextLayout,
 				snapshot.nodePositions,
 			);
-			const nodePositions = rebaseBacklinkNodePositions(
+			const restoredArrangement = classifyGraphLayoutNodeArrangement(
+				nextLayout,
+				scopedNodePositions,
+			);
+			const previousNodeIds = new Set(
+				previousLayout.nodes.map((node) => node.id),
+			);
+			let restoredNewNodeArrangement = false;
+
+			for (const nodeId of restoredArrangement.unarrangedNodeIds) {
+				if (
+					!previousNodeIds.has(nodeId)
+					&& scopedNodePositions[nodeId]
+					&& !nextUnarrangedNodeIds.has(nodeId)
+				) {
+					nextUnarrangedNodeIds.add(nodeId);
+					restoredNewNodeArrangement = true;
+				}
+			}
+			if (restoredNewNodeArrangement) {
+				nextLayout = createLayout(
+					nextGraph,
+					nextSnapshot,
+					nextUnarrangedNodeIds,
+				);
+			}
+			const nodePositions = normalizeGraphNodePositions(
 				nextLayout,
 				rebaseNodePositions(
 					previousLayout,
 					nextLayout,
 					scopedNodePositions,
 					{
-						stationaryRootNodeIds: getStationaryGraphRootNodeIds(
-							nextLayout,
-						),
 						logicalParentByChild: nextLogicalParentByChild,
 					},
 				),
 			);
+			const nextNodeIds = new Set(nextLayout.nodes.map((node) => node.id));
+
+			for (const previousNode of previousLayout.nodes) {
+				const previousInstanceRootId = getGraphLayoutRootId(previousNode.id);
+
+				if (
+					!nextNodeIds.has(previousNode.id)
+					&& !currentUnarrangedNodeIds.has(previousNode.id)
+					&& (
+						!previousInstanceRootId
+						|| !detachedRootNodeIds[previousInstanceRootId]
+					)
+				) {
+					// Workspace에서 사라진 arranged Node의 파생 좌표는 재생성할 수 있다.
+					delete nodePositions[previousNode.id];
+				}
+			}
 
 			currentGraph = nextGraph;
+			currentUnarrangedNodeIds = nextUnarrangedNodeIds;
 			currentLogicalParentByChild = nextLogicalParentByChild;
 			currentLayout = nextLayout;
 			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
