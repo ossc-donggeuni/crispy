@@ -1,0 +1,322 @@
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const nodePty = require('node-pty');
+const {
+	resolveAgentExecutable,
+} = require('../out/mcp/agentExecutableResolver.js');
+const {
+	createAgentProcessSpawnRequest,
+} = require('../out/mcp/agentLaunchPlan.js');
+const {
+	probeCodexConfigStyle,
+} = require('../out/mcp/codexCompatibility.js');
+const {
+	buildCodexBareLaunchPlan,
+	buildCodexMcpLaunchPlan,
+} = require('../out/mcp/codexLaunchPlan.js');
+const {
+	McpConnectionDescriptor,
+} = require('../out/mcp/sessionRuntime.js');
+
+const smokeTimeoutMs = 15_000;
+const maximumOutputLength = 1024 * 1024;
+const windowsArgvMarker = 'CRISPY_WINDOWS_ARGV:';
+const windowsTransientCleanupErrorCodes = new Set([
+	'EBUSY',
+	'ENOTEMPTY',
+	'EPERM',
+]);
+
+function smokeError(reason) {
+	return new Error(`[codex-config-compat-smoke] ${reason}`);
+}
+
+function shouldDeferTemporaryCleanup(error, platform) {
+	return platform === 'win32'
+		&& error !== null
+		&& typeof error === 'object'
+		&& 'code' in error
+		&& windowsTransientCleanupErrorCodes.has(error.code);
+}
+
+function removeTemporaryRoot(temporaryRoot, platform = process.platform) {
+	try {
+		fs.rmSync(temporaryRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 3,
+			retryDelay: 100,
+		});
+	} catch (error) {
+		if (!shouldDeferTemporaryCleanup(error, platform)) {
+			throw error;
+		}
+		console.warn(
+			`[codex-config-compat-smoke] Temporary cleanup deferred (${error.code}).`,
+		);
+	}
+}
+
+async function resolveInstalledCodex(environment) {
+	const resolutionEnvironment = process.platform === 'win32'
+		? Object.fromEntries([
+			...Object.entries(environment).filter(
+				([name]) => name.toUpperCase() !== 'PATHEXT',
+			),
+			['PATHEXT', '.CMD'],
+		])
+		: environment;
+	const resolution = await resolveAgentExecutable('codex', {
+		platform: process.platform,
+		environment: resolutionEnvironment,
+	});
+	if (!resolution.ok) {
+		throw smokeError('Codex CLI is unavailable.');
+	}
+	return resolution.executable;
+}
+
+/** Creates a self-contained cmd fixture that never resolves its own metacharacter path. */
+function createWindowsLauncherFixture(temporaryRoot) {
+	const fixtureDirectory = path.join(
+		temporaryRoot,
+		'Crispy 한글 공백 %CRISPY_FIXTURE% 100% ! & (Codex)',
+	);
+	fs.mkdirSync(fixtureDirectory, { recursive: true });
+	const probeScript = path.join(temporaryRoot, 'windows-launcher-fixture.js');
+	const fixtureExecutable = path.join(fixtureDirectory, 'codex.cmd');
+	fs.writeFileSync(probeScript, [
+		"'use strict';",
+		"const crypto = require('node:crypto');",
+		`const marker = ${JSON.stringify(windowsArgvMarker)};`,
+		'const args = process.argv.slice(2);',
+		"if (args.length === 1 && args[0] === '--version') {",
+		"	console.log('codex-cli 999.0.0');",
+		'} else {',
+		"	const digest = crypto.createHash('sha256').update(JSON.stringify(args), 'utf8').digest('base64url');",
+		'	console.log(marker + digest);',
+		'}',
+		'',
+	].join('\n'), 'utf8');
+	fs.writeFileSync(fixtureExecutable, createWindowsBatchFixtureSource(
+		process.execPath,
+		probeScript,
+	), 'utf8');
+	return Object.freeze({
+		executable: fixtureExecutable,
+		launcherKind: 'cmd-one-shot',
+	});
+}
+
+function createWindowsBatchFixtureSource(nodeExecutable, probeScript) {
+	const quoteBatchValue = (value) => {
+		if (/[\r\n"]/u.test(value)) {
+			throw smokeError('Windows fixture path is invalid.');
+		}
+		return `"${value.replaceAll('%', '%%')}"`;
+	};
+	return [
+		'@ECHO off',
+		'SETLOCAL DisableDelayedExpansion',
+		`${quoteBatchValue(nodeExecutable)} ${quoteBatchValue(probeScript)} %*`,
+		'',
+	].join('\r\n');
+}
+
+function runPty(request) {
+	return new Promise((resolve, reject) => {
+		let terminal;
+		try {
+			terminal = nodePty.spawn(
+				request.executable,
+				request.windowsVerbatimArguments
+					? request.args.join(' ')
+					: request.args,
+				{
+					name: 'xterm-256color',
+					cols: 100,
+					rows: 30,
+					cwd: request.cwd,
+					env: { ...request.environment },
+				},
+			);
+		} catch {
+			reject(smokeError('node-pty could not start Codex.'));
+			return;
+		}
+
+		let settled = false;
+		let output = '';
+		let timer;
+		let dataDisposable;
+		let exitDisposable;
+		const settle = (error) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			if (timer !== undefined) {
+				clearTimeout(timer);
+			}
+			dataDisposable?.dispose();
+			exitDisposable?.dispose();
+			if (error === undefined) {
+				resolve(output);
+			} else {
+				reject(error);
+			}
+		};
+		dataDisposable = terminal.onData((data) => {
+			output += data;
+			if (output.length > maximumOutputLength) {
+				try {
+					terminal.kill();
+				} catch {
+					/** The bounded smoke already fails below. */
+				}
+				settle(smokeError('Codex emitted excessive output.'));
+			}
+		});
+		exitDisposable = terminal.onExit(({ exitCode, signal }) => {
+			settle(exitCode === 0 && (signal === undefined || signal === 0)
+				? undefined
+				: smokeError('Codex config parsing exited unsuccessfully.'));
+		});
+		timer = setTimeout(() => {
+			try {
+				terminal.kill();
+			} catch {
+				/** The bounded smoke already fails below. */
+			}
+			settle(smokeError('Codex config parsing timed out.'));
+		}, smokeTimeoutMs);
+	});
+}
+
+async function runWindowsCmdOneShotSmoke(temporaryRoot, environment) {
+	const executable = createWindowsLauncherFixture(temporaryRoot);
+	const fixtureEnvironment = {
+		...environment,
+		CRISPY_FIXTURE: 'EXPANDED',
+	};
+	const compatibility = await probeCodexConfigStyle({
+		executable,
+		cwd: temporaryRoot,
+		platform: 'win32',
+		environment: fixtureEnvironment,
+	});
+	if (!compatibility.ok) {
+		throw smokeError(
+			`Windows cmd-one-shot version probe failed (${compatibility.reason}).`,
+		);
+	}
+
+	const expectedArguments = Object.freeze([
+		'--fixture-probe',
+		'space value',
+		'한글',
+		'100% ! & (Codex)',
+		'%CRISPY_FIXTURE%',
+		'%PATH%',
+	]);
+	const plan = buildCodexBareLaunchPlan({
+		executable,
+		cwd: temporaryRoot,
+		args: expectedArguments,
+	});
+	const request = createAgentProcessSpawnRequest(plan, {
+		platform: 'win32',
+		environment: fixtureEnvironment,
+	});
+	const output = await runPty(request);
+	const expectedMarker = windowsArgvMarker + crypto.createHash('sha256')
+		.update(JSON.stringify(expectedArguments), 'utf8')
+		.digest('base64url');
+	if (!output.includes(expectedMarker)) {
+		throw smokeError(
+			'Windows cmd-one-shot did not preserve special-path arguments.',
+		);
+	}
+}
+
+async function main() {
+	const environment = { ...process.env };
+	const temporaryRoot = fs.mkdtempSync(path.join(
+		os.tmpdir(),
+		'crispy-codex-config-compat-',
+	));
+
+	try {
+		const installed = await resolveInstalledCodex(environment);
+		const compatibility = await probeCodexConfigStyle({
+			executable: installed,
+			cwd: temporaryRoot,
+			platform: process.platform,
+			environment,
+		});
+		if (!compatibility.ok) {
+			throw smokeError(`Codex version probe failed (${compatibility.reason}).`);
+		}
+		const shellEnvironmentPolicyStyle = compatibility.style;
+
+		const routeId = Buffer.alloc(24, 0x43).toString('base64url');
+		const token = Buffer.alloc(32, 0x54).toString('base64url');
+		const connection = new McpConnectionDescriptor(
+			'generation-config-compat',
+			'session-config-compat',
+			`http://127.0.0.1:43123/mcp/${routeId}`,
+			token,
+		);
+		const plan = buildCodexMcpLaunchPlan({
+			executable: installed,
+			cwd: temporaryRoot,
+			connection,
+			argsAfterConfig: ['features', 'list'],
+			randomBytes: (size) => Buffer.alloc(size, 0x63),
+			shellEnvironmentPolicyStyle,
+		});
+		const request = createAgentProcessSpawnRequest(plan, {
+			platform: process.platform,
+			environment,
+		});
+		const output = await runPty(request);
+		if (output.includes(token)) {
+			throw smokeError('Codex exposed the MCP credential in output.');
+		}
+
+		console.log(
+			`[codex-config-compat-smoke] ${shellEnvironmentPolicyStyle} config parsed through node-pty.`,
+		);
+
+		if (process.platform === 'win32') {
+			await runWindowsCmdOneShotSmoke(temporaryRoot, environment);
+			console.log(
+				'[codex-config-compat-smoke] Windows cmd-one-shot special-path launch passed.',
+			);
+		}
+	} finally {
+		removeTemporaryRoot(temporaryRoot);
+	}
+}
+
+if (require.main === module) {
+	main().then(
+		() => process.exit(0),
+		(error) => {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exit(1);
+		},
+	);
+}
+
+module.exports = Object.freeze({
+	createWindowsBatchFixtureSource,
+	createWindowsLauncherFixture,
+	shouldDeferTemporaryCleanup,
+	runPty,
+	runWindowsCmdOneShotSmoke,
+});

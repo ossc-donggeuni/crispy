@@ -9,6 +9,7 @@ import type {
 	ValidatedWorkspaceRoot,
 } from '../../agent/host/workspace/types';
 import { FakePtyAdapter, FakePtyProcessHandle } from './support/fakePtyAdapter';
+import { createCaptureFailureProcessTreeController } from './support/fakeProcessTreeController';
 
 const root = {
 	scheme: 'file',
@@ -46,6 +47,7 @@ function createRoutingHost(fakePid: number = 4242): {
 		ptyAdapter,
 		prepareLaunch: successfulPrepare,
 		emitMessage: (message) => messages.push(message),
+		processTreeController: createCaptureFailureProcessTreeController(),
 		resolveAgentAutoRunInput: async (providerId) =>
 			resolveAgentAutoRunInput(providerId),
 	});
@@ -286,6 +288,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		);
 
 		host.closeTab('tab-antigravity');
+		await Promise.resolve();
 		assert.strictEqual(antigravityHandle.killCallCount, 1);
 		assert.strictEqual(codexHandle.killCallCount, 0);
 		assert.strictEqual(host.getActiveSession('tab-codex'), codexSession);
@@ -305,6 +308,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		assert.ok(antigravitySession !== undefined);
 
 		host.closeTab('tab-claude-closing');
+		await Promise.resolve();
 
 		assert.strictEqual(claudeHandle.killCallCount, 1);
 		assert.strictEqual(antigravityHandle.killCallCount, 0);
@@ -384,6 +388,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		assert.ok(session !== undefined);
 
 		host.closeTab('tab-closing');
+		await Promise.resolve();
 
 		assert.strictEqual(handle.killCallCount, 1);
 		assert.strictEqual(handle.dataListenerCount, 0);

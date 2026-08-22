@@ -49,23 +49,40 @@ export function createAgentProcessEnvironment(
 	const keyForOverlay = (name: string): string => platform === 'win32'
 		? name.toLocaleUpperCase('en-US')
 		: name;
-	const removed = new Set(plan.envRemove.map(
-		(name) => name.toLocaleUpperCase('en-US'),
+	const keyForSecurityPolicy = (name: string): string =>
+		name.toLocaleUpperCase('en-US');
+	const removed = new Set([
+		...MCP_PROVIDER_ENVIRONMENT_REMOVALS,
+		...plan.envRemove,
+	].map(
+		keyForSecurityPolicy,
 	));
-	const overlayNames = new Set(Object.keys(plan.envOverlay).map(keyForOverlay));
+	const allowedOverlayEntries = Object.entries(plan.envOverlay).filter(
+		([name]) => {
+			const normalized = keyForSecurityPolicy(name);
+			if (normalized === 'ELECTRON_RUN_AS_NODE') {
+				return false;
+			}
+			return normalized !== 'CRISPY_MCP_TOKEN'
+				|| (plan.expectsMcp && name === 'CRISPY_MCP_TOKEN');
+		},
+	);
+	const overlayNames = new Set(allowedOverlayEntries.map(([name]) =>
+		keyForOverlay(name)
+	));
 	const environment: Record<string, string> = {};
 
 	for (const [name, value] of Object.entries(baseEnvironment)) {
 		if (
 			typeof value !== 'string'
-			|| removed.has(name.toLocaleUpperCase('en-US'))
+			|| removed.has(keyForSecurityPolicy(name))
 			|| overlayNames.has(keyForOverlay(name))
 		) {
 			continue;
 		}
 		environment[name] = value;
 	}
-	for (const [name, value] of Object.entries(plan.envOverlay)) {
+	for (const [name, value] of allowedOverlayEntries) {
 		if (typeof value !== 'string') {
 			throw new Error('Agent launch environment is invalid.');
 		}

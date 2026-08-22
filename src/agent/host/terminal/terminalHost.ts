@@ -7,11 +7,35 @@ import type {
 } from '../../protocol/messages';
 import type { ProviderId } from '../../protocol/providers';
 import {
+	buildCodexBareLaunchPlan,
+	buildCodexMcpLaunchPlan,
+} from '../../../mcp/codexLaunchPlan';
+import {
+	createAgentProcessSpawnRequest,
+	type AgentLaunchPlan,
+	type AgentProcessSpawnRequest,
+} from '../../../mcp/agentLaunchPlan';
+import type {
+	BuildCodexBareLaunchPlanOptions,
+	BuildCodexMcpLaunchPlanOptions,
+} from '../../../mcp/codexLaunchPlan';
+import { spawnAgentPty } from '../../../mcp/agentPtyLaunch';
+import type {
+	McpPrepareResult,
+	McpSessionRuntime,
+	McpSessionRuntimeEvent,
+} from '../../../mcp/sessionRuntime';
+import type { PrepareCodexTerminalLaunch } from '../../../mcp/codexTerminalLaunch';
+import {
 	resolveAgentAutoRunInput,
 	resolveDetectedAgentAutoRunInput,
 	type AgentAutoRunInputResolver,
 } from '../agent/agentProviderLaunch';
-import type { PtyAdapter, PtyExitEvent } from './ptyAdapter';
+import type {
+	PtyAdapter,
+	PtyExitEvent,
+	PtyProcessHandle,
+} from './ptyAdapter';
 import {
 	prepareTerminalLaunch,
 	type PrepareTerminalLaunch,
@@ -28,6 +52,40 @@ import { createHostProcessTreeController } from './processTreeControllerFactory'
 export type TerminalHostMessageEmitter = (
 	message: HostToWebviewMessage,
 ) => void;
+
+/** TerminalHost가 session별 MCP ownership에 사용하는 Panel-owned supervisor 계약이다. */
+export interface CodexMcpSupervisor {
+	prepareSession(sessionId: string): Promise<McpPrepareResult>;
+	stopSession(sessionId: string): Promise<void>;
+	getSessionRuntime(sessionId: string): Pick<
+		McpSessionRuntime,
+		'generation' | 'lifecycle' | 'markProviderStarted'
+	> | undefined;
+	dispose(): Promise<void>;
+}
+
+export type CodexMcpLaunchPlanBuilder = (
+	options: BuildCodexMcpLaunchPlanOptions,
+) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
+
+export type CodexBareLaunchPlanBuilder = (
+	options: BuildCodexBareLaunchPlanOptions,
+) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
+
+export type AgentProcessSpawnRequestBuilder = (
+	plan: AgentLaunchPlan,
+	options: {
+		readonly platform?: NodeJS.Platform;
+		readonly environment: NodeJS.ProcessEnv;
+	},
+) => AgentProcessSpawnRequest | Promise<AgentProcessSpawnRequest>;
+
+export type AgentPtySpawner = (
+	session: TerminalSession,
+	request: AgentProcessSpawnRequest,
+	cols: number,
+	rows: number,
+) => Promise<void>;
 
 /**
  * UUID에 Host 전용 접두사를 붙여 프로토콜 규칙을 만족하는 `sessionId`를 생성한다.
@@ -54,7 +112,19 @@ export interface TerminalHostOptions {
 	/** Shell 정책에서 provider CLI 자동 실행 입력을 탐색하는 Host 경계다. */
 	readonly resolveAgentAutoRunInput?: AgentAutoRunInputResolver;
 
-	/** Panel detach 뒤 PID snapshot과 비동기 OS 종료를 담당하는 Host controller다. */
+	/** Codex direct-root launch를 Shell 정책과 분리해 준비하는 경계다. */
+	readonly prepareCodexLaunch?: PrepareCodexTerminalLaunch;
+
+	/** Panel이 소유하며 Codex session별 adapter runtime을 격리하는 supervisor다. */
+	readonly mcpSupervisor?: CodexMcpSupervisor;
+
+	/** 결정적인 transaction/race test를 위한 structured plan builder 경계다. */
+	readonly buildCodexMcpLaunchPlan?: CodexMcpLaunchPlanBuilder;
+	readonly buildCodexBareLaunchPlan?: CodexBareLaunchPlanBuilder;
+	readonly createAgentProcessSpawnRequest?: AgentProcessSpawnRequestBuilder;
+	readonly spawnAgentPty?: AgentPtySpawner;
+
+	/** Session 분리 뒤 PID snapshot과 비동기 OS 종료를 담당하는 Host controller다. */
 	readonly processTreeController?: ProcessTreeController;
 }
 
@@ -75,6 +145,12 @@ const START_ERROR_MESSAGES = Object.freeze({
 
 /** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
 const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
+/** 3초 deactivate budget에서 2초 process-tree cleanup을 남기는 PID 준비 상한이다. */
+export const DETACHED_PID_READY_TIMEOUT_MS = 500;
+
+function isValidProcessTreeRootPid(pid: number): boolean {
+	return Number.isSafeInteger(pid) && pid > 1;
+}
 
 /**
  * 탭별 현재 세션 저장소와 Host 소유 PTY 시작·입력·크기 변경·출력·종료 경로를 관리한다.
@@ -114,7 +190,24 @@ export class TerminalHost {
 	/** 실제 Shell 정책에서 provider CLI command를 선택하는 비동기 resolver다. */
 	private readonly resolveProviderAutoRunInput: AgentAutoRunInputResolver;
 
-	/** Panel 종료 경로에서 동기 node-pty kill을 피하는 process-tree controller다. */
+	/** Codex만 interactive Shell 없이 준비하는 production/injected 경계다. */
+	private readonly prepareCodexLaunch: PrepareCodexTerminalLaunch | undefined;
+
+	/** Panel 소유 MCP runtime registry이며 미주입 시 기존 provider 동작만 유지한다. */
+	private readonly mcpSupervisor: CodexMcpSupervisor | undefined;
+
+	private readonly buildCodexMcpPlan: CodexMcpLaunchPlanBuilder;
+	private readonly buildCodexBarePlan: CodexBareLaunchPlanBuilder;
+	private readonly createAgentSpawnRequest: AgentProcessSpawnRequestBuilder;
+	private readonly spawnProviderPty: AgentPtySpawner;
+
+	/** 실제 MCP plan을 spawn하는 current session과 runtime generation의 결합이다. */
+	private readonly codexGenerationBySession = new Map<SessionId, string>();
+
+	/** PTY spawn 경계에 진입한 Codex session만 provider-started 표시를 허용한다. */
+	private readonly codexPtySpawnStarted = new Set<SessionId>();
+
+	/** Session 종료 경로에서 root-only kill을 피하는 process-tree controller다. */
 	private readonly processTreeController: ProcessTreeController;
 
 	/** Webview가 마지막으로 알린 활성 탭이며 등록된 탭만 값이 될 수 있다. */
@@ -126,11 +219,20 @@ export class TerminalHost {
 	/** Panel runtime에서 분리된 뒤 새 요청과 in-flight spawn을 거부하는 gate다. */
 	private lifecycleActive = true;
 
-	/** detach에서 native 호출 없이 확보한 runtime 소유 root PID 목록이다. */
-	private detachedRootPids: readonly number[] = [];
+	/** detach에서 native 호출 없이 넘겨받아 비동기 종료까지 보존하는 PTY ownership이다. */
+	private detachedProcesses: readonly PtyProcessHandle[] = [];
 
 	/** 반복 terminate 호출이 공유하는 최초 비동기 cleanup Promise다. */
 	private terminationPromise: Promise<void> | undefined;
+
+	/** Panel dispose가 동기 시작한 MCP supervisor cleanup을 terminate가 기다린다. */
+	private mcpTerminationPromise: Promise<void> | undefined;
+
+	/** reset/reselect/restart/tab close가 분리한 session별 process-tree cleanup이다. */
+	private readonly processCleanupBySession = new Map<SessionId, Promise<void>>();
+
+	/** 같은 탭의 다음 CLI 시작이 이전 process tree 종료를 기다리는 경계다. */
+	private readonly processCleanupByTab = new Map<TabId, Promise<void>>();
 
 	/**
 	 * 비어 있는 세션 저장소와 Host 소유 의존성을 초기화한다.
@@ -144,6 +246,15 @@ export class TerminalHost {
 		this.emitMessage = options.emitMessage;
 		this.resolveProviderAutoRunInput = options.resolveAgentAutoRunInput
 			?? resolveDetectedAgentAutoRunInput;
+		this.prepareCodexLaunch = options.prepareCodexLaunch;
+		this.mcpSupervisor = options.mcpSupervisor;
+		this.buildCodexMcpPlan = options.buildCodexMcpLaunchPlan
+			?? buildCodexMcpLaunchPlan;
+		this.buildCodexBarePlan = options.buildCodexBareLaunchPlan
+			?? buildCodexBareLaunchPlan;
+		this.createAgentSpawnRequest = options.createAgentProcessSpawnRequest
+			?? createAgentProcessSpawnRequest;
+		this.spawnProviderPty = options.spawnAgentPty ?? spawnAgentPty;
 		this.processTreeController = options.processTreeController
 			?? createHostProcessTreeController();
 	}
@@ -205,7 +316,7 @@ export class TerminalHost {
 		}
 		const session = this.getActiveSession(tabId);
 		if (session !== undefined) {
-			this.disposeSessionProcess(session);
+			void this.cleanupSessionProcessTree(session);
 			this.removeSession(session.sessionId);
 		}
 
@@ -241,7 +352,7 @@ export class TerminalHost {
 
 		const session = this.getActiveSession(tabId);
 		if (session !== undefined) {
-			this.disposeSessionProcess(session);
+			void this.cleanupSessionProcessTree(session);
 			this.removeSession(session.sessionId);
 		}
 
@@ -278,9 +389,21 @@ export class TerminalHost {
 		this.providerByTab.set(tabId, providerId);
 
 		const current = this.getActiveSession(tabId);
+		let pendingCleanup = this.getTabProcessCleanup(tabId);
 		if (current !== undefined) {
-			this.disposeSessionProcess(current);
+			pendingCleanup = this.cleanupSessionProcessTree(current);
 			this.removeSession(current.sessionId);
+		}
+		if (pendingCleanup !== undefined) {
+			await pendingCleanup;
+		}
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| this.providerByTab.get(tabId) !== providerId
+			|| this.getActiveSession(tabId) !== undefined
+		) {
+			return;
 		}
 
 		const dimensions = this.lastDimensionsByTab.get(tabId);
@@ -323,6 +446,18 @@ export class TerminalHost {
 
 		this.lastDimensionsByTab.set(tabId, { cols, rows });
 		if (!this.providerByTab.has(tabId)) {
+			return;
+		}
+
+		const pendingCleanup = this.getTabProcessCleanup(tabId);
+		if (pendingCleanup !== undefined) {
+			await pendingCleanup;
+		}
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| !this.providerByTab.has(tabId)
+		) {
 			return;
 		}
 
@@ -442,6 +577,16 @@ export class TerminalHost {
 
 		this.publish({ type: 'terminal.starting', tabId });
 
+		const providerId = this.providerByTab.get(tabId);
+		if (
+			providerId === 'codex'
+			&& this.prepareCodexLaunch !== undefined
+			&& this.mcpSupervisor !== undefined
+		) {
+			await this.startCodexSession(session, cols, rows);
+			return;
+		}
+
 		let preparation: Awaited<ReturnType<PrepareTerminalLaunch>>;
 		try {
 			preparation = await this.prepareLaunch(tabId, session.sessionId);
@@ -469,7 +614,6 @@ export class TerminalHost {
 			return;
 		}
 
-		const providerId = this.providerByTab.get(tabId);
 		let autoRunInput: string | undefined;
 		if (providerId !== undefined) {
 			try {
@@ -508,6 +652,270 @@ export class TerminalHost {
 		}
 	}
 
+	/** ready→registered 뒤에만 authenticated plan을 만들고 모든 startup MCP 실패는 bare로 연다. */
+	private async startCodexSession(
+		session: TerminalSession,
+		cols: number,
+		rows: number,
+	): Promise<void> {
+		const prepareCodexLaunch = this.prepareCodexLaunch;
+		const supervisor = this.mcpSupervisor;
+		if (prepareCodexLaunch === undefined || supervisor === undefined) {
+			return;
+		}
+
+		let preparationResult: Awaited<ReturnType<PrepareCodexTerminalLaunch>>;
+		try {
+			preparationResult = await prepareCodexLaunch(
+				session.tabId,
+				session.sessionId,
+			);
+		} catch {
+			if (this.isCurrentProviderSession(session, 'codex')) {
+				this.failSession(
+					session,
+					'internal_error',
+					START_ERROR_MESSAGES.preparation,
+					true,
+				);
+			}
+			return;
+		}
+
+		if (!this.isCurrentProviderSession(session, 'codex')) {
+			return;
+		}
+		if (!preparationResult.ok) {
+			session.markError(preparationResult.error.code);
+			this.publish(preparationResult.error);
+			return;
+		}
+
+		const preparation = preparationResult.preparation;
+		let prepared: McpPrepareResult | undefined;
+		if (preparation.shellEnvironmentPolicyStyle !== undefined) {
+			try {
+				prepared = await supervisor.prepareSession(session.sessionId);
+			} catch {
+				/** Supervisor rejection is the same fail-open boundary as a typed prepare failure. */
+			}
+		}
+
+		if (!this.isCurrentProviderSession(session, 'codex')) {
+			await this.cleanupMcpSession(session.sessionId);
+			return;
+		}
+
+		let plan: AgentLaunchPlan | undefined;
+		let generation: string | undefined;
+		if (
+			prepared?.ok
+			&& preparation.shellEnvironmentPolicyStyle !== undefined
+		) {
+			generation = prepared.connection.generation;
+			const runtime = supervisor.getSessionRuntime(session.sessionId);
+			if (
+				runtime !== undefined
+				&& runtime.generation === generation
+				&& runtime.lifecycle === 'running'
+			) {
+				this.codexGenerationBySession.set(session.sessionId, generation);
+				try {
+					plan = await this.buildCodexMcpPlan({
+						executable: preparation.executable,
+						cwd: preparation.cwd,
+						connection: prepared.connection,
+						shellEnvironmentPolicyStyle:
+							preparation.shellEnvironmentPolicyStyle,
+					});
+				} catch {
+					/** Revoked descriptor or serializer failure continues through bare cleanup. */
+				}
+			}
+		}
+
+		if (!this.isCurrentProviderSession(session, 'codex')) {
+			await this.cleanupMcpSession(session.sessionId);
+			return;
+		}
+		if (
+			plan === undefined
+			|| generation === undefined
+			|| plan.providerId !== 'codex'
+			|| !plan.expectsMcp
+			|| !this.isCurrentCodexRuntime(session, generation)
+		) {
+			await this.cleanupMcpSession(session.sessionId);
+			if (!this.isCurrentProviderSession(session, 'codex')) {
+				return;
+			}
+			generation = undefined;
+			try {
+				plan = await this.buildCodexBarePlan({
+					executable: preparation.executable,
+					cwd: preparation.cwd,
+				});
+			} catch {
+				plan = undefined;
+			}
+		}
+
+		if (
+			!this.isCurrentProviderSession(session, 'codex')
+			|| plan === undefined
+			|| plan.providerId !== 'codex'
+			|| plan.expectsMcp !== (generation !== undefined)
+		) {
+			if (generation !== undefined) {
+				await this.cleanupMcpSession(session.sessionId);
+			}
+			if (
+				plan === undefined
+				&& this.isCurrentProviderSession(session, 'codex')
+			) {
+				this.failSession(
+					session,
+					'start_failed',
+					START_ERROR_MESSAGES.spawn,
+					true,
+				);
+			}
+			return;
+		}
+
+		let request: AgentProcessSpawnRequest | undefined;
+		try {
+			request = await this.createAgentSpawnRequest(plan, {
+				platform: preparation.platform,
+				environment: preparation.environment,
+			});
+		} catch {
+			/** Authenticated request construction failures are allowed one bare retry below. */
+		}
+
+		if (!this.isCurrentProviderSession(session, 'codex')) {
+			await this.cleanupMcpSession(session.sessionId);
+			return;
+		}
+		if (
+			generation !== undefined
+			&& (
+				request === undefined
+				|| !this.isCurrentCodexRuntime(session, generation)
+			)
+		) {
+			await this.cleanupMcpSession(session.sessionId);
+			if (!this.isCurrentProviderSession(session, 'codex')) {
+				return;
+			}
+			generation = undefined;
+			try {
+				plan = await this.buildCodexBarePlan({
+					executable: preparation.executable,
+					cwd: preparation.cwd,
+				});
+				request = await this.createAgentSpawnRequest(plan, {
+					platform: preparation.platform,
+					environment: preparation.environment,
+				});
+			} catch {
+				request = undefined;
+			}
+		}
+
+		if (
+			!this.isCurrentProviderSession(session, 'codex')
+			|| request === undefined
+			|| (generation !== undefined && !this.isCurrentCodexRuntime(
+				session,
+				generation,
+			))
+		) {
+			if (generation !== undefined) {
+				await this.cleanupMcpSession(session.sessionId);
+			}
+			if (
+				request === undefined
+				&& this.isCurrentProviderSession(session, 'codex')
+			) {
+				this.failSession(
+					session,
+					'start_failed',
+					START_ERROR_MESSAGES.spawn,
+					true,
+				);
+			}
+			return;
+		}
+
+		this.lastDimensionsByTab.set(session.tabId, { cols, rows });
+		if (generation === undefined) {
+			this.codexGenerationBySession.delete(session.sessionId);
+		} else {
+			this.codexGenerationBySession.set(session.sessionId, generation);
+		}
+		this.codexPtySpawnStarted.add(session.sessionId);
+		try {
+			await this.spawnProviderPty(session, request, cols, rows);
+		} catch {
+			const authenticatedSpawnFailed = generation !== undefined;
+			this.codexPtySpawnStarted.delete(session.sessionId);
+			await this.cleanupMcpSession(session.sessionId);
+			if (!this.isCurrentProviderSession(session, 'codex')) {
+				return;
+			}
+
+			if (authenticatedSpawnFailed) {
+				let bareRequest: AgentProcessSpawnRequest | undefined;
+				try {
+					const barePlan = await this.buildCodexBarePlan({
+						executable: preparation.executable,
+						cwd: preparation.cwd,
+					});
+					if (barePlan.providerId !== 'codex' || barePlan.expectsMcp) {
+						throw new Error('Invalid bare Codex launch plan.');
+					}
+					bareRequest = await this.createAgentSpawnRequest(barePlan, {
+						platform: preparation.platform,
+						environment: preparation.environment,
+					});
+				} catch {
+					/** Authenticated native spawn failure receives at most one bare retry. */
+				}
+
+				if (!this.isCurrentProviderSession(session, 'codex')) {
+					return;
+				}
+				if (bareRequest !== undefined) {
+					this.codexPtySpawnStarted.add(session.sessionId);
+					try {
+						await this.spawnProviderPty(
+							session,
+							bareRequest,
+							cols,
+							rows,
+						);
+						return;
+					} catch {
+						this.codexPtySpawnStarted.delete(session.sessionId);
+					}
+				}
+			}
+
+			this.failSession(
+				session,
+				'start_failed',
+				START_ERROR_MESSAGES.spawn,
+				true,
+			);
+			return;
+		}
+
+		if (!this.isCurrentProviderSession(session, 'codex')) {
+			await this.cleanupMcpSession(session.sessionId);
+		}
+	}
+
 	/** 실제 PID가 준비된 현재 session에만 started와 provider 입력을 한 번 전달한다. */
 	private handleSessionRunning(session: TerminalSession): void {
 		if (
@@ -516,6 +924,21 @@ export class TerminalHost {
 			|| session.state.kind !== 'running'
 		) {
 			return;
+		}
+
+		const generation = this.codexGenerationBySession.get(session.sessionId);
+		if (
+			generation !== undefined
+			&& this.codexPtySpawnStarted.has(session.sessionId)
+		) {
+			const runtime = this.mcpSupervisor?.getSessionRuntime(session.sessionId);
+			if (
+				runtime !== undefined
+				&& runtime.generation === generation
+				&& runtime.lifecycle === 'running'
+			) {
+				runtime.markProviderStarted();
+			}
 		}
 
 		this.publish({
@@ -650,8 +1073,24 @@ export class TerminalHost {
 			return;
 		}
 
-		this.disposeSessionProcess(session);
+		const registeredAtRestart = this.registeredTabs.has(tabId);
+		const providerAtRestart = this.providerByTab.get(tabId);
+		const pendingCleanup = this.cleanupSessionProcessTree(session);
 		this.removeSession(sessionId);
+		await pendingCleanup;
+		if (
+			!this.lifecycleActive
+			|| this.getActiveSession(tabId) !== undefined
+			|| (
+				registeredAtRestart
+				&& (
+					!this.registeredTabs.has(tabId)
+					|| this.providerByTab.get(tabId) !== providerAtRestart
+				)
+			)
+		) {
+			return;
+		}
 
 		const dimensions = this.lastDimensionsByTab.get(tabId)
 			?? RESTART_FALLBACK_DIMENSIONS;
@@ -697,7 +1136,7 @@ export class TerminalHost {
 	/**
 	 * Panel과 Webview routing을 native 종료 작업에서 동기적으로 분리한다.
 	 * 이 경로에서는 PTY kill이나 외부 명령을 호출하지 않으며, 최초 호출에서 확보한
-	 * runtime 소유 root PID만 `terminate()`가 이후 비동기 snapshot에 사용한다.
+	 * runtime 소유 process handle만 `terminate()`가 이후 PID 준비와 snapshot에 사용한다.
 	 */
 	detach(): void {
 		if (!this.lifecycleActive) {
@@ -706,7 +1145,8 @@ export class TerminalHost {
 
 		this.lifecycleActive = false;
 		this.stopMessageDelivery();
-		const rootPids: number[] = [];
+		this.beginMcpTermination();
+		const processes: PtyProcessHandle[] = [];
 		for (const session of [...this.sessionsById.values()]) {
 			if (session.state.kind === 'running') {
 				try {
@@ -717,9 +1157,9 @@ export class TerminalHost {
 			}
 
 			try {
-				const pid = session.detachProcess();
-				if (pid !== undefined) {
-					rootPids.push(pid);
+				const process = session.detachProcess();
+				if (process !== undefined) {
+					processes.push(process);
 				}
 			} catch {
 				/** listener 해제 실패도 다른 session 분리를 막지 않는다. */
@@ -732,10 +1172,12 @@ export class TerminalHost {
 			}
 		}
 
-		this.detachedRootPids = Object.freeze([...new Set(rootPids)]);
+		this.detachedProcesses = Object.freeze([...new Set(processes)]);
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.providerAutoRunInputBySession.clear();
+		this.codexGenerationBySession.clear();
+		this.codexPtySpawnStarted.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.providerByTab.clear();
@@ -743,27 +1185,125 @@ export class TerminalHost {
 	}
 
 	/**
-	 * detach에서 확보한 root마다 종료 전 snapshot을 얻고 비동기 OS adapter로 정리한다.
+	 * detach에서 확보한 process마다 PID 준비를 기다린 뒤 snapshot과 OS adapter로 정리한다.
 	 * 여러 session 중 하나가 실패해도 나머지를 계속하며 반복 호출은 같은 Promise를 반환한다.
 	 *
 	 * @returns 모든 root 정리가 완료되면 이행되는 최초 cleanup Promise
 	 */
 	terminate(): Promise<void> {
 		this.detach();
-		this.terminationPromise ??= Promise.all(
-			this.detachedRootPids.map(async (rootPid) => {
-				try {
-					const capture = await this.processTreeController.capture(rootPid);
-					if (capture.status !== 'captured') {
-						return;
-					}
-					await this.processTreeController.terminate(capture.snapshot);
-				} catch {
-					/** 원본 process/command 오류를 호출자나 로그로 전파하지 않는다. */
-				}
-			}),
-		).then(() => undefined, () => undefined);
+		this.terminationPromise ??= Promise.all([
+			this.mcpTerminationPromise ?? Promise.resolve(),
+			...this.processCleanupBySession.values(),
+			...this.detachedProcesses.map((process) =>
+				this.terminateProcessTree(process)
+			),
+		]).then(() => undefined, () => undefined);
 		return this.terminationPromise;
+	}
+
+	/** PID가 지연되는 ConPTY도 handle을 보존해 준비 후 process tree를 종료한다. */
+	private async terminateProcessTree(
+		process: PtyProcessHandle,
+	): Promise<void> {
+		let rootPid = process.pid;
+		if (!isValidProcessTreeRootPid(rootPid)) {
+			try {
+				rootPid = await process.waitForReadyPid({
+					timeoutMs: DETACHED_PID_READY_TIMEOUT_MS,
+				});
+			} catch {
+				this.killProcessHandle(process);
+				return;
+			}
+		}
+		if (!isValidProcessTreeRootPid(rootPid)) {
+			this.killProcessHandle(process);
+			return;
+		}
+
+		try {
+			const capture = await this.processTreeController.capture(rootPid);
+			if (capture.status !== 'captured') {
+				this.killProcessHandle(process);
+				return;
+			}
+			const result = await this.processTreeController.terminate(capture.snapshot);
+			if (
+				result.outcome !== 'gracefully_terminated'
+				&& result.outcome !== 'already_terminated'
+				&& result.outcome !== 'force_terminated'
+			) {
+				this.killProcessHandle(process);
+			}
+		} catch {
+			this.killProcessHandle(process);
+		}
+	}
+
+	private killProcessHandle(process: PtyProcessHandle): void {
+		try {
+			process.kill();
+		} catch {
+			/** 비동기 fallback kill 실패도 다른 process와 MCP 정리를 막지 않는다. */
+		}
+	}
+
+	/**
+	 * 실행 중 session을 routing에서 즉시 분리하고 전체 process tree를 비동기로 종료한다.
+	 * 유효 PID를 확보할 수 없거나 capture/terminate가 실패하면 root handle kill로 수렴한다.
+	 * 같은 session의 반복 요청은 최초 cleanup Promise를 재사용한다.
+	 */
+	private cleanupSessionProcessTree(session: TerminalSession): Promise<void> {
+		const existing = this.processCleanupBySession.get(session.sessionId);
+		if (existing !== undefined) {
+			return existing;
+		}
+
+		const mcpCleanup = this.cleanupMcpSession(session.sessionId);
+		if (session.state.kind === 'running') {
+			try {
+				session.markStopping();
+			} catch {
+				/** 상태 표시 실패도 routing 분리와 process-tree 정리를 막지 않는다. */
+			}
+		}
+
+		let process: PtyProcessHandle | undefined;
+		try {
+			process = session.detachProcess();
+		} catch {
+			/** handle 분리 실패도 최종 상태 전이와 MCP 정리를 막지 않는다. */
+		}
+
+		try {
+			session.markDisposed();
+		} catch {
+			/** 상태 전이 실패도 이미 분리한 handle 정리를 막지 않는다. */
+		}
+
+		const cleanup = Promise.all([
+			mcpCleanup,
+			process === undefined
+				? Promise.resolve()
+				: this.terminateProcessTree(process),
+		]).then(() => undefined, () => undefined);
+		this.processCleanupBySession.set(session.sessionId, cleanup);
+		this.processCleanupByTab.set(session.tabId, cleanup);
+		void cleanup.then(() => {
+			if (this.processCleanupBySession.get(session.sessionId) === cleanup) {
+				this.processCleanupBySession.delete(session.sessionId);
+			}
+			if (this.processCleanupByTab.get(session.tabId) === cleanup) {
+				this.processCleanupByTab.delete(session.tabId);
+			}
+		});
+		return cleanup;
+	}
+
+	/** 같은 탭에서 앞서 분리한 process tree가 끝날 때까지만 다음 시작을 보류한다. */
+	private getTabProcessCleanup(tabId: TabId): Promise<void> | undefined {
+		return this.processCleanupByTab.get(tabId);
 	}
 
 	/**
@@ -779,6 +1319,7 @@ export class TerminalHost {
 		}
 		this.lifecycleActive = false;
 		this.stopMessageDelivery();
+		this.beginMcpTermination();
 
 		for (const session of [...this.sessionsById.values()]) {
 			this.disposeSessionProcess(session);
@@ -787,6 +1328,8 @@ export class TerminalHost {
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.providerAutoRunInputBySession.clear();
+		this.codexGenerationBySession.clear();
+		this.codexPtySpawnStarted.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.providerByTab.clear();
@@ -827,6 +1370,7 @@ export class TerminalHost {
 
 		const signal = event.signal ?? null;
 		session.markExited(event.exitCode, signal);
+		void this.cleanupMcpSession(session.sessionId);
 		this.publish({
 			type: 'terminal.exited',
 			tabId: session.tabId,
@@ -840,6 +1384,47 @@ export class TerminalHost {
 	private isCurrentSession(session: TerminalSession): boolean {
 		return this.sessionsById.get(session.sessionId) === session
 			&& this.activeSessionByTab.get(session.tabId) === session.sessionId;
+	}
+
+	/** Session object identity와 현재 provider 배정을 하나의 attempt gate로 검사한다. */
+	private isCurrentProviderSession(
+		session: TerminalSession,
+		providerId: ProviderId,
+	): boolean {
+		return this.lifecycleActive
+			&& this.isCurrentSession(session)
+			&& this.providerByTab.get(session.tabId) === providerId;
+	}
+
+	/** Current Codex attempt와 supervisor runtime generation을 함께 검사한다. */
+	private isCurrentCodexRuntime(
+		session: TerminalSession,
+		generation: string,
+	): boolean {
+		const runtime = this.mcpSupervisor?.getSessionRuntime(session.sessionId);
+		return this.isCurrentProviderSession(session, 'codex')
+			&& session.state.kind === 'starting'
+			&& this.codexGenerationBySession.get(session.sessionId) === generation
+			&& runtime?.generation === generation
+			&& runtime.lifecycle === 'running';
+	}
+
+	/**
+	 * Supervisor가 이미 current generation만 전달한 event를 Terminal session identity와 다시
+	 * 대조한다. C4는 status message를 만들거나 provider를 자동 재시작하지 않는다.
+	 */
+	handleMcpRuntimeEvent(event: McpSessionRuntimeEvent): void {
+		const session = this.sessionsById.get(event.sessionId);
+		if (
+			!this.lifecycleActive
+			|| session === undefined
+			|| !this.isCurrentSession(session)
+			|| this.providerByTab.get(session.tabId) !== 'codex'
+			|| this.codexGenerationBySession.get(session.sessionId) !== event.generation
+		) {
+			return;
+		}
+		/** Runtime owns revoke/listener cleanup. keep_running/continue_without_mcp are observational. */
 	}
 
 	/**
@@ -895,6 +1480,7 @@ export class TerminalHost {
 
 		this.sessionsById.delete(sessionId);
 		this.providerAutoRunInputBySession.delete(sessionId);
+		void this.cleanupMcpSession(sessionId);
 		if (this.activeSessionByTab.get(session.tabId) === sessionId) {
 			this.activeSessionByTab.delete(session.tabId);
 		}
@@ -930,6 +1516,7 @@ export class TerminalHost {
 	 * @param session PTY를 종료하고 최종 상태로 전이할 세션
 	 */
 	private disposeSessionProcess(session: TerminalSession): void {
+		void this.cleanupMcpSession(session.sessionId);
 		if (session.state.kind === 'running') {
 			try {
 				session.markStopping();
@@ -948,6 +1535,35 @@ export class TerminalHost {
 			session.markDisposed();
 		} catch {
 			/** 상태 전이 실패도 재시작 흐름 밖으로 전파하지 않는다. */
+		}
+	}
+
+	/** Session credential을 먼저 무효화하고 adapter 정리를 멱등 supervisor 경계에 위임한다. */
+	private cleanupMcpSession(sessionId: SessionId): Promise<void> {
+		this.codexGenerationBySession.delete(sessionId);
+		this.codexPtySpawnStarted.delete(sessionId);
+		const supervisor = this.mcpSupervisor;
+		if (supervisor === undefined) {
+			return Promise.resolve();
+		}
+		try {
+			return supervisor.stopSession(sessionId).catch(() => undefined);
+		} catch {
+			return Promise.resolve();
+		}
+	}
+
+	/** Panel detach 시 supervisor를 즉시 closed 상태로 만들고 최초 cleanup Promise를 보존한다. */
+	private beginMcpTermination(): void {
+		if (this.mcpTerminationPromise !== undefined) {
+			return;
+		}
+		try {
+			this.mcpTerminationPromise = this.mcpSupervisor?.dispose()
+				.catch(() => undefined)
+				?? Promise.resolve();
+		} catch {
+			this.mcpTerminationPromise = Promise.resolve();
 		}
 	}
 
@@ -1004,7 +1620,16 @@ export class TerminalHost {
 		message: string,
 		canRestart: boolean,
 	): void {
+		const ownsDirectCodexPty = this.codexPtySpawnStarted.has(session.sessionId);
 		session.markError(code);
+		if (ownsDirectCodexPty) {
+			void this.cleanupMcpSession(session.sessionId);
+			try {
+				session.disposeProcess();
+			} catch {
+				/** Codex terminal operation failure still converges on listener cleanup. */
+			}
+		}
 		this.failWithoutTransition(
 			session.tabId,
 			session,

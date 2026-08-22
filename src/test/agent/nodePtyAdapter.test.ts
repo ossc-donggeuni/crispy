@@ -177,6 +177,39 @@ suite('Production node-pty adapter', () => {
 		assert.strictEqual(exitListeners.size, 0);
 	});
 
+	test('호출자 timeout에 PID가 준비되지 않으면 listener를 해제하고 실패한다', async () => {
+		const exitListeners = new Set<(event: PtyExitEvent) => void>();
+		const adapter = new NodePtyAdapter(() => ({
+			spawn() {
+				return {
+					pid: 0,
+					write() {},
+					resize() {},
+					kill() {},
+					onData() {
+						return { dispose() {} };
+					},
+					onExit(listener) {
+						exitListeners.add(listener);
+						return {
+							dispose() {
+								exitListeners.delete(listener);
+							},
+						};
+					},
+				};
+			},
+		}));
+		const process = adapter.spawn(spawnOptions);
+
+		await assert.rejects(
+			process.waitForReadyPid({ timeoutMs: 0 }),
+			(error: unknown) => error instanceof PtySpawnError,
+		);
+
+		assert.strictEqual(exitListeners.size, 0);
+	});
+
 	test('native load/spawn exception을 실행 정보 없는 고정 오류로 바꾼다', () => {
 		const sensitiveDetail = '/private/workspace/private-shell';
 		const adapter = new NodePtyAdapter(() => {

@@ -3,6 +3,7 @@ import type {
 	PtyExitEvent,
 	PtyListenerDisposable,
 	PtyProcessHandle,
+	PtyReadyPidWaitOptions,
 	PtySpawnOptions,
 } from '../../../agent/host/terminal/ptyAdapter';
 
@@ -29,6 +30,7 @@ function subscribe<Listener>(
 export class FakePtyProcessHandle implements PtyProcessHandle {
 	readonly writes: string[] = [];
 	readonly resizes: Array<{ readonly cols: number; readonly rows: number }> = [];
+	readonly readyPidWaitTimeouts: Array<number | undefined> = [];
 	killCallCount = 0;
 
 	private readonly dataListeners = new Set<(data: string) => void>();
@@ -55,7 +57,8 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 		return this.exitListeners.size;
 	}
 
-	waitForReadyPid(): Promise<number> {
+	waitForReadyPid(options: PtyReadyPidWaitOptions = {}): Promise<number> {
+		this.readyPidWaitTimeouts.push(options.timeoutMs);
 		if (Number.isSafeInteger(this.currentPid) && this.currentPid > 1) {
 			return Promise.resolve(this.currentPid);
 		}
@@ -74,6 +77,13 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 		for (const waiter of [...this.readyWaiters]) {
 			this.readyWaiters.delete(waiter);
 			waiter.resolve(pid);
+		}
+	}
+
+	rejectReadyPid(error: Error = new Error('fake PTY PID was not ready')): void {
+		for (const waiter of [...this.readyWaiters]) {
+			this.readyWaiters.delete(waiter);
+			waiter.reject(error);
 		}
 	}
 
@@ -118,15 +128,22 @@ export class FakePtyProcessHandle implements PtyProcessHandle {
 export class FakePtyAdapter implements PtyAdapter {
 	readonly spawnCalls: PtySpawnOptions[] = [];
 	readonly handles: FakePtyProcessHandle[] = [];
+	spawnFailuresRemaining = 0;
 
 	constructor(private readonly fakePid = 4242) {}
 
 	spawn(options: PtySpawnOptions): FakePtyProcessHandle {
 		this.spawnCalls.push({
 			...options,
-			args: [...options.args],
+			args: typeof options.args === 'string'
+				? options.args
+				: [...options.args],
 			env: { ...options.env },
 		});
+		if (this.spawnFailuresRemaining > 0) {
+			this.spawnFailuresRemaining -= 1;
+			throw new Error('fake PTY spawn failed');
+		}
 		const handle = new FakePtyProcessHandle(this.fakePid);
 		this.handles.push(handle);
 		return handle;

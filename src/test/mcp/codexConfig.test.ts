@@ -4,6 +4,7 @@ import {
 	CODEX_MCP_SERVER_NAME_PREFIX,
 	CODEX_MCP_SERVER_NAME_RANDOM_BYTES,
 	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+	CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 	createCodexMcpConfig,
 	createCodexMcpServerName,
 	createCodexProviderEnvironment,
@@ -38,6 +39,8 @@ suite('Codex MCP session config serializer', () => {
 			CODEX_CONFIG_OVERRIDE_ARGUMENT,
 			`mcp_servers.${expectedServerName}.enabled_tools=["crispy_ping"]`,
 			CODEX_CONFIG_OVERRIDE_ARGUMENT,
+			CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
+			CODEX_CONFIG_OVERRIDE_ARGUMENT,
 			`shell_environment_policy.filters.${CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE}="exclude"`,
 		]);
 		assert.strictEqual(config.serverName === 'crispy', false);
@@ -49,6 +52,9 @@ suite('Codex MCP session config serializer', () => {
 		assert.strictEqual(config.args.some((argument) => argument.includes(
 			'shell_environment_policy.include_only',
 		)), false);
+		assert.strictEqual(config.args.filter(
+			(argument) => argument === CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
+		).length, 1);
 	});
 
 	test('서로 다른 random source는 충돌하지 않는 TOML bare key를 만든다', () => {
@@ -62,6 +68,25 @@ suite('Codex MCP session config serializer', () => {
 		assert.notStrictEqual(first, second);
 		assert.match(first, /^crispy_canvas_[a-f0-9]{32}$/);
 		assert.match(second, /^crispy_canvas_[a-f0-9]{32}$/);
+	});
+
+	test('구버전 호환 모드는 같은 token을 legacy exclude array로만 직렬화한다', () => {
+		const config = createCodexMcpConfig(
+			createConnection(),
+			(size) => Buffer.alloc(size, 0xcd),
+			'legacy-exclude',
+		);
+
+		assert.strictEqual(config.args.includes(
+			'shell_environment_policy.exclude=["CRISPY_MCP_TOKEN"]',
+		), true);
+		assert.strictEqual(config.args.some((argument) => argument.includes(
+			'shell_environment_policy.filters',
+		)), false);
+		assert.strictEqual(
+			config.args.includes(CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT),
+			true,
+		);
 	});
 
 	test('random source byte 계약과 exact loopback session URL을 강제한다', () => {

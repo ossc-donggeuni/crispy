@@ -7,6 +7,10 @@ import {
 import path from 'node:path';
 import { McpAdapterSupervisor } from './adapterSupervisor';
 import {
+	resolveCodexConfigStyle,
+	type CodexConfigStyleResolver,
+} from './codexCompatibility';
+import {
 	type AgentProcessSpawnRequest,
 	createAgentProcessSpawnOptions,
 	createAgentProcessSpawnRequest,
@@ -84,6 +88,7 @@ export interface RunCodexMcpSmokeOptions {
 	readonly randomBytes?: McpRandomBytes;
 	readonly platform?: NodeJS.Platform;
 	readonly resolveExecutable?: AgentExecutableResolver;
+	readonly resolveConfigStyle?: CodexConfigStyleResolver;
 	readonly spawnProvider?: CodexProviderSpawner;
 	readonly terminateProvider?: (provider: ChildProcess) => Promise<void>;
 	readonly report?: (status: CodexSmokeStatus) => void;
@@ -159,6 +164,7 @@ export async function runCodexMcpSmoke(
 	const terminateProvider = options.terminateProvider ?? terminateCodexProvider;
 	const platform = options.platform ?? process.platform;
 	const resolveExecutable = options.resolveExecutable ?? resolveAgentExecutable;
+	const resolveConfigStyle = options.resolveConfigStyle ?? resolveCodexConfigStyle;
 	let provider: ChildProcess | undefined;
 
 	try {
@@ -179,6 +185,16 @@ export async function runCodexMcpSmoke(
 			report('failed:provider_unavailable');
 			return false;
 		}
+		const shellEnvironmentPolicyStyle = await resolveConfigStyle({
+			executable: executable.executable,
+			cwd: options.cwd,
+			platform,
+			environment: options.baseEnvironment,
+		});
+		if (shellEnvironmentPolicyStyle === undefined) {
+			report('failed:provider_unavailable');
+			return false;
+		}
 		let providerRequest: CodexProviderSpawnRequest;
 		try {
 			const plan = buildCodexMcpLaunchPlan({
@@ -188,6 +204,7 @@ export async function runCodexMcpSmoke(
 				argsBeforeConfig: CODEX_SMOKE_ARGS_BEFORE_CONFIG,
 				argsAfterConfig: [CODEX_MCP_SMOKE_PROMPT],
 				randomBytes: options.randomBytes,
+				shellEnvironmentPolicyStyle,
 			});
 			providerRequest = createAgentProcessSpawnRequest(plan, {
 				platform,

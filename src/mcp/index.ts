@@ -96,18 +96,38 @@ export {
 	CODEX_MCP_SERVER_NAME_PREFIX,
 	CODEX_MCP_SERVER_NAME_RANDOM_BYTES,
 	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+	CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 	createCodexMcpConfig,
 	createCodexMcpServerName,
 	createCodexProviderEnvironment,
 	sanitizeCodexProviderEnvironment,
 	type CodexMcpConfig,
+	type CodexShellEnvironmentPolicyStyle,
 } from './codexConfig';
+export {
+	CODEX_KEYED_FILTER_CONSERVATIVE_BASELINE,
+	CODEX_VERSION_PROBE_TIMEOUT_MS,
+	probeCodexConfigStyle,
+	resolveCodexConfigStyle,
+	selectCodexConfigStyleFromVersionOutput,
+	type CodexConfigStyleProbeResult,
+	type CodexConfigStyleResolver,
+	type CodexVersionProbeFailureReason,
+	type ResolveCodexConfigStyleOptions,
+} from './codexCompatibility';
 export {
 	buildCodexBareLaunchPlan,
 	buildCodexMcpLaunchPlan,
 	type BuildCodexBareLaunchPlanOptions,
 	type BuildCodexMcpLaunchPlanOptions,
 } from './codexLaunchPlan';
+export { spawnAgentPty } from './agentPtyLaunch';
+export {
+	createPrepareCodexTerminalLaunch,
+	type PrepareCodexTerminalLaunch,
+	type PrepareCodexTerminalLaunchDependencies,
+	type PreparedCodexTerminalLaunch,
+} from './codexTerminalLaunch';
 export {
 	createCrispyToolServer,
 	CRISPY_MCP_SERVER_NAME,

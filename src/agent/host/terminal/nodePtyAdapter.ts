@@ -3,6 +3,7 @@ import type {
 	PtyExitEvent,
 	PtyListenerDisposable,
 	PtyProcessHandle,
+	PtyReadyPidWaitOptions,
 	PtySpawnOptions,
 } from './ptyAdapter';
 
@@ -102,7 +103,7 @@ export interface NodePtyBinding {
 	 */
 	spawn(
 		executable: string,
-		args: string[],
+		args: string[] | string,
 		options: NodePtySpawnOptions,
 	): NodePtyProcess;
 }
@@ -139,14 +140,18 @@ class NodePtyProcessHandle implements PtyProcessHandle {
 	 * POSIX처럼 PID가 즉시 준비된 경우 바로 반환하고, Windows ConPTY처럼 0으로
 	 * 시작하는 경우 실제 PID 또는 exit/timeout 중 먼저 도착한 결과를 사용한다.
 	 */
-	waitForReadyPid(): Promise<number> {
+	waitForReadyPid(options: PtyReadyPidWaitOptions = {}): Promise<number> {
 		const initialPid = this.process.pid;
 		if (isValidPid(initialPid)) {
 			return Promise.resolve(initialPid);
 		}
+		const timeoutMs = options.timeoutMs ?? PID_READY_TIMEOUT_MS;
+		if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+			return Promise.reject(new PtySpawnError());
+		}
 
 		return new Promise<number>((resolve, reject) => {
-			const deadline = Date.now() + PID_READY_TIMEOUT_MS;
+			const deadline = Date.now() + timeoutMs;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			let settled = false;
 			let exitSubscription: NodePtyDisposable | undefined;
@@ -264,7 +269,9 @@ export class NodePtyAdapter implements PtyAdapter {
 			const useBundledWindowsConpty = this.platform === 'win32';
 			const process = this.loadBinding().spawn(
 				options.executable,
-				[...options.args],
+				typeof options.args === 'string'
+					? options.args
+					: [...options.args],
 				{
 					cwd: options.cwd,
 					env: { ...options.env },

@@ -15,11 +15,17 @@ export interface PtyExitEvent {
  */
 export interface PtySpawnOptions {
 	readonly executable: string;
-	readonly args: readonly string[];
+	/** Windows cmd one-shot만 node-pty의 raw command-line string을 사용한다. */
+	readonly args: readonly string[] | string;
 	readonly cwd: string;
 	readonly env: Readonly<NodeJS.ProcessEnv>;
 	readonly cols: number;
 	readonly rows: number;
+}
+
+/** 실제 PID 준비를 기다리는 호출 경계별 timeout 정책이다. */
+export interface PtyReadyPidWaitOptions {
+	readonly timeoutMs?: number;
 }
 
 /** TerminalSession이 사용하는 PTY process의 최소 Host 내부 포트다. */
@@ -30,7 +36,7 @@ export interface PtyProcessHandle {
 	 * native PTY가 실제 child PID를 공개할 때까지 기다린다.
 	 * Windows ConPTY는 spawn 직후 PID가 0일 수 있으므로 즉시 PID를 전제하지 않는다.
 	 */
-	waitForReadyPid(): Promise<number>;
+	waitForReadyPid(options?: PtyReadyPidWaitOptions): Promise<number>;
 
 	write(data: string): void;
 	resize(cols: number, rows: number): void;

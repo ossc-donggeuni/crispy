@@ -7,6 +7,10 @@ import {
 import { nodePtyAdapter } from './agent/host/terminal/nodePtyAdapter';
 import { TerminalHost } from './agent/host/terminal/terminalHost';
 import { createAgentAutoRunInputResolver } from './agent/host/agent/agentProviderLaunch';
+import { McpAdapterSupervisor } from './mcp/adapterSupervisor';
+import { createPrepareCodexTerminalLaunch } from './mcp/codexTerminalLaunch';
+import { resolveAgentExecutable } from './mcp/agentExecutableResolver';
+import { resolveCurrentWorkspace } from './agent/host/workspace/workspaceResolver';
 import {
 	createTerminalRuntimeCleanup,
 	runCleanupWithTimeout,
@@ -30,7 +34,7 @@ import {
 	type WorkspaceRefreshCoordinator,
 } from './workspace';
 
-/** C2 Host APIs are bundled for later Canvas/PTY integration but stay disconnected in this phase. */
+/** MCP Host APIs remain exported for integration and deterministic tests. */
 export { McpAdapterSupervisor } from './mcp/adapterSupervisor';
 export {
 	McpSessionRuntime,
@@ -115,13 +119,29 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				localResourceRoots: [webviewRoot],
 			},
 		);
-		const terminalHost = new TerminalHost({
+		const readProviderCliPath = (providerId: ProviderId): string | undefined =>
+			vscode.workspace
+				.getConfiguration('crispy')
+				.get<string>(`${providerId}CliPath`);
+		let terminalHost!: TerminalHost;
+		const mcpSupervisor = new McpAdapterSupervisor({
+			extensionUri: context.extensionUri,
+			parentEnvironment: { ...process.env },
+			onEvent: (event) => terminalHost?.handleMcpRuntimeEvent(event),
+		});
+		terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
-				getCliPath: (providerId) => vscode.workspace
-					.getConfiguration('crispy')
-					.get<string>(`${providerId}CliPath`),
+				getCliPath: readProviderCliPath,
 			}),
+			prepareCodexLaunch: createPrepareCodexTerminalLaunch({
+				workspaceResolver: resolveCurrentWorkspace,
+				resolveExecutable: resolveAgentExecutable,
+				readPlatform: () => process.platform,
+				readEnvironment: () => ({ ...process.env }),
+				getCliPath: () => readProviderCliPath('codex'),
+			}),
+			mcpSupervisor,
 			emitMessage: (message) => {
 				void Promise.resolve(panel.webview.postMessage(message)).catch(
 					() => undefined,

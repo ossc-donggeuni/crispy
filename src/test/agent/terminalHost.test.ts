@@ -16,6 +16,10 @@ import type {
 	ValidatedWorkspaceRoot,
 } from '../../agent/host/workspace/types';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
+import {
+	createCaptureFailureProcessTreeController,
+	FakeProcessTreeController,
+} from './support/fakeProcessTreeController';
 
 type Equal<Left, Right> =
 	(<Value>() => Value extends Left ? 1 : 2) extends
@@ -57,10 +61,22 @@ function createHost(
 	return {
 		host: new TerminalHost({
 			...options,
+			processTreeController: options.processTreeController
+				?? createCaptureFailureProcessTreeController(),
 			emitMessage: (message) => messages.push(message),
 		}),
 		messages,
 	};
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+	const deadline = Date.now() + 1000;
+	while (!predicate()) {
+		if (Date.now() >= deadline) {
+			throw new Error('test condition timed out');
+		}
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
 }
 
 suite('TerminalHost public session behavior', () => {
@@ -174,6 +190,7 @@ suite('TerminalHost public session behavior', () => {
 		assert.ok(session);
 
 		host.resetAgent('tab-agent-reset');
+		await Promise.resolve();
 
 		assert.strictEqual(host.hasTab('tab-agent-reset'), true);
 		assert.strictEqual(host.getActiveTabId(), 'tab-agent-reset');
@@ -183,6 +200,95 @@ suite('TerminalHost public session behavior', () => {
 		assert.strictEqual(adapter.handles[0].killCallCount, 1);
 		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
 		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+	});
+
+	test('Agent reset은 routing을 즉시 끊고 성공한 process tree 전체를 종료한다', async () => {
+		const adapter = new FakePtyAdapter(4311);
+		const controller = new FakeProcessTreeController();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+		});
+
+		host.createTab('tab-agent-reset-tree');
+		await host.handleTerminalReady('tab-agent-reset-tree', 80, 24);
+		await host.switchAgent('tab-agent-reset-tree', 'codex');
+		const session = host.getActiveSession('tab-agent-reset-tree');
+		assert.ok(session);
+
+		host.resetAgent('tab-agent-reset-tree');
+
+		assert.strictEqual(host.getActiveSession('tab-agent-reset-tree'), undefined);
+		assert.deepStrictEqual(session.state, { kind: 'disposed' });
+		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
+		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+		await waitUntil(() => controller.calls.length === 2);
+		assert.deepStrictEqual(controller.calls, ['capture:4311', 'terminate:4311']);
+		assert.strictEqual(adapter.handles[0].killCallCount, 0);
+	});
+
+	test('탭 닫기는 UI ownership을 즉시 제거하고 process tree는 백그라운드에서 종료한다', async () => {
+		const adapter = new FakePtyAdapter(4312);
+		const controller = new FakeProcessTreeController();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+		});
+
+		host.createTab('tab-close-tree');
+		await host.handleTerminalReady('tab-close-tree', 80, 24);
+		await host.switchAgent('tab-close-tree', 'codex');
+		const session = host.getActiveSession('tab-close-tree');
+		assert.ok(session);
+
+		host.closeTab('tab-close-tree');
+
+		assert.strictEqual(host.hasTab('tab-close-tree'), false);
+		assert.strictEqual(host.getActiveSession('tab-close-tree'), undefined);
+		assert.deepStrictEqual(session.state, { kind: 'disposed' });
+		await waitUntil(() => controller.calls.length === 2);
+		assert.deepStrictEqual(controller.calls, ['capture:4312', 'terminate:4312']);
+		assert.strictEqual(adapter.handles[0].killCallCount, 0);
+	});
+
+	test('Agent 재선택은 이전 process tree 종료 전 새 CLI를 시작하지 않는다', async () => {
+		const adapter = new FakePtyAdapter(4313);
+		let releaseTermination!: () => void;
+		const terminationPending = new Promise<void>((resolve) => {
+			releaseTermination = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => terminationPending,
+		});
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+			resolveAgentAutoRunInput: async () => undefined,
+		});
+
+		host.createTab('tab-reselect-tree');
+		await host.handleTerminalReady('tab-reselect-tree', 80, 24);
+		await host.switchAgent('tab-reselect-tree', 'codex');
+		const first = host.getActiveSession('tab-reselect-tree');
+		assert.ok(first);
+
+		const reselecting = host.switchAgent('tab-reselect-tree', 'claude');
+		await waitUntil(() => controller.calls.includes('terminate:4313'));
+
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(first.state, { kind: 'disposed' });
+		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
+		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+		releaseTermination();
+		await reselecting;
+
+		assert.strictEqual(adapter.spawnCalls.length, 2);
+		assert.strictEqual(host.getActiveSession('tab-reselect-tree')?.state.kind, 'running');
+		assert.deepStrictEqual(controller.calls, ['capture:4313', 'terminate:4313']);
+		assert.strictEqual(adapter.handles[0].killCallCount, 0);
 	});
 });
 
@@ -701,6 +807,40 @@ suite('TerminalHost PTY output and exit routing', () => {
 });
 
 suite('TerminalHost restart orchestration', () => {
+	test('재시작은 이전 process tree 종료 전 새 PTY를 만들지 않는다', async () => {
+		const adapter = new FakePtyAdapter(4314);
+		let releaseTermination!: () => void;
+		const terminationPending = new Promise<void>((resolve) => {
+			releaseTermination = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => terminationPending,
+		});
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+		});
+		await host.startSession('tab-restart-tree', 80, 24);
+		const first = host.getActiveSession('tab-restart-tree');
+		assert.ok(first);
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		const restarting = host.restartSession(
+			'tab-restart-tree',
+			first.sessionId,
+		);
+		await waitUntil(() => controller.calls.includes('terminate:4314'));
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+
+		releaseTermination();
+		await restarting;
+
+		assert.strictEqual(adapter.spawnCalls.length, 2);
+		assert.deepStrictEqual(controller.calls, ['capture:4314', 'terminate:4314']);
+		assert.strictEqual(adapter.handles[0].killCallCount, 0);
+	});
+
 	test('종료된 session을 정리하고 새 sessionId로 정책을 다시 적용해 시작한다', async () => {
 		let workspaceCalls = 0;
 		let shellCalls = 0;
