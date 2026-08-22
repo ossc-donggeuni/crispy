@@ -3,6 +3,14 @@ import {
 	type GraphCamera,
 } from './graphCamera';
 import { createGraphLayout, type GraphLayout } from './graphLayout';
+import {
+	collectGraphLayoutSubtreeNodeIds,
+	classifyGraphLayoutNodeArrangement,
+	rebaseArrangedSubtree,
+	rebaseNodePositions,
+	rebaseReattachedSubtree,
+	translateDetachedSubtree,
+} from './graphLayoutTransition';
 import type { Graph } from './graphModel';
 import {
 	addGraphRoot,
@@ -17,6 +25,7 @@ import { createGraphNavigatorRoots } from './graphNavigatorRoots';
 import {
 	initializeGraphRenderer,
 	type GraphRenderer,
+	type GraphNodeArrangementRequest,
 	type GraphRootReattachRequest,
 } from './graphRenderer';
 import type { GraphDetachDropRequest } from './graphDetachDrag';
@@ -64,6 +73,7 @@ export function initializeGraphLayoutReflow(
 	state: GraphStateStore,
 	renderer: Pick<GraphRenderer, 'applyLayout'>,
 	navigator: Pick<GraphNavigator, 'setLayout'>,
+	getCurrentLayout: () => GraphLayout,
 	createLayout: (state: GraphStateSnapshot) => GraphLayout,
 ): () => void {
 	let active = true;
@@ -82,10 +92,41 @@ export function initializeGraphLayoutReflow(
 			return;
 		}
 
+		const hasNewlyOpenedFolder = Object.entries(nextState.openedFolders).some(
+			([nodeId, isOpened]) => isOpened && !renderedOpenedFolders[nodeId],
+		);
 		renderedFileGroupPages = nextState.fileGroupPages;
 		renderedOpenedFolders = nextState.openedFolders;
 		renderedHiddenNodeIds = nextState.hiddenNodeIds;
-		applyGraphLayout(renderer, navigator, createLayout(nextState));
+		const previousLayout = getCurrentLayout();
+		const nextLayout = createLayout(nextState);
+		const rebasedNodePositions = rebaseBacklinkNodePositions(
+			nextLayout,
+			rebaseNodePositions(
+				previousLayout,
+				nextLayout,
+				nextState.nodePositions,
+				{
+					inheritAncestorOffsets: hasNewlyOpenedFolder,
+					stationaryRootNodeIds: nextLayout.unarrangedNodeIds,
+				},
+			),
+		);
+
+		applyGraphLayout(
+			renderer,
+			navigator,
+			nextLayout,
+			rebasedNodePositions,
+		);
+		state.setState({
+			camera: nextState.camera,
+			nodePositions: rebasedNodePositions,
+			fileGroupPages: nextState.fileGroupPages,
+			openedFolders: nextState.openedFolders,
+			detachedRootNodeIds: nextState.detachedRootNodeIds,
+			hiddenNodeIds: nextState.hiddenNodeIds,
+		});
 	});
 
 	return () => {
@@ -99,50 +140,48 @@ export function applyGraphLayout(
 	renderer: Pick<GraphRenderer, 'applyLayout'>,
 	navigator: Pick<GraphNavigator, 'setLayout'>,
 	layout: GraphLayout,
+	nodePositions?: GraphStateSnapshot['nodePositions'],
 ): void {
-	renderer.applyLayout(layout);
+	renderer.applyLayout(layout, nodePositions);
 	navigator.setLayout(layout);
 }
 
-/**
- * Folder/File Detach 요청을 공통 Root 추가와 위치 저장으로 처리한다.
- * client 좌표는 Viewport local 좌표를 거쳐 기존 Camera 역변환을 사용한다.
- */
-export function promoteToGraphRoot(
-	graph: Graph,
-	request: GraphDetachDropRequest,
-	viewport: HTMLElement,
-	camera: GraphCamera,
-	state: GraphStateStore,
-): Graph | undefined {
-	const addition = addGraphRoot(graph, request.nodeId);
+/** 정적 Backlink Card는 저장된 독립 위치를 버리고 Parent의 정렬 offset만 상속한다. */
+function rebaseBacklinkNodePositions(
+	layout: GraphLayout,
+	nodePositions: GraphStateSnapshot['nodePositions'],
+): Record<string, { x: number; y: number }> {
+	const backlinkNodeIds = new Set(layout.nodes
+		.filter((node) => (
+			node.kind === 'folder-backlink'
+			|| (
+				node.kind === 'file-group'
+					&& node.presentation === 'standalone'
+					&& node.children.some(
+						(file) => file.presentation === 'backlink',
+					)
+			)
+		))
+		.map((node) => node.id));
 
-	if (!addition) {
-		return undefined;
+	if (backlinkNodeIds.size === 0) {
+		return Object.fromEntries(Object.entries(nodePositions).map(
+			([nodeId, position]) => [nodeId, { ...position }],
+		));
 	}
 
-	const bounds = viewport.getBoundingClientRect();
-	const worldPosition = camera.viewportToWorld({
-		x: request.clientX - bounds.left,
-		y: request.clientY - bounds.top,
-	});
-	const snapshot = state.getState();
+	const positionsWithoutBacklinks = Object.fromEntries(
+		Object.entries(nodePositions).filter(
+			([nodeId]) => !backlinkNodeIds.has(nodeId),
+		),
+	);
 
-	state.setState({
-		camera: snapshot.camera,
-		nodePositions: {
-			...snapshot.nodePositions,
-			[request.nodeId]: worldPosition,
-		},
-		fileGroupPages: snapshot.fileGroupPages,
-		openedFolders: snapshot.openedFolders,
-		detachedRootNodeIds: {
-			...snapshot.detachedRootNodeIds,
-			[request.nodeId]: true,
-		},
-	});
-
-	return addition.graph;
+	return rebaseNodePositions(
+		layout,
+		layout,
+		positionsWithoutBacklinks,
+		{ inheritAncestorOffsets: true },
+	);
 }
 
 /**
@@ -236,7 +275,7 @@ export function initializeGraphView(
 	viewport.append(world, overlayLayer);
 	root.append(viewport);
 	const state = createGraphState(initialState);
-	const initialGraphState = state.getState();
+	let initialGraphState = state.getState();
 	let workspaceGraph = graph;
 	let currentGraph = applyDetachedGraphRoots(
 		workspaceGraph,
@@ -252,36 +291,123 @@ export function initializeGraphView(
 	const camera = initializeGraphCamera(viewport, world, state, {
 		getVisibleGraphArea,
 	});
+	const createLayout = (
+		targetGraph: Graph,
+		snapshot: GraphStateSnapshot,
+		unarrangedNodeIds: ReadonlySet<string> = new Set(),
+	): GraphLayout => createGraphLayout(targetGraph, {
+		fileGroupPages: snapshot.fileGroupPages,
+		openedFolders: snapshot.openedFolders,
+		hiddenNodeIds: snapshot.hiddenNodeIds,
+		unarrangedNodeIds,
+	});
+	const initialBaselineLayout = createLayout(currentGraph, initialGraphState);
+	state.setState({
+		camera: initialGraphState.camera,
+		nodePositions: rebaseBacklinkNodePositions(
+			initialBaselineLayout,
+			initialGraphState.nodePositions,
+		),
+		fileGroupPages: initialGraphState.fileGroupPages,
+		openedFolders: initialGraphState.openedFolders,
+		detachedRootNodeIds: initialGraphState.detachedRootNodeIds,
+		hiddenNodeIds: initialGraphState.hiddenNodeIds,
+	});
+	initialGraphState = state.getState();
+	const initialArrangement = classifyGraphLayoutNodeArrangement(
+		initialBaselineLayout,
+		initialGraphState.nodePositions,
+	);
+	let currentUnarrangedNodeIds = new Set(initialArrangement.unarrangedNodeIds);
+	let currentLayout = currentUnarrangedNodeIds.size === 0
+		? initialBaselineLayout
+		: createLayout(
+			currentGraph,
+			initialGraphState,
+			currentUnarrangedNodeIds,
+		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
-	let currentLayout: GraphLayout;
 	const syncNavigatorRoots = (): void => {
 		navigator.setRoots(createGraphNavigatorRoots(currentGraph));
 	};
 	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => {
-		currentLayout = createGraphLayout(currentGraph, {
-			fileGroupPages: snapshot.fileGroupPages,
-			openedFolders: snapshot.openedFolders,
-			hiddenNodeIds: snapshot.hiddenNodeIds,
-		});
+		const arrangement = classifyGraphLayoutNodeArrangement(
+			currentLayout,
+			snapshot.nodePositions,
+		);
+
+		currentUnarrangedNodeIds = new Set(arrangement.unarrangedNodeIds);
+
+		currentLayout = createLayout(
+			currentGraph,
+			snapshot,
+			currentUnarrangedNodeIds,
+		);
 
 		return currentLayout;
 	};
-	const applyCurrentLayout = (snapshot: GraphStateSnapshot): void => {
-		applyGraphLayout(renderer, navigator, createCurrentLayout(snapshot));
-	};
 	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
-		const nextGraph = promoteToGraphRoot(
-			currentGraph,
-			request,
-			viewport,
-			camera,
-			state,
-		);
+		const addition = addGraphRoot(currentGraph, request.nodeId);
 
-		if (nextGraph) {
-			currentGraph = nextGraph;
-			applyCurrentLayout(state.getState());
+		if (addition) {
+			const snapshot = state.getState();
+			const viewportBounds = viewport.getBoundingClientRect();
+			const targetPosition = camera.viewportToWorld({
+				x: request.clientX - viewportBounds.left,
+				y: request.clientY - viewportBounds.top,
+			});
+			const previousLayout = currentLayout;
+			const unarrangedNodeIds = new Set(
+				classifyGraphLayoutNodeArrangement(
+					previousLayout,
+					snapshot.nodePositions,
+				).unarrangedNodeIds,
+			);
+
+			unarrangedNodeIds.add(request.nodeId);
+			currentUnarrangedNodeIds = unarrangedNodeIds;
+			const nextLayout = createLayout(
+				addition.graph,
+				snapshot,
+				unarrangedNodeIds,
+			);
+			const rebasedNodePositions = rebaseBacklinkNodePositions(
+				nextLayout,
+				rebaseNodePositions(
+					previousLayout,
+					nextLayout,
+					snapshot.nodePositions,
+					{
+						inheritAncestorOffsets: true,
+						stationaryRootNodeIds: unarrangedNodeIds,
+					},
+				),
+			);
+			const nodePositions = translateDetachedSubtree(
+				previousLayout,
+				nextLayout,
+				snapshot.nodePositions,
+				request.nodeId,
+				targetPosition,
+				{ baseNodePositions: rebasedNodePositions },
+			);
+			const detachedRootNodeIds = {
+				...snapshot.detachedRootNodeIds,
+				[request.nodeId]: true as const,
+			};
+
+			currentGraph = addition.graph;
+			currentLayout = nextLayout;
+			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
+			state.setState({
+				camera: snapshot.camera,
+				nodePositions,
+				fileGroupPages: snapshot.fileGroupPages,
+				openedFolders: snapshot.openedFolders,
+				detachedRootNodeIds,
+				hiddenNodeIds: snapshot.hiddenNodeIds,
+			});
 			syncNavigatorRoots();
 		}
 
@@ -326,25 +452,114 @@ export function initializeGraphView(
 			return false;
 		}
 
-		currentGraph = nextGraph;
 		const snapshot = state.getState();
-		const nodePositions = { ...snapshot.nodePositions };
+		const previousLayout = currentLayout;
+		const unarrangedNodeIds = new Set(
+			classifyGraphLayoutNodeArrangement(
+				previousLayout,
+				snapshot.nodePositions,
+			).unarrangedNodeIds,
+		);
+
+		unarrangedNodeIds.delete(nodeId);
+		currentUnarrangedNodeIds = unarrangedNodeIds;
+		const nextLayout = createLayout(
+			nextGraph,
+			snapshot,
+			unarrangedNodeIds,
+		);
+		const nodePositions = rebaseReattachedSubtree(
+			previousLayout,
+			nextLayout,
+			snapshot.nodePositions,
+			nodeId,
+		);
 		const detachedRootNodeIds = { ...snapshot.detachedRootNodeIds };
 
-		delete nodePositions[nodeId];
 		delete detachedRootNodeIds[nodeId];
+		currentGraph = nextGraph;
+		currentLayout = nextLayout;
+		applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
 		state.setState({
 			camera: snapshot.camera,
 			nodePositions,
 			fileGroupPages: snapshot.fileGroupPages,
 			openedFolders: snapshot.openedFolders,
 			detachedRootNodeIds,
+			hiddenNodeIds: snapshot.hiddenNodeIds,
 		});
-		applyCurrentLayout(state.getState());
 		syncNavigatorRoots();
 		return true;
 	};
-	const initialLayout = createCurrentLayout(initialGraphState);
+	const handleNodeArrangementChange = ({
+		nodeId,
+		arranged,
+	}: GraphNodeArrangementRequest): boolean => {
+		const nextUnarrangedNodeIds = new Set(currentUnarrangedNodeIds);
+		const wasUnarranged = nextUnarrangedNodeIds.has(nodeId);
+
+		if (arranged) {
+			nextUnarrangedNodeIds.delete(nodeId);
+		} else {
+			nextUnarrangedNodeIds.add(nodeId);
+		}
+
+		if (!arranged && wasUnarranged) {
+			return false;
+		}
+
+		const snapshot = state.getState();
+		const previousLayout = currentLayout;
+		const nextLayout = createLayout(
+			currentGraph,
+			snapshot,
+			nextUnarrangedNodeIds,
+		);
+		const nodePositions = rebaseNodePositions(
+			previousLayout,
+			nextLayout,
+			snapshot.nodePositions,
+			{ stationaryRootNodeIds: nextUnarrangedNodeIds },
+		);
+
+		if (arranged) {
+			const arrangedPositions = rebaseArrangedSubtree(
+				previousLayout,
+				nextLayout,
+				snapshot.nodePositions,
+				nodePositions,
+				nodeId,
+			);
+			const subtreeNodeIds = new Set([
+				...collectGraphLayoutSubtreeNodeIds(previousLayout, nodeId),
+				...collectGraphLayoutSubtreeNodeIds(nextLayout, nodeId),
+			]);
+
+			for (const subtreeNodeId of subtreeNodeIds) {
+				const arrangedPosition = arrangedPositions[subtreeNodeId];
+
+				if (arrangedPosition) {
+					nodePositions[subtreeNodeId] = arrangedPosition;
+				} else {
+					delete nodePositions[subtreeNodeId];
+				}
+			}
+		}
+
+		currentUnarrangedNodeIds = nextUnarrangedNodeIds;
+		currentLayout = nextLayout;
+		applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
+		state.setState({
+			camera: snapshot.camera,
+			nodePositions,
+			fileGroupPages: snapshot.fileGroupPages,
+			openedFolders: snapshot.openedFolders,
+			detachedRootNodeIds: snapshot.detachedRootNodeIds,
+			hiddenNodeIds: snapshot.hiddenNodeIds,
+		});
+		return true;
+	};
+	const initialLayout = currentLayout;
 
 	renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -358,7 +573,8 @@ export function initializeGraphView(
 			onDetachDrop: handleDetachDrop,
 			onBacklinkClick: handleBacklinkClick,
 			onRootContextClick: handleRootContextClick,
-			onRootReattach: handleRootReattach,
+				onRootReattach: handleRootReattach,
+				onNodeArrangementChange: handleNodeArrangementChange,
 			resolveRootId: (rootNodeId) => currentGraph.roots.find(
 				(root) => root.nodeId === rootNodeId,
 			)?.id,
@@ -380,6 +596,7 @@ export function initializeGraphView(
 		state,
 		renderer,
 		navigator,
+		() => currentLayout,
 		createCurrentLayout,
 	);
 
@@ -399,11 +616,42 @@ export function initializeGraphView(
 			const snapshot = state.getState();
 
 			workspaceGraph = graph;
-			currentGraph = applyDetachedGraphRoots(
+			const nextGraph = applyDetachedGraphRoots(
 				workspaceGraph,
 				snapshot.detachedRootNodeIds,
 			);
-			applyCurrentLayout(snapshot);
+			const previousLayout = currentLayout;
+			const arrangement = classifyGraphLayoutNodeArrangement(
+				previousLayout,
+				snapshot.nodePositions,
+			);
+			currentUnarrangedNodeIds = new Set(arrangement.unarrangedNodeIds);
+			const nextLayout = createLayout(
+				nextGraph,
+				snapshot,
+				currentUnarrangedNodeIds,
+			);
+			const nodePositions = rebaseBacklinkNodePositions(
+				nextLayout,
+				rebaseNodePositions(
+					previousLayout,
+					nextLayout,
+					snapshot.nodePositions,
+					{ stationaryRootNodeIds: currentUnarrangedNodeIds },
+				),
+			);
+
+			currentGraph = nextGraph;
+			currentLayout = nextLayout;
+			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
+			state.setState({
+				camera: snapshot.camera,
+				nodePositions,
+				fileGroupPages: snapshot.fileGroupPages,
+				openedFolders: snapshot.openedFolders,
+				detachedRootNodeIds: snapshot.detachedRootNodeIds,
+				hiddenNodeIds: snapshot.hiddenNodeIds,
+			});
 			syncNavigatorRoots();
 			navigator.setWorkspaceGraph(workspaceGraph);
 		},

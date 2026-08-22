@@ -12,6 +12,12 @@ export interface GraphNodeDrag {
 
 /** Graph Node Drag가 Renderer와 Click interaction에 전달하는 callback이다. */
 export interface GraphNodeDragOptions {
+	/** Pointer Drag 시작 직전에 진행 중인 Renderer transition을 정리한다. */
+	onDragStart?: () => void;
+	/** Threshold를 넘어 실제 Drag로 전환된 순간 한 번 호출된다. */
+	onDragActivate?: () => void;
+	/** Animation 중인 DOM과 같은 실제 시작 World 위치를 선택적으로 반환한다. */
+	getCurrentPosition?: () => GraphLayoutPosition | undefined;
 	/** Drag로 소비되지 않은 Click이 완료됐을 때 호출된다. */
 	onClick?: () => void;
 	/** Drag 중 임시 World 위치가 바뀌거나 취소로 복원될 때 호출된다. */
@@ -97,16 +103,20 @@ export function initializeGraphNodeDrag(
 
 		event.preventDefault();
 		suppressNextClick = false;
+		options.onDragStart?.();
 		const state = graphState.getState();
 		const savedPosition = state.nodePositions[nodeId];
+		const startPosition = options.getCurrentPosition?.()
+			?? savedPosition
+			?? currentDefaultPosition;
 
 		session = {
 			pointerId: event.pointerId,
 			startClientX: event.clientX,
 			startClientY: event.clientY,
-			startPosition: savedPosition ?? currentDefaultPosition,
+			startPosition,
 			cameraScale: state.camera.scale,
-			currentPosition: savedPosition ?? currentDefaultPosition,
+			currentPosition: startPosition,
 			didDrag: false,
 		};
 		node.classList.add('is-dragging');
@@ -130,7 +140,10 @@ export function initializeGraphNodeDrag(
 			return;
 		}
 
-		session.didDrag = true;
+		if (!session.didDrag) {
+			session.didDrag = true;
+			options.onDragActivate?.();
+		}
 		const deltaX = screenDeltaX / session.cameraScale;
 		const deltaY = screenDeltaY / session.cameraScale;
 		session.currentPosition = {

@@ -3,11 +3,13 @@ import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
 	initializeGraphCamera,
+	type GraphAnimationFrameScheduler,
 } from '../../webview/graph/graphCamera';
 import {
 	createFileGroupId,
 	createGraphLayout,
 	getFileGroupHeight,
+	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphLayout,
 	type GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
@@ -27,7 +29,9 @@ import {
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import {
 	initializeGraphRenderer,
+	type GraphNodeArrangementRequest,
 	type GraphRendererInteractions,
+	type GraphRendererOptions,
 } from '../../webview/graph/graphRenderer';
 import {
 	createGraphState,
@@ -211,7 +215,10 @@ suite('Graph Renderer / Node Drag', () => {
 
 		assert.strictEqual(folderLabel.textContent, folderContext.relativePath);
 		assert.strictEqual(folderLabel.style.left, '0px');
-		assert.strictEqual(folderLabel.style.maxWidth, '300px');
+		assert.strictEqual(
+			folderLabel.style.maxWidth,
+			`${GRAPH_FOLDER_NODE_WIDTH * 1.5}px`,
+		);
 		assert.strictEqual(
 			findDescendantByClass(child, 'graph-root-context-label'),
 			undefined,
@@ -1696,7 +1703,7 @@ suite('Graph Renderer / Node Drag', () => {
 		);
 		assert.ok(restoredEdge.getAttribute('d'));
 		assert.strictEqual(restoredFolder.getEventListenerCount(), 6);
-		assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+		assert.strictEqual(restoredFileRow.getEventListenerCount(), 8);
 
 		restoredFolder.dispatch('click', createClickEvent(restoredFolder));
 		restoredFileRow.dispatch('click', createClickEvent(restoredFileRow));
@@ -1759,7 +1766,7 @@ suite('Graph Renderer / Node Drag', () => {
 			getDescendantsByClass(fileGroup, 'graph-file-item'),
 			retainedRows,
 		);
-		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 2));
+		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 8));
 
 		const addedFile = {
 			kind: 'file' as const,
@@ -1877,12 +1884,12 @@ suite('Graph Renderer / Node Drag', () => {
 
 			assert.notStrictEqual(restoredFileGroup, activeFileGroup);
 			assert.strictEqual(restoredFileGroup.getEventListenerCount(), 6);
-			assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+			assert.strictEqual(restoredFileRow.getEventListenerCount(), 8);
 
 			fixture.renderer.applyLayout(openLayout);
 			assert.strictEqual(fixture.getNode(fileGroupId), restoredFileGroup);
 			assert.strictEqual(restoredFileGroup.getEventListenerCount(), 6);
-			assert.strictEqual(restoredFileRow.getEventListenerCount(), 2);
+			assert.strictEqual(restoredFileRow.getEventListenerCount(), 8);
 
 			restoredFileGroup.dispatch(
 				'click',
@@ -2029,6 +2036,301 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
+	test('Layout 전환은 기존 Node DOM과 연결 Edge를 같은 Frame에서 보간한다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			GRAPH_MOCK_PROJECT,
+			undefined,
+			{
+				animationFrameScheduler: scheduler,
+				transitionDuration: 200,
+			},
+		);
+		const nodeId = 'folder:app';
+		const node = fixture.getNode(nodeId);
+		const edge = fixture.getConnectedEdge(nodeId);
+		const initialNode = getLayoutNode(fixture.layout, nodeId);
+		const initialEdgePath = edge.getAttribute('d');
+		const edgeWritesBefore = edge.getAttributeWriteCount('d');
+		const targetPosition = {
+			x: initialNode.position.x + 120,
+			y: initialNode.position.y + 200,
+		};
+
+		fixture.renderer.applyLayout(replaceLayoutNode(fixture.layout, {
+			...initialNode,
+			position: targetPosition,
+		}));
+
+		assert.strictEqual(fixture.getNode(nodeId), node);
+		assert.deepStrictEqual(readTranslate(node.style.transform), initialNode.position);
+		assert.strictEqual(scheduler.pendingCount, 1);
+
+		scheduler.runNext(0);
+		assert.deepStrictEqual(readTranslate(node.style.transform), initialNode.position);
+		scheduler.runNext(100);
+		const interpolatedPosition = readTranslate(node.style.transform);
+
+		assert.ok(interpolatedPosition.x > initialNode.position.x);
+		assert.ok(interpolatedPosition.x < targetPosition.x);
+		assert.ok(interpolatedPosition.y > initialNode.position.y);
+		assert.ok(interpolatedPosition.y < targetPosition.y);
+		assert.notStrictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.ok(edge.getAttributeWriteCount('d') > edgeWritesBefore);
+
+		scheduler.runNext(200);
+		assert.deepStrictEqual(readTranslate(node.style.transform), targetPosition);
+		assert.strictEqual(scheduler.pendingCount, 0);
+		fixture.renderer.dispose();
+	});
+
+	test('Folder 펼침과 접힘은 하위 Node 및 Edge를 부모 기준으로 출입시킨다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const folderId = 'folder:app';
+		const childId = 'folder:app/src';
+		const edgeId = `${folderId}->${childId}`;
+		const collapsedFolders: Record<string, true> = {
+			[GRAPH_MOCK_PROJECT.id]: true,
+		};
+		const expandedFolders: Record<string, true> = {
+			...collapsedFolders,
+			[folderId]: true,
+		};
+		const fixture = createRendererFixture(
+			1,
+			{
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				openedFolders: collapsedFolders,
+			},
+			{},
+			GRAPH_MOCK_PROJECT,
+			undefined,
+			{
+				animationFrameScheduler: scheduler,
+				transitionDuration: 200,
+			},
+		);
+		const parentStart = readTranslate(
+			fixture.getNode(folderId).style.transform,
+		);
+		const expandedLayout = createGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+			{ openedFolders: expandedFolders },
+		);
+		const childTarget = getLayoutNode(expandedLayout, childId).position;
+
+		fixture.renderer.applyLayout(expandedLayout);
+		const child = fixture.getNode(childId);
+		const edge = fixture.getEdge(edgeId);
+
+		assert.deepStrictEqual(readTranslate(child.style.transform), parentStart);
+		assert.strictEqual(child.style.opacity, '0');
+		assert.strictEqual(child.style.scale, '0.96');
+		assert.strictEqual(edge.style.opacity, '0');
+		assert.strictEqual(child.hasClass('is-layout-transitioning'), true);
+		assert.strictEqual(scheduler.pendingCount, 1);
+
+		scheduler.runNext(0);
+		scheduler.runNext(100);
+		const enteringPosition = readTranslate(child.style.transform);
+		const enteringOpacity = Number(child.style.opacity);
+
+		assert.ok(enteringPosition.x > parentStart.x);
+		assert.ok(enteringPosition.x < childTarget.x);
+		assert.ok(enteringOpacity > 0 && enteringOpacity < 1);
+		assert.strictEqual(edge.style.opacity, child.style.opacity);
+
+		scheduler.runNext(200);
+		assert.deepStrictEqual(readTranslate(child.style.transform), childTarget);
+		assert.strictEqual(child.style.opacity, '');
+		assert.strictEqual(child.style.scale, '');
+		assert.strictEqual(edge.style.opacity, '');
+		assert.strictEqual(child.hasClass('is-layout-transitioning'), false);
+
+		const collapsedLayout = createGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+			{ openedFolders: collapsedFolders },
+		);
+		const parentTarget = getLayoutNode(collapsedLayout, folderId).position;
+
+		fixture.renderer.applyLayout(collapsedLayout);
+		assert.strictEqual(fixture.nodeLayer.children.includes(child), true);
+		assert.strictEqual(fixture.edgeLayer.children.includes(edge), true);
+		assert.strictEqual(child.hasClass('is-layout-exiting'), true);
+		assert.strictEqual(child.getEventListenerCount(), 0);
+		assert.strictEqual(child.style.opacity, '1');
+		assert.strictEqual(edge.style.opacity, '1');
+
+		scheduler.runNext(200);
+		scheduler.runNext(300);
+		const exitingPosition = readTranslate(child.style.transform);
+		const exitingOpacity = Number(child.style.opacity);
+
+		assert.ok(exitingPosition.x < childTarget.x);
+		assert.ok(exitingPosition.x > parentTarget.x);
+		assert.ok(exitingOpacity > 0 && exitingOpacity < 1);
+
+		scheduler.runNext(400);
+		assert.strictEqual(fixture.nodeLayer.children.includes(child), false);
+		assert.strictEqual(fixture.edgeLayer.children.includes(edge), false);
+		assert.strictEqual(scheduler.pendingCount, 0);
+		fixture.renderer.dispose();
+	});
+
+	test('새 Layout은 진행 중 전환을 현재 위치에서 취소하고 새 목표로 이어간다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			GRAPH_MOCK_PROJECT,
+			undefined,
+			{
+				animationFrameScheduler: scheduler,
+				transitionDuration: 200,
+			},
+		);
+		const nodeId = 'folder:app';
+		const node = fixture.getNode(nodeId);
+		const initialNode = getLayoutNode(fixture.layout, nodeId);
+		const firstNode = {
+			...initialNode,
+			position: {
+				x: initialNode.position.x + 100,
+				y: initialNode.position.y + 100,
+			},
+		};
+		const secondNode = {
+			...initialNode,
+			position: {
+				x: initialNode.position.x + 300,
+				y: initialNode.position.y + 240,
+			},
+		};
+
+		fixture.renderer.applyLayout(replaceLayoutNode(fixture.layout, firstNode));
+		scheduler.runNext(0);
+		scheduler.runNext(50);
+		const interruptedPosition = readTranslate(node.style.transform);
+
+		fixture.renderer.applyLayout(replaceLayoutNode(fixture.layout, secondNode));
+
+		assert.strictEqual(scheduler.cancelCount, 1);
+		assert.strictEqual(scheduler.pendingCount, 1);
+		assert.deepStrictEqual(readTranslate(node.style.transform), interruptedPosition);
+		scheduler.runNext(50);
+		assert.deepStrictEqual(readTranslate(node.style.transform), interruptedPosition);
+		scheduler.runNext(250);
+		assert.deepStrictEqual(readTranslate(node.style.transform), secondNode.position);
+		fixture.renderer.dispose();
+	});
+
+	test('Drag 시작은 Layout 전환을 종료하고 Pointer 이동을 즉시 반영한다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			GRAPH_MOCK_PROJECT,
+			undefined,
+			{
+				animationFrameScheduler: scheduler,
+				transitionDuration: 200,
+			},
+		);
+		const nodeId = 'folder:app';
+		const node = fixture.getNode(nodeId);
+		const initialNode = getLayoutNode(fixture.layout, nodeId);
+		const targetPosition = {
+			x: initialNode.position.x + 160,
+			y: initialNode.position.y + 120,
+		};
+
+		fixture.renderer.applyLayout(replaceLayoutNode(fixture.layout, {
+			...initialNode,
+			position: targetPosition,
+		}));
+		scheduler.runNext(0);
+		scheduler.runNext(50);
+		node.dispatch('pointerdown', createPointerEvent(node, 10, 10));
+
+		assert.strictEqual(scheduler.cancelCount, 1);
+		assert.strictEqual(scheduler.pendingCount, 0);
+		assert.deepStrictEqual(readTranslate(node.style.transform), targetPosition);
+		node.dispatch('pointermove', createPointerEvent(node, 30, 40));
+		assert.deepStrictEqual(readTranslate(node.style.transform), {
+			x: targetPosition.x + 20,
+			y: targetPosition.y + 30,
+		});
+		assert.strictEqual(scheduler.pendingCount, 0);
+		node.dispatch('pointerup', createPointerEvent(node, 30, 40));
+		fixture.renderer.dispose();
+	});
+
+	test('dispose와 reduced motion은 예약 RAF를 남기지 않는다', () => {
+		const scheduler = new FakeAnimationFrameScheduler();
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			GRAPH_MOCK_PROJECT,
+			undefined,
+			{
+				animationFrameScheduler: scheduler,
+				transitionDuration: 200,
+			},
+		);
+		const nodeId = 'folder:app';
+		const initialNode = getLayoutNode(fixture.layout, nodeId);
+		const movedNode = {
+			...initialNode,
+			position: {
+				x: initialNode.position.x + 100,
+				y: initialNode.position.y + 100,
+			},
+		};
+
+		fixture.renderer.applyLayout(replaceLayoutNode(fixture.layout, movedNode));
+		assert.strictEqual(scheduler.pendingCount, 1);
+		fixture.renderer.dispose();
+		assert.strictEqual(scheduler.pendingCount, 0);
+		assert.strictEqual(scheduler.cancelCount, 1);
+
+		const reducedScheduler = new FakeAnimationFrameScheduler();
+		const reducedFixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			GRAPH_MOCK_PROJECT,
+			undefined,
+			{
+				animationFrameScheduler: reducedScheduler,
+				transitionDuration: 200,
+				prefersReducedMotion: true,
+			},
+		);
+		const reducedNode = getLayoutNode(reducedFixture.layout, nodeId);
+		const reducedTarget = {
+			x: reducedNode.position.x + 90,
+			y: reducedNode.position.y + 70,
+		};
+
+		reducedFixture.renderer.applyLayout(replaceLayoutNode(
+			reducedFixture.layout,
+			{ ...reducedNode, position: reducedTarget },
+		));
+		assert.deepStrictEqual(
+			readTranslate(reducedFixture.getNode(nodeId).style.transform),
+			reducedTarget,
+		);
+		assert.strictEqual(reducedScheduler.pendingCount, 0);
+		reducedFixture.renderer.dispose();
+	});
+
 	test('dispose 이후 applyLayout은 기존 DOM geometry를 변경하지 않는다', () => {
 		const fixture = createRendererFixture();
 		const nodeId = 'folder:app';
@@ -2083,12 +2385,17 @@ suite('Graph Renderer / Node Drag', () => {
 			assert.notStrictEqual(connectedEdge.getAttribute('d'), edgePathBefore);
 
 			node.dispatch('pointerup', createPointerEvent(node, 140, 60));
-			assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {
-				[nodeId]: {
-					x: layoutNode.position.x + 20,
-					y: layoutNode.position.y - 10,
-				},
+			const savedPositions = fixture.graphState.getState().nodePositions;
+
+			assert.deepStrictEqual(savedPositions[nodeId], {
+				x: layoutNode.position.x + 20,
+				y: layoutNode.position.y - 10,
 			});
+			if (label === 'File Group') {
+				assert.deepStrictEqual(Object.keys(savedPositions), [nodeId]);
+			} else {
+				assert.ok(Object.keys(savedPositions).length > 1);
+			}
 			assert.strictEqual(stateChanges, 1);
 			assert.strictEqual(node.hasPointerCapture(1), false);
 			assert.strictEqual(node.hasClass('is-dragging'), false);
@@ -2097,18 +2404,352 @@ suite('Graph Renderer / Node Drag', () => {
 		});
 	}
 
+	test('부모 Node Drag은 현재 Edge subtree 전체를 같은 Delta로 이동·저장한다', () => {
+		const fixture = createRendererFixture();
+		const parentId = 'folder:app';
+		const childId = 'folder:app/src';
+		const unrelatedId = 'folder:src';
+		const parent = fixture.getNode(parentId);
+		const child = fixture.getNode(childId);
+		const unrelated = fixture.getNode(unrelatedId);
+		const parentStart = readTranslate(parent.style.transform);
+		const childStart = readTranslate(child.style.transform);
+		const unrelatedStart = unrelated.style.transform;
+		const edge = fixture.getEdge(`${parentId}->${childId}`);
+		const edgePathBefore = edge.getAttribute('d');
+
+		parent.dispatch('pointerdown', createPointerEvent(parent, 10, 10));
+		parent.dispatch('pointermove', createPointerEvent(parent, 90, 60));
+
+		assert.deepStrictEqual(readTranslate(parent.style.transform), {
+			x: parentStart.x + 80,
+			y: parentStart.y + 50,
+		});
+		assert.deepStrictEqual(readTranslate(child.style.transform), {
+			x: childStart.x + 80,
+			y: childStart.y + 50,
+		});
+		assert.strictEqual(unrelated.style.transform, unrelatedStart);
+		assert.notStrictEqual(edge.getAttribute('d'), edgePathBefore);
+		assert.deepStrictEqual(fixture.graphState.getState().nodePositions, {});
+
+		parent.dispatch('pointerup', createPointerEvent(parent, 90, 60));
+
+		assert.deepStrictEqual(
+			fixture.graphState.getState().nodePositions[parentId],
+			{ x: parentStart.x + 80, y: parentStart.y + 50 },
+		);
+		assert.deepStrictEqual(
+			fixture.graphState.getState().nodePositions[childId],
+			{ x: childStart.x + 80, y: childStart.y + 50 },
+		);
+		assert.strictEqual(
+			fixture.graphState.getState().nodePositions[unrelatedId],
+			undefined,
+		);
+		fixture.renderer.dispose();
+	});
+
+	test('정렬 Node를 목록 밖으로 Drag하면 placeholder를 남기고 비정렬 요청을 보낸다', () => {
+		const requests: GraphNodeArrangementRequest[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onNodeArrangementChange: (request) => {
+				requests.push(request);
+				return true;
+			},
+		});
+		const nodeId = 'folder:app';
+		const siblingId = 'folder:src';
+		const node = fixture.getNode(nodeId);
+		const sibling = fixture.getNode(siblingId);
+		const nodePosition = getLayoutNode(fixture.layout, nodeId).position;
+		const siblingPosition = getLayoutNode(fixture.layout, siblingId).position;
+
+		node.dispatch('pointerdown', createPointerEvent(
+			node,
+			nodePosition.x + 8,
+			nodePosition.y + 8,
+		));
+		node.dispatch('pointermove', createPointerEvent(node, -500, -500));
+		const placeholder = getDescendantByAttribute(
+			fixture.nodeLayer,
+			'data-graph-arrangement-placeholder-id',
+			nodeId,
+		);
+
+		assert.strictEqual(
+			placeholder.style.transform,
+			`translate(${nodePosition.x}px, ${nodePosition.y}px)`,
+		);
+		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), false);
+		assert.notStrictEqual(
+			node.style.transform,
+			`translate(${nodePosition.x}px, ${nodePosition.y}px)`,
+		);
+
+		node.dispatch('pointermove', createPointerEvent(
+			node,
+			siblingPosition.x + 8,
+			siblingPosition.y + 8,
+		));
+		assert.strictEqual(sibling.hasClass('is-arrangement-target'), true);
+		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), true);
+
+		node.dispatch('pointermove', createPointerEvent(node, -500, -500));
+		assert.strictEqual(sibling.hasClass('is-arrangement-target'), false);
+		node.dispatch('pointerup', createPointerEvent(node, -500, -500));
+
+		assert.deepStrictEqual(requests, [{ nodeId, arranged: false }]);
+		assert.strictEqual(findDescendantByAttribute(
+			fixture.nodeLayer,
+			'data-graph-arrangement-placeholder-id',
+			nodeId,
+		), undefined);
+		fixture.renderer.dispose();
+	});
+
+	test('비정렬 Node를 sibling 목록 또는 빈 Parent에 놓으면 정렬 요청을 보낸다', () => {
+		for (const allChildrenUnarranged of [false, true]) {
+			const first = {
+				kind: 'folder' as const,
+				id: `folder:arrangement-${allChildrenUnarranged}/first`,
+				name: 'first',
+				status: 'loaded' as const,
+				children: [],
+			};
+			const second = {
+				kind: 'folder' as const,
+				id: `folder:arrangement-${allChildrenUnarranged}/second`,
+				name: 'second',
+				status: 'loaded' as const,
+				children: [],
+			};
+			const project: Project = {
+				kind: 'project',
+				id: `project:arrangement-${allChildrenUnarranged}`,
+				name: 'arrangement',
+				status: 'loaded',
+				children: [first, second],
+			};
+			const requests: GraphNodeArrangementRequest[] = [];
+			const fixture = createRendererFixture(1, {
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {
+					[first.id]: { x: 820, y: 320 },
+					...(allChildrenUnarranged
+						? { [second.id]: { x: 900, y: 500 } }
+						: {}),
+				},
+			}, {
+				onNodeArrangementChange: (request) => {
+					requests.push(request);
+					return true;
+				},
+			}, project);
+			const state = fixture.graphState.getState();
+			const unarrangedNodeIds = new Set([
+				first.id,
+				...(allChildrenUnarranged ? [second.id] : []),
+			]);
+			const nextLayout = createGraphLayout(createSingleRootGraph(project), {
+				openedFolders: state.openedFolders,
+				unarrangedNodeIds,
+			});
+
+			fixture.renderer.applyLayout(nextLayout, state.nodePositions);
+			const firstNode = fixture.getNode(first.id);
+			const targetId = allChildrenUnarranged ? project.id : second.id;
+			const target = fixture.getNode(targetId);
+			const targetPosition = getLayoutNode(nextLayout, targetId).position;
+
+			firstNode.dispatch('pointerdown', createPointerEvent(firstNode, 828, 328));
+			firstNode.dispatch('pointermove', createPointerEvent(
+				firstNode,
+				targetPosition.x + 8,
+				targetPosition.y + 8,
+			));
+
+			assert.strictEqual(target.hasClass('is-arrangement-target'), true);
+			assert.strictEqual(findDescendantByAttribute(
+				fixture.nodeLayer,
+				'data-graph-arrangement-placeholder-id',
+				first.id,
+			), undefined);
+
+			firstNode.dispatch('pointerup', createPointerEvent(
+				firstNode,
+				targetPosition.x + 8,
+				targetPosition.y + 8,
+			));
+			assert.deepStrictEqual(requests, [{ nodeId: first.id, arranged: true }]);
+			assert.strictEqual(target.hasClass('is-arrangement-target'), false);
+			fixture.renderer.dispose();
+		}
+	});
+
+	test('grouped File Row를 밖으로 Drag하면 원본 강조와 커서 preview 후 비정렬 요청을 보낸다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:arrangement/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const project: Project = {
+			kind: 'project',
+			id: 'project:file-arrangement-drag',
+			name: 'file-arrangement-drag',
+			status: 'loaded',
+			children: files,
+		};
+		const requests: GraphNodeArrangementRequest[] = [];
+		const fixture = createRendererFixture(1, undefined, {
+			onNodeArrangementChange: (request) => {
+				requests.push(request);
+				return true;
+			},
+		}, project);
+		const file = files[1];
+
+		assert.ok(file);
+		const fileGroupId = createFileGroupId(project.id);
+		const fileGroup = fixture.getNode(fileGroupId);
+		const row = getDescendantByAttribute(fileGroup, 'data-file-id', file.id);
+		const fileGroupPosition = getLayoutNode(fixture.layout, fileGroupId).position;
+
+		row.dispatch('pointerdown', createPointerEvent(row, 10, 10));
+		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
+		const preview = getDescendantByAttribute(
+			fixture.nodeLayer,
+			'data-graph-arrangement-preview-id',
+			file.id,
+		);
+
+		assert.strictEqual(row.hasClass('is-arrangement-drag-source'), true);
+		assert.ok(preview.style.transform.includes('translate('));
+		assert.ok(getText(preview).includes(file.name));
+
+		row.dispatch('pointermove', createPointerEvent(
+			row,
+			fileGroupPosition.x + 10,
+			fileGroupPosition.y + 10,
+		));
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), true);
+		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
+		row.dispatch('pointerup', createPointerEvent(row, -500, -500));
+
+		assert.deepStrictEqual(requests, [{ nodeId: file.id, arranged: false }]);
+		assert.ok(fixture.graphState.getState().nodePositions[file.id]);
+		assert.strictEqual(row.hasClass('is-arrangement-drag-source'), false);
+		assert.strictEqual(findDescendantByAttribute(
+			fixture.nodeLayer,
+			'data-graph-arrangement-preview-id',
+			file.id,
+		), undefined);
+		fixture.renderer.dispose();
+	});
+
+	test('분리된 File은 Parent가 아닌 원래 grouped File Group만 복구 대상으로 사용한다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:arrangement-restore/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const project: Project = {
+			kind: 'project',
+			id: 'project:file-arrangement-restore',
+			name: 'file-arrangement-restore',
+			status: 'loaded',
+			children: files,
+		};
+		const file = files[1];
+
+		assert.ok(file);
+		const detachedPosition = { x: 820, y: 360 };
+		const requests: GraphNodeArrangementRequest[] = [];
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [file.id]: detachedPosition },
+		}, {
+			onNodeArrangementChange: (request) => {
+				requests.push(request);
+				return true;
+			},
+		}, project);
+		const state = fixture.graphState.getState();
+		const unarrangedLayout = createGraphLayout(createSingleRootGraph(project), {
+			openedFolders: state.openedFolders,
+			unarrangedNodeIds: new Set([file.id]),
+		});
+
+		fixture.renderer.applyLayout(unarrangedLayout, state.nodePositions);
+		const standalone = fixture.getNode(file.id);
+		const parent = fixture.getNode(project.id);
+		const fileGroupId = createFileGroupId(project.id);
+		const fileGroup = fixture.getNode(fileGroupId);
+		const parentPosition = getLayoutNode(unarrangedLayout, project.id).position;
+		const fileGroupPosition = getLayoutNode(
+			unarrangedLayout,
+			fileGroupId,
+		).position;
+
+		standalone.dispatch('pointerdown', createPointerEvent(
+			standalone,
+			detachedPosition.x + 8,
+			detachedPosition.y + 8,
+		));
+		standalone.dispatch('pointermove', createPointerEvent(
+			standalone,
+			parentPosition.x + 8,
+			parentPosition.y + 8,
+		));
+		assert.strictEqual(parent.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), false);
+		standalone.dispatch('pointerup', createPointerEvent(
+			standalone,
+			parentPosition.x + 8,
+			parentPosition.y + 8,
+		));
+		assert.deepStrictEqual(requests, []);
+
+		const currentPosition = readTranslate(standalone.style.transform);
+
+		standalone.dispatch('pointerdown', createPointerEvent(
+			standalone,
+			currentPosition.x + 8,
+			currentPosition.y + 8,
+		));
+		standalone.dispatch('pointermove', createPointerEvent(
+			standalone,
+			fileGroupPosition.x + 8,
+			fileGroupPosition.y + 8,
+		));
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), true);
+		assert.strictEqual(parent.hasClass('is-arrangement-target'), false);
+		standalone.dispatch('pointerup', createPointerEvent(
+			standalone,
+			fileGroupPosition.x + 8,
+			fileGroupPosition.y + 8,
+		));
+
+		assert.deepStrictEqual(requests, [{ nodeId: file.id, arranged: true }]);
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), false);
+		fixture.renderer.dispose();
+	});
+
 	test('pointercancel과 lostpointercapture는 임시 위치를 복원하고 저장하지 않는다', () => {
 		for (const eventType of ['pointercancel', 'lostpointercapture'] as const) {
 			const fixture = createRendererFixture();
 			const nodeId = 'folder:app';
 			const layoutNode = getLayoutNode(fixture.layout, nodeId);
 			const node = fixture.getNode(nodeId);
+			const child = fixture.getNode('folder:app/src');
+			const childTransform = child.style.transform;
 			const edge = fixture.getConnectedEdge(nodeId);
 			const edgePathBefore = edge.getAttribute('d');
 
 			node.dispatch('pointerdown', createPointerEvent(node, 10, 10));
 			node.dispatch('pointermove', createPointerEvent(node, 50, 40));
 			assert.notStrictEqual(edge.getAttribute('d'), edgePathBefore);
+			assert.notStrictEqual(child.style.transform, childTransform);
 
 			if (eventType === 'lostpointercapture') {
 				node.releasePointerCapture(1);
@@ -2121,6 +2762,7 @@ suite('Graph Renderer / Node Drag', () => {
 				node.style.transform,
 				`translate(${layoutNode.position.x}px, ${layoutNode.position.y}px)`,
 			);
+			assert.strictEqual(child.style.transform, childTransform);
 			assert.strictEqual(edge.getAttribute('d'), edgePathBefore);
 			assert.strictEqual(node.hasPointerCapture(1), false);
 			assert.strictEqual(node.hasClass('is-dragging'), false);
@@ -2213,6 +2855,7 @@ function createRendererFixture(
 	interactions: GraphRendererInteractions = {},
 	rootNode: GraphRootNode = GRAPH_MOCK_PROJECT,
 	rootContext?: GraphRootContext,
+	rendererOptions: GraphRendererOptions = {},
 ) {
 	const document = new FakeDocument();
 	const edgeLayer = document.createElementNS('', 'svg');
@@ -2239,6 +2882,7 @@ function createRendererFixture(
 		layout,
 		graphState,
 		interactions,
+		rendererOptions,
 	);
 	const getNode = (nodeId: string): FakeElement => {
 		const node = nodeLayer.children.find(
@@ -2362,6 +3006,8 @@ function replaceLayoutNode(
 		edges: layout.edges,
 		rootContexts: layout.rootContexts,
 		rootNodeIds: layout.rootNodeIds,
+		arrangedNodeIds: layout.arrangedNodeIds,
+		unarrangedNodeIds: layout.unarrangedNodeIds,
 	};
 }
 
@@ -2431,6 +3077,18 @@ function assertPointAlmostEqual(
 ): void {
 	assert.ok(Math.abs(actual.x - expected.x) < 1e-10);
 	assert.ok(Math.abs(actual.y - expected.y) < 1e-10);
+}
+
+function readTranslate(transform: string): { x: number; y: number } {
+	const match = transform.match(
+		/^translate\((-?\d+(?:\.\d+)?)px, (-?\d+(?:\.\d+)?)px\)$/,
+	);
+
+	assert.ok(match, `translate transform이어야 한다: ${transform}`);
+	return {
+		x: Number(match[1]),
+		y: Number(match[2]),
+	};
 }
 
 function createClickEvent(
@@ -2563,6 +3221,42 @@ function getText(element: FakeElement): string {
 }
 
 type GraphEventListener = (event: never) => void;
+
+class FakeAnimationFrameScheduler implements GraphAnimationFrameScheduler {
+	private readonly callbacks = new Map<number, FrameRequestCallback>();
+	private nextRequestId = 1;
+	cancelCount = 0;
+
+	get pendingCount(): number {
+		return this.callbacks.size;
+	}
+
+	request(callback: FrameRequestCallback): number {
+		const requestId = this.nextRequestId;
+
+		this.nextRequestId += 1;
+		this.callbacks.set(requestId, callback);
+		return requestId;
+	}
+
+	cancel(requestId: number): void {
+		if (this.callbacks.delete(requestId)) {
+			this.cancelCount += 1;
+		}
+	}
+
+	runNext(timestamp: number): void {
+		const entry = this.callbacks.entries().next().value as
+			| [number, FrameRequestCallback]
+			| undefined;
+
+		assert.ok(entry, '실행할 Animation Frame이 있어야 한다.');
+		const [requestId, callback] = entry;
+
+		this.callbacks.delete(requestId);
+		callback(timestamp);
+	}
+}
 
 class FakeDocument {
 	createElement(tagName = 'div'): FakeElement {

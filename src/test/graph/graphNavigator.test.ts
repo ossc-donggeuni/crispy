@@ -2206,6 +2206,8 @@ function createEmptyLayout(): GraphLayout {
 		edges: [],
 		rootContexts: {},
 		rootNodeIds: new Set(),
+		arrangedNodeIds: new Set(),
+		unarrangedNodeIds: new Set(),
 	};
 }
 
@@ -2394,6 +2396,8 @@ function createMinimapLayout(
 		edges,
 		rootContexts: {},
 		rootNodeIds: new Set(),
+		arrangedNodeIds: new Set(nodes.map((node) => node.id)),
+		unarrangedNodeIds: new Set(),
 	};
 }
 

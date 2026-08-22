@@ -104,6 +104,10 @@ export interface GraphLayout {
 	readonly rootContexts: Readonly<Record<string, GraphRootContext>>;
 	/** 실행 중 추가/제거되는 최신 Graph Root Node ID 집합이다. */
 	readonly rootNodeIds: ReadonlySet<string>;
+	/** Parent의 자동 sibling flow에 참여하는 Node ID 집합이다. */
+	readonly arrangedNodeIds: ReadonlySet<string>;
+	/** 수동 위치를 유지하며 Parent의 자동 sibling flow에서 제외된 Node ID 집합이다. */
+	readonly unarrangedNodeIds: ReadonlySet<string>;
 }
 
 /** 순수 Layout 계산에 필요한 pagination 및 열린 Folder snapshot이다. */
@@ -111,6 +115,8 @@ export interface GraphLayoutOptions {
 	readonly fileGroupPages?: Readonly<Record<string, number>>;
 	readonly openedFolders?: Readonly<Record<string, true>>;
 	readonly hiddenNodeIds?: Readonly<Record<string, true>>;
+	/** 수동으로 꺼내 일반 sibling flow의 subtree 높이 계산에서 제외할 Node다. */
+	readonly unarrangedNodeIds?: ReadonlySet<string>;
 }
 
 /** 저장 위치가 있으면 우선하고 없으면 Layout의 결정적 기본 위치를 반환한다. */
@@ -160,6 +166,7 @@ interface LayoutTreeNode {
 	readonly fileGroupPresentation?: GraphFileGroupPresentation;
 	readonly targetRootId?: string;
 	readonly targetNodeId?: string;
+	readonly unarranged?: true;
 	readonly children: readonly LayoutTreeNode[];
 }
 
@@ -207,6 +214,7 @@ export function createGraphLayout(
 				undefined,
 				undefined,
 				options.hiddenNodeIds?.[rootNode.id] === true,
+				options.unarrangedNodeIds ?? new Set(),
 			)
 			: createContainerTree(
 				rootNode,
@@ -216,13 +224,31 @@ export function createGraphLayout(
 				rootsByNodeId,
 				options.hiddenNodeIds ?? {},
 				false,
+				options.unarrangedNodeIds ?? new Set(),
 			);
 		const subtreeHeight = placeTree(tree, rootTop, nodes, edges);
 
 		rootTop += subtreeHeight + GRAPH_LAYOUT_ROOT_GAP;
 	}
 
-	return { nodes, edges, rootContexts, rootNodeIds };
+	const unarrangedNodeIds = new Set(
+		nodes
+			.map((node) => node.id)
+			.filter((nodeId) => options.unarrangedNodeIds?.has(nodeId) === true),
+	);
+
+	return {
+		nodes,
+		edges,
+		rootContexts,
+		rootNodeIds,
+		arrangedNodeIds: new Set(
+			nodes
+				.map((node) => node.id)
+				.filter((nodeId) => !unarrangedNodeIds.has(nodeId)),
+		),
+		unarrangedNodeIds,
+	};
 }
 
 /**
@@ -244,6 +270,7 @@ function createContainerTree(
 	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	inheritedHidden: boolean,
+	unarrangedNodeIds: ReadonlySet<string>,
 ): LayoutTreeNode {
 	const hidden = inheritedHidden
 		|| (
@@ -273,6 +300,7 @@ function createContainerTree(
 					rootsByNodeId,
 					hiddenNodeIds,
 					hidden,
+					unarrangedNodeIds,
 				);
 		});
 	const files = visibleChildren.filter(isFile);
@@ -285,6 +313,7 @@ function createContainerTree(
 			rootsByNodeId,
 			hiddenNodeIds,
 			hidden,
+			unarrangedNodeIds,
 		)
 		: [];
 
@@ -294,6 +323,9 @@ function createContainerTree(
 		kind: container.kind,
 		...(hidden ? { hidden: true as const } : {}),
 		status: container.status,
+		...(unarrangedNodeIds.has(container.id)
+			? { unarranged: true as const }
+			: {}),
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
@@ -331,23 +363,69 @@ function createFileLayoutTrees(
 	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	inheritedHidden: boolean,
+	unarrangedNodeIds: ReadonlySet<string>,
+): readonly LayoutTreeNode[] {
+	const floatingFileIds = new Set(files.filter((file) => (
+		unarrangedNodeIds.has(file.id) && !rootsByNodeId.has(file.id)
+	)).map((file) => file.id));
+	const floatingFiles = files.filter((file) => (
+		floatingFileIds.has(file.id) && hiddenNodeIds[file.id] !== true
+	));
+	const arrangedFiles = files.filter((file) => !floatingFileIds.has(file.id));
+	const arrangedTrees = createArrangedFileLayoutTrees(
+		parent,
+		arrangedFiles,
+		depth,
+		fileGroupPages,
+		rootsByNodeId,
+		hiddenNodeIds,
+		inheritedHidden,
+		unarrangedNodeIds,
+		floatingFileIds.size > 0 && files.length > 1,
+	);
+	const floatingTrees = floatingFiles.map((file) => createStandaloneFileGroupTree(
+		file,
+		depth,
+		parent.id,
+		undefined,
+		inheritedHidden,
+		unarrangedNodeIds,
+	));
+
+	return [...arrangedTrees, ...floatingTrees];
+}
+
+/** 정렬 흐름에 남은 File만 기존 singleton/grouped presentation 규칙으로 묶는다. */
+function createArrangedFileLayoutTrees(
+	parent: ProjectContainer,
+	files: readonly File[],
+	depth: number,
+	fileGroupPages: Readonly<Record<string, number>>,
+	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
+	hiddenNodeIds: Readonly<Record<string, true>>,
+	inheritedHidden: boolean,
+	unarrangedNodeIds: ReadonlySet<string>,
+	forceGroupedPresentation = false,
 ): readonly LayoutTreeNode[] {
 	const singleton = files[0];
 
-	if (files.length === 1 && singleton) {
+	if (!forceGroupedPresentation && files.length === 1 && singleton) {
 		if (hiddenNodeIds[singleton.id] === true) {
 			return [];
 		}
-
-		const targetRoot = rootsByNodeId.get(singleton.id);
 
 		return [createStandaloneFileGroupTree(
 			singleton,
 			depth,
 			parent.id,
-			targetRoot,
+			rootsByNodeId.get(singleton.id),
 			inheritedHidden,
+			unarrangedNodeIds,
 		)];
+	}
+
+	if (files.length === 0) {
+		return [];
 	}
 
 	const id = createFileGroupId(parent.id);
@@ -379,6 +457,7 @@ function createFileLayoutTrees(
 			inheritedHidden,
 		)),
 		fileGroupPresentation: 'grouped',
+		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
 	}];
 }
@@ -390,9 +469,12 @@ function createStandaloneFileGroupTree(
 	parentId?: string,
 	targetRoot?: GraphRoot,
 	hidden = false,
+	unarrangedNodeIds: ReadonlySet<string> = new Set(),
 ): LayoutTreeNode {
+	const id = targetRoot ? createFileBacklinkGroupId(targetRoot.id) : file.id;
+
 	return {
-		id: targetRoot ? createFileBacklinkGroupId(targetRoot.id) : file.id,
+		id,
 		name: file.name,
 		kind: 'file-group',
 		...(hidden ? { hidden: true } : {}),
@@ -402,6 +484,7 @@ function createStandaloneFileGroupTree(
 		parentId,
 		fileChildren: [toGraphFileNode(file, targetRoot, hidden)],
 		fileGroupPresentation: 'standalone',
+		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
 	};
 }
@@ -436,23 +519,27 @@ export function getFileGroupHeight(
 /** Subtree 높이를 기준으로 Node를 배치하고 직접 Child Edge를 순서대로 생성한다. */
 function placeTree(
 	tree: LayoutTreeNode,
-	top: number,
+	nodeTop: number,
 	nodes: GraphLayoutNode[],
 	edges: GraphLayoutEdge[],
 ): number {
 	const childHeights = tree.children.map(getSubtreeHeight);
-	const childrenHeight = childHeights.reduce((sum, height) => sum + height, 0)
-		+ Math.max(0, tree.children.length - 1) * GRAPH_LAYOUT_ROW_GAP;
+	const arrangedChildHeights = childHeights.filter((height) => height > 0);
+	const childrenHeight = arrangedChildHeights.reduce(
+		(sum, height) => sum + height,
+		0,
+	) + Math.max(0, arrangedChildHeights.length - 1) * GRAPH_LAYOUT_ROW_GAP;
 	const subtreeHeight = Math.max(tree.height, childrenHeight);
 	const position = {
 		x: GRAPH_LAYOUT_START_X
 			+ tree.depth * (GRAPH_LAYOUT_COLUMN_WIDTH + GRAPH_LAYOUT_COLUMN_GAP),
-		y: top + (subtreeHeight - tree.height) / 2,
+		// 자신의 subtree 높이가 바뀌어도 Node 자체의 World 좌표는 유지한다.
+		y: nodeTop,
 	};
 
 	nodes.push(toGraphLayoutNode(tree, position));
 
-	let childTop = top + (subtreeHeight - childrenHeight) / 2;
+	let childSubtreeTop = nodeTop + (tree.height - childrenHeight) / 2;
 
 	for (let index = 0; index < tree.children.length; index += 1) {
 		const child = tree.children[index];
@@ -470,23 +557,40 @@ function placeTree(
 				? { hidden: true as const }
 				: {}),
 		});
-		placeTree(child, childTop, nodes, edges);
-		childTop += childHeight + GRAPH_LAYOUT_ROW_GAP;
+		if (child.unarranged) {
+			placeTree(child, nodeTop, nodes, edges);
+			continue;
+		}
+
+		placeTree(
+			child,
+			childSubtreeTop + (childHeight - child.height) / 2,
+			nodes,
+			edges,
+		);
+		childSubtreeTop += childHeight + GRAPH_LAYOUT_ROW_GAP;
 	}
 
-	return subtreeHeight;
+	return tree.unarranged ? 0 : subtreeHeight;
 }
 
 /** 자신과 모든 Child를 충돌 없이 세로 배치하는 데 필요한 Subtree 높이를 계산한다. */
 function getSubtreeHeight(tree: LayoutTreeNode): number {
+	if (tree.unarranged) {
+		return 0;
+	}
+
 	if (tree.children.length === 0) {
 		return tree.height;
 	}
 
-	const childrenHeight = tree.children.reduce(
-		(sum, child) => sum + getSubtreeHeight(child),
+	const arrangedChildHeights = tree.children
+		.map(getSubtreeHeight)
+		.filter((height) => height > 0);
+	const childrenHeight = arrangedChildHeights.reduce(
+		(sum, height) => sum + height,
 		0,
-	) + (tree.children.length - 1) * GRAPH_LAYOUT_ROW_GAP;
+	) + Math.max(0, arrangedChildHeights.length - 1) * GRAPH_LAYOUT_ROW_GAP;
 
 	return Math.max(tree.height, childrenHeight);
 }

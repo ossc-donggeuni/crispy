@@ -517,6 +517,230 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(openedNodeIds.has('folder:app/src'), false);
 	});
 
+	test('Project와 Folder 자신의 위치는 subtree Open/Close와 무관하게 유지한다', () => {
+		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
+		const projectClosedLayout = createBaseGraphLayout(graph);
+		const folderClosedLayout = createBaseGraphLayout(graph, {
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		});
+		const folderOpenedLayout = createBaseGraphLayout(graph, {
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+			},
+		});
+
+		assert.deepStrictEqual(
+			getLayoutNode(projectClosedLayout.nodes, GRAPH_MOCK_PROJECT.id).position,
+			getLayoutNode(folderClosedLayout.nodes, GRAPH_MOCK_PROJECT.id).position,
+		);
+		assert.deepStrictEqual(
+			getLayoutNode(folderClosedLayout.nodes, 'folder:app').position,
+			getLayoutNode(folderOpenedLayout.nodes, 'folder:app').position,
+		);
+	});
+
+	test('정렬 Folder는 중앙 확장하고 unarranged Folder는 sibling flow를 바꾸지 않는다', () => {
+		const targetFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:center-target',
+			name: 'center-target',
+			status: 'loaded',
+			children: [
+				{
+					kind: 'folder',
+					id: 'folder:center-target/first',
+					name: 'first',
+					status: 'loaded',
+					children: [],
+				},
+				{
+					kind: 'folder',
+					id: 'folder:center-target/second',
+					name: 'second',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:centered-open',
+			name: 'centered-open',
+			status: 'loaded',
+			children: [
+				{
+					kind: 'folder',
+					id: 'folder:above',
+					name: 'above',
+					status: 'loaded',
+					children: [],
+				},
+				targetFolder,
+				{
+					kind: 'folder',
+					id: 'folder:below',
+					name: 'below',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const graph = createSingleRootGraph(project);
+		const collapsedLayout = createBaseGraphLayout(graph, {
+			openedFolders: { [project.id]: true },
+		});
+		const expandedLayout = createBaseGraphLayout(graph, {
+			openedFolders: {
+				[project.id]: true,
+				[targetFolder.id]: true,
+			},
+		});
+		const unarrangedExpandedLayout = createBaseGraphLayout(graph, {
+			openedFolders: {
+				[project.id]: true,
+				[targetFolder.id]: true,
+			},
+			unarrangedNodeIds: new Set([targetFolder.id]),
+		});
+		const collapsedTarget = getLayoutNode(
+			collapsedLayout.nodes,
+			targetFolder.id,
+		);
+		const expandedTarget = getLayoutNode(
+			expandedLayout.nodes,
+			targetFolder.id,
+		);
+		const aboveDelta = getLayoutNode(
+			expandedLayout.nodes,
+			'folder:above',
+		).position.y - getLayoutNode(
+			collapsedLayout.nodes,
+			'folder:above',
+		).position.y;
+		const belowDelta = getLayoutNode(
+			expandedLayout.nodes,
+			'folder:below',
+		).position.y - getLayoutNode(
+			collapsedLayout.nodes,
+			'folder:below',
+		).position.y;
+		const firstChild = getLayoutNode(
+			expandedLayout.nodes,
+			'folder:center-target/first',
+		);
+		const secondChild = getLayoutNode(
+			expandedLayout.nodes,
+			'folder:center-target/second',
+		);
+
+		assert.deepStrictEqual(expandedTarget.position, collapsedTarget.position);
+		assert.ok(aboveDelta < 0);
+		assert.strictEqual(belowDelta, -aboveDelta);
+		assert.ok(firstChild.position.y < expandedTarget.position.y);
+		assert.ok(secondChild.position.y > expandedTarget.position.y);
+		const unarrangedAbove = getLayoutNode(
+			unarrangedExpandedLayout.nodes,
+			'folder:above',
+		);
+		const unarrangedTarget = getLayoutNode(
+			unarrangedExpandedLayout.nodes,
+			targetFolder.id,
+		);
+		const unarrangedBelow = getLayoutNode(
+			unarrangedExpandedLayout.nodes,
+			'folder:below',
+		);
+
+		assert.deepStrictEqual(unarrangedTarget.position, collapsedTarget.position);
+		assert.strictEqual(
+			unarrangedBelow.position.y - unarrangedAbove.position.y,
+			GRAPH_FOLDER_NODE_HEIGHT + 6,
+		);
+		assert.strictEqual(
+			(unarrangedAbove.position.y + unarrangedBelow.position.y) / 2,
+			unarrangedTarget.position.y,
+		);
+		assert.deepStrictEqual(
+			[...unarrangedExpandedLayout.unarrangedNodeIds],
+			[targetFolder.id],
+		);
+		assert.strictEqual(
+			unarrangedExpandedLayout.arrangedNodeIds.has('folder:above'),
+			true,
+		);
+		assert.ok(
+			getLayoutNode(
+				unarrangedExpandedLayout.nodes,
+				'folder:center-target/first',
+			).position.y < collapsedTarget.position.y,
+		);
+		assert.ok(
+			getLayoutNode(
+				unarrangedExpandedLayout.nodes,
+				'folder:center-target/second',
+			).position.y > collapsedTarget.position.y,
+		);
+	});
+
+	test('비정렬 File은 grouped 목록에서 standalone으로 분리하고 나머지 File은 빈틈없이 묶는다', () => {
+		const project: Project = {
+			kind: 'project',
+			id: 'project:file-arrangement',
+			name: 'file-arrangement',
+			status: 'loaded',
+			children: [
+				{ kind: 'file', id: 'file:arranged-a', name: 'a.ts' },
+				{ kind: 'file', id: 'file:floating', name: 'floating.ts' },
+				{ kind: 'file', id: 'file:arranged-b', name: 'b.ts' },
+			],
+		};
+		const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+			openedFolders: { [project.id]: true },
+			unarrangedNodeIds: new Set(['file:floating']),
+		});
+		const group = getLayoutNode(layout.nodes, createFileGroupId(project.id));
+		const floating = getLayoutNode(layout.nodes, 'file:floating');
+
+		assert.ok(group.kind === 'file-group');
+		assert.deepStrictEqual(
+			group.children.map((file) => file.id),
+			['file:arranged-a', 'file:arranged-b'],
+		);
+		assert.ok(floating.kind === 'file-group');
+		assert.strictEqual(floating.presentation, 'standalone');
+		assert.strictEqual(layout.unarrangedNodeIds.has(floating.id), true);
+		assert.strictEqual(layout.arrangedNodeIds.has(group.id), true);
+	});
+
+	test('두 File 중 하나를 분리해도 복구 대상 File Group presentation을 유지한다', () => {
+		const project: Project = {
+			kind: 'project',
+			id: 'project:file-arrangement-target',
+			name: 'file-arrangement-target',
+			status: 'loaded',
+			children: [
+				{ kind: 'file', id: 'file:arranged', name: 'arranged.ts' },
+				{ kind: 'file', id: 'file:floating-target', name: 'floating.ts' },
+			],
+		};
+		const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+			openedFolders: { [project.id]: true },
+			unarrangedNodeIds: new Set(['file:floating-target']),
+		});
+		const group = getLayoutNode(layout.nodes, createFileGroupId(project.id));
+		const floating = getLayoutNode(layout.nodes, 'file:floating-target');
+
+		assert.ok(group.kind === 'file-group');
+		assert.strictEqual(group.presentation, 'grouped');
+		assert.deepStrictEqual(
+			group.children.map((file) => file.id),
+			['file:arranged'],
+		);
+		assert.ok(floating.kind === 'file-group');
+		assert.strictEqual(floating.presentation, 'standalone');
+	});
+
 	test('열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다', () => {
 		const folderId = 'folder:app';
 		const layout = createBaseGraphLayout(
@@ -765,7 +989,11 @@ suite('Graph Model / Layout', () => {
 		assert.ok(pageTwoSibling.position.y > pageOneSibling.position.y);
 		assert.strictEqual(
 			pageTwoSibling.position.y - pageOneSibling.position.y,
-			pageTwoGroup.height - pageOneGroup.height,
+			(pageTwoGroup.height - pageOneGroup.height) / 2,
+		);
+		assert.strictEqual(
+			pageTwoGroup.position.y - pageOneGroup.position.y,
+			-(pageTwoGroup.height - pageOneGroup.height) / 2,
 		);
 	});
 

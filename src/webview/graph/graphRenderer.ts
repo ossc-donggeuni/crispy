@@ -1,4 +1,13 @@
-import { resolveGraphLayoutNodePosition } from './graphLayout';
+import {
+	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
+	type GraphAnimationFrameScheduler,
+} from './graphCamera';
+import {
+	createFileGroupId,
+	GRAPH_FILE_GROUP_NODE_WIDTH,
+	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
+	resolveGraphLayoutNodePosition,
+} from './graphLayout';
 import type {
 	GraphFileNode,
 	GraphFileGroupNode,
@@ -7,7 +16,7 @@ import type {
 	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
-import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from './graphCamera';
+import { collectGraphLayoutSubtreeNodeIds } from './graphLayoutTransition';
 import {
 	initializeGraphDetachDrag,
 	type GraphDetachDrag,
@@ -43,6 +52,12 @@ type FileRowRenderer = {
 	readonly dispose: () => void;
 };
 
+type FileArrangementDragInitializer = (
+	element: HTMLElement,
+	file: GraphFileNode,
+	fileGroupId: string,
+) => () => void;
+
 type BacklinkInitializer = (
 	element: HTMLElement,
 	targetRootId: string,
@@ -62,7 +77,10 @@ interface RootContextLabelRenderer {
 /** Graph Node/Edge DOM과 interaction lifecycle을 관리한다. */
 export interface GraphRenderer {
 	/** 기존 Node/Edge DOM을 새로운 Layout geometry와 동기화한다. */
-	applyLayout(layout: GraphLayout): void;
+	applyLayout(
+		layout: GraphLayout,
+		nodePositions?: Readonly<Record<string, GraphLayoutPosition>>,
+	): void;
 	/** 현재 렌더링된 Backlink DOM의 client rect를 반환한다. */
 	getBacklinkClientRect(targetRootId: string): DOMRect | undefined;
 	/** 현재 렌더링된 Backlink DOM의 client 좌표계 중심을 반환한다. */
@@ -92,12 +110,52 @@ export interface GraphRendererInteractions {
 	resolveRootId?: (rootNodeId: string) => string | undefined;
 	/** 자신의 Backlink Target에 Drop된 Root의 제거를 상위 View에 요청한다. */
 	onRootReattach?: (request: GraphRootReattachRequest) => boolean;
+	/** 일반 Node Drag 결과를 정렬 flow 포함 여부로 반영하도록 상위 View에 요청한다. */
+	onNodeArrangementChange?: (request: GraphNodeArrangementRequest) => boolean;
 }
 
 /** Reattach가 확인된 Root와 실제 Node를 최신 Graph 변경 경로에 전달한다. */
 export interface GraphRootReattachRequest {
 	readonly rootId: string;
 	readonly nodeId: string;
+}
+
+/** Node Drag가 정렬 영역 안/밖에서 끝났을 때 전달하는 상태 전환 요청이다. */
+export interface GraphNodeArrangementRequest {
+	readonly nodeId: string;
+	readonly arranged: boolean;
+}
+
+/** Renderer 위치 Animation의 platform dependency와 동작을 선택적으로 제어한다. */
+export interface GraphRendererOptions {
+	animationFrameScheduler?: GraphAnimationFrameScheduler;
+	transitionDuration?: number;
+	prefersReducedMotion?: boolean;
+}
+
+/** 단일 Layout transition에서 보간할 Node의 시작/목표 위치다. */
+interface GraphNodePositionTransition {
+	readonly from: GraphLayoutPosition;
+	readonly to: GraphLayoutPosition;
+}
+
+/** 진행 중인 Layout 위치 Animation과 예약 Frame이다. */
+interface GraphLayoutAnimationSession {
+	readonly transitions: ReadonlyMap<string, GraphNodePositionTransition>;
+	readonly enteringNodes: readonly HTMLElement[];
+	readonly exitingNodes: readonly GraphExitingNodeTransition[];
+	readonly enteringEdges: readonly SVGPathElement[];
+	readonly exitingEdges: readonly SVGPathElement[];
+	readonly duration: number;
+	startTime?: number;
+	frameRequestId?: number;
+}
+
+/** Layout에서 사라지는 Node DOM과 현재 위치 및 수렴할 Ancestor 위치다. */
+interface GraphExitingNodeTransition {
+	readonly element: HTMLElement;
+	readonly from: GraphLayoutPosition;
+	readonly to: GraphLayoutPosition;
 }
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -108,7 +166,13 @@ const DETACH_ARROW_PATH = 'M4 12 12 4 M7 4h5v5';
 const FILE_CLICK_ANIMATION_CLASS = 'is-file-clicking';
 const REATTACH_TARGET_CLASS = 'is-reattach-target';
 const REATTACH_TARGET_MARGIN = 8;
+const ARRANGEMENT_TARGET_CLASS = 'is-arrangement-target';
+const ARRANGEMENT_TARGET_MARGIN = 10;
 const ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER = 1.5;
+const DEFAULT_LAYOUT_TRANSITION_DURATION = 220;
+const LAYOUT_NODE_MIN_SCALE = 0.96;
+const LAYOUT_TRANSITION_CLASS = 'is-layout-transitioning';
+const LAYOUT_EXIT_CLASS = 'is-layout-exiting';
 
 /**
  * 기존 Edge/Node Layer에 프로젝트 Layout을 렌더링하고 저장 위치와 동기화한다.
@@ -129,8 +193,15 @@ export function initializeGraphRenderer(
 	layout: GraphLayout,
 	graphState: GraphStateStore,
 	interactions: GraphRendererInteractions = {},
+	options: GraphRendererOptions = {},
 ): GraphRenderer {
 	const ownerDocument = nodeLayer.ownerDocument;
+	const animationFrameScheduler = options.animationFrameScheduler
+		?? resolveRendererAnimationFrameScheduler(ownerDocument);
+	const transitionDuration = Math.max(
+		0,
+		options.transitionDuration ?? DEFAULT_LAYOUT_TRANSITION_DURATION,
+	);
 	let renderedLayout = layout;
 	let nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
 	const nodeElements = new Map<string, HTMLElement>();
@@ -151,10 +222,249 @@ export function initializeGraphRenderer(
 	const rootContextLabels = new Map<string, RootContextLabelRenderer>();
 	let rootNodeIds = layout.rootNodeIds;
 	let disposed = false;
+	let layoutAnimation: GraphLayoutAnimationSession | undefined;
 	let activeReattachTarget: {
 		readonly rootId: string;
 		readonly element: HTMLElement;
 	} | undefined;
+	let activeArrangementDrag: {
+		readonly nodeId: string;
+		readonly wasUnarranged: boolean;
+		readonly targetBounds?: DOMRect;
+		readonly targetElements: readonly HTMLElement[];
+		readonly placeholder?: HTMLElement;
+		readonly sourceElement?: HTMLElement;
+		readonly preview?: HTMLElement;
+		isTarget: boolean;
+	} | undefined;
+	/** 정렬 Drag placeholder와 hover target 표시를 모두 제거한다. */
+	const clearArrangementDrag = (): void => {
+		if (!activeArrangementDrag) {
+			return;
+		}
+
+		for (const target of activeArrangementDrag.targetElements) {
+			target.classList.remove(ARRANGEMENT_TARGET_CLASS);
+		}
+
+		activeArrangementDrag.placeholder?.remove();
+		activeArrangementDrag.sourceElement?.classList.remove(
+			'is-arrangement-drag-source',
+		);
+		activeArrangementDrag.preview?.remove();
+		activeArrangementDrag = undefined;
+	};
+	/** 최신 World 위치와 Camera scale로 Node의 client rect를 계산한다. */
+	const getNodeClientRect = (nodeId: string): DOMRect | undefined => {
+		const node = nodesById.get(nodeId);
+		const position = renderedPositions.get(nodeId);
+
+		if (!node || !position) {
+			return undefined;
+		}
+
+		const layerBounds = nodeLayer.getBoundingClientRect();
+		const scale = graphState.getState().camera.scale;
+		const left = layerBounds.left + position.x * scale;
+		const top = layerBounds.top + position.y * scale;
+
+		return createClientRect(
+			left,
+			top,
+			node.width * scale,
+			node.height * scale,
+		);
+	};
+	/** 직접 Parent의 정렬 child 영역을 찾아 placeholder와 hover 대상을 준비한다. */
+	const beginArrangementDrag = (
+		nodeId: string,
+		sourcePosition: GraphLayoutPosition,
+	): void => {
+		clearArrangementDrag();
+		const wasUnarranged = renderedLayout.unarrangedNodeIds.has(nodeId);
+		const parentId = renderedLayout.edges.find(
+			(edge) => edge.targetId === nodeId,
+		)?.sourceId;
+
+		// Graph Root는 sibling 목록의 구성원이 아니므로 정렬 Drag 대상으로 보지 않는다.
+		// Detached Root의 복귀는 기존 Backlink reattach interaction이 전담한다.
+		if (!parentId) {
+			return;
+		}
+
+		const sourceNode = nodesById.get(nodeId);
+		const floatingFileNode = sourceNode?.kind === 'file-group'
+			&& sourceNode.presentation === 'standalone'
+			&& sourceNode.id === sourceNode.children[0]?.id
+			&& sourceNode.children[0].presentation !== 'backlink'
+			? sourceNode
+			: undefined;
+
+		if (wasUnarranged && floatingFileNode?.parentId) {
+			const fileGroupId = createFileGroupId(floatingFileNode.parentId);
+			const fileGroup = nodesById.get(fileGroupId);
+			const targetElement = nodeElements.get(fileGroupId);
+			const isGroupedTarget = fileGroup?.kind === 'file-group'
+				&& fileGroup.presentation === 'grouped';
+
+			if (isGroupedTarget && targetElement) {
+				activeArrangementDrag = {
+					nodeId,
+					wasUnarranged,
+					targetBounds: getNodeClientRect(fileGroupId),
+					targetElements: [targetElement],
+					isTarget: false,
+				};
+				return;
+			}
+		}
+
+		const siblingIds = parentId
+			? renderedLayout.edges
+				.filter((edge) => (
+					edge.sourceId === parentId
+						&& edge.targetId !== nodeId
+						&& renderedLayout.arrangedNodeIds.has(edge.targetId)
+				))
+				.map((edge) => edge.targetId)
+				.filter((siblingId) => (
+					nodeElements.get(siblingId)?.hidden === false
+				))
+			: [];
+		const siblingElements = siblingIds
+			.map((siblingId) => nodeElements.get(siblingId))
+			.filter((element): element is HTMLElement => element !== undefined);
+		let placeholder: HTMLElement | undefined;
+		const targetElements: HTMLElement[] = [...siblingElements];
+		const targetRects = siblingIds
+			.map(getNodeClientRect)
+			.filter((rect): rect is DOMRect => rect !== undefined);
+
+		if (!wasUnarranged) {
+			if (sourceNode) {
+				placeholder = ownerDocument.createElement('div');
+				placeholder.className = 'graph-arrangement-placeholder';
+				placeholder.setAttribute('data-graph-arrangement-placeholder-id', nodeId);
+				placeholder.style.width = `${sourceNode.width}px`;
+				placeholder.style.height = `${sourceNode.height}px`;
+				placeholder.style.transform = `translate(${sourcePosition.x}px, ${sourcePosition.y}px)`;
+				nodeLayer.append(placeholder);
+				targetElements.push(placeholder);
+				const sourceBounds = getNodeClientRect(nodeId);
+
+				if (sourceBounds) {
+					targetRects.push(sourceBounds);
+				}
+			}
+		}
+
+		if (targetRects.length === 0 && parentId) {
+			const parentElement = nodeElements.get(parentId);
+
+			if (parentElement && !parentElement.hidden) {
+				targetElements.push(parentElement);
+				const parentBounds = getNodeClientRect(parentId);
+
+				if (parentBounds) {
+					targetRects.push(parentBounds);
+				}
+			}
+		}
+
+		activeArrangementDrag = {
+			nodeId,
+			wasUnarranged,
+			targetBounds: unionClientRects(targetRects),
+			targetElements,
+			placeholder,
+			isTarget: false,
+		};
+	};
+	/** Grouped File Row Drag용 원래 목록 target과 standalone preview를 만든다. */
+	const beginFileArrangementDrag = (
+		file: GraphFileNode,
+		fileGroupId: string,
+		sourceElement: HTMLElement,
+	): HTMLElement | undefined => {
+		clearArrangementDrag();
+		const targetElement = nodeElements.get(fileGroupId);
+
+		if (!targetElement) {
+			return undefined;
+		}
+
+		const preview = ownerDocument.createElement('div');
+		const name = ownerDocument.createElement('span');
+
+		preview.className = 'graph-node graph-file-group-node graph-arrangement-drag-preview';
+		preview.setAttribute('data-graph-arrangement-preview-id', file.id);
+		preview.style.width = `${GRAPH_FILE_GROUP_NODE_WIDTH}px`;
+		preview.style.height = `${GRAPH_FILE_GROUP_STANDALONE_HEIGHT}px`;
+		name.className = 'graph-file-name';
+		name.textContent = file.name;
+		preview.append(name);
+		nodeLayer.append(preview);
+		sourceElement.classList.add('is-arrangement-drag-source');
+		activeArrangementDrag = {
+			nodeId: file.id,
+			wasUnarranged: false,
+			targetBounds: getNodeClientRect(fileGroupId),
+			targetElements: [targetElement],
+			sourceElement,
+			preview,
+			isTarget: false,
+		};
+		return preview;
+	};
+	/** Client Pointer 중심에 File preview를 두고 최종 World 좌표를 반환한다. */
+	const moveFileArrangementPreview = (
+		preview: HTMLElement,
+		clientX: number,
+		clientY: number,
+	): GraphLayoutPosition => {
+		const layerBounds = nodeLayer.getBoundingClientRect();
+		const scale = graphState.getState().camera.scale;
+		const position = {
+			x: (clientX - layerBounds.left) / scale
+				- GRAPH_FILE_GROUP_NODE_WIDTH / 2,
+			y: (clientY - layerBounds.top) / scale
+				- GRAPH_FILE_GROUP_STANDALONE_HEIGHT / 2,
+		};
+
+		preview.style.transform = `translate(${position.x}px, ${position.y}px)`;
+		return position;
+	};
+	/** Pointer가 정렬 child 목록 영역에 들어왔는지 판별하고 반투명 강조를 갱신한다. */
+	const updateArrangementTarget = (
+		clientX: number,
+		clientY: number,
+	): boolean => {
+		const session = activeArrangementDrag;
+		const isTarget = session?.targetBounds
+			? isPointInsideExpandedRect(
+				clientX,
+				clientY,
+				session.targetBounds,
+				ARRANGEMENT_TARGET_MARGIN,
+			)
+			: false;
+
+		if (!session || session.isTarget === isTarget) {
+			return isTarget;
+		}
+
+		session.isTarget = isTarget;
+
+		for (const target of session.targetElements) {
+			if (isTarget) {
+				target.classList.add(ARRANGEMENT_TARGET_CLASS);
+			} else {
+				target.classList.remove(ARRANGEMENT_TARGET_CLASS);
+			}
+		}
+
+		return isTarget;
+	};
 	/** 숨겨지지 않은 최신 Backlink DOM만 interaction 대상으로 반환한다. */
 	const getVisibleBacklinkElement = (
 		targetRootId: string,
@@ -291,6 +601,223 @@ export function initializeGraphRenderer(
 		}
 	};
 
+	/** Layout 출입 효과를 완료하고 임시 DOM/inline style을 정리한다. */
+	const finishLayoutVisualTransition = (
+		session: GraphLayoutAnimationSession,
+	): void => {
+		for (const element of session.enteringNodes) {
+			element.classList.remove(LAYOUT_TRANSITION_CLASS);
+			element.style.opacity = '';
+			element.style.scale = '';
+		}
+
+		for (const element of session.enteringEdges) {
+			element.classList.remove(LAYOUT_TRANSITION_CLASS);
+			element.style.opacity = '';
+		}
+
+		for (const transition of session.exitingNodes) {
+			transition.element.remove();
+		}
+
+		for (const element of session.exitingEdges) {
+			element.remove();
+		}
+	};
+
+	/** 예약 Frame을 취소하되 유지 Node의 현재 보간 위치는 다음 시작점으로 남긴다. */
+	const cancelLayoutAnimation = (): void => {
+		const session = layoutAnimation;
+
+		layoutAnimation = undefined;
+
+		if (session?.frameRequestId !== undefined) {
+			animationFrameScheduler?.cancel(session.frameRequestId);
+		}
+
+		if (session) {
+			finishLayoutVisualTransition(session);
+		}
+	};
+
+	/** 진행 중 Transition의 모든 Node와 연결 Edge를 목표 위치로 즉시 완료한다. */
+	const finishLayoutAnimation = (): void => {
+		const session = layoutAnimation;
+
+		if (!session) {
+			return;
+		}
+
+		cancelLayoutAnimation();
+		const pendingEdges = new Map<string, GraphLayoutEdge>();
+
+		for (const [nodeId, transition] of session.transitions) {
+			updateNodePosition(nodeId, transition.to, pendingEdges);
+		}
+
+		for (const edge of pendingEdges.values()) {
+			renderEdge(edge);
+		}
+	};
+
+	/** Node와 연결 Edge를 같은 RAF에서 ease-out 보간하는 단일 Layout transition을 시작한다. */
+	const startLayoutAnimation = (
+		transitions: ReadonlyMap<string, GraphNodePositionTransition>,
+		visualTransition: Pick<
+			GraphLayoutAnimationSession,
+			'enteringNodes' | 'exitingNodes' | 'enteringEdges' | 'exitingEdges'
+		>,
+	): void => {
+		const prefersReducedMotion = options.prefersReducedMotion
+			?? ownerDocument.defaultView?.matchMedia?.(
+				'(prefers-reduced-motion: reduce)',
+			).matches
+			?? false;
+
+		if (
+			(
+				transitions.size === 0
+				&& visualTransition.enteringNodes.length === 0
+				&& visualTransition.exitingNodes.length === 0
+				&& visualTransition.enteringEdges.length === 0
+				&& visualTransition.exitingEdges.length === 0
+			)
+			|| !animationFrameScheduler
+			|| transitionDuration === 0
+			|| prefersReducedMotion
+		) {
+			const pendingEdges = new Map<string, GraphLayoutEdge>();
+
+			for (const [nodeId, transition] of transitions) {
+				updateNodePosition(nodeId, transition.to, pendingEdges);
+			}
+
+			for (const edge of pendingEdges.values()) {
+				renderEdge(edge);
+			}
+
+			finishLayoutVisualTransition({
+				...visualTransition,
+				transitions,
+				duration: transitionDuration,
+			});
+			return;
+		}
+
+		const session: GraphLayoutAnimationSession = {
+			transitions,
+			...visualTransition,
+			duration: transitionDuration,
+		};
+
+		for (const element of session.enteringNodes) {
+			element.classList.add(LAYOUT_TRANSITION_CLASS);
+			element.style.opacity = '0';
+			element.style.scale = String(LAYOUT_NODE_MIN_SCALE);
+		}
+
+		for (const element of session.enteringEdges) {
+			element.classList.add(LAYOUT_TRANSITION_CLASS);
+			element.style.opacity = '0';
+		}
+
+		for (const transition of session.exitingNodes) {
+			transition.element.classList.add(
+				LAYOUT_TRANSITION_CLASS,
+				LAYOUT_EXIT_CLASS,
+			);
+			transition.element.style.opacity = '1';
+			transition.element.style.scale = '1';
+		}
+
+		for (const element of session.exitingEdges) {
+			element.classList.add(
+				LAYOUT_TRANSITION_CLASS,
+				LAYOUT_EXIT_CLASS,
+			);
+			element.style.opacity = '1';
+		}
+		const renderFrame = (timestamp: number): void => {
+			if (disposed || layoutAnimation !== session) {
+				return;
+			}
+
+			session.frameRequestId = undefined;
+			session.startTime ??= timestamp;
+			const progress = Math.min(
+				1,
+				Math.max(0, (timestamp - session.startTime) / session.duration),
+			);
+			const easedProgress = easeOutCubic(progress);
+			const pendingEdges = new Map<string, GraphLayoutEdge>();
+
+			for (const [nodeId, transition] of session.transitions) {
+				updateNodePosition(nodeId, {
+					x: interpolate(
+						transition.from.x,
+						transition.to.x,
+						easedProgress,
+					),
+					y: interpolate(
+						transition.from.y,
+						transition.to.y,
+						easedProgress,
+					),
+				}, pendingEdges);
+			}
+
+			for (const element of session.enteringNodes) {
+				element.style.opacity = String(easedProgress);
+				element.style.scale = String(interpolate(
+					LAYOUT_NODE_MIN_SCALE,
+					1,
+					easedProgress,
+				));
+			}
+
+			for (const element of session.enteringEdges) {
+				element.style.opacity = String(easedProgress);
+			}
+
+			for (const transition of session.exitingNodes) {
+				transition.element.style.opacity = String(1 - easedProgress);
+				transition.element.style.scale = String(interpolate(
+					1,
+					LAYOUT_NODE_MIN_SCALE,
+					easedProgress,
+				));
+				transition.element.style.transform = `translate(${interpolate(
+					transition.from.x,
+					transition.to.x,
+					easedProgress,
+				)}px, ${interpolate(
+					transition.from.y,
+					transition.to.y,
+					easedProgress,
+				)}px)`;
+			}
+
+			for (const element of session.exitingEdges) {
+				element.style.opacity = String(1 - easedProgress);
+			}
+
+			for (const edge of pendingEdges.values()) {
+				renderEdge(edge);
+			}
+
+			if (progress === 1) {
+				layoutAnimation = undefined;
+				finishLayoutVisualTransition(session);
+				return;
+			}
+
+			session.frameRequestId = animationFrameScheduler.request(renderFrame);
+		};
+
+		layoutAnimation = session;
+		session.frameRequestId = animationFrameScheduler.request(renderFrame);
+	};
+
 	/** 해당 Layout Root의 선택적 Context Label을 추가, 갱신 또는 제거한다. */
 	const syncRootContextLabel = (
 		layoutNode: GraphLayoutNode,
@@ -350,6 +877,179 @@ export function initializeGraphRenderer(
 			);
 		}
 	};
+	const initializeFileArrangementDrag: FileArrangementDragInitializer = (
+		element,
+		file,
+		fileGroupId,
+	) => {
+		let session: {
+			readonly pointerId: number;
+			readonly startClientX: number;
+			readonly startClientY: number;
+			preview?: HTMLElement;
+			position?: GraphLayoutPosition;
+			didDrag: boolean;
+		} | undefined;
+		let suppressNextClick = false;
+		let dragDisposed = false;
+		const stop = (pointerId: number, releaseCapture: boolean): void => {
+			session = undefined;
+
+			if (releaseCapture && element.hasPointerCapture(pointerId)) {
+				element.releasePointerCapture(pointerId);
+			}
+		};
+		const handlePointerDown = (event: PointerEvent): void => {
+			if (
+				dragDisposed
+				|| session
+				|| !event.isPrimary
+				|| event.button !== 0
+				|| shouldIgnoreFileArrangementDrag(element, event)
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			suppressNextClick = false;
+			session = {
+				pointerId: event.pointerId,
+				startClientX: event.clientX,
+				startClientY: event.clientY,
+				didDrag: false,
+			};
+			element.setPointerCapture(event.pointerId);
+		};
+		const handlePointerMove = (event: PointerEvent): void => {
+			if (!session || event.pointerId !== session.pointerId) {
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			const distance = Math.hypot(
+				event.clientX - session.startClientX,
+				event.clientY - session.startClientY,
+			);
+
+			if (!session.didDrag && distance < 4) {
+				return;
+			}
+
+			if (!session.didDrag) {
+				session.didDrag = true;
+				session.preview = beginFileArrangementDrag(
+					file,
+					fileGroupId,
+					element,
+				);
+			}
+
+			if (session.preview) {
+				session.position = moveFileArrangementPreview(
+					session.preview,
+					event.clientX,
+					event.clientY,
+				);
+			}
+			updateArrangementTarget(event.clientX, event.clientY);
+		};
+		const handlePointerUp = (event: PointerEvent): void => {
+			if (!session || event.pointerId !== session.pointerId) {
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			const completedSession = session;
+
+			suppressNextClick = completedSession.didDrag;
+			const shouldArrange = completedSession.didDrag
+				&& updateArrangementTarget(event.clientX, event.clientY);
+
+			stop(event.pointerId, true);
+			clearArrangementDrag();
+
+			if (
+				completedSession.didDrag
+				&& !shouldArrange
+				&& completedSession.position
+			) {
+				const snapshot = graphState.getState();
+
+				graphState.setState({
+					camera: snapshot.camera,
+					nodePositions: {
+						...snapshot.nodePositions,
+						[file.id]: completedSession.position,
+					},
+				});
+				interactions.onNodeArrangementChange?.({
+					nodeId: file.id,
+					arranged: false,
+				});
+			}
+		};
+		const handlePointerCancel = (event: PointerEvent): void => {
+			if (!session || event.pointerId !== session.pointerId) {
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			suppressNextClick = false;
+			stop(event.pointerId, true);
+			clearArrangementDrag();
+		};
+		const handleLostPointerCapture = (event: PointerEvent): void => {
+			if (!session || event.pointerId !== session.pointerId) {
+				return;
+			}
+
+			suppressNextClick = false;
+			stop(event.pointerId, false);
+			clearArrangementDrag();
+		};
+		const handleClick = (event: MouseEvent): void => {
+			if (!suppressNextClick) {
+				return;
+			}
+
+			suppressNextClick = false;
+			event.preventDefault();
+			event.stopPropagation();
+		};
+
+		element.addEventListener('pointerdown', handlePointerDown);
+		element.addEventListener('pointermove', handlePointerMove);
+		element.addEventListener('pointerup', handlePointerUp);
+		element.addEventListener('pointercancel', handlePointerCancel);
+		element.addEventListener('lostpointercapture', handleLostPointerCapture);
+		element.addEventListener('click', handleClick);
+
+		return () => {
+			if (dragDisposed) {
+				return;
+			}
+
+			dragDisposed = true;
+			element.removeEventListener('pointerdown', handlePointerDown);
+			element.removeEventListener('pointermove', handlePointerMove);
+			element.removeEventListener('pointerup', handlePointerUp);
+			element.removeEventListener('pointercancel', handlePointerCancel);
+			element.removeEventListener(
+				'lostpointercapture',
+				handleLostPointerCapture,
+			);
+			element.removeEventListener('click', handleClick);
+
+			if (session) {
+				stop(session.pointerId, true);
+				clearArrangementDrag();
+			}
+		};
+	};
 
 	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
 	const addNode = (layoutNode: GraphLayoutNode): void => {
@@ -388,9 +1088,10 @@ export function initializeGraphRenderer(
 				ownerDocument,
 				graphState,
 				interactions,
-				rootNodeIds,
-				initializeBacklink,
-			);
+					rootNodeIds,
+					initializeBacklink,
+					initializeFileArrangementDrag,
+				);
 
 			content.render(graphState.getFileGroupPage(layoutNode.id));
 			fileGroupContents.set(layoutNode.id, content);
@@ -412,19 +1113,117 @@ export function initializeGraphRenderer(
 		element.style.transform = `translate(${position.x}px, ${position.y}px)`;
 
 		if (isMovableLayoutNode(layoutNode)) {
+			let subtreeDragStartPositions:
+				| ReadonlyMap<string, GraphLayoutPosition>
+				| undefined;
+			const captureSubtreeDragStartPositions = (): ReadonlyMap<
+				string,
+				GraphLayoutPosition
+			> => {
+				const positions = new Map<string, GraphLayoutPosition>();
+
+				for (const nodeId of collectGraphLayoutSubtreeNodeIds(
+					renderedLayout,
+					layoutNode.id,
+				)) {
+					const position = renderedPositions.get(nodeId);
+
+					if (position) {
+						positions.set(nodeId, { ...position });
+					}
+				}
+
+				subtreeDragStartPositions = positions;
+				return positions;
+			};
+			const updateSubtreeDragPosition = (
+				position: GraphLayoutPosition,
+			): void => {
+				const startPositions = subtreeDragStartPositions
+					?? captureSubtreeDragStartPositions();
+				const rootStartPosition = startPositions.get(layoutNode.id);
+
+				if (!rootStartPosition) {
+					updateNodePosition(layoutNode.id, position);
+					return;
+				}
+
+				const delta = {
+					x: position.x - rootStartPosition.x,
+					y: position.y - rootStartPosition.y,
+				};
+				const pendingEdges = new Map<string, GraphLayoutEdge>();
+
+				for (const [nodeId, startPosition] of startPositions) {
+					updateNodePosition(nodeId, {
+						x: startPosition.x + delta.x,
+						y: startPosition.y + delta.y,
+					}, pendingEdges);
+				}
+
+				for (const edge of pendingEdges.values()) {
+					renderEdge(edge);
+				}
+			};
+				const commitSubtreeDragPositions = (): boolean => {
+				const startPositions = subtreeDragStartPositions;
+
+				subtreeDragStartPositions = undefined;
+
+					if (!startPositions || startPositions.size === 0) {
+					return false;
+				}
+
+				const state = graphState.getState();
+				const nodePositions = { ...state.nodePositions };
+
+				for (const nodeId of startPositions.keys()) {
+					const position = renderedPositions.get(nodeId);
+
+					if (position) {
+						nodePositions[nodeId] = { ...position };
+					}
+				}
+
+				graphState.setState({
+					camera: { ...state.camera },
+					nodePositions,
+				});
+				return true;
+			};
+			const nodeClickHandler = createNodeClickHandler(
+				layoutNode,
+				interactions,
+			);
+
 			nodeDrags.set(layoutNode.id, initializeGraphNodeDrag(
 				element,
 				layoutNode.id,
 				layoutNode.position,
 				graphState,
 				{
-					onClick: createNodeClickHandler(layoutNode, interactions),
-					onPositionChange: (position) => {
-						updateNodePosition(layoutNode.id, position);
-					},
-					onDragMove: ({ clientX, clientY }) => {
-						updateReattachTarget(layoutNode.id, clientX, clientY);
-					},
+						onDragStart: () => {
+							finishLayoutAnimation();
+							subtreeDragStartPositions = undefined;
+						},
+						onDragActivate: () => {
+							const startPositions = captureSubtreeDragStartPositions();
+							const sourcePosition = startPositions.get(layoutNode.id);
+
+							if (sourcePosition) {
+								beginArrangementDrag(
+									layoutNode.id,
+									sourcePosition,
+								);
+							}
+						},
+					getCurrentPosition: () => renderedPositions.get(layoutNode.id),
+					onClick: nodeClickHandler,
+					onPositionChange: updateSubtreeDragPosition,
+						onDragMove: ({ clientX, clientY }) => {
+							updateReattachTarget(layoutNode.id, clientX, clientY);
+							updateArrangementTarget(clientX, clientY);
+						},
 					onDragEnd: ({ clientX, clientY }) => {
 						const rootId = updateReattachTarget(
 							layoutNode.id,
@@ -433,20 +1232,53 @@ export function initializeGraphRenderer(
 						);
 
 						clearReattachTarget();
-						return rootId !== undefined
+						const reattached = rootId !== undefined
 							&& interactions.onRootReattach?.({
 								rootId,
 								nodeId: layoutNode.id,
 							}) === true;
+
+							if (reattached) {
+								clearArrangementDrag();
+								subtreeDragStartPositions = undefined;
+								return true;
+							}
+
+							const arrangement = activeArrangementDrag;
+							const shouldArrange = updateArrangementTarget(
+								clientX,
+								clientY,
+							);
+							const wasUnarranged = arrangement?.wasUnarranged ?? false;
+
+							clearArrangementDrag();
+							const committed = commitSubtreeDragPositions();
+							const arrangementChanged = shouldArrange || !wasUnarranged
+								? interactions.onNodeArrangementChange?.({
+									nodeId: layoutNode.id,
+									arranged: shouldArrange,
+								}) === true
+								: false;
+
+							return committed || arrangementChanged;
+						},
+						onDragCancel: () => {
+							clearReattachTarget();
+							clearArrangementDrag();
+						subtreeDragStartPositions = undefined;
 					},
-					onDragCancel: clearReattachTarget,
 				},
 			));
 		}
 	};
 
 	/** 제거할 Node의 interaction과 content를 정리한 뒤 DOM과 Map에서 제외한다. */
-	const removeNode = (nodeId: string): void => {
+	const removeNode = (
+		nodeId: string,
+		preserveElement = false,
+	): HTMLElement | undefined => {
+		const element = nodeElements.get(nodeId);
+
 		nodeDrags.get(nodeId)?.dispose();
 		nodeDrags.delete(nodeId);
 		nodeDetachDrags.get(nodeId)?.dispose();
@@ -457,15 +1289,26 @@ export function initializeGraphRenderer(
 		fileGroupContents.delete(nodeId);
 		rootContextLabels.get(nodeId)?.dispose();
 		rootContextLabels.delete(nodeId);
-		nodeElements.get(nodeId)?.remove();
+		if (!preserveElement) {
+			element?.remove();
+		}
 		nodeElements.delete(nodeId);
 		renderedPositions.delete(nodeId);
+		return element;
 	};
 
 	/** 제거할 Edge path를 DOM과 ID Map에서 제외한다. */
-	const removeEdge = (edgeId: string): void => {
-		edgeElements.get(edgeId)?.remove();
+	const removeEdge = (
+		edgeId: string,
+		preserveElement = false,
+	): SVGPathElement | undefined => {
+		const element = edgeElements.get(edgeId);
+
+		if (!preserveElement) {
+			element?.remove();
+		}
 		edgeElements.delete(edgeId);
+		return element;
 	};
 
 	for (const layoutNode of layout.nodes) {
@@ -488,6 +1331,7 @@ export function initializeGraphRenderer(
 
 		const previousPositions = renderedNodePositions;
 		renderedNodePositions = state.nodePositions;
+		const changedPositions: Array<readonly [string, GraphLayoutPosition]> = [];
 
 		for (const layoutNode of renderedLayout.nodes) {
 			const previous = resolveGraphLayoutNodePosition(
@@ -503,7 +1347,17 @@ export function initializeGraphRenderer(
 				continue;
 			}
 
-			updateNodePosition(layoutNode.id, next);
+			changedPositions.push([layoutNode.id, next]);
+		}
+
+		if (changedPositions.length === 0) {
+			return;
+		}
+
+		finishLayoutAnimation();
+
+		for (const [nodeId, position] of changedPositions) {
+			updateNodePosition(nodeId, position);
 		}
 	};
 
@@ -564,13 +1418,19 @@ export function initializeGraphRenderer(
 	const unsubscribeState = graphState.subscribe(renderState);
 
 	return {
-		applyLayout(nextLayout): void {
+		applyLayout(
+			nextLayout,
+			nodePositions = graphState.getState().nodePositions,
+		): void {
 			if (disposed) {
 				return;
 			}
+			cancelLayoutAnimation();
 			clearReattachTarget();
+			clearArrangementDrag();
 
 			const previousNodesById = nodesById;
+			const previousRenderedPositions = new Map(renderedPositions);
 			const previousEdgesById = new Map(
 				renderedLayout.edges.map((edge) => [edge.id, edge]),
 			);
@@ -580,19 +1440,61 @@ export function initializeGraphRenderer(
 			const nextEdgesById = new Map(
 				nextLayout.edges.map((edge) => [edge.id, edge]),
 			);
+			const previousParentByChild = new Map(
+				renderedLayout.edges.map((edge) => [edge.targetId, edge.sourceId]),
+			);
+			const nextParentByChild = new Map(
+				nextLayout.edges.map((edge) => [edge.targetId, edge.sourceId]),
+			);
 			const pendingEdges = new Map<string, GraphLayoutEdge>();
+			const positionTransitions = new Map<
+				string,
+				GraphNodePositionTransition
+			>();
+			const enteringNodes: HTMLElement[] = [];
+			const exitingNodes: GraphExitingNodeTransition[] = [];
+			const enteringEdges: SVGPathElement[] = [];
+			const exitingEdges: SVGPathElement[] = [];
+			const enteringNodeIds = new Set<string>();
+			const storedPositions = nodePositions;
 
 			rootNodeIds = nextLayout.rootNodeIds;
 
 			for (const nodeId of previousNodesById.keys()) {
 				if (!nextNodesById.has(nodeId)) {
-					removeNode(nodeId);
+					const from = previousRenderedPositions.get(nodeId);
+					const retainedAncestorId = findNearestAncestorInMap(
+						nodeId,
+						previousParentByChild,
+						nextNodesById,
+					);
+					const retainedAncestor = retainedAncestorId
+						? nextNodesById.get(retainedAncestorId)
+						: undefined;
+					const element = removeNode(nodeId, true);
+
+					if (element && from && retainedAncestor && !element.hidden) {
+						exitingNodes.push({
+							element,
+							from,
+							to: resolveGraphLayoutNodePosition(
+								retainedAncestor,
+								storedPositions,
+							),
+						});
+					} else {
+						element?.remove();
+					}
 				}
 			}
 
 			for (const edgeId of previousEdgesById.keys()) {
 				if (!nextEdgesById.has(edgeId)) {
-					removeEdge(edgeId);
+					const element = removeEdge(edgeId, true);
+
+					if (element) {
+						exitingEdges.push(element);
+					}
 				}
 			}
 
@@ -604,6 +1506,12 @@ export function initializeGraphRenderer(
 
 				if (!previousNode) {
 					addNode(nextNode);
+					const element = nodeElements.get(nextNode.id);
+
+					if (element && !element.hidden) {
+						enteringNodes.push(element);
+						enteringNodeIds.add(nextNode.id);
+					}
 				} else if (!hasSameNodePresentation(previousNode, nextNode)) {
 					removeNode(nextNode.id);
 					addNode(nextNode);
@@ -613,6 +1521,11 @@ export function initializeGraphRenderer(
 			for (const nextEdge of nextLayout.edges) {
 				if (!previousEdgesById.has(nextEdge.id)) {
 					addEdge(nextEdge);
+					const element = edgeElements.get(nextEdge.id);
+
+					if (element) {
+						enteringEdges.push(element);
+					}
 				} else {
 					const edgeElement = edgeElements.get(nextEdge.id);
 
@@ -638,7 +1551,7 @@ export function initializeGraphRenderer(
 				}
 			}
 
-			const storedPositions = graphState.getState().nodePositions;
+			renderedNodePositions = storedPositions;
 
 			for (const nextNode of nextLayout.nodes) {
 				const previousNode = previousNodesById.get(nextNode.id);
@@ -699,20 +1612,65 @@ export function initializeGraphRenderer(
 					nextNode,
 					storedPositions,
 				);
-				const currentPosition = renderedPositions.get(nextNode.id);
+				const enteringAncestorId = !previousNode
+					? findNearestAncestorInMap(
+						nextNode.id,
+						nextParentByChild,
+						previousNodesById,
+					)
+					: undefined;
+				const enteringAncestorPosition = enteringAncestorId
+					? previousRenderedPositions.get(enteringAncestorId)
+					: undefined;
+				const currentPosition = previousNode
+					? previousRenderedPositions.get(nextNode.id)
+					: enteringAncestorPosition ?? renderedPositions.get(nextNode.id);
+				const reconciledPosition = renderedPositions.get(nextNode.id);
+
+				if (
+					currentPosition
+					&& (
+						!reconciledPosition
+						|| reconciledPosition.x !== currentPosition.x
+						|| reconciledPosition.y !== currentPosition.y
+					)
+				) {
+					updateNodePosition(nextNode.id, currentPosition, pendingEdges);
+				}
 
 				if (
 					!currentPosition
 					|| currentPosition.x !== targetPosition.x
 					|| currentPosition.y !== targetPosition.y
 				) {
-					updateNodePosition(nextNode.id, targetPosition, pendingEdges);
+					if (
+						currentPosition
+						&& (previousNode || enteringNodeIds.has(nextNode.id))
+					) {
+						positionTransitions.set(nextNode.id, {
+							from: { ...currentPosition },
+							to: { ...targetPosition },
+						});
+
+						for (const edge of edgesByNodeId.get(nextNode.id) ?? []) {
+							pendingEdges.set(edge.id, edge);
+						}
+					} else {
+						updateNodePosition(nextNode.id, targetPosition, pendingEdges);
+					}
 				}
 			}
 
 			for (const edge of pendingEdges.values()) {
 				renderEdge(edge);
 			}
+
+			startLayoutAnimation(positionTransitions, {
+				enteringNodes,
+				exitingNodes,
+				enteringEdges,
+				exitingEdges,
+			});
 		},
 		getBacklinkClientRect(targetRootId) {
 			if (disposed) {
@@ -743,7 +1701,9 @@ export function initializeGraphRenderer(
 			}
 
 			disposed = true;
-			clearReattachTarget();
+				cancelLayoutAnimation();
+				clearReattachTarget();
+				clearArrangementDrag();
 			unsubscribeState();
 
 			for (const nodeId of [...nodeElements.keys()]) {
@@ -760,6 +1720,53 @@ export function initializeGraphRenderer(
 	};
 }
 
+/** 실제 Webview Window의 RAF API만 Renderer Scheduler로 감싼다. */
+function resolveRendererAnimationFrameScheduler(
+	ownerDocument: Document,
+): GraphAnimationFrameScheduler | undefined {
+	const ownerWindow = ownerDocument.defaultView;
+
+	if (
+		!ownerWindow
+		|| typeof ownerWindow.requestAnimationFrame !== 'function'
+		|| typeof ownerWindow.cancelAnimationFrame !== 'function'
+	) {
+		return undefined;
+	}
+
+	return {
+		request: (callback) => ownerWindow.requestAnimationFrame(callback),
+		cancel: (requestId) => ownerWindow.cancelAnimationFrame(requestId),
+	};
+}
+
+function easeOutCubic(progress: number): number {
+	return 1 - (1 - progress) ** 3;
+}
+
+function interpolate(start: number, end: number, progress: number): number {
+	return start + (end - start) * progress;
+}
+
+/** Parent chain에서 지정 Map에 남아 있는 가장 가까운 Ancestor를 찾는다. */
+function findNearestAncestorInMap<T>(
+	nodeId: string,
+	parentByChild: ReadonlyMap<string, string>,
+	targets: ReadonlyMap<string, T>,
+): string | undefined {
+	let parentId = parentByChild.get(nodeId);
+
+	while (parentId) {
+		if (targets.has(parentId)) {
+			return parentId;
+		}
+
+		parentId = parentByChild.get(parentId);
+	}
+
+	return undefined;
+}
+
 /** 고정 margin을 포함한 DOM rect 안에 client pointer가 있는지 판별한다. */
 function isPointInsideExpandedRect(
 	clientX: number,
@@ -771,6 +1778,74 @@ function isPointInsideExpandedRect(
 		&& clientX <= rect.right + margin
 		&& clientY >= rect.top - margin
 		&& clientY <= rect.bottom + margin;
+}
+
+/** 여러 정렬 sibling client rect를 하나의 연속된 목록 hit area로 합친다. */
+function unionClientRects(rects: readonly DOMRect[]): DOMRect | undefined {
+	const first = rects[0];
+
+	if (!first) {
+		return undefined;
+	}
+
+	const bounds = rects.slice(1).reduce((current, rect) => ({
+		left: Math.min(current.left, rect.left),
+		top: Math.min(current.top, rect.top),
+		right: Math.max(current.right, rect.right),
+		bottom: Math.max(current.bottom, rect.bottom),
+	}), {
+		left: first.left,
+		top: first.top,
+		right: first.right,
+		bottom: first.bottom,
+	});
+
+	return {
+		x: bounds.left,
+		y: bounds.top,
+		left: bounds.left,
+		top: bounds.top,
+		right: bounds.right,
+		bottom: bounds.bottom,
+		width: bounds.right - bounds.left,
+		height: bounds.bottom - bounds.top,
+		toJSON: () => ({}),
+	};
+}
+
+function createClientRect(
+	left: number,
+	top: number,
+	width: number,
+	height: number,
+): DOMRect {
+	return {
+		x: left,
+		y: top,
+		left,
+		top,
+		right: left + width,
+		bottom: top + height,
+		width,
+		height,
+		toJSON: () => ({}),
+	};
+}
+
+/** File Row 자신은 허용하되 내부 Detach Handle에서 시작한 Drag는 분리한다. */
+function shouldIgnoreFileArrangementDrag(
+	element: HTMLElement,
+	event: Event,
+): boolean {
+	const target = event.target;
+
+	if (target === null || typeof (target as Element).closest !== 'function') {
+		return true;
+	}
+
+	return (target as Element).closest(
+		`[${GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE}]`,
+	) !== element;
 }
 
 /** Root 카드에 Layout 비참여 absolute Context Label과 입력 차단 정책을 추가한다. */
@@ -1020,6 +2095,7 @@ function initializeFileGroupContent(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
+	initializeFileArrangementDrag: FileArrangementDragInitializer,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
 	let renderedRootNodeIds = rootNodeIds;
@@ -1061,9 +2137,11 @@ function initializeFileGroupContent(
 					file,
 					ownerDocument,
 					interactions,
-					renderedRootNodeIds,
-					initializeBacklink,
-				);
+						renderedRootNodeIds,
+						initializeBacklink,
+						initializeFileArrangementDrag,
+						renderedNode.id,
+					);
 
 				list.append(row.element);
 				fileRows.set(file.id, row.element);
@@ -1172,6 +2250,8 @@ function createFileRow(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
+	initializeFileArrangementDrag: FileArrangementDragInitializer,
+	fileGroupId: string,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
@@ -1187,6 +2267,10 @@ function createFileRow(
 	const detachDrag = file.presentation === 'backlink' || rootNodeIds.has(file.id)
 		? undefined
 		: appendDetachHandle(item, file.id, ownerDocument, interactions);
+	const disposeArrangementDrag = file.presentation === 'backlink'
+		|| rootNodeIds.has(file.id)
+		? undefined
+		: initializeFileArrangementDrag(item, file, fileGroupId);
 	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
 	const animateFileClick = (): void => {
 		item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
@@ -1217,6 +2301,7 @@ function createFileRow(
 		dispose: () => {
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
+			disposeArrangementDrag?.();
 			item.removeEventListener('click', handleFileClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
