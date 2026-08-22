@@ -32,13 +32,6 @@ import {
 	createGraphState,
 	type GraphState,
 } from '../../webview/graph/graphState';
-import { DEFAULT_PANEL_LAYOUT_STATE } from '../../webview/panel/panelState';
-import {
-	restoreWebviewState,
-	saveWebviewState,
-	type PersistedWebviewState,
-	type WebviewStateApi,
-} from '../../webview/webviewState';
 
 suite('Graph Renderer / Node Drag', () => {
 	test('unreadable Project와 Folder에만 상태 Class를 적용한다', () => {
@@ -1896,48 +1889,43 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('Node 이동을 기존 Webview State로 저장하고 새 Store/Renderer에서 일부 위치만 복원한다', () => {
-		let savedState: PersistedWebviewState | undefined;
-		const api: WebviewStateApi = {
-			getState: () => savedState,
-			setState: (state) => {
-				savedState = state;
-			},
-		};
-		const firstState = restoreWebviewState(api);
+	test('Node 이동을 Runtime State에 반영하고 새 Store/Renderer에 다시 적용한다', () => {
 		const first = createRendererFixture(1, {
-			...firstState.graph,
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
 			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
 		});
 		const movedId = 'folder:app';
 		const untouchedId = 'folder:src';
 		const movedLayout = getLayoutNode(first.layout, movedId);
 		const untouchedLayout = getLayoutNode(first.layout, untouchedId);
-		const unsubscribe = first.graphState.subscribe((graph) => {
-			saveWebviewState(api, {
-				panel: { ...DEFAULT_PANEL_LAYOUT_STATE },
-				graph,
-			});
-		});
-
 		const movedNode = first.getNode(movedId);
 		movedNode.dispatch('pointerdown', createPointerEvent(movedNode, 20, 30));
 		movedNode.dispatch('pointermove', createPointerEvent(movedNode, 100, 70));
-		assert.strictEqual(savedState, undefined);
+		assert.deepStrictEqual(first.graphState.getState().nodePositions, {});
 		movedNode.dispatch('pointerup', createPointerEvent(movedNode, 100, 70));
-		const savedAfterPointerUp = api.getState() as PersistedWebviewState | undefined;
+		const movedState = first.graphState.getState();
 
-		assert.deepStrictEqual(savedAfterPointerUp?.graph.nodePositions, {
+		assert.deepStrictEqual(movedState.nodePositions, {
 			[movedId]: {
 				x: movedLayout.position.x + 80,
 				y: movedLayout.position.y + 40,
 			},
 		});
-		unsubscribe();
 		first.renderer.dispose();
 
-		const restored = restoreWebviewState(api);
-		const second = createRendererFixture(1, restored.graph);
+		const second = createRendererFixture(1, {
+			camera: { ...movedState.camera },
+			nodePositions: Object.fromEntries(
+				Object.entries(movedState.nodePositions).map(([id, position]) => [
+					id,
+					{ x: position.x, y: position.y },
+				]),
+			),
+			fileGroupPages: { ...movedState.fileGroupPages },
+			openedFolders: { ...movedState.openedFolders },
+			detachedRootNodeIds: { ...movedState.detachedRootNodeIds },
+		});
 
 		assert.notStrictEqual(second.graphState, first.graphState);
 		assert.strictEqual(

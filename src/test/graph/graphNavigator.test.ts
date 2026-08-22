@@ -21,7 +21,7 @@ import { DEFAULT_PANEL_LAYOUT_STATE } from '../../webview/panel/panelState';
 import {
 	restoreWebviewState,
 	saveWebviewState,
-	type PersistedWebviewState,
+	type WebviewSessionState,
 	type WebviewStateApi,
 } from '../../webview/webviewState';
 
@@ -1125,13 +1125,10 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.viewport.hasClass('is-panning'), false);
 	});
 
-	test('getState에서 복원한 Camera의 Zoom 변경을 기존 Webview State 흐름으로 다시 저장한다', () => {
-		let savedState: PersistedWebviewState | undefined = {
+	test('getState에서 복원한 Camera의 Zoom 변경을 Session State로 다시 저장한다', () => {
+		let savedState: WebviewSessionState | undefined = {
 			panel: { ...DEFAULT_PANEL_LAYOUT_STATE },
-			graph: {
-				camera: { x: 513, y: 324, scale: 1.2 },
-				nodePositions: {},
-			},
+			camera: { x: 513, y: 324, scale: 1.2 },
 		};
 		const api: WebviewStateApi = {
 			getState: () => savedState,
@@ -1144,7 +1141,7 @@ suite('Graph Navigator', () => {
 		const unsubscribe = fixture.graphState.subscribe((graph) => {
 			saveWebviewState(api, {
 				panel: restoredState.panel,
-				graph,
+				camera: graph.camera,
 			});
 		});
 
@@ -1152,8 +1149,8 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.scale.textContent, '120%');
 		fixture.zoomInButton.dispatch('click', {} as Event);
 
-		assert.deepStrictEqual(savedState?.graph.camera, fixture.camera.getState());
-		assert.ok(Math.abs((savedState?.graph.camera.scale ?? 0) - 1.3) < 1e-10);
+		assert.deepStrictEqual(savedState?.camera, fixture.camera.getState());
+		assert.ok(Math.abs((savedState?.camera.scale ?? 0) - 1.3) < 1e-10);
 		unsubscribe();
 	});
 

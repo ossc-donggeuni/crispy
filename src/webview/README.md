@@ -52,17 +52,14 @@ src/webview/
 
 ### `webviewState.ts`
 
-> Panel 및 Graph 상태를 하나의 저장 가능한 Webview snapshot으로 다룹니다.
+> Panel/Camera Session 상태와 Host 초기 Graph snapshot의 복원을 담당합니다.
 
-- 전체 snapshot 검증 및 독립 객체 복사
-- Camera, 사용자가 이동한 Node의 World 위치, File Group page 및 열린 Folder 저장
-- Panel Dock, 크기와 접힘 여부 저장 및 복원
+- Session State의 Panel 및 Camera 검증과 독립 객체 복사
+- Panel Dock, 크기, 접힘 여부와 Camera를 Webview `getState()` / `setState()`로 저장 및 복원
 - `collapsed`가 없는 이전 저장 상태를 Dock과 크기를 유지한 채 호환 복원
-- VS Code Webview `getState()` / `setState()` 연결
 - Extension Host가 HTML로 전달하는 초기 상태 직렬화 및 복원
 - 저장 상태가 없거나 잘못된 경우 Panel 및 Graph 기본값 적용
-- `nodePositions`, `fileGroupPages` 또는 `openedFolders`가 없는 Graph 상태를 빈 값으로 복원
-- 새 Store와 Graph View를 사용한 Camera, 일부 Node 위치, File Group page 및 opened 상태 복원
+- W-04.3 이전 전체 Webview `setState()` snapshot에서도 Panel/Camera만 호환 복원
 
 ### `webview.ts`
 
@@ -74,8 +71,8 @@ src/webview/
 - `initialState.panel`을 Panel Runtime State로 분리
 - `initialState.graph`의 Camera, Node 위치, File Group page 및 opened 상태로 Graph View와 Store 초기화
 - Mock Project Layout, Renderer, Camera 및 Navigator 조합
-- Graph State 변경 시 Panel 상태와 함께 기존 Webview State 저장
-- `webview.stateChanged` 메시지로 같은 전체 snapshot을 Extension Host에 전달
+- Camera/Panel 변경 시 Session State만 `setState()` 및 `webview.stateChanged`로 전달
+- Node 위치, File Group page, 열린 Folder와 Detached Root 변경 시 `workspace.stateChanged`로 전달
 - Dock, Resize와 Collapse 기능 초기화
 - Dock 변경 시 표시 크기와 Sticker 위치 재계산
 - unload 시 Graph State subscription과 Graph View 정리

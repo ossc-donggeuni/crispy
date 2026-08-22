@@ -8,8 +8,13 @@ import {
 	parseWorkspaceToWebviewMessage,
 	type WebviewToExtensionMessage,
 } from '../messages';
+import {
+	WORKSPACE_PERSISTENT_STATE_VERSION,
+	type WorkspacePersistentState,
+} from '../workspace/workspaceMetadata';
 import { initializeGraphView } from './graph/graphView';
 import { deserializeGraphFromWebview } from './graph/graphTransport';
+import type { GraphStateSnapshot } from './graph/graphState';
 import { initializePanelCollapse } from './panel/panelCollapse';
 import { initializePanelDock } from './panel/panelDock';
 import { applyPanelSize, initializePanelResize } from './panel/panelResize';
@@ -17,7 +22,7 @@ import { applyPanelSize, initializePanelResize } from './panel/panelResize';
 import {
 	restoreWebviewState,
 	saveWebviewState,
-	type PersistedWebviewState,
+	type WebviewSessionState,
 	type WebviewStateApi,
 } from './webviewState';
 
@@ -70,15 +75,20 @@ const terminalPool = createDefaultAgentTerminalPool(
 	(message) => vscodeApi.postMessage(message),
 );
 
-/** Panel과 Graph의 현재 상태를 하나의 저장 가능한 snapshot으로 읽는다. */
-const getCurrentWebviewState = (): PersistedWebviewState => ({
-	panel: panelState,
-	graph: graphView.state.getState(),
+/** 현재 Panel과 Camera를 Webview Session snapshot으로 복사한다. */
+const getCurrentWebviewSessionState = (): WebviewSessionState => ({
+	panel: {
+		preferredDock: panelState.preferredDock,
+		sideSize: panelState.sideSize,
+		verticalSize: panelState.verticalSize,
+		collapsed: panelState.collapsed,
+	},
+	camera: { ...graphView.state.getState().camera },
 });
 
-/** VS Code Webview state와 Extension Host snapshot을 함께 갱신한다. */
-const persistWebviewState = () => {
-	const state = getCurrentWebviewState();
+/** VS Code Webview Session state와 Extension Host snapshot을 함께 갱신한다. */
+const persistWebviewSessionState = () => {
+	const state = getCurrentWebviewSessionState();
 
 	saveWebviewState(vscodeApi, state);
 	vscodeApi.postMessage({
@@ -86,6 +96,22 @@ const persistWebviewState = () => {
 		state,
 	});
 };
+
+/** Runtime Graph State의 Workspace 소유 필드를 현재 version snapshot으로 복사한다. */
+const createWorkspacePersistentState = (
+	graphState: GraphStateSnapshot,
+): WorkspacePersistentState => ({
+	version: WORKSPACE_PERSISTENT_STATE_VERSION,
+	nodePositions: Object.fromEntries(
+		Object.entries(graphState.nodePositions).map(([id, position]) => [
+			id,
+			{ x: position.x, y: position.y },
+		]),
+	),
+	fileGroupPages: { ...graphState.fileGroupPages },
+	openedFolders: { ...graphState.openedFolders },
+	detachedRootNodeIds: { ...graphState.detachedRootNodeIds },
+});
 
 /**
  * Agent UI 동작을 Host protocol로 연결하며, 전송 실패가 Graph, Dock, Layout이나
@@ -176,7 +202,7 @@ const refreshCollapse = initializePanelCollapse(
 		stickerOpener,
 	},
 	panelState,
-	persistWebviewState,
+	persistWebviewSessionState,
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
 /** Dock 초기화 */
@@ -185,7 +211,7 @@ const refreshDock = initializePanelDock(
 	dragHandle,
 	dockPreview,
 	panelState,
-	persistWebviewState,
+	persistWebviewSessionState,
 	() => {
 		/** Dock이 바뀌면 새 방향 기준으로 표시 크기와 Sticker 위치를 다시 맞춘다. */
 		applyPanelSize(layout, panelState);
@@ -199,11 +225,36 @@ initializePanelResize(
 	resizeHandle,
 	panelState,
 	refreshDock,
-	persistWebviewState,
+	persistWebviewSessionState,
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
 
-const unsubscribeGraphState = graphView.state.subscribe(persistWebviewState);
+let previousGraphState = graphView.state.getState();
+const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
+	const previousState = previousGraphState;
+	previousGraphState = currentGraphState;
+
+	if (
+		previousState.camera.x !== currentGraphState.camera.x
+		|| previousState.camera.y !== currentGraphState.camera.y
+		|| previousState.camera.scale !== currentGraphState.camera.scale
+	) {
+		persistWebviewSessionState();
+	}
+
+	if (
+		previousState.nodePositions !== currentGraphState.nodePositions
+		|| previousState.fileGroupPages !== currentGraphState.fileGroupPages
+		|| previousState.openedFolders !== currentGraphState.openedFolders
+		|| previousState.detachedRootNodeIds
+			!== currentGraphState.detachedRootNodeIds
+	) {
+		vscodeApi.postMessage({
+			type: 'workspace.stateChanged',
+			state: createWorkspacePersistentState(currentGraphState),
+		});
+	}
+});
 
 window.addEventListener('unload', () => {
 	unsubscribeGraphState();

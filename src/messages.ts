@@ -4,18 +4,26 @@ import type {
 } from './agent/protocol';
 import type { Graph } from './webview/graph/graphModel';
 import { parseGraph } from './webview/graph/graphTransport';
-import type { PersistedWebviewState } from './webview/webviewState';
+import type { WebviewSessionState } from './webview/webviewState';
+import type { WorkspacePersistentState } from './workspace/workspaceMetadata';
 
-/** Webview 전체 snapshot 변경을 Extension Host에 전달하는 상태 경계 메시지다. */
+/** Webview Session snapshot 변경을 Extension Host에 전달하는 상태 경계 메시지다. */
 export interface WebviewStateChangedMessage {
 	type: 'webview.stateChanged';
-	state: PersistedWebviewState;
+	state: WebviewSessionState;
 }
 
-/** Webview에서 Extension Host로 전송하는 Agent wire 및 Webview state 메시지다. */
+/** Workspace Persistent State 전체 snapshot 변경을 Extension Host에 전달한다. */
+export interface WorkspaceStateChangedMessage {
+	type: 'workspace.stateChanged';
+	state: WorkspacePersistentState;
+}
+
+/** Webview에서 Extension Host로 전송하는 Agent wire 및 상태 경계 메시지다. */
 export type WebviewToExtensionMessage =
 	| WebviewToHostWireMessage
-	| WebviewStateChangedMessage;
+	| WebviewStateChangedMessage
+	| WorkspaceStateChangedMessage;
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {

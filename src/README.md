@@ -25,7 +25,7 @@ src/
 - Project / Folder / File Multi-Root Graph와 Root Promotion / Reattach 처리
 - Backlink 및 Context Label 기반 양방향 Camera Focus
 - Panel과 Graph Runtime State 관리
-- Panel과 Graph를 포함하는 Webview snapshot 저장 및 복원
+- Panel/Camera Session과 Workspace Graph 상태 snapshot 저장 경계
 - Agent Chat Panel의 Dock 및 Resize 처리
 - 세부 구조와 동작은 `webview/README.md` 참고
 
@@ -38,15 +38,16 @@ src/
 - Webview HTML 구성
 - 빌드된 CSS와 JavaScript 리소스 연결
 - Webview 메시지 수신 및 응답
-- 유효한 `webview.stateChanged` snapshot을 Extension Host 메모리에 유지
-- Panel 재생성 시 마지막 snapshot을 `data-webview-state`로 전달
-- `deactivate()` 시 현재 Panel과 마지막 snapshot 정리
+- Canvas 생성 시 Root별 `.crispy/state.json`을 읽고 Workspace 상태를 병합
+- `workspace.stateChanged`를 Host 메모리에 반영하고 Root별 metadata로 분배해 저장
+- Panel 재생성 시 현재 Session/Workspace snapshot을 `data-webview-state`로 전달
+- `deactivate()` 시 현재 Panel과 세션 메모리를 정리하고 다음 활성화에서 metadata 복원
 
 ### `messages.ts`
 
 > Extension Host와 Webview 사이에서 사용하는 메시지 타입을 정의합니다.
 
-- Webview snapshot 메시지와 Agent / Terminal wire protocol 타입 통합
+- Session/Workspace 상태 메시지와 Agent / Terminal wire protocol 타입 통합
 - Webview state와 Agent / Terminal validation boundary 분리
 - `webview.ready`와 `extension.ready` handshake 계약 관리
 

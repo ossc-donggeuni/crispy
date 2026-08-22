@@ -1,17 +1,27 @@
 import * as assert from 'assert';
-import type {
+import {
 	CrispyExtensionApi,
 	TerminalMessageHost,
+	createInitialWebviewState,
+	loadWorkspacePersistentStateForRoots,
+	persistWorkspacePersistentStateForRoots,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
 	WebviewToExtensionMessage,
 } from '../messages';
 import {
-	parseWebviewState,
+	createDefaultWebviewSessionState,
+	parseWebviewSessionState,
 	serializeWebviewState,
 	type PersistedWebviewState,
+	type WebviewSessionState,
 } from '../webview/webviewState';
+import {
+	createDefaultWorkspacePersistentState,
+	parseWorkspacePersistentState,
+	type WorkspacePersistentState,
+} from '../workspace/workspaceMetadata';
 import { deserializeGraphFromWebview } from '../webview/graph/graphTransport';
 import type { Graph } from '../webview/graph/graphModel';
 
@@ -208,6 +218,101 @@ suite('Crispy Extension Host', () => {
 		}
 	});
 
+	test('Host 메모리가 없는 새 실행은 Workspace metadata와 기본 Session을 조합한다', () => {
+		const workspaceState = createWorkspacePersistentState();
+
+		assert.deepStrictEqual(
+			createInitialWebviewState(undefined, workspaceState),
+			createPersistedStateFromSession(
+				createDefaultWebviewSessionState(),
+				workspaceState,
+			),
+		);
+	});
+
+	test('Multi-root metadata를 병합하고 한 Root의 read 실패를 격리한다', async () => {
+		const frontendUri = vscode.Uri.file('/workspace/frontend');
+		const backendUri = vscode.Uri.file('/workspace/backend');
+		const frontendState = createWorkspacePersistentStateForRoot(
+			frontendUri,
+			2,
+		);
+		const backendState = createWorkspacePersistentStateForRoot(backendUri, 4);
+		const states = new Map([
+			[frontendUri.toString(), frontendState],
+			[backendUri.toString(), backendState],
+		]);
+		const merged = await loadWorkspacePersistentStateForRoots(
+			[frontendUri, backendUri],
+			async (rootUri) => states.get(rootUri.toString())
+				?? createDefaultWorkspacePersistentState(),
+		);
+
+		assert.deepStrictEqual(merged, mergeWorkspaceStates(
+			frontendState,
+			backendState,
+		));
+
+		const isolated = await loadWorkspacePersistentStateForRoots(
+			[frontendUri, backendUri],
+			async (rootUri) => {
+				if (rootUri.toString() === frontendUri.toString()) {
+					throw new Error('frontend read failed');
+				}
+
+				return backendState;
+			},
+		);
+
+		assert.deepStrictEqual(isolated, backendState);
+	});
+
+	test('Workspace snapshot을 Root별로 write하고 실패 Root만 warning으로 격리한다', async () => {
+		const frontendUri = vscode.Uri.file('/workspace/frontend');
+		const backendUri = vscode.Uri.file('/workspace/backend');
+		const frontendState = createWorkspacePersistentStateForRoot(
+			frontendUri,
+			2,
+		);
+		const hiddenFolderId = `folder:${vscode.Uri.joinPath(
+			frontendUri,
+			'private',
+		).toString()}`;
+		frontendState.nodePositions[hiddenFolderId] = { x: 900, y: 500 };
+		frontendState.openedFolders[hiddenFolderId] = true;
+		const backendState = createWorkspacePersistentStateForRoot(backendUri, 4);
+		const writes: Array<{
+			readonly rootUri: vscode.Uri;
+			readonly state: WorkspacePersistentState;
+		}> = [];
+		const warnings: unknown[][] = [];
+
+		await assert.doesNotReject(persistWorkspacePersistentStateForRoots(
+			mergeWorkspaceStates(frontendState, backendState),
+			[frontendUri, backendUri],
+			async (rootUri, state) => {
+				writes.push({ rootUri, state });
+				if (rootUri.toString() === frontendUri.toString()) {
+					throw new Error('frontend write failed');
+				}
+			},
+			{ warn: (...values) => warnings.push(values) },
+		));
+
+		assert.deepStrictEqual(
+			writes.map(({ rootUri }) => rootUri.toString()),
+			[frontendUri.toString(), backendUri.toString()],
+		);
+		assert.deepStrictEqual(writes[0]?.state, frontendState);
+		assert.deepStrictEqual(writes[1]?.state, backendState);
+		assert.deepStrictEqual(
+			writes[0]?.state.nodePositions[hiddenFolderId],
+			{ x: 900, y: 500 },
+		);
+		assert.strictEqual(warnings.length, 1);
+		assert.match(String(warnings[0]?.[0]), /frontend/);
+	});
+
 	test('열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다', async () => {
 		const firstPanel = await openCanvas();
 		const secondPanel = await openCanvas();
@@ -267,22 +372,17 @@ suite('Crispy Extension Host', () => {
 		assert.notStrictEqual(recreatedPanel, panel);
 	});
 
-	test('Panel dispose 후 전체 Webview state를 복원하고 deactivate 시 초기화한다', async () => {
-		const changedState: PersistedWebviewState = {
+	test('Panel dispose 후 Webview Session state를 복원하고 deactivate 시 초기화한다', async () => {
+		const changedState: WebviewSessionState = {
 			panel: {
 				preferredDock: 'left',
 				sideSize: 480,
 				verticalSize: 260,
 				collapsed: true,
 			},
-			graph: {
-				camera: { x: 120, y: -45, scale: 1.5 },
-				nodePositions: {},
-				fileGroupPages: {},
-				openedFolders: { 'folder:src': true },
-				detachedRootNodeIds: { 'folder:src': true },
-			},
+			camera: { x: 120, y: -45, scale: 1.5 },
 		};
+		const expectedInitialState = createPersistedStateFromSession(changedState);
 		const initialPanel = await openCanvas();
 
 		await sendWebviewState(initialPanel, changedState);
@@ -291,7 +391,7 @@ suite('Crispy Extension Host', () => {
 		const restoredPanel = await openCanvas();
 		assert.strictEqual(
 			getSerializedInitialWebviewState(restoredPanel),
-			serializeWebviewState(changedState),
+			serializeWebviewState(expectedInitialState),
 		);
 
 		await sendWebviewState(restoredPanel, changedState);
@@ -303,25 +403,65 @@ suite('Crispy Extension Host', () => {
 		const panelAfterDeactivate = await openCanvas();
 		assert.strictEqual(
 			getSerializedInitialWebviewState(panelAfterDeactivate),
-			serializeWebviewState(undefined),
+			serializeWebviewState(createPersistedStateFromSession(
+				createDefaultWebviewSessionState(),
+			)),
+		);
+	});
+
+	test('workspace.stateChanged 후 Panel 재생성 시 Workspace 상태를 유지한다', async () => {
+		const workspaceState = createWorkspacePersistentState();
+		const panel = await openCanvas();
+
+		await sendWorkspaceState(panel, workspaceState);
+		await disposePanel(panel);
+
+		const restoredPanel = await openCanvas();
+		assert.strictEqual(
+			getSerializedInitialWebviewState(restoredPanel),
+			serializeWebviewState(createPersistedStateFromSession(
+				createDefaultWebviewSessionState(),
+				workspaceState,
+			)),
+		);
+	});
+
+	test('Session 뒤 Workspace 변경이 Panel/Camera와 Workspace 상태를 서로 덮어쓰지 않는다', async () => {
+		const sessionState: WebviewSessionState = {
+			panel: {
+				preferredDock: 'top',
+				sideSize: 510,
+				verticalSize: 330,
+				collapsed: true,
+			},
+			camera: { x: 210, y: -95, scale: 1.75 },
+		};
+		const workspaceState = createWorkspacePersistentState();
+		const panel = await openCanvas();
+
+		await sendWebviewState(panel, sessionState);
+		await sendWorkspaceState(panel, workspaceState);
+		await disposePanel(panel);
+
+		const restoredPanel = await openCanvas();
+		assert.strictEqual(
+			getSerializedInitialWebviewState(restoredPanel),
+			serializeWebviewState(createPersistedStateFromSession(
+				sessionState,
+				workspaceState,
+			)),
 		);
 	});
 
 	test('잘못된 webview.stateChanged snapshot은 마지막 유효 상태를 덮어쓰지 않는다', async () => {
-		const changedState: PersistedWebviewState = {
+		const changedState: WebviewSessionState = {
 			panel: {
 				preferredDock: 'bottom',
 				sideSize: 410,
 				verticalSize: 290,
 				collapsed: false,
 			},
-			graph: {
-				camera: { x: -80, y: 65, scale: 2 },
-				nodePositions: {},
-				fileGroupPages: {},
-				openedFolders: {},
-				detachedRootNodeIds: {},
-			},
+			camera: { x: -80, y: 65, scale: 2 },
 		};
 		const panel = await openCanvas();
 
@@ -330,7 +470,7 @@ suite('Crispy Extension Host', () => {
 			type: 'webview.stateChanged',
 			state: {
 				panel: changedState.panel,
-				graph: { camera: { x: 0, y: 0, scale: Number.NaN } },
+				camera: { x: 0, y: 0, scale: Number.NaN },
 			},
 		});
 		await disposePanel(panel);
@@ -338,7 +478,7 @@ suite('Crispy Extension Host', () => {
 		const restoredPanel = await openCanvas();
 		assert.strictEqual(
 			getSerializedInitialWebviewState(restoredPanel),
-			serializeWebviewState(changedState),
+			serializeWebviewState(createPersistedStateFromSession(changedState)),
 		);
 	});
 
@@ -613,7 +753,7 @@ async function disposePanel(panel: vscode.WebviewPanel): Promise<void> {
 
 async function sendWebviewState(
 	panel: vscode.WebviewPanel,
-	state: PersistedWebviewState,
+	state: WebviewSessionState,
 ): Promise<void> {
 	const message: WebviewToExtensionMessage = {
 		type: 'webview.stateChanged',
@@ -632,9 +772,30 @@ async function sendWebviewState(
 	);
 }
 
+async function sendWorkspaceState(
+	panel: vscode.WebviewPanel,
+	state: WorkspacePersistentState,
+): Promise<void> {
+	const message: WebviewToExtensionMessage = {
+		type: 'workspace.stateChanged',
+		state,
+	};
+	const received = onceWebviewMessage(
+		panel.webview,
+		(candidate) => getWorkspaceStateFromMessage(candidate) !== undefined,
+	);
+
+	panel.webview.html = createMessagePostingHtml(message);
+
+	assert.deepStrictEqual(
+		getWorkspaceStateFromMessage(await received),
+		state,
+	);
+}
+
 function getWebviewStateFromMessage(
 	message: unknown,
-): PersistedWebviewState | undefined {
+): WebviewSessionState | undefined {
 	if (!message || typeof message !== 'object') {
 		return undefined;
 	}
@@ -642,8 +803,91 @@ function getWebviewStateFromMessage(
 	const candidate = message as Record<string, unknown>;
 
 	return candidate.type === 'webview.stateChanged'
-		? parseWebviewState(candidate.state)
+		? parseWebviewSessionState(candidate.state)
 		: undefined;
+}
+
+function getWorkspaceStateFromMessage(
+	message: unknown,
+): WorkspacePersistentState | undefined {
+	if (!message || typeof message !== 'object') {
+		return undefined;
+	}
+
+	const candidate = message as Record<string, unknown>;
+
+	return candidate.type === 'workspace.stateChanged'
+		? parseWorkspacePersistentState(candidate.state)
+		: undefined;
+}
+
+function createPersistedStateFromSession(
+	state: WebviewSessionState,
+	workspaceState?: WorkspacePersistentState,
+): PersistedWebviewState {
+	return {
+		panel: state.panel,
+		graph: {
+			camera: state.camera,
+			nodePositions: workspaceState?.nodePositions ?? {},
+			fileGroupPages: workspaceState?.fileGroupPages ?? {},
+			openedFolders: workspaceState?.openedFolders ?? {},
+			detachedRootNodeIds: workspaceState?.detachedRootNodeIds ?? {},
+		},
+	};
+}
+
+function createWorkspacePersistentState(): WorkspacePersistentState {
+	return {
+		version: 1,
+		nodePositions: {
+			'folder:file:///workspace/app/src': { x: 640, y: 280 },
+		},
+		fileGroupPages: {
+			'folder:file:///workspace/app/src:files': 3,
+		},
+		openedFolders: {
+			'folder:file:///workspace/app/src': true,
+		},
+		detachedRootNodeIds: {
+			'file:file:///workspace/app/index.ts': true,
+		},
+	};
+}
+
+function createWorkspacePersistentStateForRoot(
+	rootUri: vscode.Uri,
+	page: number,
+): WorkspacePersistentState {
+	const folderId = `folder:${vscode.Uri.joinPath(rootUri, 'src').toString()}`;
+	const fileId = `file:${vscode.Uri.joinPath(
+		rootUri,
+		'src',
+		'index.ts',
+	).toString()}`;
+
+	return {
+		version: 1,
+		nodePositions: { [folderId]: { x: page * 100, y: page * 50 } },
+		fileGroupPages: { [`${folderId}:files`]: page },
+		openedFolders: { [folderId]: true },
+		detachedRootNodeIds: { [fileId]: true },
+	};
+}
+
+function mergeWorkspaceStates(
+	...states: readonly WorkspacePersistentState[]
+): WorkspacePersistentState {
+	return {
+		version: 1,
+		nodePositions: Object.assign({}, ...states.map((state) => state.nodePositions)),
+		fileGroupPages: Object.assign({}, ...states.map((state) => state.fileGroupPages)),
+		openedFolders: Object.assign({}, ...states.map((state) => state.openedFolders)),
+		detachedRootNodeIds: Object.assign(
+			{},
+			...states.map((state) => state.detachedRootNodeIds),
+		),
+	};
 }
 
 function onceWebviewMessage(

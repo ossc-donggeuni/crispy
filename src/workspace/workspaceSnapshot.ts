@@ -77,6 +77,10 @@ async function readWorkspaceDirectory(
 
 	const workspaceEntries = await Promise.all(
 		directoryEntries.map(async ([name, fileType]): Promise<WorkspaceEntry | undefined> => {
+			if (name === '.crispy' && fileType === vscode.FileType.Directory) {
+				return undefined;
+			}
+
 			const uri = vscode.Uri.joinPath(parentUri, name);
 
 			if (fileType === vscode.FileType.Directory) {

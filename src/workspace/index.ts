@@ -8,6 +8,14 @@ export type {
 } from './workspaceModel';
 export { createWorkspaceSnapshot } from './workspaceSnapshot';
 export { convertWorkspaceSnapshotToGraph } from './workspaceToGraph';
+export type { WorkspacePersistentState } from './workspaceMetadata';
+export {
+	mergeWorkspacePersistentStates,
+	partitionWorkspacePersistentStateByRoot,
+	readWorkspacePersistentState,
+	writeWorkspacePersistentState,
+	type WorkspaceRootPersistentState,
+} from './workspacePersistence';
 export {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,

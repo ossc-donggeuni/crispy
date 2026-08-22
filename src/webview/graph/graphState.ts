@@ -89,23 +89,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 	}
 
 	const candidate = value as Record<string, unknown>;
-
-	if (!candidate.camera || typeof candidate.camera !== 'object') {
-		return undefined;
-	}
-
-	const camera = candidate.camera as Record<string, unknown>;
-
-	if (
-		!isFiniteNumber(camera.x)
-		|| !isFiniteNumber(camera.y)
-		|| !isFiniteNumber(camera.scale)
-		|| camera.scale < MIN_CAMERA_SCALE
-		|| camera.scale > MAX_CAMERA_SCALE
-	) {
-		return undefined;
-	}
-
+	const camera = parseGraphCameraState(candidate.camera);
 	const nodePositions = parseNodePositions(candidate.nodePositions);
 	const fileGroupPages = parseFileGroupPages(candidate.fileGroupPages);
 	const openedFolders = parseOpenedFolders(candidate.openedFolders);
@@ -114,7 +98,8 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 	);
 
 	if (
-		!nodePositions
+		!camera
+		|| !nodePositions
 		|| !fileGroupPages
 		|| !openedFolders
 		|| !detachedRootNodeIds
@@ -123,11 +108,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 	}
 
 	return {
-		camera: {
-			x: camera.x,
-			y: camera.y,
-			scale: camera.scale,
-		},
+		camera,
 		nodePositions,
 		fileGroupPages,
 		openedFolders,
@@ -328,11 +309,38 @@ function isFiniteNumber(value: unknown): value is number {
 	return typeof value === 'number' && Number.isFinite(value);
 }
 
+/** Camera 복원 후보를 지원 배율 범위로 검증하고 복사한다. */
+export function parseGraphCameraState(
+	value: unknown,
+): GraphCameraState | undefined {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	const candidate = value as Record<string, unknown>;
+
+	if (
+		!isFiniteNumber(candidate.x)
+		|| !isFiniteNumber(candidate.y)
+		|| !isFiniteNumber(candidate.scale)
+		|| candidate.scale < MIN_CAMERA_SCALE
+		|| candidate.scale > MAX_CAMERA_SCALE
+	) {
+		return undefined;
+	}
+
+	return {
+		x: candidate.x,
+		y: candidate.y,
+		scale: candidate.scale,
+	};
+}
+
 /**
  * Node 위치 복원 후보를 검증하고 복사한다.
  * 이전 Camera 전용 snapshot에는 위치가 없으므로 빈 override로 호환 복원한다.
  */
-function parseNodePositions(
+export function parseNodePositions(
 	value: unknown,
 ): Record<string, GraphNodePosition> | undefined {
 	if (value === undefined) {
@@ -371,7 +379,9 @@ function parseNodePositions(
  * 파일 그룹 page 복원 후보를 검증하고 복사한다.
  * 이전 저장 상태에는 이 필드가 없으므로 빈 Map으로 호환 복원한다.
  */
-function parseFileGroupPages(value: unknown): Record<string, number> | undefined {
+export function parseFileGroupPages(
+	value: unknown,
+): Record<string, number> | undefined {
 	if (value === undefined) {
 		return {};
 	}
@@ -397,7 +407,9 @@ function parseFileGroupPages(value: unknown): Record<string, number> | undefined
  * 열린 Folder 상태 복원 후보를 sparse Map으로 검증하고 복사한다.
  * 필드가 없으면 모든 Folder가 닫힌 빈 Map으로 복원한다.
  */
-function parseOpenedFolders(value: unknown): Record<string, true> | undefined {
+export function parseOpenedFolders(
+	value: unknown,
+): Record<string, true> | undefined {
 	return parseSparseTrueRecord(value);
 }
 
@@ -405,7 +417,7 @@ function parseOpenedFolders(value: unknown): Record<string, true> | undefined {
  * Detached Root Node ID 복원 후보를 sparse Map으로 검증하고 복사한다.
  * 필드가 없는 기존 상태는 Detach가 없는 빈 Map으로 복원한다.
  */
-function parseDetachedRootNodeIds(
+export function parseDetachedRootNodeIds(
 	value: unknown,
 ): Record<string, true> | undefined {
 	return parseSparseTrueRecord(value);

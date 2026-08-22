@@ -1,6 +1,8 @@
 import {
 	INITIAL_GRAPH_STATE,
+	parseGraphCameraState,
 	parseGraphState,
+	type GraphCameraState,
 	type GraphState,
 } from './graph/graphState';
 import {
@@ -9,6 +11,13 @@ import {
 	type PanelLayoutState,
 } from './panel/panelState';
 
+/** 향후 VS Code Webview 세션에 저장할 UI 및 Graph 표시 상태다. */
+export interface WebviewSessionState {
+	panel: PanelLayoutState;
+	camera: GraphCameraState;
+}
+
+/** 현재 persistence 경로와 메시지 계약을 유지하기 위한 전체 Webview 상태다. */
 export interface PersistedWebviewState {
 	panel: PanelLayoutState;
 	graph: GraphState;
@@ -16,7 +25,43 @@ export interface PersistedWebviewState {
 
 export interface WebviewStateApi {
 	getState(): unknown;
-	setState(state: PersistedWebviewState): void;
+	setState(state: WebviewSessionState): void;
+}
+
+/** 외부 객체와 참조를 공유하지 않는 기본 Webview Session 상태를 생성한다. */
+export function createDefaultWebviewSessionState(): WebviewSessionState {
+	return {
+		panel: {
+			preferredDock: DEFAULT_PANEL_LAYOUT_STATE.preferredDock,
+			sideSize: DEFAULT_PANEL_LAYOUT_STATE.sideSize,
+			verticalSize: DEFAULT_PANEL_LAYOUT_STATE.verticalSize,
+			collapsed: DEFAULT_PANEL_LAYOUT_STATE.collapsed,
+		},
+		camera: {
+			x: INITIAL_GRAPH_STATE.camera.x,
+			y: INITIAL_GRAPH_STATE.camera.y,
+			scale: INITIAL_GRAPH_STATE.camera.scale,
+		},
+	};
+}
+
+/** 복원 후보에서 유효한 Session 상태를 검증해 독립적인 객체로 복사한다. */
+export function parseWebviewSessionState(
+	value: unknown,
+): WebviewSessionState | undefined {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	const candidate = value as Record<string, unknown>;
+	const panel = parsePanelLayoutState(candidate.panel);
+	const camera = parseGraphCameraState(candidate.camera);
+
+	if (!panel || !camera) {
+		return undefined;
+	}
+
+	return { panel, camera };
 }
 
 /**
@@ -30,10 +75,36 @@ export function restoreWebviewState(
 	vscodeApi: WebviewStateApi,
 	serializedInitialState?: string,
 ): PersistedWebviewState {
-	const savedState = parseWebviewState(vscodeApi.getState());
+	const persistedState = vscodeApi.getState();
+	const savedSessionState = parseWebviewSessionState(persistedState);
 
-	if (savedState) {
-		return savedState;
+	if (savedSessionState) {
+		const initialState = deserializeWebviewState(serializedInitialState)
+			?? createDefaultWebviewState();
+
+		return {
+			panel: savedSessionState.panel,
+			graph: {
+				...initialState.graph,
+				camera: savedSessionState.camera,
+			},
+		};
+	}
+
+	/** 이전 전체 snapshot에서도 Panel/Camera만 Session 호환 상태로 복원한다. */
+	const legacySavedState = parseWebviewState(persistedState);
+
+	if (legacySavedState) {
+		const initialState = deserializeWebviewState(serializedInitialState)
+			?? createDefaultWebviewState();
+
+		return {
+			panel: legacySavedState.panel,
+			graph: {
+				...initialState.graph,
+				camera: legacySavedState.graph.camera,
+			},
+		};
 	}
 
 	return deserializeWebviewState(serializedInitialState)
@@ -41,16 +112,18 @@ export function restoreWebviewState(
 }
 
 /**
- * 현재 Panel 및 Graph 상태를 독립적인 Webview snapshot으로 저장한다.
+ * 현재 Panel 및 Camera를 독립적인 Webview Session snapshot으로 저장한다.
  *
  * @param vscodeApi Webview 상태를 저장할 VS Code API
- * @param state 현재 Panel Layout과 Graph 상태
+ * @param state 현재 Panel Layout과 Camera 상태
  */
 export function saveWebviewState(
 	vscodeApi: WebviewStateApi,
-	state: PersistedWebviewState,
+	state: WebviewSessionState,
 ): void {
-	vscodeApi.setState(parseWebviewState(state) ?? createDefaultWebviewState());
+	vscodeApi.setState(
+		parseWebviewSessionState(state) ?? createDefaultWebviewSessionState(),
+	);
 }
 
 /**
