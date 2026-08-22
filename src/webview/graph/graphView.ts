@@ -29,7 +29,7 @@ import {
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
-	/** Camera, Node 위치, File Group page, Open 및 Detached Root를 관리하는 Store다. */
+	/** Camera, Node 위치, File Group page, Open, Detached Root 및 Filter를 관리하는 Store다. */
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
@@ -48,7 +48,7 @@ export interface GraphViewInteractions {
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
 /**
- * 현재 Layout 입력인 File Group page 또는 opened Folder reference가 바뀔 때만
+ * 현재 Layout 입력인 File Group page, opened Folder 또는 hidden Node reference가 바뀔 때만
  * 다음 Layout을 적용한다.
  * Layout factory를 분리해 Camera/Drag-only 변경 fast-path를 직접 검증할 수 있다.
  */
@@ -61,12 +61,14 @@ export function initializeGraphLayoutReflow(
 	let active = true;
 	let renderedFileGroupPages = state.getState().fileGroupPages;
 	let renderedOpenedFolders = state.getState().openedFolders;
+	let renderedHiddenNodeIds = state.getState().hiddenNodeIds;
 	const unsubscribe = state.subscribe((nextState) => {
 		if (
 			!active
 			|| (
 				nextState.fileGroupPages === renderedFileGroupPages
 				&& nextState.openedFolders === renderedOpenedFolders
+				&& nextState.hiddenNodeIds === renderedHiddenNodeIds
 			)
 		) {
 			return;
@@ -74,6 +76,7 @@ export function initializeGraphLayoutReflow(
 
 		renderedFileGroupPages = nextState.fileGroupPages;
 		renderedOpenedFolders = nextState.openedFolders;
+		renderedHiddenNodeIds = nextState.hiddenNodeIds;
 		applyGraphLayout(renderer, navigator, createLayout(nextState));
 	});
 
@@ -226,8 +229,9 @@ export function initializeGraphView(
 	root.append(viewport);
 	const state = createGraphState(initialState);
 	const initialGraphState = state.getState();
+	let workspaceGraph = graph;
 	let currentGraph = applyDetachedGraphRoots(
-		graph,
+		workspaceGraph,
 		initialGraphState.detachedRootNodeIds,
 	);
 	const camera = initializeGraphCamera(viewport, world, state);
@@ -241,6 +245,7 @@ export function initializeGraphView(
 		currentLayout = createGraphLayout(currentGraph, {
 			fileGroupPages: snapshot.fileGroupPages,
 			openedFolders: snapshot.openedFolders,
+			hiddenNodeIds: snapshot.hiddenNodeIds,
 		});
 
 		return currentLayout;
@@ -351,6 +356,7 @@ export function initializeGraphView(
 		{ onRootSelect: handleNavigatorRootSelect },
 	);
 	syncNavigatorRoots();
+	navigator.setWorkspaceGraph(workspaceGraph);
 	let disposed = false;
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
@@ -369,12 +375,14 @@ export function initializeGraphView(
 
 			const snapshot = state.getState();
 
+			workspaceGraph = graph;
 			currentGraph = applyDetachedGraphRoots(
-				graph,
+				workspaceGraph,
 				snapshot.detachedRootNodeIds,
 			);
 			applyCurrentLayout(snapshot);
 			syncNavigatorRoots();
+			navigator.setWorkspaceGraph(workspaceGraph);
 		},
 		dispose(): void {
 			if (disposed) {

@@ -111,6 +111,7 @@ const createWorkspacePersistentState = (
 	fileGroupPages: { ...graphState.fileGroupPages },
 	openedFolders: { ...graphState.openedFolders },
 	detachedRootNodeIds: { ...graphState.detachedRootNodeIds },
+	hiddenNodeIds: { ...graphState.hiddenNodeIds },
 });
 
 /**
@@ -248,6 +249,7 @@ const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
 		|| previousState.openedFolders !== currentGraphState.openedFolders
 		|| previousState.detachedRootNodeIds
 			!== currentGraphState.detachedRootNodeIds
+		|| previousState.hiddenNodeIds !== currentGraphState.hiddenNodeIds
 	) {
 		vscodeApi.postMessage({
 			type: 'workspace.stateChanged',

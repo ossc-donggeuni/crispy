@@ -270,6 +270,11 @@
 	border-radius: 4px;
 }
 
+.graph-node[hidden],
+.graph-file-item[hidden] {
+	display: none;
+}
+
 .graph-file-item:hover {
 	background: #303132;
 	cursor: pointer;
@@ -708,6 +713,7 @@
 }
 
 .graph-navigator-root-list-panel,
+.graph-navigator-filter-panel,
 .graph-navigator-action-rail {
 	box-sizing: border-box;
 	color: var(--vscode-foreground);
@@ -717,7 +723,8 @@
 	pointer-events: auto;
 }
 
-.graph-navigator-root-list-panel {
+.graph-navigator-root-list-panel,
+.graph-navigator-filter-panel {
 	position: absolute;
 	right: calc(100% + 6px);
 	bottom: 0;
@@ -730,11 +737,17 @@
 	padding: 12px;
 }
 
-.graph-navigator-root-list-panel[hidden] {
+.graph-navigator-filter-panel {
+	width: min(280px, calc(100vw - 112px));
+}
+
+.graph-navigator-root-list-panel[hidden],
+.graph-navigator-filter-panel[hidden] {
 	display: none;
 }
 
-.graph-navigator-root-list-title {
+.graph-navigator-root-list-title,
+.graph-navigator-filter-title {
 	flex: none;
 	margin: 0;
 	font-size: 13px;
@@ -851,6 +864,136 @@
 	display: none;
 }
 
+.graph-navigator-filter-tree,
+.graph-navigator-filter-children {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.graph-navigator-filter-tree {
+	min-height: 0;
+	flex: 1 1 auto;
+	margin: 10px -4px 0;
+	padding: 0 4px;
+	overflow-y: auto;
+}
+
+.graph-navigator-filter-children {
+	padding-left: 16px;
+}
+
+.graph-navigator-filter-children[hidden] {
+	display: none;
+}
+
+.graph-navigator-filter-item {
+	min-width: 0;
+}
+
+.graph-navigator-filter-row {
+	display: flex;
+	min-width: 0;
+	height: 28px;
+	box-sizing: border-box;
+	align-items: center;
+	padding: 2px 4px;
+	border-radius: 4px;
+}
+
+.graph-navigator-filter-row:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
+
+.graph-navigator-filter-toggle,
+.graph-navigator-filter-toggle-spacer {
+	display: grid;
+	width: 18px;
+	height: 22px;
+	flex: none;
+	padding: 0;
+	place-items: center;
+}
+
+.graph-navigator-filter-toggle {
+	color: var(--vscode-icon-foreground, var(--vscode-foreground));
+	background: transparent;
+	border: 0;
+	font: inherit;
+	cursor: pointer;
+}
+
+.graph-navigator-filter-toggle:focus-visible,
+.graph-navigator-filter-checkbox:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.graph-navigator-filter-chevron {
+	font-size: 12px;
+	line-height: 1;
+	pointer-events: none;
+}
+
+.graph-navigator-filter-checkbox {
+	width: 14px;
+	height: 14px;
+	flex: none;
+	margin: 0 5px 0 1px;
+	accent-color: var(--vscode-checkbox-background);
+	cursor: pointer;
+}
+
+.graph-navigator-filter-item-icon {
+	display: block;
+	width: 18px;
+	height: 18px;
+	flex: none;
+	margin-right: 6px;
+	background-color: var(--vscode-icon-foreground, var(--vscode-foreground));
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	pointer-events: none;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-navigator-filter-item-icon[data-folder-icon='folder-open.svg'] {
+	mask-image: url('./assets/file-icons/folder-open.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-open.svg');
+}
+
+.graph-navigator-filter-item-icon[data-folder-icon='folder-closed.svg'] {
+	mask-image: url('./assets/file-icons/folder-closed.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
+}
+
+.graph-navigator-filter-item-icon.graph-file-icon {
+	width: 18px;
+	height: 18px;
+	background-color: transparent;
+}
+
+.graph-navigator-filter-item.is-project > .graph-navigator-filter-row {
+	font-weight: 600;
+}
+
+.graph-navigator-filter-item.is-project > .graph-navigator-filter-row > .graph-navigator-filter-item-icon {
+	margin-left: 5px;
+}
+
+.graph-navigator-filter-name {
+	min-width: 0;
+	flex: 1 1 auto;
+	overflow: hidden;
+	font-size: 12px;
+	line-height: 20px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .graph-navigator-action-rail {
 	display: flex;
 	width: 42px;
@@ -909,6 +1052,11 @@
 .graph-navigator-action-icon[data-navigator-icon='navigator-root.svg'] {
 	mask-image: url('./assets/ui-icons/navigator-root.svg');
 	-webkit-mask-image: url('./assets/ui-icons/navigator-root.svg');
+}
+
+.graph-navigator-action-icon[data-navigator-icon='navigator-filter.svg'] {
+	mask-image: url('./assets/ui-icons/navigator-filter.svg');
+	-webkit-mask-image: url('./assets/ui-icons/navigator-filter.svg');
 }
 
 .graph-navigator-coordinate {

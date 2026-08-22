@@ -13,12 +13,14 @@ suite('Workspace Persistent State', () => {
 			fileGroupPages: { 'folder:src:files': 2 },
 			openedFolders: { 'folder:src': true },
 			detachedRootNodeIds: { 'file:src/index.ts': true },
+			hiddenNodeIds: { 'folder:src/private': true },
 		}), {
 			version: 1,
 			nodePositions: { 'folder:src': { x: 120, y: -40 } },
 			fileGroupPages: { 'folder:src:files': 2 },
 			openedFolders: { 'folder:src': true },
 			detachedRootNodeIds: { 'file:src/index.ts': true },
+			hiddenNodeIds: { 'folder:src/private': true },
 		});
 	});
 
@@ -32,6 +34,7 @@ suite('Workspace Persistent State', () => {
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		});
 		assert.notStrictEqual(first, second);
 		assert.notStrictEqual(first.nodePositions, second.nodePositions);
@@ -41,6 +44,7 @@ suite('Workspace Persistent State', () => {
 			first.detachedRootNodeIds,
 			second.detachedRootNodeIds,
 		);
+		assert.notStrictEqual(first.hiddenNodeIds, second.hiddenNodeIds);
 	});
 
 	test('현재 버전이 아닌 상태를 거부한다', () => {
@@ -65,6 +69,7 @@ suite('Workspace Persistent State', () => {
 			},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		});
 	});
 
@@ -106,13 +111,23 @@ suite('Workspace Persistent State', () => {
 		}), undefined);
 	});
 
-	test('fileGroupPages를 포함한 누락된 Workspace 상태 Map을 빈 상태로 복원한다', () => {
+	test('잘못된 숨김 Node 값을 거부한다', () => {
+		for (const hiddenNodeIds of [false, [], { 'folder:src': false }, { '': true }]) {
+			assert.strictEqual(parseWorkspacePersistentState({
+				version: 1,
+				hiddenNodeIds,
+			}), undefined);
+		}
+	});
+
+	test('Filter를 포함한 누락된 Workspace 상태 Map을 빈 상태로 복원한다', () => {
 		assert.deepStrictEqual(parseWorkspacePersistentState({ version: 1 }), {
 			version: 1,
 			nodePositions: {},
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		});
 	});
 
@@ -123,6 +138,7 @@ suite('Workspace Persistent State', () => {
 			fileGroupPages: { 'folder:src:files': 2 },
 			openedFolders: { 'folder:src': true } as Record<string, true>,
 			detachedRootNodeIds: { 'folder:src': true } as Record<string, true>,
+			hiddenNodeIds: { 'folder:src/private': true } as Record<string, true>,
 		};
 		const state = parseWorkspacePersistentState(input);
 
@@ -131,6 +147,7 @@ suite('Workspace Persistent State', () => {
 		input.fileGroupPages['folder:src:files'] = 999;
 		input.openedFolders['folder:test'] = true;
 		input.detachedRootNodeIds['file:src/index.ts'] = true;
+		input.hiddenNodeIds['file:src/private/secret.ts'] = true;
 
 		assert.deepStrictEqual(state.nodePositions, {
 			'folder:src': { x: 100, y: 200 },
@@ -140,6 +157,9 @@ suite('Workspace Persistent State', () => {
 		});
 		assert.deepStrictEqual(state.openedFolders, { 'folder:src': true });
 		assert.deepStrictEqual(state.detachedRootNodeIds, { 'folder:src': true });
+		assert.deepStrictEqual(state.hiddenNodeIds, {
+			'folder:src/private': true,
+		});
 		assert.notStrictEqual(state.nodePositions, input.nodePositions);
 		assert.notStrictEqual(
 			state.nodePositions['folder:src'],
@@ -151,5 +171,6 @@ suite('Workspace Persistent State', () => {
 			state.detachedRootNodeIds,
 			input.detachedRootNodeIds,
 		);
+		assert.notStrictEqual(state.hiddenNodeIds, input.hiddenNodeIds);
 	});
 });

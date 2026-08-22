@@ -215,6 +215,36 @@ suite('Graph Navigator Minimap Geometry', () => {
 		);
 	});
 
+	test('Layout에서 숨김 처리된 Node와 Edge를 Minimap geometry에서 제외한다', () => {
+		const hiddenNode = {
+			...createNode('node:hidden', 0, 0, 100, 40),
+			hidden: true as const,
+		};
+		const visibleNode = createNode('node:visible', 300, 100, 100, 40);
+		const geometry = createMinimapGraphGeometry(
+			createLayout([hiddenNode, visibleNode], [{
+				id: 'edge:hidden',
+				sourceId: hiddenNode.id,
+				targetId: visibleNode.id,
+				hidden: true,
+			}]),
+			{},
+			{ width: 160, height: 96 },
+		);
+
+		assert.ok(geometry);
+		assert.deepStrictEqual(geometry.nodes.map((node) => node.id), [
+			visibleNode.id,
+		]);
+		assert.deepStrictEqual(geometry.edges, []);
+		assert.deepStrictEqual(geometry.bounds, {
+			x: visibleNode.position.x,
+			y: visibleNode.position.y,
+			width: visibleNode.width,
+			height: visibleNode.height,
+		});
+	});
+
 	test('렌더 영역이나 Padding이 유효하지 않으면 Projection을 만들지 않는다', () => {
 		const bounds = { x: 0, y: 0, width: 100, height: 50 };
 

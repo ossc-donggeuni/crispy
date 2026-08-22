@@ -115,6 +115,10 @@ suite('Webview State', () => {
 			state.graph.detachedRootNodeIds,
 			INITIAL_GRAPH_STATE.detachedRootNodeIds,
 		);
+		assert.notStrictEqual(
+			state.graph.hiddenNodeIds,
+			INITIAL_GRAPH_STATE.hiddenNodeIds,
+		);
 	});
 
 	test('이전 전체 getState에서는 Session만 복원하고 Host Workspace 상태를 유지한다', () => {
@@ -153,6 +157,10 @@ suite('Webview State', () => {
 			state.graph.detachedRootNodeIds,
 			htmlState.graph.detachedRootNodeIds,
 		);
+		assert.notStrictEqual(
+			state.graph.hiddenNodeIds,
+			htmlState.graph.hiddenNodeIds,
+		);
 	});
 
 	test('getState가 없으면 HTML의 data-webview-state를 복원한다', () => {
@@ -181,6 +189,10 @@ suite('Webview State', () => {
 		assert.notStrictEqual(
 			state.graph.detachedRootNodeIds,
 			initialState.graph.detachedRootNodeIds,
+		);
+		assert.notStrictEqual(
+			state.graph.hiddenNodeIds,
+			initialState.graph.hiddenNodeIds,
 		);
 	});
 
@@ -229,6 +241,7 @@ suite('Webview State', () => {
 		assert.deepStrictEqual(restored.graph.fileGroupPages, {});
 		assert.deepStrictEqual(restored.graph.openedFolders, {});
 		assert.deepStrictEqual(restored.graph.detachedRootNodeIds, {});
+		assert.deepStrictEqual(restored.graph.hiddenNodeIds, {});
 		assert.strictEqual(createGraphState(restored.graph).getFileGroupPage('missing'), 1);
 		assert.strictEqual(
 			createGraphState(restored.graph).isFolderOpened('folder:missing'),
@@ -306,6 +319,7 @@ suite('Webview State', () => {
 			Object.hasOwn(savedState ?? {}, 'detachedRootNodeIds'),
 			false,
 		);
+		assert.strictEqual(Object.hasOwn(savedState ?? {}, 'hiddenNodeIds'), false);
 	});
 
 	test('Session Camera는 setState에서 복원하고 Workspace 필드는 Host 초기 상태를 유지한다', () => {
@@ -323,6 +337,7 @@ suite('Webview State', () => {
 		hostInitialState.graph.fileGroupPages = { 'folder:app:files': 3 };
 		hostInitialState.graph.openedFolders = { 'folder:app': true };
 		hostInitialState.graph.detachedRootNodeIds = { 'folder:app': true };
+		hostInitialState.graph.hiddenNodeIds = { 'folder:app/private': true };
 		const sessionState: WebviewSessionState = {
 			panel: {
 				...hostInitialState.panel,
@@ -357,9 +372,13 @@ suite('Webview State', () => {
 			restoredState.graph.detachedRootNodeIds,
 			hostInitialState.graph.detachedRootNodeIds,
 		);
+		assert.deepStrictEqual(
+			restoredState.graph.hiddenNodeIds,
+			hostInitialState.graph.hiddenNodeIds,
+		);
 	});
 
-	test('serialize 후 restore해도 page, 열린 Folder와 Detached Root 상태를 유지한다', () => {
+	test('serialize 후 restore해도 Workspace Graph 상태를 유지한다', () => {
 		const state = createWebviewState('right', 10, -20, 1.25);
 		state.graph.fileGroupPages = {
 			'folder:src:files': 4,
@@ -372,6 +391,10 @@ suite('Webview State', () => {
 		state.graph.detachedRootNodeIds = {
 			'folder:src': true,
 			'file:test/index.ts': true,
+		};
+		state.graph.hiddenNodeIds = {
+			'folder:src/private': true,
+			'file:test/secret.ts': true,
 		};
 
 		const restored = restoreWebviewState(
@@ -390,6 +413,10 @@ suite('Webview State', () => {
 		assert.deepStrictEqual(restored.graph.detachedRootNodeIds, {
 			'folder:src': true,
 			'file:test/index.ts': true,
+		});
+		assert.deepStrictEqual(restored.graph.hiddenNodeIds, {
+			'folder:src/private': true,
+			'file:test/secret.ts': true,
 		});
 	});
 
@@ -449,6 +476,7 @@ suite('Webview State Wiring', () => {
 			fileGroupPages: initialState.graph.fileGroupPages ?? {},
 			openedFolders: initialState.graph.openedFolders ?? {},
 			detachedRootNodeIds: initialState.graph.detachedRootNodeIds ?? {},
+			hiddenNodeIds: initialState.graph.hiddenNodeIds ?? {},
 		};
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
 		let panelState: PanelLayoutState | undefined;
@@ -519,6 +547,7 @@ suite('Webview State Wiring', () => {
 				fileGroupPages: { ...graphState.fileGroupPages },
 				openedFolders: { ...graphState.openedFolders },
 				detachedRootNodeIds: { ...graphState.detachedRootNodeIds },
+				hiddenNodeIds: { ...graphState.hiddenNodeIds },
 			};
 
 			return {
@@ -538,6 +567,10 @@ suite('Webview State Wiring', () => {
 						detachedRootNodeIds: {
 							...(state.detachedRootNodeIds
 								?? currentGraphState.detachedRootNodeIds),
+						},
+						hiddenNodeIds: {
+							...(state.hiddenNodeIds
+								?? currentGraphState.hiddenNodeIds),
 						},
 					};
 					},
@@ -821,6 +854,7 @@ suite('Webview State Wiring', () => {
 					fileGroupPages: {},
 					openedFolders: {},
 					detachedRootNodeIds: {},
+					hiddenNodeIds: {},
 				},
 			}]);
 
@@ -878,6 +912,7 @@ suite('Webview State Wiring', () => {
 					fileGroupPages: { 'folder:src:files': 2 },
 					openedFolders: { 'folder:src': true },
 					detachedRootNodeIds: { 'folder:src': true },
+					hiddenNodeIds: {},
 				},
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
@@ -903,6 +938,32 @@ suite('Webview State Wiring', () => {
 					fileGroupPages: { 'folder:src:files': 2 },
 					openedFolders: { 'folder:src': true },
 					detachedRootNodeIds: {},
+					hiddenNodeIds: {},
+				},
+			);
+			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
+
+			const hiddenNodeState: GraphStateSnapshot = {
+				...reattachedRootState,
+				hiddenNodeIds: { 'folder:src/private': true },
+			};
+			currentGraphState = hiddenNodeState;
+			graphSubscriber(hiddenNodeState);
+
+			assert.strictEqual(savedStates.length, 1);
+			assert.strictEqual(
+				getWorkspaceStateChangedMessages(postedMessages).length,
+				6,
+			);
+			assert.deepStrictEqual(
+				getWorkspaceStateChangedMessages(postedMessages)[5]?.state,
+				{
+					version: 1,
+					nodePositions: {},
+					fileGroupPages: { 'folder:src:files': 2 },
+					openedFolders: { 'folder:src': true },
+					detachedRootNodeIds: {},
+					hiddenNodeIds: { 'folder:src/private': true },
 				},
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
@@ -995,7 +1056,7 @@ suite('Webview State Wiring', () => {
 			});
 			assert.strictEqual(
 				getWorkspaceStateChangedMessages(postedMessages).length,
-				5,
+				6,
 			);
 
 			const fitCountBeforeExpand = terminalFitCount;
@@ -1124,6 +1185,7 @@ function createWebviewState(
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		},
 	};
 }

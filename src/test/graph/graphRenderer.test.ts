@@ -7,6 +7,7 @@ import {
 import {
 	createFileGroupId,
 	createGraphLayout,
+	getFileGroupHeight,
 	type GraphLayout,
 	type GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
@@ -1192,6 +1193,172 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
+	test('File Filter projection은 Row를 당기고 현재 page의 remaining count를 갱신한다', () => {
+		const project = createPaginationProject([7]);
+		const folder = project.children[0];
+
+		assert.ok(folder && isFolder(folder));
+		const fileIds = folder.children.map((file) => file.id);
+		const fileGroupId = createFileGroupId(folder.id);
+		const fixture = createRendererFixture(1, undefined, {}, project);
+		let fileGroup = fixture.getNode(fileGroupId);
+		const initialHeight = fileGroup.style.height;
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds.slice(0, 5));
+		assert.strictEqual(
+			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
+			'+ 2개 더보기',
+		);
+
+		applyRendererHiddenNodeIds(fixture, project, {
+			[fileIds[2] as string]: true,
+		});
+		fileGroup = fixture.getNode(fileGroupId);
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [
+			fileIds[0],
+			fileIds[1],
+			fileIds[3],
+			fileIds[4],
+			fileIds[5],
+		]);
+		assert.strictEqual(
+			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
+			'+ 1개 더보기',
+		);
+		assert.strictEqual(fileGroup.style.height, initialHeight);
+
+		applyRendererHiddenNodeIds(fixture, project, {
+			[fileIds[6] as string]: true,
+		});
+		fileGroup = fixture.getNode(fileGroupId);
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds.slice(0, 5));
+		assert.strictEqual(
+			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
+			'+ 1개 더보기',
+		);
+		assert.strictEqual(fileGroup.style.height, initialHeight);
+		fixture.renderer.dispose();
+	});
+
+	test('+ 1개 더보기에서 visible 또는 overflow File을 숨기면 Footer 없이 5개만 표시한다', () => {
+		const project = createPaginationProject([6]);
+		const folder = project.children[0];
+
+		assert.ok(folder && isFolder(folder));
+		const fileIds = folder.children.map((file) => file.id);
+		const fileGroupId = createFileGroupId(folder.id);
+		const fixture = createRendererFixture(1, undefined, {}, project);
+		const applyHiddenFile = (fileId: string): FakeElement => {
+			applyRendererHiddenNodeIds(fixture, project, { [fileId]: true });
+
+			return fixture.getNode(fileGroupId);
+		};
+		const initialGroup = fixture.getNode(fileGroupId);
+
+		assert.strictEqual(
+			getDescendantByClass(initialGroup, 'graph-file-more').textContent,
+			'+ 1개 더보기',
+		);
+		let fileGroup = applyHiddenFile(fileIds[2] as string);
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [
+			fileIds[0],
+			fileIds[1],
+			fileIds[3],
+			fileIds[4],
+			fileIds[5],
+		]);
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-controls'), undefined);
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-more'), undefined);
+
+		fileGroup = applyHiddenFile(fileIds[5] as string);
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds.slice(0, 5));
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-controls'), undefined);
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-more'), undefined);
+		fixture.renderer.dispose();
+	});
+
+	test('펼친 File Group Filter는 높이를 줄이고 all-hidden Group을 복원 가능한 상태로 숨긴다', () => {
+		const project = createPaginationProject([7]);
+		const folder = project.children[0];
+
+		assert.ok(folder && isFolder(folder));
+		const fileIds = folder.children.map((file) => file.id);
+		const fileGroupId = createFileGroupId(folder.id);
+		const savedPosition = { x: 640, y: 320 };
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [fileGroupId]: savedPosition },
+			fileGroupPages: { [fileGroupId]: 2 },
+		}, {}, project);
+		const initialState = fixture.graphState.getState();
+		const connectedEdge = fixture.getConnectedEdge(fileGroupId);
+		const applyHiddenFiles = (hiddenNodeIds: Record<string, true>): FakeElement => {
+			applyRendererHiddenNodeIds(fixture, project, hiddenNodeIds);
+
+			return fixture.getNode(fileGroupId);
+		};
+		let fileGroup = fixture.getNode(fileGroupId);
+
+		assert.strictEqual(getRenderedFileIds(fileGroup).length, 7);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(7, true)}px`);
+
+		fileGroup = applyHiddenFiles({ [fileIds[2] as string]: true });
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [
+			fileIds[0],
+			fileIds[1],
+			fileIds[3],
+			fileIds[4],
+			fileIds[5],
+			fileIds[6],
+		]);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(6, true)}px`);
+		assert.strictEqual(fixture.graphState.getState().fileGroupPages, initialState.fileGroupPages);
+		assert.strictEqual(fixture.graphState.getState().nodePositions, initialState.nodePositions);
+		assert.strictEqual(fixture.graphState.getState().openedFolders, initialState.openedFolders);
+		assert.strictEqual(
+			fixture.graphState.getState().detachedRootNodeIds,
+			initialState.detachedRootNodeIds,
+		);
+
+		fileGroup = applyHiddenFiles(Object.fromEntries(
+			fileIds.map((fileId) => [fileId, true]),
+		) as Record<string, true>);
+
+		assert.strictEqual(fileGroup.hidden, true);
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), []);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(0, false)}px`);
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-controls'), undefined);
+		assert.strictEqual(connectedEdge.getAttribute('visibility'), 'hidden');
+
+		fileGroup = applyHiddenFiles(Object.fromEntries(
+			fileIds.slice(0, 6).map((fileId) => [fileId, true]),
+		) as Record<string, true>);
+
+		assert.strictEqual(fileGroup.hidden, false);
+		assert.strictEqual(
+			fileGroup.getAttribute('data-file-group-presentation'),
+			'grouped',
+		);
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), [fileIds[6]]);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(1, false)}px`);
+		assert.strictEqual(connectedEdge.getAttribute('visibility'), null);
+		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 2);
+
+		fileGroup = applyHiddenFiles({});
+
+		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(7, true)}px`);
+		assert.ok(findDescendantByClass(fileGroup, 'graph-file-collapse'));
+		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 2);
+		assert.strictEqual(folder.children.length, 7);
+		fixture.renderer.dispose();
+	});
+
 	test('17개 파일을 더보기로 모두 표시하고 Ghost 접기로 최초 상태에 복원한다', () => {
 		const fileGroupClicks: string[] = [];
 		const project = createPaginationProject([17]);
@@ -1971,6 +2138,7 @@ function createRendererFixture(
 	const layout = createGraphLayout(graph, {
 		fileGroupPages: graphState.getState().fileGroupPages,
 		openedFolders: graphState.getState().openedFolders,
+		hiddenNodeIds: graphState.getState().hiddenNodeIds,
 	});
 	const renderer = initializeGraphRenderer(
 		edgeLayer.asSvgElement(),
@@ -2042,6 +2210,33 @@ function getLayoutNode(layout: GraphLayout, nodeId: string): GraphLayoutNode {
 
 	assert.ok(node);
 	return node;
+}
+
+function getRenderedFileIds(fileGroup: FakeElement): Array<string | null> {
+	return getDescendantsByClass(fileGroup, 'graph-file-item').map(
+		(row) => row.getAttribute('data-file-id'),
+	);
+}
+
+function applyRendererHiddenNodeIds(
+	fixture: ReturnType<typeof createRendererFixture>,
+	rootNode: GraphRootNode,
+	hiddenNodeIds: Record<string, true>,
+): void {
+	const state = fixture.graphState.getState();
+
+	fixture.graphState.setState({
+		camera: state.camera,
+		nodePositions: state.nodePositions,
+		hiddenNodeIds,
+	});
+	const nextState = fixture.graphState.getState();
+
+	fixture.renderer.applyLayout(createGraphLayout(createSingleRootGraph(rootNode), {
+		fileGroupPages: nextState.fileGroupPages,
+		openedFolders: nextState.openedFolders,
+		hiddenNodeIds: nextState.hiddenNodeIds,
+	}));
 }
 
 /** Renderer 단위 테스트의 기존 Container Tree fixture를 명시적으로 연다. */
@@ -2310,6 +2505,7 @@ class FakeElement {
 		},
 	};
 	className = '';
+	hidden = false;
 	textContent = '';
 	type = '';
 	clientWidth: number;
@@ -2370,6 +2566,10 @@ class FakeElement {
 			name,
 			(this.attributeWriteCounts.get(name) ?? 0) + 1,
 		);
+	}
+
+	removeAttribute(name: string): void {
+		this.attributes.delete(name);
 	}
 
 	getAttribute(name: string): string | null {

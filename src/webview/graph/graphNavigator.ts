@@ -7,6 +7,12 @@ import {
 } from './graphCamera';
 import { resolveFileIcon } from './fileIconResolver';
 import type { GraphLayout } from './graphLayout';
+import type {
+	Folder,
+	Graph,
+	Project,
+	ProjectEntry,
+} from './graphModel';
 import {
 	calculateCameraWorldBounds,
 	calculateMinimapWorldDelta,
@@ -29,6 +35,8 @@ export interface GraphNavigator {
 	setLayout(layout: GraphLayout): void;
 	/** 전달받은 표시 데이터 순서대로 Root List Panel 내용을 교체한다. */
 	setRoots(roots: readonly GraphNavigatorRoot[]): void;
+	/** Filter Panel이 사용할 최신 원본 Workspace Graph를 교체한다. */
+	setWorkspaceGraph(graph: Graph): void;
 	dispose(): void;
 }
 
@@ -43,6 +51,10 @@ const ROOT_LIST_PANEL_ID = 'graph-navigator-root-list-panel';
 const ROOT_LIST_PANEL_TITLE_ID = 'graph-navigator-root-list-title';
 const ROOT_LIST_ICON_ASSET = 'navigator-root.svg';
 const ROOT_LIST_EMPTY_LABEL = '활성화된 루트가 없습니다.';
+const FILTER_LABEL = 'Workspace Filter';
+const FILTER_PANEL_ID = 'graph-navigator-filter-panel';
+const FILTER_PANEL_TITLE_ID = 'graph-navigator-filter-title';
+const FILTER_ICON_ASSET = 'navigator-filter.svg';
 const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
 const FOLDER_ROOT_ICON_ASSET = 'folder-closed.svg';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -60,6 +72,54 @@ interface NavigatorActionDefinition {
 interface NavigatorRootListItem {
 	readonly element: HTMLLIElement;
 	dispose(): void;
+}
+
+/** 동시에 하나만 열 수 있는 Navigator의 부동 Panel이다. */
+type NavigatorPanel = 'roots' | 'filter' | undefined;
+
+/** 원본 Workspace Graph의 Project Root를 중복 없이 입력 순서대로 고른다. */
+function getWorkspaceProjects(graph: Graph): readonly Project[] {
+	const projects: Project[] = [];
+	const projectIds = new Set<string>();
+
+	for (const root of graph.roots) {
+		const node = graph.rootNodes[root.nodeId];
+
+		if (!node || node.kind !== 'project' || projectIds.has(node.id)) {
+			continue;
+		}
+
+		projectIds.add(node.id);
+		projects.push(node);
+	}
+
+	return projects;
+}
+
+/** Folder 자신을 제외한 현재 Workspace subtree ID를 수집한다. */
+function getFolderDescendantIds(folder: Folder): readonly string[] {
+	const ids: string[] = [];
+
+	for (const child of folder.children) {
+		ids.push(child.id);
+
+		if (child.kind === 'folder') {
+			ids.push(...getFolderDescendantIds(child));
+		}
+	}
+
+	return ids;
+}
+
+/** Folder 아래에 직접 hidden으로 기록된 항목이 하나라도 있는지 확인한다. */
+function hasHiddenDescendant(
+	folder: Folder,
+	hiddenNodeIds: GraphStateSnapshot['hiddenNodeIds'],
+): boolean {
+	return folder.children.some((child) => (
+		hiddenNodeIds[child.id] === true
+		|| (child.kind === 'folder' && hasHiddenDescendant(child, hiddenNodeIds))
+	));
 }
 
 /** Indicator Pointer Drag 시작 시점의 Camera와 Projection을 고정한 session이다. */
@@ -194,6 +254,9 @@ export function initializeGraphNavigator(
 	const rootListTitle = ownerDocument.createElement('h2');
 	const rootList = ownerDocument.createElement('ul');
 	const rootListEmpty = ownerDocument.createElement('p');
+	const filterPanel = ownerDocument.createElement('section');
+	const filterTitle = ownerDocument.createElement('h2');
+	const filterTree = ownerDocument.createElement('ul');
 	const actionRail = ownerDocument.createElement('div');
 	const bottomRow = ownerDocument.createElement('div');
 	const minimap = ownerDocument.createElement('div');
@@ -227,6 +290,18 @@ export function initializeGraphNavigator(
 	rootListEmpty.className = 'graph-navigator-root-empty';
 	rootListEmpty.textContent = ROOT_LIST_EMPTY_LABEL;
 	rootListPanel.append(rootListTitle, rootList, rootListEmpty);
+	filterPanel.className = 'graph-navigator-filter-panel';
+	filterPanel.id = FILTER_PANEL_ID;
+	filterPanel.hidden = true;
+	filterPanel.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
+	filterPanel.setAttribute('aria-labelledby', FILTER_PANEL_TITLE_ID);
+	filterTitle.className = 'graph-navigator-filter-title';
+	filterTitle.id = FILTER_PANEL_TITLE_ID;
+	filterTitle.textContent = FILTER_LABEL;
+	filterTree.className = 'graph-navigator-filter-tree';
+	filterTree.setAttribute('role', 'tree');
+	filterTree.setAttribute('aria-label', FILTER_LABEL);
+	filterPanel.append(filterTitle, filterTree);
 	actionRail.className = 'graph-navigator-action-rail';
 	actionRail.setAttribute('role', 'toolbar');
 	actionRail.setAttribute('aria-label', 'Navigator actions');
@@ -271,20 +346,31 @@ export function initializeGraphNavigator(
 	zoomInButton.setAttribute('aria-label', 'Zoom in');
 	zoomInButton.textContent = '+';
 
-	let rootListOpen = false;
+	let activePanel: NavigatorPanel;
 	let rootListButton: HTMLButtonElement;
-	const renderRootListState = (): void => {
+	let filterButton: HTMLButtonElement;
+	const renderPanelState = (): void => {
+		const rootListOpen = activePanel === 'roots';
+		const filterOpen = activePanel === 'filter';
+
 		rootListPanel.hidden = !rootListOpen;
+		filterPanel.hidden = !filterOpen;
 		rootListButton.setAttribute('aria-expanded', String(rootListOpen));
+		filterButton.setAttribute('aria-expanded', String(filterOpen));
 		if (rootListOpen) {
 			rootListButton.classList.add('is-active');
 		} else {
 			rootListButton.classList.remove('is-active');
 		}
+		if (filterOpen) {
+			filterButton.classList.add('is-active');
+		} else {
+			filterButton.classList.remove('is-active');
+		}
 	};
 	const handleRootListToggle = (): void => {
-		rootListOpen = !rootListOpen;
-		renderRootListState();
+		activePanel = activePanel === 'roots' ? undefined : 'roots';
+		renderPanelState();
 	};
 	const rootListAction = createNavigatorActionButton(ownerDocument, {
 		label: ROOT_LIST_LABEL,
@@ -292,7 +378,17 @@ export function initializeGraphNavigator(
 		iconAsset: ROOT_LIST_ICON_ASSET,
 		onActivate: handleRootListToggle,
 	});
-	const navigatorActions = [rootListAction];
+	const handleFilterToggle = (): void => {
+		activePanel = activePanel === 'filter' ? undefined : 'filter';
+		renderPanelState();
+	};
+	const filterAction = createNavigatorActionButton(ownerDocument, {
+		label: FILTER_LABEL,
+		controlsId: FILTER_PANEL_ID,
+		iconAsset: FILTER_ICON_ASSET,
+		onActivate: handleFilterToggle,
+	});
+	const navigatorActions = [rootListAction, filterAction];
 	let renderedRootItems: NavigatorRootListItem[] = [];
 	const disposeRootItems = (): void => {
 		for (const item of renderedRootItems) {
@@ -303,17 +399,272 @@ export function initializeGraphNavigator(
 	};
 
 	rootListButton = rootListAction.button;
+	filterButton = filterAction.button;
 	actionRail.append(...navigatorActions.map((action) => action.button));
-	featureRow.append(rootListPanel, actionRail);
+	featureRow.append(rootListPanel, actionRail, filterPanel);
 	controls.append(zoomOutButton, scale, zoomInButton);
 	zoom.append(coordinate, controls);
 	bottomRow.append(minimap, zoom);
 	navigator.append(bottomRow, featureRow);
 	overlayLayer.append(navigator);
+	let workspaceGraph: Graph | undefined;
+	let filterEntriesById = new Map<string, ProjectEntry>();
+	const expandedFilterDirectoryIds = new Set<string>();
+	const knownFilterProjectIds = new Set<string>();
+
+	/** 기존 File/Folder icon 규약을 사용하는 Filter Tree icon을 만든다. */
+	const createFilterItemIcon = (
+		entry: Project | ProjectEntry,
+		expanded: boolean,
+	): HTMLSpanElement => {
+		const icon = ownerDocument.createElement('span');
+
+		icon.className = 'graph-navigator-filter-item-icon';
+		icon.setAttribute('aria-hidden', 'true');
+		if (entry.kind === 'file') {
+			icon.classList.add('graph-file-icon');
+			icon.setAttribute('data-file-icon', resolveFileIcon(entry.name));
+		} else {
+			icon.setAttribute(
+				'data-folder-icon',
+				expanded ? PROJECT_ROOT_ICON_ASSET : FOLDER_ROOT_ICON_ASSET,
+			);
+		}
+
+		return icon;
+	};
+
+	const createFilterToggleSpacer = (): HTMLSpanElement => {
+		const spacer = ownerDocument.createElement('span');
+
+		spacer.className = 'graph-navigator-filter-toggle-spacer';
+		spacer.setAttribute('aria-hidden', 'true');
+		return spacer;
+	};
+
+	/** 자식이 있는 Project/Folder의 로컬 expand 버튼을 만든다. */
+	const createFilterExpandButton = (
+		directory: Project | Folder,
+		expanded: boolean,
+	): HTMLButtonElement | HTMLSpanElement => {
+		if (directory.children.length === 0) {
+			return createFilterToggleSpacer();
+		}
+
+		const button = ownerDocument.createElement('button');
+		const chevron = ownerDocument.createElement('span');
+
+		button.className = 'graph-navigator-filter-toggle';
+		button.type = 'button';
+		button.title = expanded ? `${directory.name} 접기` : `${directory.name} 펼치기`;
+		button.setAttribute('aria-label', button.title);
+		button.setAttribute('aria-expanded', String(expanded));
+		button.setAttribute('data-filter-toggle-id', directory.id);
+		chevron.className = 'graph-navigator-filter-chevron';
+		chevron.setAttribute('aria-hidden', 'true');
+		chevron.textContent = expanded ? '▾' : '▸';
+		button.append(chevron);
+		return button;
+	};
+
+	/** File 또는 Folder 하나를 synthetic container 없이 실제 Workspace 자식으로 렌더링한다. */
+	const createFilterEntryItem = (
+		entry: ProjectEntry,
+		hiddenNodeIds: GraphStateSnapshot['hiddenNodeIds'],
+	): HTMLLIElement => {
+		const item = ownerDocument.createElement('li');
+		const row = ownerDocument.createElement('div');
+		const checkbox = ownerDocument.createElement('input');
+		const name = ownerDocument.createElement('span');
+		const isFolderEntry = entry.kind === 'folder';
+		const expanded = isFolderEntry
+			&& expandedFilterDirectoryIds.has(entry.id);
+
+		filterEntriesById.set(entry.id, entry);
+		item.className = 'graph-navigator-filter-item';
+		item.setAttribute('role', 'treeitem');
+		item.setAttribute('data-filter-node-id', entry.id);
+		item.setAttribute('data-filter-node-kind', entry.kind);
+		row.className = 'graph-navigator-filter-row';
+		checkbox.className = 'graph-navigator-filter-checkbox';
+		checkbox.type = 'checkbox';
+		checkbox.setAttribute('aria-label', `${entry.name} 표시`);
+		checkbox.setAttribute('data-filter-checkbox-id', entry.id);
+		checkbox.setAttribute('data-filter-checkbox-kind', entry.kind);
+		name.className = 'graph-navigator-filter-name';
+		name.textContent = entry.name;
+		name.title = entry.name;
+
+		if (isFolderEntry) {
+			const directHidden = hiddenNodeIds[entry.id] === true;
+			const descendantHidden = !directHidden
+				&& hasHiddenDescendant(entry, hiddenNodeIds);
+
+			checkbox.checked = !directHidden && !descendantHidden;
+			checkbox.indeterminate = descendantHidden;
+			checkbox.setAttribute(
+				'aria-checked',
+				descendantHidden ? 'mixed' : String(checkbox.checked),
+			);
+			item.setAttribute('aria-expanded', String(expanded));
+			row.append(
+				createFilterExpandButton(entry, expanded),
+				checkbox,
+				createFilterItemIcon(entry, expanded),
+				name,
+			);
+
+			if (expanded && entry.children.length > 0) {
+				const children = ownerDocument.createElement('ul');
+
+				children.className = 'graph-navigator-filter-children';
+				children.setAttribute('role', 'group');
+				children.append(...entry.children.map((child) => (
+					createFilterEntryItem(child, hiddenNodeIds)
+				)));
+				item.append(row, children);
+				return item;
+			}
+		} else {
+			checkbox.checked = hiddenNodeIds[entry.id] !== true;
+			checkbox.indeterminate = false;
+			checkbox.setAttribute('aria-checked', String(checkbox.checked));
+			row.append(
+				createFilterToggleSpacer(),
+				checkbox,
+				createFilterItemIcon(entry, false),
+				name,
+			);
+		}
+
+		item.append(row);
+		return item;
+	};
+
+	/** Project Root와 실제 Folder/File hierarchy를 최신 hidden 상태로 다시 그린다. */
+	const renderFilterTree = (
+		state: GraphStateSnapshot = graphState.getState(),
+	): void => {
+		filterEntriesById = new Map();
+		if (!workspaceGraph) {
+			filterTree.replaceChildren();
+			return;
+		}
+
+		const projects = getWorkspaceProjects(workspaceGraph);
+		for (const project of projects) {
+			if (!knownFilterProjectIds.has(project.id)) {
+				knownFilterProjectIds.add(project.id);
+				expandedFilterDirectoryIds.add(project.id);
+			}
+		}
+
+		filterTree.replaceChildren(...projects.map((project) => {
+			const item = ownerDocument.createElement('li');
+			const row = ownerDocument.createElement('div');
+			const name = ownerDocument.createElement('span');
+			const expanded = expandedFilterDirectoryIds.has(project.id);
+
+			item.className = 'graph-navigator-filter-item is-project';
+			item.setAttribute('role', 'treeitem');
+			item.setAttribute('data-filter-node-id', project.id);
+			item.setAttribute('data-filter-node-kind', project.kind);
+			item.setAttribute('aria-expanded', String(expanded));
+			row.className = 'graph-navigator-filter-row';
+			name.className = 'graph-navigator-filter-name';
+			name.textContent = project.name;
+			name.title = project.name;
+			row.append(
+				createFilterExpandButton(project, expanded),
+				createFilterItemIcon(project, expanded),
+				name,
+			);
+			item.append(row);
+
+			if (expanded && project.children.length > 0) {
+				const children = ownerDocument.createElement('ul');
+
+				children.className = 'graph-navigator-filter-children';
+				children.setAttribute('role', 'group');
+				children.append(...project.children.map((child) => (
+					createFilterEntryItem(child, state.hiddenNodeIds)
+				)));
+				item.append(children);
+			}
+
+			return item;
+		}));
+	};
+
+	/** 기존 snapshot 필드를 보존하며 hidden sparse record만 immutable하게 교체한다. */
+	const setHiddenNodeIds = (hiddenNodeIds: Record<string, true>): void => {
+		const state = graphState.getState();
+
+		graphState.setState({
+			camera: state.camera,
+			nodePositions: state.nodePositions,
+			hiddenNodeIds,
+		});
+	};
+
+	const handleFilterTreeClick = (event: MouseEvent): void => {
+		const target = event.target as HTMLElement | null;
+		const toggle = target?.closest?.('[data-filter-toggle-id]');
+		const directoryId = toggle?.getAttribute('data-filter-toggle-id');
+
+		if (!directoryId) {
+			return;
+		}
+
+		if (expandedFilterDirectoryIds.has(directoryId)) {
+			expandedFilterDirectoryIds.delete(directoryId);
+		} else {
+			expandedFilterDirectoryIds.add(directoryId);
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		renderFilterTree();
+	};
+	const handleFilterTreeChange = (event: Event): void => {
+		const target = event.target as HTMLElement | null;
+		const checkbox = target?.closest?.(
+			'[data-filter-checkbox-id]',
+		) as HTMLInputElement | null;
+		const entryId = checkbox?.getAttribute('data-filter-checkbox-id');
+		const entry = entryId ? filterEntriesById.get(entryId) : undefined;
+
+		if (!checkbox || !entryId || !entry) {
+			return;
+		}
+
+		const hiddenNodeIds = { ...graphState.getState().hiddenNodeIds };
+		if (entry.kind === 'file') {
+			if (checkbox.checked) {
+				delete hiddenNodeIds[entry.id];
+			} else {
+				hiddenNodeIds[entry.id] = true;
+			}
+		} else if (checkbox.checked) {
+			delete hiddenNodeIds[entry.id];
+			for (const descendantId of getFolderDescendantIds(entry)) {
+				delete hiddenNodeIds[descendantId];
+			}
+		} else {
+			hiddenNodeIds[entry.id] = true;
+		}
+
+		event.stopPropagation();
+		setHiddenNodeIds(hiddenNodeIds);
+	};
+
+	filterTree.addEventListener('click', handleFilterTreeClick);
+	filterTree.addEventListener('change', handleFilterTreeChange);
 	let currentLayout: GraphLayout | undefined = initialLayout;
 	const initialGraphState = graphState.getState();
 	let renderedNodePositions = initialGraphState.nodePositions;
 	let renderedCamera = initialGraphState.camera;
+	let renderedHiddenNodeIds = initialGraphState.hiddenNodeIds;
 	let currentMinimapProjection: MinimapProjection | undefined;
 	let currentMinimapSize: MinimapSize | undefined;
 	let currentMinimapViewportGeometry: MinimapViewportGeometry | undefined;
@@ -672,8 +1023,13 @@ export function initializeGraphNavigator(
 			|| state.camera.y !== renderedCamera.y
 			|| state.camera.scale !== renderedCamera.scale;
 		const nodePositionsChanged = state.nodePositions !== renderedNodePositions;
+		const hiddenNodeIdsChanged = state.hiddenNodeIds !== renderedHiddenNodeIds;
 
 		renderedCamera = state.camera;
+		if (hiddenNodeIdsChanged) {
+			renderedHiddenNodeIds = state.hiddenNodeIds;
+			renderFilterTree(state);
+		}
 		if (nodePositionsChanged) {
 			renderedNodePositions = state.nodePositions;
 			renderMinimapGraph(state);
@@ -733,7 +1089,7 @@ export function initializeGraphNavigator(
 		: undefined;
 
 	resizeObserver?.observe(viewport);
-	renderRootListState();
+	renderPanelState();
 	render();
 	renderMinimapGraph(initialGraphState);
 
@@ -759,6 +1115,14 @@ export function initializeGraphNavigator(
 			rootList.hidden = renderedRootItems.length === 0;
 			rootListEmpty.hidden = renderedRootItems.length > 0;
 		},
+		setWorkspaceGraph(graph): void {
+			if (disposed) {
+				return;
+			}
+
+			workspaceGraph = graph;
+			renderFilterTree();
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -772,6 +1136,8 @@ export function initializeGraphNavigator(
 			suppressNextMinimapClick = false;
 			resizeObserver?.disconnect();
 			unsubscribeState();
+			filterTree.removeEventListener('click', handleFilterTreeClick);
+			filterTree.removeEventListener('change', handleFilterTreeChange);
 			disposeRootItems();
 			for (const action of navigatorActions) {
 				action.dispose();

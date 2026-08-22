@@ -204,6 +204,7 @@ function createDefaultWebviewState(): PersistedWebviewState {
 			fileGroupPages: {},
 			openedFolders: {},
 			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
 		},
 	};
 }

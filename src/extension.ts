@@ -315,6 +315,8 @@ export function handleWebviewMessage(
 						openedFolders: lastWebviewState?.graph.openedFolders ?? {},
 						detachedRootNodeIds:
 							lastWebviewState?.graph.detachedRootNodeIds ?? {},
+						hiddenNodeIds:
+							lastWebviewState?.graph.hiddenNodeIds ?? {},
 					},
 				};
 			}
@@ -341,6 +343,7 @@ export function handleWebviewMessage(
 						fileGroupPages: state.fileGroupPages,
 						openedFolders: state.openedFolders,
 						detachedRootNodeIds: state.detachedRootNodeIds,
+						hiddenNodeIds: state.hiddenNodeIds,
 					},
 				};
 				const persistence = persistWorkspacePersistentStateForRoots(
@@ -422,6 +425,7 @@ export function createInitialWebviewState(
 			fileGroupPages: previousState.graph.fileGroupPages ?? {},
 			openedFolders: previousState.graph.openedFolders ?? {},
 			detachedRootNodeIds: previousState.graph.detachedRootNodeIds ?? {},
+			hiddenNodeIds: previousState.graph.hiddenNodeIds ?? {},
 		})
 		: undefined;
 	const workspaceState = previousWorkspaceState
@@ -436,6 +440,7 @@ export function createInitialWebviewState(
 			fileGroupPages: workspaceState.fileGroupPages,
 			openedFolders: workspaceState.openedFolders,
 			detachedRootNodeIds: workspaceState.detachedRootNodeIds,
+			hiddenNodeIds: workspaceState.hiddenNodeIds,
 		},
 	};
 }

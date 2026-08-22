@@ -11,13 +11,14 @@ export interface GraphNodePosition {
 	y: number;
 }
 
-/** Camera, Node 위치, 파일 그룹 page, 열린 Folder와 Detached Root를 포함하는 저장 가능한 Graph 상태다. */
+/** Camera, Node 위치, 파일 그룹 page, 열린 Folder, Detached Root와 숨김 Node를 포함하는 저장 가능한 Graph 상태다. */
 export interface GraphState {
 	camera: GraphCameraState;
 	nodePositions: Record<string, GraphNodePosition>;
 	fileGroupPages?: Record<string, number>;
 	openedFolders?: Record<string, true>;
 	detachedRootNodeIds?: Record<string, true>;
+	hiddenNodeIds?: Record<string, true>;
 }
 
 /** 외부 mutation을 막기 위해 읽기 전용으로 고정한 Graph 상태 snapshot이다. */
@@ -27,6 +28,7 @@ export interface GraphStateSnapshot {
 	readonly fileGroupPages: Readonly<Record<string, number>>;
 	readonly openedFolders: Readonly<Record<string, true>>;
 	readonly detachedRootNodeIds: Readonly<Record<string, true>>;
+	readonly hiddenNodeIds: Readonly<Record<string, true>>;
 }
 
 /** Graph 상태가 실제로 변경된 뒤 호출되는 구독 callback이다. */
@@ -65,6 +67,7 @@ export const INITIAL_GRAPH_STATE: GraphStateSnapshot = Object.freeze({
 	fileGroupPages: Object.freeze({}),
 	openedFolders: Object.freeze({}),
 	detachedRootNodeIds: Object.freeze({}),
+	hiddenNodeIds: Object.freeze({}),
 });
 
 /** 파일 총 개수와 page로 실제 표시할 파일 개수를 계산한다. */
@@ -96,6 +99,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 	const detachedRootNodeIds = parseDetachedRootNodeIds(
 		candidate.detachedRootNodeIds,
 	);
+	const hiddenNodeIds = parseHiddenNodeIds(candidate.hiddenNodeIds);
 
 	if (
 		!camera
@@ -103,6 +107,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 		|| !fileGroupPages
 		|| !openedFolders
 		|| !detachedRootNodeIds
+		|| !hiddenNodeIds
 	) {
 		return undefined;
 	}
@@ -113,6 +118,7 @@ export function parseGraphState(value: unknown): GraphState | undefined {
 		fileGroupPages,
 		openedFolders,
 		detachedRootNodeIds,
+		hiddenNodeIds,
 	};
 }
 
@@ -247,6 +253,13 @@ function createSnapshot(
 		)
 		? previousState.detachedRootNodeIds
 		: Object.freeze({ ...sourceDetachedRootNodeIds });
+	const sourceHiddenNodeIds = state.hiddenNodeIds
+		?? previousState?.hiddenNodeIds
+		?? INITIAL_GRAPH_STATE.hiddenNodeIds;
+	const hiddenNodeIds = previousState
+		&& areSameHiddenNodeIds(previousState.hiddenNodeIds, sourceHiddenNodeIds)
+		? previousState.hiddenNodeIds
+		: Object.freeze({ ...sourceHiddenNodeIds });
 
 	return Object.freeze({
 		camera: Object.freeze({
@@ -258,6 +271,7 @@ function createSnapshot(
 		fileGroupPages,
 		openedFolders,
 		detachedRootNodeIds,
+		hiddenNodeIds,
 	});
 }
 
@@ -296,6 +310,10 @@ function isSameState(
 		&& areSameDetachedRootNodeIds(
 			currentState.detachedRootNodeIds,
 			nextState.detachedRootNodeIds,
+		)
+		&& areSameHiddenNodeIds(
+			currentState.hiddenNodeIds,
+			nextState.hiddenNodeIds,
 		);
 }
 
@@ -423,6 +441,16 @@ export function parseDetachedRootNodeIds(
 	return parseSparseTrueRecord(value);
 }
 
+/**
+ * 숨김 Node ID 복원 후보를 sparse Map으로 검증하고 복사한다.
+ * 필드가 없는 기존 상태는 숨김 Node가 없는 빈 Map으로 복원한다.
+ */
+export function parseHiddenNodeIds(
+	value: unknown,
+): Record<string, true> | undefined {
+	return parseSparseTrueRecord(value);
+}
+
 /** 값이 true인 ID만 허용하는 sparse record를 검증하고 복사한다. */
 function parseSparseTrueRecord(
 	value: unknown,
@@ -523,6 +551,14 @@ function areSameOpenedFolders(
 function areSameDetachedRootNodeIds(
 	currentNodeIds: GraphStateSnapshot['detachedRootNodeIds'],
 	nextNodeIds: GraphStateSnapshot['detachedRootNodeIds'],
+): boolean {
+	return areSameSparseTrueRecords(currentNodeIds, nextNodeIds);
+}
+
+/** 두 숨김 Node Map에 같은 Node ID가 저장되어 있는지 판별한다. */
+function areSameHiddenNodeIds(
+	currentNodeIds: GraphStateSnapshot['hiddenNodeIds'],
+	nextNodeIds: GraphStateSnapshot['hiddenNodeIds'],
 ): boolean {
 	return areSameSparseTrueRecords(currentNodeIds, nextNodeIds);
 }

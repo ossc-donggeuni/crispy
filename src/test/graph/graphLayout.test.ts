@@ -850,6 +850,178 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(folder.position.x - root.position.x, 262);
 	});
 
+	test('Filter 표시 상태를 Project를 제외한 Folder subtree와 File presentation에 계산한다', () => {
+		const childFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:filter/parent/child',
+			name: 'child',
+			status: 'loaded',
+			children: [],
+		};
+		const parentFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:filter/parent',
+			name: 'parent',
+			status: 'loaded',
+			children: [childFolder],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:filter',
+			name: 'filter',
+			status: 'loaded',
+			children: [
+				parentFolder,
+				{ kind: 'file', id: 'file:filter/a.ts', name: 'a.ts' },
+				{ kind: 'file', id: 'file:filter/b.ts', name: 'b.ts' },
+			],
+		};
+		const hiddenNodeIds = {
+			[project.id]: true as const,
+			[parentFolder.id]: true as const,
+			'file:filter/a.ts': true as const,
+		};
+		const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+			openedFolders: {
+				[project.id]: true,
+				[parentFolder.id]: true,
+				[childFolder.id]: true,
+			},
+			hiddenNodeIds,
+		});
+		const projectNode = getLayoutNode(layout.nodes, project.id);
+		const parentNode = getLayoutNode(layout.nodes, parentFolder.id);
+		const childNode = getLayoutNode(layout.nodes, childFolder.id);
+		const fileGroup = getFileGroup(layout.nodes, project.id);
+		const hiddenFile = fileGroup.children.find(
+			(file) => file.id === 'file:filter/a.ts',
+		);
+		const visibleFile = fileGroup.children.find(
+			(file) => file.id === 'file:filter/b.ts',
+		);
+
+		assert.strictEqual(projectNode.hidden, undefined);
+		assert.strictEqual(parentNode.hidden, true);
+		assert.strictEqual(childNode.hidden, true);
+		assert.strictEqual(fileGroup.hidden, undefined);
+		assert.strictEqual(fileGroup.presentation, 'grouped');
+		assert.strictEqual(hiddenFile, undefined);
+		assert.strictEqual(visibleFile?.hidden, undefined);
+		assert.deepStrictEqual(
+			fileGroup.children.map((file) => file.id),
+			['file:filter/b.ts'],
+		);
+		assert.strictEqual(
+			layout.edges.find((edge) => edge.targetId === parentFolder.id)?.hidden,
+			true,
+		);
+		assert.strictEqual(
+			layout.edges.find((edge) => edge.targetId === childFolder.id)?.hidden,
+			true,
+		);
+		assert.deepStrictEqual(hiddenNodeIds, {
+			[project.id]: true,
+			[parentFolder.id]: true,
+			'file:filter/a.ts': true,
+		});
+	});
+
+	test('File Group pagination과 높이는 hidden File을 제외한 projection을 기준으로 계산한다', () => {
+		const parentId = 'folder:app/src';
+		const fileGroupId = createFileGroupId(parentId);
+		const originalGroup = getFileGroup(
+			createGraphLayout(GRAPH_MOCK_PROJECT).nodes,
+			parentId,
+		);
+		const fileIds = originalGroup.children.map((file) => file.id);
+		const hiddenCurrentGroup = getFileGroup(createGraphLayout(
+			GRAPH_MOCK_PROJECT,
+			{ hiddenNodeIds: { [fileIds[2] as string]: true } },
+		).nodes, parentId);
+		const hiddenOverflowGroup = getFileGroup(createGraphLayout(
+			GRAPH_MOCK_PROJECT,
+			{ hiddenNodeIds: { [fileIds[6] as string]: true } },
+		).nodes, parentId);
+
+		assert.strictEqual(fileIds.length, 7);
+		assert.deepStrictEqual(
+			hiddenCurrentGroup.children.map((file) => file.id),
+			[fileIds[0], fileIds[1], fileIds[3], fileIds[4], fileIds[5], fileIds[6]],
+		);
+		assert.deepStrictEqual(
+			hiddenOverflowGroup.children.map((file) => file.id),
+			fileIds.slice(0, 6),
+		);
+		assert.strictEqual(
+			hiddenCurrentGroup.height,
+			getFileGroupHeight(5, true),
+		);
+		assert.strictEqual(hiddenOverflowGroup.height, hiddenCurrentGroup.height);
+		assert.strictEqual(originalGroup.children.length, 7);
+	});
+
+	test('펼친 File Group은 visible Row 수로 줄고 모두 hidden이면 Group과 Edge만 숨긴다', () => {
+		const parentId = 'folder:app/src';
+		const fileGroupId = createFileGroupId(parentId);
+		const originalGraph = createGraphLayout(GRAPH_MOCK_PROJECT);
+		const originalGroup = getFileGroup(originalGraph.nodes, parentId);
+		const fileIds = originalGroup.children.map((file) => file.id);
+		const fileGroupPages = { [fileGroupId]: 2 };
+		const expandedGroup = getFileGroup(createGraphLayout(
+			GRAPH_MOCK_PROJECT,
+			{ fileGroupPages },
+		).nodes, parentId);
+		const filteredExpandedLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages,
+			hiddenNodeIds: { [fileIds[2] as string]: true },
+		});
+		const filteredExpandedGroup = getFileGroup(
+			filteredExpandedLayout.nodes,
+			parentId,
+		);
+		const allHiddenNodeIds = Object.fromEntries(
+			fileIds.map((fileId) => [fileId, true]),
+		) as Record<string, true>;
+		const allHiddenLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages,
+			hiddenNodeIds: allHiddenNodeIds,
+		});
+		const allHiddenGroup = getFileGroup(allHiddenLayout.nodes, parentId);
+		const oneVisibleId = fileIds[6] as string;
+		const oneVisibleLayout = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages,
+			hiddenNodeIds: Object.fromEntries(
+				fileIds.slice(0, 6).map((fileId) => [fileId, true]),
+			) as Record<string, true>,
+		});
+		const oneVisibleGroup = getFileGroup(oneVisibleLayout.nodes, parentId);
+
+		assert.strictEqual(expandedGroup.height, getFileGroupHeight(7, true));
+		assert.strictEqual(
+			filteredExpandedGroup.height,
+			getFileGroupHeight(6, true),
+		);
+		assert.deepStrictEqual(
+			filteredExpandedGroup.children.map((file) => file.id),
+			[fileIds[0], fileIds[1], fileIds[3], fileIds[4], fileIds[5], fileIds[6]],
+		);
+		assert.strictEqual(allHiddenGroup.hidden, true);
+		assert.deepStrictEqual(allHiddenGroup.children, []);
+		assert.strictEqual(allHiddenGroup.height, getFileGroupHeight(0, false));
+		assert.strictEqual(
+			allHiddenLayout.edges.find((edge) => edge.targetId === fileGroupId)?.hidden,
+			true,
+		);
+		assert.strictEqual(oneVisibleGroup.hidden, undefined);
+		assert.strictEqual(oneVisibleGroup.presentation, 'grouped');
+		assert.deepStrictEqual(
+			oneVisibleGroup.children.map((file) => file.id),
+			[oneVisibleId],
+		);
+		assert.strictEqual(oneVisibleGroup.height, getFileGroupHeight(1, false));
+		assert.deepStrictEqual(fileGroupPages, { [fileGroupId]: 2 });
+	});
+
 	test('30px File Row와 pagination control 높이를 File Group Layout 높이에 반영한다', () => {
 		const layout = createGraphLayout(GRAPH_MOCK_PROJECT);
 		const fileGroup = getFileGroup(layout.nodes, 'folder:app/src');

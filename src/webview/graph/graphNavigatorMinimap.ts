@@ -349,7 +349,8 @@ export function createMinimapGraphGeometry(
 	size: MinimapSize,
 	padding = GRAPH_NAVIGATOR_MINIMAP_PADDING,
 ): MinimapGraphGeometry | undefined {
-	const positionedNodes = resolvePositionedNodes(layout.nodes, nodePositions);
+	const visibleNodes = layout.nodes.filter((node) => node.hidden !== true);
+	const positionedNodes = resolvePositionedNodes(visibleNodes, nodePositions);
 	const bounds = calculateGraphBounds(
 		positionedNodes.map(({ node }) => node),
 		nodePositions,
@@ -377,6 +378,10 @@ export function createMinimapGraphGeometry(
 		};
 	});
 	const edges = layout.edges.flatMap((edge): MinimapEdgeGeometry[] => {
+		if (edge.hidden === true) {
+			return [];
+		}
+
 		const source = positionsById.get(edge.sourceId);
 		const target = positionsById.get(edge.targetId);
 

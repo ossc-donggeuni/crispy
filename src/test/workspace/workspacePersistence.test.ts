@@ -227,7 +227,7 @@ suite('Workspace Persistence', () => {
 	});
 
 	suite('Root ownership and partition', () => {
-		test('Root, Folder, File, File Group과 Detached ID를 URI 경계로 분배한다', () => {
+		test('Root, Folder, File, File Group, Detached와 Filter ID를 URI 경계로 분배한다', () => {
 			const appUri = vscode.Uri.file('/workspace/app');
 			const appOldUri = vscode.Uri.file('/workspace/app-old');
 			const appRootId = workspaceRootId(appUri);
@@ -261,6 +261,11 @@ suite('Workspace Persistence', () => {
 					[appFileId]: true,
 					[appOldFolderId]: true,
 				},
+				hiddenNodeIds: {
+					[appFolderId]: true,
+					[appOldFolderId]: true,
+					[unknownId]: true,
+				},
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -285,6 +290,7 @@ suite('Workspace Persistence', () => {
 				[appFolderId]: true,
 			});
 			assert.deepStrictEqual(app.detachedRootNodeIds, { [appFileId]: true });
+			assert.deepStrictEqual(app.hiddenNodeIds, { [appFolderId]: true });
 			assert.deepStrictEqual(appOld.nodePositions, {
 				[appOldFolderId]: { x: 90, y: 100 },
 			});
@@ -292,6 +298,7 @@ suite('Workspace Persistence', () => {
 				Object.hasOwn(app.nodePositions, unknownId),
 				false,
 			);
+			assert.strictEqual(Object.hasOwn(app.hiddenNodeIds, unknownId), false);
 		});
 
 		test('현재 Graph에 없는 URI 기반 metadata도 소유 Root에 보존한다', () => {
@@ -311,6 +318,10 @@ suite('Workspace Persistence', () => {
 				fileGroupPages: { [`${hiddenFolderId}:files`]: 2 },
 				openedFolders: { [hiddenFolderId]: true },
 				detachedRootNodeIds: { [hiddenFileId]: true },
+				hiddenNodeIds: {
+					[hiddenFolderId]: true,
+					[hiddenFileId]: true,
+				},
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -321,7 +332,7 @@ suite('Workspace Persistence', () => {
 			assert.deepStrictEqual(getRootState(partitioned, rootUri), state);
 		});
 
-		test('중첩 Root에서는 File Group parent를 소유한 가장 구체적인 Root를 선택한다', () => {
+		test('중첩 Root에서는 File Group과 Filter ID를 가장 구체적인 Root가 소유한다', () => {
 			const outerRootUri = vscode.Uri.file('/workspace/app');
 			const innerRootUri = vscode.Uri.joinPath(outerRootUri, 'packages', 'ui');
 			const innerRootFileGroupId = `${workspaceRootId(innerRootUri)}:files`;
@@ -338,6 +349,10 @@ suite('Workspace Persistence', () => {
 				},
 				openedFolders: {},
 				detachedRootNodeIds: {},
+				hiddenNodeIds: {
+					[workspaceRootId(innerRootUri)]: true,
+					[folderId(innerRootUri)]: true,
+				},
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -381,6 +396,10 @@ suite('Workspace Persistence', () => {
 					...appState.detachedRootNodeIds,
 					...apiState.detachedRootNodeIds,
 				},
+				hiddenNodeIds: {
+					...appState.hiddenNodeIds,
+					...apiState.hiddenNodeIds,
+				},
 			});
 		});
 
@@ -404,6 +423,10 @@ suite('Workspace Persistence', () => {
 				detachedRootNodeIds: {
 					...createState(appUri, 2).detachedRootNodeIds,
 					...createState(apiUri, 3).detachedRootNodeIds,
+				},
+				hiddenNodeIds: {
+					...createState(appUri, 2).hiddenNodeIds,
+					...createState(apiUri, 3).hiddenNodeIds,
 				},
 			};
 
@@ -441,6 +464,10 @@ suite('Workspace Persistence', () => {
 					...appState.detachedRootNodeIds,
 					...apiState.detachedRootNodeIds,
 				},
+				hiddenNodeIds: {
+					...appState.hiddenNodeIds,
+					...apiState.hiddenNodeIds,
+				},
 			};
 
 			assert.deepStrictEqual(mergeWorkspacePersistentStates([
@@ -463,6 +490,10 @@ suite('Workspace Persistence', () => {
 				detachedRootNodeIds: {
 					...appState.detachedRootNodeIds,
 					...apiState.detachedRootNodeIds,
+				},
+				hiddenNodeIds: {
+					...appState.hiddenNodeIds,
+					...apiState.hiddenNodeIds,
 				},
 			});
 		});
@@ -553,7 +584,8 @@ function createState(
 		nodePositions: { [folder]: { x: page * 10, y: page * 20 } },
 		fileGroupPages: { [`${folder}:files`]: page },
 		openedFolders: { [folder]: true },
-		detachedRootNodeIds: { [file]: true },
+	detachedRootNodeIds: { [file]: true },
+	hiddenNodeIds: { [folder]: true },
 	};
 }
 
