@@ -389,6 +389,7 @@ export function initializeGraphLayoutReflow(
 	getCurrentLayout: () => GraphLayout,
 	createLayout: (state: GraphStateSnapshot) => GraphLayout,
 	getLogicalParentByChild: () => ReadonlyMap<string, string> = () => new Map(),
+	onHiddenNodeIdsChange: (state: GraphStateSnapshot) => void = () => undefined,
 ): () => void {
 	let active = true;
 	let renderedFileGroupPages = state.getState().fileGroupPages;
@@ -406,6 +407,7 @@ export function initializeGraphLayoutReflow(
 			return;
 		}
 
+		const hiddenNodeIdsChanged = nextState.hiddenNodeIds !== renderedHiddenNodeIds;
 		const hasNewlyClosedFolder = Object.entries(renderedOpenedFolders).some(
 			([nodeId, wasOpened]) => wasOpened && !nextState.openedFolders[nodeId],
 		);
@@ -433,6 +435,9 @@ export function initializeGraphLayoutReflow(
 			nextLayout,
 			rebasedNodePositions,
 		);
+		if (hiddenNodeIdsChanged) {
+			onHiddenNodeIdsChange(nextState);
+		}
 		state.setState({
 			camera: nextState.camera,
 			nodePositions: rebasedNodePositions,
@@ -944,8 +949,13 @@ export function initializeGraphView(
 		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
-	const syncNavigatorRoots = (): void => {
-		navigator.setRoots(createGraphNavigatorRoots(currentGraph));
+	const syncNavigatorRoots = (
+		snapshot: GraphStateSnapshot = state.getState(),
+	): void => {
+		navigator.setRoots(createGraphNavigatorRoots(
+			currentGraph,
+			snapshot.hiddenNodeIds,
+		));
 	};
 	const createCurrentLayout = (snapshot: GraphStateSnapshot): GraphLayout => {
 		// 초기 복원 이후 arrangement는 Drag callback이 명시적으로 갱신한다.
@@ -1354,6 +1364,7 @@ export function initializeGraphView(
 		() => currentLayout,
 		createCurrentLayout,
 		() => currentLogicalParentByChild,
+		syncNavigatorRoots,
 	);
 
 	return {

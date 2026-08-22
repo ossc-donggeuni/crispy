@@ -24,6 +24,7 @@ import {
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
+	type GraphStateSnapshot,
 } from '../../webview/graph/graphState';
 import {
 	addGraphRoot,
@@ -1737,6 +1738,7 @@ suite('Graph View', () => {
 		assert.strictEqual(fileBacklink, undefined);
 		assert.strictEqual(siblingRow.hidden, false);
 		assert.strictEqual(folderBacklinkEdge, undefined);
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['filter-detached']);
 		for (const hiddenLayoutNodeId of [
 			detachedFolder.id,
 			folderBacklinkId,
@@ -1778,6 +1780,11 @@ suite('Graph View', () => {
 		assert.strictEqual(restoredFolderRoot.hidden, false);
 		assert.strictEqual(restoredFolderBacklink.hidden, false);
 		assert.strictEqual(restoredFileRoot.hidden, false);
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'filter-detached',
+			'filter-detached/',
+			'filter-detached.ts',
+		]);
 		const restoredFileBacklink = getDescendantsByClass(root, 'graph-file-item').find(
 			(row) => row.getAttribute('data-file-id') === detachedFile.id,
 		);
@@ -3182,6 +3189,38 @@ suite('Graph View', () => {
 				).textContent,
 				String(ordinal),
 			);
+		}
+		const visibleState = graphView.state.getState();
+
+		graphView.state.setState({
+			camera: visibleState.camera,
+			nodePositions: visibleState.nodePositions,
+			hiddenNodeIds: { [source.id]: true },
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['multiple-detach']);
+		for (const ordinal of [1, 2, 3]) {
+			assert.strictEqual(findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				rootNodeId(ordinal),
+			), undefined);
+		}
+
+		const hiddenState = graphView.state.getState();
+
+		graphView.state.setState({
+			camera: hiddenState.camera,
+			nodePositions: hiddenState.nodePositions,
+			hiddenNodeIds: {},
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (2)',
+			'multiple-detach/ (3)',
+		]);
+		for (const ordinal of [1, 2, 3]) {
+			assert.ok(getDetachedRoot(ordinal));
 		}
 		const secondPositionBeforeMove = readTranslate(
 			getDetachedRoot(2).style.transform,
@@ -5184,6 +5223,7 @@ suite('Graph View', () => {
 		let createLayoutCalls = 0;
 		const rendererLayouts: ReturnType<typeof createGraphLayout>[] = [];
 		const navigatorLayouts: ReturnType<typeof createGraphLayout>[] = [];
+		const navigatorRootProjectionStates: GraphStateSnapshot[] = [];
 		let currentLayout = createGraphLayout(
 			createSingleRootGraph(GRAPH_MOCK_PROJECT),
 		);
@@ -5206,6 +5246,8 @@ suite('Graph View', () => {
 
 				return currentLayout;
 			},
+			() => new Map(),
+			(snapshot) => navigatorRootProjectionStates.push(snapshot),
 		);
 
 		state.setState({
@@ -5219,18 +5261,21 @@ suite('Graph View', () => {
 		assert.strictEqual(createLayoutCalls, 0);
 		assert.strictEqual(rendererLayouts.length, 0);
 		assert.strictEqual(navigatorLayouts.length, 0);
+		assert.strictEqual(navigatorRootProjectionStates.length, 0);
 
 		state.toggleFolder('folder:app');
 		assert.strictEqual(createLayoutCalls, 1);
 		assert.strictEqual(rendererLayouts.length, 1);
 		assert.strictEqual(navigatorLayouts.length, 1);
 		assert.strictEqual(rendererLayouts[0], navigatorLayouts[0]);
+		assert.strictEqual(navigatorRootProjectionStates.length, 0);
 
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
 		assert.strictEqual(createLayoutCalls, 2);
 		assert.strictEqual(rendererLayouts.length, 2);
 		assert.strictEqual(navigatorLayouts.length, 2);
 		assert.strictEqual(rendererLayouts[1], navigatorLayouts[1]);
+		assert.strictEqual(navigatorRootProjectionStates.length, 0);
 
 		const snapshot = state.getState();
 
@@ -5243,6 +5288,11 @@ suite('Graph View', () => {
 		assert.strictEqual(rendererLayouts.length, 3);
 		assert.strictEqual(navigatorLayouts.length, 3);
 		assert.strictEqual(rendererLayouts[2], navigatorLayouts[2]);
+		assert.strictEqual(navigatorRootProjectionStates.length, 1);
+		assert.strictEqual(
+			navigatorRootProjectionStates[0].hiddenNodeIds['folder:app/src'],
+			true,
+		);
 
 		unsubscribe();
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
@@ -5250,6 +5300,7 @@ suite('Graph View', () => {
 		assert.strictEqual(createLayoutCalls, 3);
 		assert.strictEqual(rendererLayouts.length, 3);
 		assert.strictEqual(navigatorLayouts.length, 3);
+		assert.strictEqual(navigatorRootProjectionStates.length, 1);
 	});
 });
 

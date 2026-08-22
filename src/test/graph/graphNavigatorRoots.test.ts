@@ -189,6 +189,43 @@ suite('Graph Navigator Root Data', () => {
 		]);
 	});
 
+	test('Filter에서 숨긴 Folder/File Root는 제외하고 Project Root는 유지한다', () => {
+		const firstHiddenRootId = createDetachedRootId(FOLDER_A.id, 1);
+		const secondHiddenRootId = createDetachedRootId(FOLDER_A.id, 2);
+		const visibleRootId = createDetachedRootId(FOLDER_B.id, 1);
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:project', nodeId: PROJECT.id },
+				{ id: firstHiddenRootId, nodeId: FOLDER_A.id },
+				{ id: secondHiddenRootId, nodeId: FOLDER_A.id },
+				{ id: visibleRootId, nodeId: FOLDER_B.id },
+			],
+			rootNodes: {
+				[PROJECT.id]: PROJECT,
+				[FOLDER_A.id]: FOLDER_A,
+				[FOLDER_B.id]: FOLDER_B,
+			},
+		};
+
+		assert.deepStrictEqual(createGraphNavigatorRoots(graph, {
+			[PROJECT.id]: true,
+			[FOLDER_A.id]: true,
+		}), [
+			{
+				rootId: 'root:project',
+				nodeId: PROJECT.id,
+				name: PROJECT.name,
+				kind: 'project',
+			},
+			{
+				rootId: visibleRootId,
+				nodeId: FOLDER_B.id,
+				name: FOLDER_B.name,
+				kind: 'folder',
+			},
+		]);
+	});
+
 	test('변환 과정에서 Graph Root, Root Node와 입력 Container를 변경하지 않는다', () => {
 		const graph = createGraphFixture();
 		const graphBefore = JSON.parse(JSON.stringify(graph)) as Graph;

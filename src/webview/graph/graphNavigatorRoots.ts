@@ -20,15 +20,32 @@ export interface GraphNavigatorRoot {
 
 /**
  * Graph Root 순서를 유지하며 Navigator 표시 데이터로 projection한다.
- * 참조하는 Root Node가 없는 항목만 건너뛰고 입력 Graph는 변경하지 않는다.
+ * 참조하는 Root Node가 없거나 Filter에서 숨겨진 Folder/File Root는 건너뛰고
+ * 입력 Graph와 Filter 상태는 변경하지 않는다.
  */
 export function createGraphNavigatorRoots(
 	graph: Graph,
+	hiddenNodeIds: Readonly<Record<string, true>> = {},
 ): readonly GraphNavigatorRoot[] {
 	const navigatorRoots: GraphNavigatorRoot[] = [];
 	const detachedCountByNodeId = new Map<string, number>();
+	const visibleRoots = graph.roots.flatMap((root) => {
+		const rootNode = graph.rootNodes[root.nodeId];
 
-	for (const root of graph.roots) {
+		if (
+			!rootNode
+			|| (
+				rootNode.kind !== 'project'
+				&& hiddenNodeIds[rootNode.id] === true
+			)
+		) {
+			return [];
+		}
+
+		return [{ root, rootNode }];
+	});
+
+	for (const { root } of visibleRoots) {
 		if (!isDetachedRootId(root.id)) {
 			continue;
 		}
@@ -38,13 +55,7 @@ export function createGraphNavigatorRoots(
 		);
 	}
 
-	for (const root of graph.roots) {
-		const rootNode = graph.rootNodes[root.nodeId];
-
-		if (!rootNode) {
-			continue;
-		}
-
+	for (const { root, rootNode } of visibleRoots) {
 		const detachedInstanceCount = detachedCountByNodeId.get(root.nodeId) ?? 0;
 		const detachedOrdinal = getDetachedRootOrdinal(root.id);
 		const navigatorRoot: GraphNavigatorRoot = {
