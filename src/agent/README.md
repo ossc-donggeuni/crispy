@@ -460,8 +460,8 @@ override, broad tool deny 또는 user MCP를 제외하는 설정은 넣지 않�
 
 | binary | 결과 |
 | --- | --- |
-| 현재 사용자 설치 `2.1.234` | inline config 인식, header env expansion, `crispy_ping`, authenticated activity 성공; token env 제거 negative control은 activity 없음 |
-| 격리한 공식 `2.1.121` | 위와 동일하게 positive/negative control 통과 |
+| 현재 사용자 설치 `2.1.234` | inline config 인식, header env expansion, `crispy_ping`, authenticated activity 성공; token env 제거 시 자연 종료까지 authenticated activity 없음 |
+| 격리한 공식 `2.1.121` | 기존 실행에서 위와 동일한 positive 결과 및 token-env 제거 시 authenticated activity 미관찰 |
 
 `2.1.121`은 사용자 설치를 덮어쓰지 않고 `/tmp`에 다운로드했다. 공식 manifest의
 `darwin-arm64` SHA-256 `3810e55d47ed4d413de6dc037e34d58948f779a4c6bdeeacf1748d850c5daad6`과
@@ -482,7 +482,10 @@ pnpm run smoke:claude-mcp -- --claude-executable /path/to/isolated/claude
 ```
 
 정상 실행은 각 positive/negative transaction에서 `version_compatible`, `adapter_ready`,
-`awaiting_activity` 뒤 각각 `activity_observed`, `negative_control_passed`를 출력한다. token, URL,
-route와 inline config는 출력하지 않는다. version probe 실패·timeout·unparsable 또는 최소 미만은
+`awaiting_activity` 뒤 각각 `activity_observed`, `negative_control_no_authenticated_activity`를 출력한다.
+후자는 token env가 없는 Claude의 자연 종료까지 authenticated activity가 없었다는 뜻이며 exit code,
+config rejection 또는 HTTP `401` 관찰을 뜻하지 않는다. signal 종료는
+`failed:negative_control_inconclusive`다. token, URL, route와 inline config는 출력하지 않는다.
+version probe 실패·timeout·unparsable 또는 최소 미만은
 credential/config를 만들지 않고 L2에서 bare Claude로 fail-open할 근거만 반환한다.
 `provider_update_required` emit과 사용자-visible 업데이트 안내는 여전히 별도 제품 결정이다.

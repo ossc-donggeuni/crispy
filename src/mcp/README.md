@@ -173,8 +173,13 @@ L1 serializer가 만들어야 하는 token-free argument의 의미는 다음과 
 ```
 
 `CRISPY_MCP_TOKEN`은 최종 PTY spawn boundary에서만 provider environment에 overlay한다. 공식
-문서상 변수가 없고 default도 없으면 config는 load되지만 `${VAR}` text가 그대로 남는다. L1의
-negative control은 이 동작이 Crispy server의 `401`과 activity 미관찰로 끝나는지 검증한다.
+문서상 required 변수가 없고 default도 없으면 config parsing이 실패한다. L1의 negative control은
+같은 inline config에서 token environment만 제거했을 때 Claude의 자연 종료까지 authenticated activity가
+관찰되지 않는지 확인한다. exit code는 config rejection 원인을 증명하지 않으므로 성공 조건으로 삼지
+않고, signal 종료는 관찰이 중단된 것으로 보고 `negative_control_inconclusive`로 실패한다. 성공 상태
+`negative_control_no_authenticated_activity`는 credential-isolation 관찰 결과일 뿐 config 오류 문구나
+Crispy server의 `401` 응답을 뜻하지 않는다. missing/wrong bearer token의 정확한 `401` 계약은 별도
+protocol integration test가 검증한다.
 
 ### user MCP와 권한 보존 계약
 
@@ -228,8 +233,9 @@ preparation을 추가한다. L3 전에는 Claude status/retry UI를 연결하지
    `activity_observed`를 확인한다.
 4. argv/diagnostic/snapshot 전체에 token 값이 없고 inline JSON에는 literal placeholder만 있는지
    검사한다.
-5. 같은 config에서 token env만 제거한 negative control이 literal placeholder로 인증되지 않아
-   `401`이 되고 activity가 발생하지 않는지 확인한다.
+5. 같은 config에서 token env만 제거한 negative control이 자연 종료까지 authenticated activity를
+   만들지 않는지 확인한다. exit code에는 config rejection 의미를 부여하지 않고 signal 종료는
+   inconclusive로 실패시키며, provider output이나 Crispy server의 `401` 응답은 검증하지 않는다.
 6. `--strict-mcp-config`와 global tool/cache override가 없는지, 기존 user MCP source를 배제하지
    않는지 argv 단위 테스트와 실제 `/mcp` 관찰로 확인한다.
 7. 정책/config rejection fixture의 exit, stderr, interactive prompt 도달 여부를 별도로 수집하되

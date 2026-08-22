@@ -68,33 +68,52 @@ suite('Claude MCP L1 dev smoke transaction', () => {
 		assert.strictEqual(spawnRequest.environment.KEEP_ME, 'yes');
 	});
 
-	test('negative control은 같은 inline config에서 token env만 제거하고 activity 없이 끝난다', async () => {
+	test('negative control은 token env 없이 자연 종료까지 authenticated activity가 없어야 통과한다', async () => {
+		for (const exitCode of [0, 1]) {
+			const fixture = createFixture('missing-negative-control');
+			let spawnRequest: AgentProcessSpawnRequest | undefined;
+			const succeeded = await runClaudeMcpSmoke({
+				...fixture.options,
+				spawnProvider: (request) => {
+					spawnRequest = request;
+					setImmediate(() => fixture.provider.emitExit({ exitCode }));
+					return fixture.provider;
+				},
+			});
+
+			assert.strictEqual(succeeded, true);
+			assert.deepStrictEqual(fixture.statuses, [
+				'version_compatible',
+				'adapter_ready',
+				'awaiting_activity',
+				'negative_control_no_authenticated_activity',
+			]);
+			assert.ok(spawnRequest !== undefined);
+			assert.strictEqual(Object.keys(spawnRequest.environment).some(
+				(name) => name.toUpperCase() === 'CRISPY_MCP_TOKEN',
+			), false);
+			assert.strictEqual(spawnRequest.args.at(-1)?.includes(
+				'Bearer ${CRISPY_MCP_TOKEN}',
+			), true);
+			assert.strictEqual(JSON.stringify(spawnRequest).includes(bearerToken), false);
+		}
+	});
+
+	test('negative control은 signal 종료를 관찰 성공으로 오인하지 않는다', async () => {
 		const fixture = createFixture('missing-negative-control');
-		let spawnRequest: AgentProcessSpawnRequest | undefined;
 		const succeeded = await runClaudeMcpSmoke({
 			...fixture.options,
-			spawnProvider: (request) => {
-				spawnRequest = request;
-				setImmediate(() => fixture.provider.emitExit({ exitCode: 0 }));
+			spawnProvider: () => {
+				setImmediate(() => fixture.provider.emitExit({ exitCode: 1, signal: 15 }));
 				return fixture.provider;
 			},
 		});
 
-		assert.strictEqual(succeeded, true);
-		assert.deepStrictEqual(fixture.statuses, [
-			'version_compatible',
-			'adapter_ready',
-			'awaiting_activity',
-			'negative_control_passed',
-		]);
-		assert.ok(spawnRequest !== undefined);
-		assert.strictEqual(Object.keys(spawnRequest.environment).some(
-			(name) => name.toUpperCase() === 'CRISPY_MCP_TOKEN',
-		), false);
-		assert.strictEqual(spawnRequest.args.at(-1)?.includes(
-			'Bearer ${CRISPY_MCP_TOKEN}',
-		), true);
-		assert.strictEqual(JSON.stringify(spawnRequest).includes(bearerToken), false);
+		assert.strictEqual(succeeded, false);
+		assert.strictEqual(
+			fixture.statuses.at(-1),
+			'failed:negative_control_inconclusive',
+		);
 	});
 
 	test('negative control에서 authenticated activity가 오면 즉시 실패한다', async () => {

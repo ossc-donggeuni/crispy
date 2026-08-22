@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type {
+	PtyExitEvent,
 	PtyListenerDisposable,
 	PtyProcessHandle,
 } from '../agent/host/terminal/ptyAdapter';
@@ -64,6 +65,7 @@ export const CLAUDE_SMOKE_FAILURE_REASONS = Object.freeze([
 	'version_incompatible',
 	'stale_session',
 	'negative_control_activity',
+	'negative_control_inconclusive',
 	'smoke_cancelled',
 	'smoke_failed',
 ] as const);
@@ -74,7 +76,7 @@ export type ClaudeSmokeStatus =
 	| 'adapter_ready'
 	| 'awaiting_activity'
 	| 'activity_observed'
-	| 'negative_control_passed'
+	| 'negative_control_no_authenticated_activity'
 	| `failed:${ClaudeSmokeFailureReason}`;
 export type ClaudeSmokeCredentialMode = 'registered' | 'missing-negative-control';
 
@@ -112,6 +114,7 @@ export interface RunClaudeMcpSmokeOptions {
 type ClaudeSmokeOutcome =
 	| { readonly type: 'ping' }
 	| { readonly type: 'activity' }
+	| ({ readonly type: 'provider_exit' } & PtyExitEvent)
 	| { readonly type: 'failure'; readonly reason: McpFailureReason };
 
 /** Filters child events to one current session and optionally observes any authenticated request. */
@@ -278,8 +281,12 @@ export async function runClaudeMcpSmoke(
 		]);
 		if (options.credentialMode === 'missing-negative-control') {
 			if (outcome.type === 'provider_exit') {
-				report('negative_control_passed');
-				return true;
+				if (outcome.signal === undefined || outcome.signal === 0) {
+					report('negative_control_no_authenticated_activity');
+					return true;
+				}
+				report('failed:negative_control_inconclusive');
+				return false;
 			}
 			if (outcome.type === 'ping' || outcome.type === 'activity') {
 				report('failed:negative_control_activity');
@@ -361,12 +368,24 @@ async function waitForProviderReady(
 }
 
 function waitForProviderEnd(provider: PtyProcessHandle): {
-	readonly promise: Promise<{ readonly type: 'provider_exit' }>;
+	readonly promise: Promise<{
+		readonly type: 'provider_exit';
+		readonly exitCode: number;
+		readonly signal?: number;
+	}>;
 	readonly subscription: PtyListenerDisposable;
 } {
 	let subscription: PtyListenerDisposable;
-	const promise = new Promise<{ readonly type: 'provider_exit' }>((resolve) => {
-		subscription = provider.onExit(() => resolve({ type: 'provider_exit' }));
+	const promise = new Promise<{
+		readonly type: 'provider_exit';
+		readonly exitCode: number;
+		readonly signal?: number;
+	}>((resolve) => {
+		subscription = provider.onExit((event) => resolve({
+			type: 'provider_exit',
+			exitCode: event.exitCode,
+			...(event.signal === undefined ? {} : { signal: event.signal }),
+		}));
 	});
 	return { promise, subscription: subscription! };
 }
