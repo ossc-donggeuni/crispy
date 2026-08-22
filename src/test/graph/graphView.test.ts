@@ -288,6 +288,10 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			existingFolder.id,
 		);
+		const minimapNodeLayer = getDescendantByClass(
+			root,
+			'graph-navigator-minimap-node-layer',
+		);
 		const stateStore = graphView.state;
 		const initialState = stateStore.getState();
 		const initialCamera = graphView.camera.getState();
@@ -328,6 +332,16 @@ suite('Graph View', () => {
 			'data-graph-edge-id',
 			`${updatedProject.id}->${addedFolder.id}`,
 		));
+		assert.ok(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			addedFolder.id,
+		));
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-filter-node-id',
+			addedFolder.id,
+		));
 		assert.strictEqual(
 			findDescendantByAttribute(
 				root,
@@ -336,6 +350,16 @@ suite('Graph View', () => {
 			),
 			undefined,
 		);
+		assert.strictEqual(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			removedFolder.id,
+		), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-filter-node-id',
+			removedFolder.id,
+		), undefined);
 		assert.strictEqual(
 			getDescendantsByClass(
 				getDescendantByAttribute(root, 'data-graph-node-id', fileGroupId),
@@ -363,6 +387,26 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			secondaryProject.id,
 		));
+		assert.ok(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			secondaryProject.id,
+		));
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-filter-node-id',
+			secondaryProject.id,
+		));
+		assert.strictEqual(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			addedFolder.id,
+		), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-filter-node-id',
+			addedFolder.id,
+		), undefined);
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['secondary']);
 		assert.deepStrictEqual(initialState.nodePositions, {
 			[existingFolder.id]: { x: 320, y: 180 },
@@ -376,6 +420,185 @@ suite('Graph View', () => {
 			'folder:stale': true,
 		});
 		assert.deepStrictEqual(initialState.fileGroupPages, { [fileGroupId]: 2 });
+		graphView.dispose();
+	});
+
+	test('Workspace Refresh는 File Group 경계와 stale page를 최신 DOM/Layout/Minimap에 적용한다', () => {
+		const projectId = 'project:refresh-pagination';
+		const fileGroupId = createFileGroupId(projectId);
+		const files = Array.from({ length: 6 }, (_, index) => ({
+			kind: 'file' as const,
+			id: `file:refresh-pagination/${index + 1}.ts`,
+			name: `${index + 1}.ts`,
+		}));
+		const createGraph = (nextFiles: typeof files): Graph => createSingleRootGraph({
+			kind: 'project',
+			id: projectId,
+			name: 'refresh-pagination',
+			status: 'loaded',
+			children: nextFiles,
+		});
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 35, y: -20, scale: 1.25 },
+			nodePositions: { [fileGroupId]: { x: 520, y: 240 } },
+			fileGroupPages: { [fileGroupId]: 1 },
+			openedFolders: { [projectId]: true },
+			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
+		}, createGraph(files.slice(0, 4)));
+		const initialState = graphView.state.getState();
+		const initialCamera = graphView.camera.getState();
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const groupEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${projectId}->${fileGroupId}`,
+		);
+		const minimapNodeLayer = getDescendantByClass(
+			root,
+			'graph-navigator-minimap-node-layer',
+		);
+		const initialMinimapGroupHeight = Number(getDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		).getAttribute('height'));
+		const getRenderedIds = (): Array<string | null> => getDescendantsByClass(
+			getDescendantByAttribute(root, 'data-graph-node-id', fileGroupId),
+			'graph-file-item',
+		).map((row) => row.getAttribute('data-file-id'));
+		const assertGroupedFiles = (
+			expectedFiles: typeof files,
+			hasMore: boolean,
+		): void => {
+			const currentGroup = getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				fileGroupId,
+			);
+
+			assert.strictEqual(currentGroup, fileGroup);
+			assert.strictEqual(getDescendantByAttribute(
+				root,
+				'data-graph-edge-id',
+				`${projectId}->${fileGroupId}`,
+			), groupEdge);
+			assert.deepStrictEqual(
+				getRenderedIds(),
+				expectedFiles.slice(0, 5).map((file) => file.id),
+			);
+			assert.strictEqual(
+				findDescendantByClass(currentGroup, 'graph-file-more') !== undefined,
+				hasMore,
+			);
+			assert.strictEqual(
+				currentGroup.style.height,
+				`${getFileGroupHeight(
+					Math.min(expectedFiles.length, 5),
+					hasMore,
+				)}px`,
+			);
+			assert.ok(findDescendantByAttribute(
+				minimapNodeLayer,
+				'data-graph-node-id',
+				fileGroupId,
+			));
+		};
+
+		assertGroupedFiles(files.slice(0, 4), false);
+		graphView.updateGraph(createGraph(files.slice(0, 5)));
+		assertGroupedFiles(files.slice(0, 5), false);
+		assert.ok(Number(getDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		).getAttribute('height')) > initialMinimapGroupHeight);
+
+		graphView.updateGraph(createGraph(files));
+		assertGroupedFiles(files, true);
+		assert.strictEqual(
+			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
+			'+ 1개 더보기',
+		);
+
+		const fiveAfterVisibleDelete = files.filter((_, index) => index !== 2);
+
+		graphView.updateGraph(createGraph(fiveAfterVisibleDelete));
+		assertGroupedFiles(fiveAfterVisibleDelete, false);
+		assert.deepStrictEqual(getRenderedIds(), [
+			files[0]?.id,
+			files[1]?.id,
+			files[3]?.id,
+			files[4]?.id,
+			files[5]?.id,
+		]);
+
+		const fourAfterDelete = fiveAfterVisibleDelete.slice(0, 4);
+
+		graphView.updateGraph(createGraph(fourAfterDelete));
+		assertGroupedFiles(fourAfterDelete, false);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(4, false)}px`);
+		assert.strictEqual(graphView.state.getState(), initialState);
+
+		graphView.updateGraph(createGraph(files));
+		graphView.state.showMoreFiles(fileGroupId);
+		assert.strictEqual(graphView.state.getFileGroupPage(fileGroupId), 2);
+		const expandedState = graphView.state.getState();
+
+		graphView.updateGraph(createGraph(fourAfterDelete));
+		assert.deepStrictEqual(getRenderedIds(), fourAfterDelete.map((file) => file.id));
+		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-controls'), undefined);
+		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(4, false)}px`);
+		assert.strictEqual(graphView.state.getFileGroupPage(fileGroupId), 2);
+
+		graphView.updateGraph(createGraph(files.slice(0, 1)));
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		), undefined);
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			files[0]?.id as string,
+		));
+		assert.strictEqual(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		), undefined);
+
+		graphView.updateGraph(createGraph([]));
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			files[0]?.id as string,
+		), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${projectId}->${files[0]?.id}`,
+		), undefined);
+
+		graphView.updateGraph(createGraph(files.slice(5)));
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			files[5]?.id as string,
+		));
+		assert.ok(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			files[5]?.id as string,
+		));
+		assert.strictEqual(graphView.state.getState(), expandedState);
+		assert.deepStrictEqual(graphView.camera.getState(), initialCamera);
 		graphView.dispose();
 	});
 
@@ -759,6 +982,175 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Workspace Refresh와 기존 File Filter를 함께 적용해 Row, Footer와 Tree를 동기화한다', () => {
+		const projectId = 'project:refresh-filter';
+		const fileGroupId = createFileGroupId(projectId);
+		const createFile = (name: string) => ({
+			kind: 'file' as const,
+			id: `file:refresh-filter/${name}.ts`,
+			name: `${name}.ts`,
+		});
+		const [a, b, c, d, e, f, g, h, i, j, k] = [
+			'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+		].map(createFile);
+
+		assert.ok(a && b && c && d && e && f && g && h && i && j && k);
+		const createGraph = (children: readonly typeof a[]): Graph => createSingleRootGraph({
+			kind: 'project',
+			id: projectId,
+			name: 'refresh-filter',
+			status: 'loaded',
+			children,
+		});
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 10, y: 20, scale: 1.5 },
+			nodePositions: { [fileGroupId]: { x: 480, y: 220 } },
+			fileGroupPages: { [fileGroupId]: 1 },
+			openedFolders: { [projectId]: true },
+			detachedRootNodeIds: {},
+			hiddenNodeIds: {
+				[c.id]: true,
+				[h.id]: true,
+				[k.id]: true,
+			},
+		}, createGraph([a, b, c, d, e, f]));
+		const initialState = graphView.state.getState();
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const minimapNodeLayer = getDescendantByClass(
+			root,
+			'graph-navigator-minimap-node-layer',
+		);
+		const assertProjection = (
+			expected: readonly typeof a[],
+			remaining: number,
+		): void => {
+			const currentGroup = getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				fileGroupId,
+			);
+			const more = findDescendantByClass(currentGroup, 'graph-file-more');
+
+			assert.strictEqual(currentGroup, fileGroup);
+			assert.deepStrictEqual(
+				getDescendantsByClass(currentGroup, 'graph-file-item').map(
+					(row) => row.getAttribute('data-file-id'),
+				),
+				expected.slice(0, 5).map((file) => file.id),
+			);
+			assert.strictEqual(
+				more?.textContent,
+				remaining > 0 ? `+ ${remaining}개 더보기` : undefined,
+			);
+			assert.strictEqual(
+				currentGroup.style.height,
+				`${getFileGroupHeight(Math.min(expected.length, 5), remaining > 0)}px`,
+			);
+			assert.ok(findDescendantByAttribute(
+				minimapNodeLayer,
+				'data-graph-node-id',
+				fileGroupId,
+			));
+			assert.strictEqual(graphView.state.getState(), initialState);
+		};
+
+		assertProjection([a, b, d, e, f], 0);
+		graphView.updateGraph(createGraph([a, b, c, e, f]));
+		assertProjection([a, b, e, f], 0);
+
+		graphView.updateGraph(createGraph([a, b, c, e, f, g]));
+		assertProjection([a, b, e, f, g], 0);
+
+		graphView.updateGraph(createGraph([a, b, c, e, f, g, h]));
+		assertProjection([a, b, e, f, g], 0);
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			h.id,
+		).checked, false);
+
+		graphView.updateGraph(createGraph([a, b, c, e, f, g, h, i]));
+		assertProjection([a, b, e, f, g, i], 1);
+
+		graphView.updateGraph(createGraph([a, c, e, f, g, h, i]));
+		assertProjection([a, e, f, g, i], 0);
+
+		graphView.updateGraph(createGraph([a, b, c, e, f, g, h]));
+		assertProjection([a, b, e, f, g], 0);
+
+		graphView.updateGraph(createGraph([a, b, e, f, g, h]));
+		assertProjection([a, b, e, f, g], 0);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			c.id,
+		), undefined);
+		assert.deepStrictEqual(initialState.hiddenNodeIds, {
+			[c.id]: true,
+			[h.id]: true,
+			[k.id]: true,
+		});
+
+		graphView.updateGraph(createGraph([h]));
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			h.id,
+		), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			minimapNodeLayer,
+			'data-graph-node-id',
+			h.id,
+		), undefined);
+
+		graphView.updateGraph(createGraph([h, j]));
+		const restoredGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+
+		assert.notStrictEqual(restoredGroup, fileGroup);
+		assert.deepStrictEqual(
+			getDescendantsByClass(restoredGroup, 'graph-file-item').map(
+				(row) => row.getAttribute('data-file-id'),
+			),
+			[j.id],
+		);
+		assert.strictEqual(restoredGroup.style.height, `${getFileGroupHeight(1, false)}px`);
+
+		graphView.updateGraph(createGraph([h, j, k]));
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		), restoredGroup);
+		assert.deepStrictEqual(
+			getDescendantsByClass(restoredGroup, 'graph-file-item').map(
+				(row) => row.getAttribute('data-file-id'),
+			),
+			[j.id],
+		);
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-filter-checkbox-id',
+			k.id,
+		).checked, false);
+		assert.strictEqual(graphView.state.getState(), initialState);
+		graphView.dispose();
+	});
+
 	test('Folder Filter를 subtree, Edge와 Minimap에 반영하고 해제 시 기존 상태로 복원한다', () => {
 		const hiddenFile = {
 			kind: 'file' as const,
@@ -1013,31 +1405,24 @@ suite('Graph View', () => {
 				[standaloneFile.id, true],
 			]) as Record<string, true>,
 		}, graph);
-		const groupedNode = getDescendantByAttribute(
+		const groupedNode = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			fileGroupId,
 		);
-		const standaloneNode = getDescendantByAttribute(
+		const standaloneNode = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			standaloneFile.id,
 		);
-		const initialRows = getDescendantsByClass(groupedNode, 'graph-file-item');
 		const minimapNodeLayer = getDescendantByClass(
 			root,
 			'graph-navigator-minimap-node-layer',
 		);
 		const initialState = graphView.state.getState();
 
-		assert.strictEqual(groupedNode.hidden, true);
-		assert.strictEqual(groupedNode.getAttribute('data-file-group-presentation'), 'grouped');
-		assert.strictEqual(initialRows.length, 0);
-		assert.strictEqual(standaloneNode.hidden, true);
-		assert.strictEqual(
-			standaloneNode.getAttribute('data-file-group-presentation'),
-			'standalone',
-		);
+		assert.strictEqual(groupedNode, undefined);
+		assert.strictEqual(standaloneNode, undefined);
 		assert.strictEqual(findDescendantByAttribute(
 			minimapNodeLayer,
 			'data-graph-node-id',
@@ -1064,17 +1449,21 @@ suite('Graph View', () => {
 			restoredGroupedNode,
 			'graph-file-item',
 		);
+		const restoredStandaloneNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			standaloneFile.id,
+		);
 
 		assert.strictEqual(restoredRows.length, groupedFiles.length);
 		assert.ok(restoredRows.every((row) => row.hidden === false));
-		assert.strictEqual(standaloneNode.hidden, false);
 		assert.strictEqual(restoredGroupedNode.hidden, false);
 		assert.strictEqual(
 			restoredGroupedNode.getAttribute('data-file-group-presentation'),
 			'grouped',
 		);
 		assert.strictEqual(
-			standaloneNode.getAttribute('data-file-group-presentation'),
+			restoredStandaloneNode.getAttribute('data-file-group-presentation'),
 			'standalone',
 		);
 		assert.strictEqual(graphView.state.getState().fileGroupPages, initialState.fileGroupPages);

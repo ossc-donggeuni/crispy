@@ -39,3 +39,4 @@ export {
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRefreshDependencies,
 } from './workspaceRefresh';
+export { watchWorkspaceChanges } from './workspaceWatcher';

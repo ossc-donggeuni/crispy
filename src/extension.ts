@@ -14,6 +14,7 @@ import { resolveCurrentWorkspace } from './agent/host/workspace/workspaceResolve
 import {
 	createTerminalRuntimeCleanup,
 	runCleanupWithTimeout,
+	type DetachableTerminalRuntime,
 } from './agent/host/terminal/terminalRuntimeCleanup';
 import type {
 	ExtensionToWebviewMessage,
@@ -41,6 +42,7 @@ import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
+	watchWorkspaceChanges,
 	writeWorkspacePersistentState,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRootFilter,
@@ -62,6 +64,8 @@ interface CanvasRuntime {
 	readonly panel: vscode.WebviewPanel;
 	/** 이 Panel에 귀속된 직렬화 Workspace Refresh를 요청한다. */
 	requestWorkspaceRefresh(): Promise<void>;
+	/** Webview message listener가 준비된 뒤 초기화 중 Workspace 변경을 전달한다. */
+	markWebviewReady(): void;
 
 	/** Routing과 Webview 구독을 native 종료 없이 즉시 분리한다. */
 	detach(): void;
@@ -131,6 +135,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			{
 				enableScripts: true,
 				localResourceRoots: [webviewRoot],
+				retainContextWhenHidden: true,
 			},
 		);
 		const readProviderCliPath = (providerId: ProviderId): string | undefined =>
@@ -170,10 +175,16 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
 		);
 
+		let runtime: CanvasRuntime;
 		/** Webview snapshot과 Agent protocol을 각 validation boundary로 전달한다. */
 		const messageSubscription = panel.webview.onDidReceiveMessage(
 			(message: unknown) => {
-				handleWebviewMessage(panel.webview, message, terminalHost);
+				handleWebviewMessage(
+					panel.webview,
+					message,
+					terminalHost,
+					() => runtime?.markWebviewReady(),
+				);
 			},
 		);
 		
@@ -198,7 +209,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				panel.webview.postMessage(message)
 			),
 		});
-		const runtime = createCanvasRuntime(
+		runtime = createCanvasRuntime(
 			panel,
 			terminalHost,
 			[messageSubscription],
@@ -259,20 +270,54 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
  * @param terminalHost Panel이 소유한 Terminal session 및 PTY 정리 경계
  * @param subscriptions Host 정리 뒤 해제할 Webview message listener 구독 목록
  * @param workspaceRefresh Panel과 함께 유지할 Workspace Refresh coordinator
+ * @param watchWorkspace Canvas에 귀속할 Workspace 변경 watcher 생성 함수
  * @returns Panel dispose와 deactivate가 공유하는 멱등한 정리 경계
  */
-function createCanvasRuntime(
+export function createCanvasRuntime(
 	panel: vscode.WebviewPanel,
-	terminalHost: TerminalHost,
+	terminalHost: DetachableTerminalRuntime,
 	subscriptions: readonly vscode.Disposable[],
 	workspaceRefresh: WorkspaceRefreshCoordinator,
+	watchWorkspace: (onChange: () => void) => vscode.Disposable
+		= watchWorkspaceChanges,
 ): CanvasRuntime {
-	const cleanup = createTerminalRuntimeCleanup(terminalHost, subscriptions);
+	let webviewReady = false;
+	let refreshPendingUntilReady = false;
+	let detached = false;
+	const workspaceWatcher = watchWorkspace(() => {
+		if (detached) {
+			return;
+		}
+
+		if (!webviewReady) {
+			refreshPendingUntilReady = true;
+			return;
+		}
+
+		void workspaceRefresh.requestWorkspaceRefresh();
+	});
+	const cleanup = createTerminalRuntimeCleanup(
+		terminalHost,
+		[...subscriptions, workspaceWatcher],
+	);
 
 	return {
 		panel,
 		requestWorkspaceRefresh: workspaceRefresh.requestWorkspaceRefresh,
+		markWebviewReady(): void {
+			if (detached || webviewReady) {
+				return;
+			}
+
+			webviewReady = true;
+			if (refreshPendingUntilReady) {
+				refreshPendingUntilReady = false;
+				void workspaceRefresh.requestWorkspaceRefresh();
+			}
+		},
 		detach(): void {
+			detached = true;
+			refreshPendingUntilReady = false;
 			/** Webview/Terminal 정리보다 먼저 Refresh 결과와 pending 실행을 차단한다. */
 			workspaceRefresh.dispose();
 			cleanup.detach();
@@ -305,12 +350,15 @@ function releaseCanvasRuntime(runtime: CanvasRuntime): void {
  *
  * @param webview 응답 메시지를 전송할 Webview
  * @param message Webview에서 수신한 메시지
+ * @param terminalHost 검증된 Terminal 메시지를 전달할 Host 경계
+ * @param onWebviewReady 검증된 ready 뒤 Canvas 초기화 대기를 해제할 callback
  * @returns 메시지를 Webview에 전달한 결과 또는 처리 대상이 아닐 때 `undefined`
  */
 export function handleWebviewMessage(
 	webview: Pick<vscode.Webview, 'postMessage'>,
 	message: unknown,
 	terminalHost?: TerminalMessageHost,
+	onWebviewReady?: () => void,
 ): Thenable<boolean> | undefined {
 	if (message && typeof message === 'object') {
 		const candidate = message as Record<string, unknown>;
@@ -381,6 +429,7 @@ export function handleWebviewMessage(
 
 	switch (parseResult.value.type) {
 		case 'webview.ready':
+			onWebviewReady?.();
 			console.log('[Crispy] Webview ready');
 
 			return webview.postMessage({

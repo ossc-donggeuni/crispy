@@ -335,6 +335,10 @@ function createFileLayoutTrees(
 	const singleton = files[0];
 
 	if (files.length === 1 && singleton) {
+		if (hiddenNodeIds[singleton.id] === true) {
+			return [];
+		}
+
 		const targetRoot = rootsByNodeId.get(singleton.id);
 
 		return [createStandaloneFileGroupTree(
@@ -342,18 +346,23 @@ function createFileLayoutTrees(
 			depth,
 			parent.id,
 			targetRoot,
-			inheritedHidden || hiddenNodeIds[singleton.id] === true,
+			inheritedHidden,
 		)];
 	}
 
 	const id = createFileGroupId(parent.id);
 	const page = fileGroupPages[id] ?? 1;
 	const visibleFiles = files.filter((file) => hiddenNodeIds[file.id] !== true);
+
+	if (visibleFiles.length === 0) {
+		return [];
+	}
+
 	const visibleFileCount = getVisibleFileCount(visibleFiles.length, page);
 	const remainingFileCount = getRemainingFileCount(visibleFiles.length, page);
 	const hasPaginationControls = remainingFileCount > 0
 		|| (visibleFiles.length > FILE_GROUP_PAGE_SIZE && page > 1);
-	const hidden = inheritedHidden || visibleFiles.length === 0;
+	const hidden = inheritedHidden;
 
 	return [{
 		id,

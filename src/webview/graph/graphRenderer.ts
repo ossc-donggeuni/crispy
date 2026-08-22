@@ -31,7 +31,10 @@ import { fitRelativePath } from './graphRootContext';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
-	applyLayout(node: GraphFileGroupNode): void;
+	applyLayout(
+		node: GraphFileGroupNode,
+		rootNodeIds: ReadonlySet<string>,
+	): void;
 	dispose(): void;
 }
 
@@ -654,7 +657,10 @@ export function initializeGraphRenderer(
 					nextNode.kind === 'file-group'
 					&& nextNode.presentation === 'grouped'
 				) {
-					fileGroupContents.get(nextNode.id)?.applyLayout(nextNode);
+					fileGroupContents.get(nextNode.id)?.applyLayout(
+						nextNode,
+						rootNodeIds,
+					);
 				}
 
 				if (
@@ -1016,6 +1022,7 @@ function initializeFileGroupContent(
 	initializeBacklink: BacklinkInitializer,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
+	let renderedRootNodeIds = rootNodeIds;
 	let content: FileGroupContentElements = { elements: [], cleanups: [] };
 	let fileRows = new Map<string, HTMLLIElement>();
 	let disposed = false;
@@ -1054,7 +1061,7 @@ function initializeFileGroupContent(
 					file,
 					ownerDocument,
 					interactions,
-					rootNodeIds,
+					renderedRootNodeIds,
 					initializeBacklink,
 				);
 
@@ -1113,12 +1120,32 @@ function initializeFileGroupContent(
 
 			content = { elements, cleanups };
 		},
-		applyLayout(nextNode): void {
+		applyLayout(nextNode, nextRootNodeIds): void {
 			if (disposed) {
 				return;
 			}
 
+			const childrenChanged = renderedNode.children.length
+				!== nextNode.children.length
+				|| renderedNode.children.some((file, index) => {
+					const nextFile = nextNode.children[index];
+
+					return nextFile?.id !== file.id
+						|| nextFile.name !== file.name
+						|| nextFile.presentation !== file.presentation
+						|| nextFile.targetRootId !== file.targetRootId;
+				});
+			const rootMembershipChanged = nextNode.children.some((file) => (
+				renderedRootNodeIds.has(file.id) !== nextRootNodeIds.has(file.id)
+			));
 			renderedNode = nextNode;
+			renderedRootNodeIds = nextRootNodeIds;
+
+			if (childrenChanged || rootMembershipChanged) {
+				this.render(graphState.getFileGroupPage(nextNode.id));
+				return;
+			}
+
 			const filesById = new Map(
 				nextNode.children.map((file) => [file.id, file]),
 			);
@@ -1397,9 +1424,18 @@ function hasSameNodePresentation(
 		return true;
 	}
 
-	return previous.presentation === next.presentation
-		&& previous.parentId === next.parentId
-		&& previous.children.length === next.children.length
+	if (
+		previous.presentation !== next.presentation
+		|| previous.parentId !== next.parentId
+	) {
+		return false;
+	}
+
+	if (previous.presentation === 'grouped') {
+		return true;
+	}
+
+	return previous.children.length === next.children.length
 		&& previous.children.every((file, index) => {
 			const nextFile = next.children[index];
 
