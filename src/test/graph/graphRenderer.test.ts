@@ -2532,7 +2532,7 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('정렬 Node를 목록 밖으로 Drag하면 placeholder를 남기고 비정렬 요청을 보낸다', () => {
+	test('정렬 Node를 목록 밖으로 Drag하면 목록 drop zone과 placeholder를 정리한다', () => {
 		const requests: GraphNodeArrangementRequest[] = [];
 		const fixture = createRendererFixture(1, undefined, {
 			onNodeArrangementChange: (request) => {
@@ -2575,14 +2575,14 @@ suite('Graph Renderer / Node Drag', () => {
 			siblingPosition.y + 8,
 		));
 		assert.strictEqual(sibling.hasClass('is-arrangement-target'), true);
-		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), true);
 
 		node.dispatch('pointermove', createPointerEvent(
 			node,
 			nodePosition.x + 8,
 			nodePosition.y + 8,
 		));
-		assert.strictEqual(sibling.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(sibling.hasClass('is-arrangement-target'), true);
 		assert.strictEqual(placeholder.hasClass('is-arrangement-target'), true);
 
 		node.dispatch('pointermove', createPointerEvent(node, -500, -500));
@@ -2761,6 +2761,91 @@ suite('Graph Renderer / Node Drag', () => {
 			assert.strictEqual(target.hasClass('is-arrangement-target'), false);
 			fixture.renderer.dispose();
 		}
+	});
+
+	test('비정렬 Card가 정렬 목록과 겹치면 Pointer가 밖에 있어도 목록 전체를 강조한다', () => {
+		const floating = {
+			kind: 'folder' as const,
+			id: 'folder:overlap-target/floating',
+			name: 'floating',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const arrangedNodes = ['first', 'second', 'third'].map((name) => ({
+			kind: 'folder' as const,
+			id: `folder:overlap-target/${name}`,
+			name,
+			status: 'loaded' as const,
+			children: [],
+		}));
+		const project: Project = {
+			kind: 'project',
+			id: 'project:overlap-target',
+			name: 'overlap-target',
+			status: 'loaded',
+			children: [floating, ...arrangedNodes],
+		};
+		const requests: GraphNodeArrangementRequest[] = [];
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {
+				[floating.id]: { x: 820, y: 320 },
+			},
+		}, {
+			onNodeArrangementChange: (request) => {
+				requests.push(request);
+				return true;
+			},
+		}, project);
+		const state = fixture.graphState.getState();
+		const layout = createGraphLayout(createSingleRootGraph(project), {
+			openedFolders: state.openedFolders,
+			unarrangedNodeIds: new Set([floating.id]),
+		});
+
+		fixture.renderer.applyLayout(layout, state.nodePositions);
+		const floatingNode = fixture.getNode(floating.id);
+		const arrangedElements = arrangedNodes.map(({ id }) => fixture.getNode(id));
+		const floatingPosition = readTranslate(floatingNode.style.transform);
+		const arrangedLayoutNode = getLayoutNode(layout, arrangedNodes[1].id);
+		const pointerOffset = {
+			x: arrangedLayoutNode.width - 8,
+			y: arrangedLayoutNode.height / 2,
+		};
+		const overlappingPosition = {
+			x: arrangedLayoutNode.position.x + 100,
+			y: arrangedLayoutNode.position.y,
+		};
+		const pointerPosition = {
+			x: overlappingPosition.x + pointerOffset.x,
+			y: overlappingPosition.y + pointerOffset.y,
+		};
+
+		floatingNode.dispatch('pointerdown', createPointerEvent(
+			floatingNode,
+			floatingPosition.x + pointerOffset.x,
+			floatingPosition.y + pointerOffset.y,
+		));
+		floatingNode.dispatch('pointermove', createPointerEvent(
+			floatingNode,
+			pointerPosition.x,
+			pointerPosition.y,
+		));
+
+		assert.strictEqual(floatingNode.hasClass('is-arrangement-target'), false);
+		assert.ok(arrangedElements.every(
+			(element) => element.hasClass('is-arrangement-target'),
+		));
+		floatingNode.dispatch('pointerup', createPointerEvent(
+			floatingNode,
+			pointerPosition.x,
+			pointerPosition.y,
+		));
+		assert.deepStrictEqual(requests, [{ nodeId: floating.id, arranged: true }]);
+		assert.ok(arrangedElements.every(
+			(element) => !element.hasClass('is-arrangement-target'),
+		));
+		fixture.renderer.dispose();
 	});
 
 	test('grouped File Row를 밖으로 Drag하면 원본 강조와 커서 preview 후 비정렬 요청을 보낸다', () => {

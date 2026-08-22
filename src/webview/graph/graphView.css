@@ -159,6 +159,7 @@
 		var(--graph-viewport-accent-color) 68%,
 		transparent
 	);
+	z-index: 2;
 
 	background: color-mix(
 		in srgb,

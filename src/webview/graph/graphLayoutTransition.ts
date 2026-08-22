@@ -14,6 +14,8 @@ export interface RebaseNodePositionOptions {
 	readonly inheritAncestorOffsets?: boolean;
 	/** 자신의 절대 위치를 고정하고 descendant에는 내부 Layout 변화만 적용할 Root다. */
 	readonly stationaryRootNodeIds?: ReadonlySet<string>;
+	/** Layout에서 접힌 Node도 가장 가까운 표시 Ancestor의 이동량을 따르게 하는 전체 계층이다. */
+	readonly logicalParentByChild?: ReadonlyMap<string, string>;
 }
 
 export interface TranslateDetachedSubtreeOptions {
@@ -149,11 +151,65 @@ export function rebaseNodePositions(
 		};
 	}
 
+	rebaseCollapsedNodePositions(
+		previousLayout,
+		nextLayout,
+		nodePositions,
+		rebasedPositions,
+		options.logicalParentByChild,
+	);
+
 	if (options.inheritAncestorOffsets) {
 		inheritAncestorPositionOffsets(nextLayout, rebasedPositions);
 	}
 
 	return rebasedPositions;
+}
+
+/** Layout에 없는 저장 Node를 가장 가까운 표시 Ancestor의 실제 이동량만큼 옮긴다. */
+function rebaseCollapsedNodePositions(
+	previousLayout: GraphLayout,
+	nextLayout: GraphLayout,
+	nodePositions: GraphNodePositions,
+	rebasedPositions: Record<string, GraphLayoutPosition>,
+	logicalParentByChild: ReadonlyMap<string, string> | undefined,
+): void {
+	if (!logicalParentByChild || logicalParentByChild.size === 0) {
+		return;
+	}
+	const previousNodesById = indexNodes(previousLayout);
+	const nextNodesById = indexNodes(nextLayout);
+
+	for (const [nodeId, savedPosition] of Object.entries(nodePositions)) {
+		if (previousNodesById.has(nodeId) && nextNodesById.has(nodeId)) {
+			continue;
+		}
+		let ancestorId = logicalParentByChild.get(nodeId);
+
+		while (ancestorId) {
+			const previousAncestor = previousNodesById.get(ancestorId);
+			const nextAncestor = nextNodesById.get(ancestorId);
+
+			if (previousAncestor && nextAncestor) {
+				const previousPosition = resolveGraphLayoutNodePosition(
+					previousAncestor,
+					nodePositions,
+				);
+				const nextPosition = resolveGraphLayoutNodePosition(
+					nextAncestor,
+					rebasedPositions,
+				);
+
+				rebasedPositions[nodeId] = {
+					x: savedPosition.x + nextPosition.x - previousPosition.x,
+					y: savedPosition.y + nextPosition.y - previousPosition.y,
+				};
+				break;
+			}
+
+			ancestorId = logicalParentByChild.get(ancestorId);
+		}
+	}
 }
 
 /**

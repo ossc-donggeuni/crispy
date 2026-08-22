@@ -81,10 +81,10 @@ interface RootContextLabelRenderer {
 	dispose(): void;
 }
 
-/** 정렬 가능한 실제 Card/Placeholder 하나와 그 client hit rect다. */
-interface GraphArrangementTarget {
-	readonly element: HTMLElement;
-	readonly bounds: DOMRect;
+/** 같은 Parent 아래 정렬된 Card/Placeholder들이 만드는 하나의 복구 영역이다. */
+interface GraphArrangementDropZone {
+	readonly hitBounds: readonly DOMRect[];
+	readonly highlightElements: readonly HTMLElement[];
 }
 
 /** Graph Node/Edge DOM과 interaction lifecycle을 관리한다. */
@@ -127,6 +127,8 @@ export interface GraphRendererInteractions {
 	) => GraphRootReattachResult;
 	/** 일반 Node Drag 결과를 정렬 flow 포함 여부로 반영하도록 상위 View에 요청한다. */
 	onNodeArrangementChange?: (request: GraphNodeArrangementRequest) => boolean;
+	/** 접힌 Node를 포함한 논리 subtree의 Visual ID를 Drag 이동 대상으로 복원한다. */
+	resolveNodeSubtreeIds?: (nodeId: string) => ReadonlySet<string>;
 }
 
 /** Reattach가 확인된 Root와 실제 Node를 최신 Graph 변경 경로에 전달한다. */
@@ -249,11 +251,11 @@ export function initializeGraphRenderer(
 	let activeArrangementDrag: {
 		readonly nodeId: string;
 		readonly wasUnarranged: boolean;
-		readonly targets: readonly GraphArrangementTarget[];
+		readonly dropZone?: GraphArrangementDropZone;
 		readonly placeholder?: HTMLElement;
 		readonly sourceElement?: HTMLElement;
 		readonly preview?: HTMLElement;
-		activeTarget?: HTMLElement;
+		isDropZoneActive?: boolean;
 	} | undefined;
 	/** 정렬 Drag placeholder와 hover target 표시를 모두 제거한다. */
 	const clearArrangementDrag = (): void => {
@@ -261,8 +263,8 @@ export function initializeGraphRenderer(
 			return;
 		}
 
-		for (const target of activeArrangementDrag.targets) {
-			target.element.classList.remove(ARRANGEMENT_TARGET_CLASS);
+		for (const element of activeArrangementDrag.dropZone?.highlightElements ?? []) {
+			element.classList.remove(ARRANGEMENT_TARGET_CLASS);
 		}
 
 		activeArrangementDrag.placeholder?.remove();
@@ -337,9 +339,12 @@ export function initializeGraphRenderer(
 				activeArrangementDrag = {
 					nodeId,
 					wasUnarranged,
-					targets: targetBounds
-						? [{ element: targetElement, bounds: targetBounds }]
-						: [],
+					dropZone: targetBounds
+						? {
+							hitBounds: [targetBounds],
+							highlightElements: [targetElement],
+						}
+						: undefined,
 				};
 				return;
 			}
@@ -358,7 +363,7 @@ export function initializeGraphRenderer(
 				))
 			: [];
 		let placeholder: HTMLElement | undefined;
-		const targets: GraphArrangementTarget[] = siblingIds.flatMap((siblingId) => {
+		const targetEntries = siblingIds.flatMap((siblingId) => {
 			const element = nodeElements.get(siblingId);
 			const bounds = getNodeClientRect(siblingId);
 
@@ -377,19 +382,22 @@ export function initializeGraphRenderer(
 				const sourceBounds = getNodeClientRect(nodeId);
 
 				if (sourceBounds) {
-					targets.push({ element: placeholder, bounds: sourceBounds });
+					targetEntries.push({ element: placeholder, bounds: sourceBounds });
 				}
 			}
 		}
 
-		if (targets.length === 0 && parentId) {
+		if (targetEntries.length === 0 && parentId) {
 			const parentElement = nodeElements.get(parentId);
 
 			if (parentElement && !parentElement.hidden) {
 				const parentBounds = getNodeClientRect(parentId);
 
 				if (parentBounds) {
-					targets.push({ element: parentElement, bounds: parentBounds });
+					targetEntries.push({
+						element: parentElement,
+						bounds: parentBounds,
+					});
 				}
 			}
 		}
@@ -397,7 +405,12 @@ export function initializeGraphRenderer(
 		activeArrangementDrag = {
 			nodeId,
 			wasUnarranged,
-			targets,
+			dropZone: targetEntries.length > 0
+				? {
+					hitBounds: targetEntries.map(({ bounds }) => bounds),
+					highlightElements: targetEntries.map(({ element }) => element),
+				}
+				: undefined,
 			placeholder,
 		};
 	};
@@ -430,9 +443,12 @@ export function initializeGraphRenderer(
 		activeArrangementDrag = {
 			nodeId: file.id,
 			wasUnarranged: false,
-			targets: targetBounds
-				? [{ element: targetElement, bounds: targetBounds }]
-				: [],
+			dropZone: targetBounds
+				? {
+					hitBounds: [targetBounds],
+					highlightElements: [targetElement],
+				}
+				: undefined,
 			sourceElement,
 			preview,
 		};
@@ -456,29 +472,37 @@ export function initializeGraphRenderer(
 		preview.style.transform = `translate(${position.x}px, ${position.y}px)`;
 		return position;
 	};
-	/** Pointer가 실제 정렬 Card/Placeholder에 들어왔는지 판별하고 해당 슬롯만 강조한다. */
+	/** Pointer/Card가 정렬 목록에 들어왔는지 판별하고 목록의 모든 슬롯을 강조한다. */
 	const updateArrangementTarget = (
 		clientX: number,
 		clientY: number,
 	): boolean => {
 		const session = activeArrangementDrag;
-		const target = session
-			? findClosestArrangementTarget(
-				session.targets,
+		const draggedBounds = session && !session.preview
+			? getNodeClientRect(session.nodeId)
+			: undefined;
+		const isTarget = session?.dropZone
+			? isArrangementDropZoneHit(
+				session.dropZone,
 				clientX,
 				clientY,
 				ARRANGEMENT_TARGET_MARGIN,
+				draggedBounds,
 			)
-			: undefined;
-		const isTarget = target !== undefined;
+			: false;
 
-		if (!session || session.activeTarget === target?.element) {
+		if (!session || session.isDropZoneActive === isTarget) {
 			return isTarget;
 		}
 
-		session.activeTarget?.classList.remove(ARRANGEMENT_TARGET_CLASS);
-		session.activeTarget = target?.element;
-		session.activeTarget?.classList.add(ARRANGEMENT_TARGET_CLASS);
+		for (const element of session.dropZone?.highlightElements ?? []) {
+			if (isTarget) {
+				element.classList.add(ARRANGEMENT_TARGET_CLASS);
+			} else {
+				element.classList.remove(ARRANGEMENT_TARGET_CLASS);
+			}
+		}
+		session.isDropZoneActive = isTarget;
 
 		return isTarget;
 	};
@@ -1187,6 +1211,21 @@ export function initializeGraphRenderer(
 					layoutNode.id,
 				)) {
 					const position = renderedPositions.get(nodeId);
+
+					if (position) {
+						positions.set(nodeId, { ...position });
+					}
+				}
+				const storedPositions = graphState.getState().nodePositions;
+
+				for (const nodeId of interactions.resolveNodeSubtreeIds?.(
+					layoutNode.id,
+				) ?? []) {
+					if (positions.has(nodeId)) {
+						continue;
+					}
+					const position = renderedPositions.get(nodeId)
+						?? storedPositions[nodeId];
 
 					if (position) {
 						positions.set(nodeId, { ...position });
@@ -1978,75 +2017,40 @@ function isPointInsideExpandedRect(
 		&& clientY <= rect.bottom + margin;
 }
 
-/**
- * 확장된 개별 hit rect 안의 슬롯만 반환한다.
- * Margin이 겹치면 실제 rect까지의 거리, 그다음 중심 거리가 가까운 슬롯을 고른다.
- */
-function findClosestArrangementTarget(
-	targets: readonly GraphArrangementTarget[],
+/** 개별 Card 사이의 빈 공간은 제외한 채 정렬 목록 drop zone 진입을 판별한다. */
+function isArrangementDropZoneHit(
+	dropZone: GraphArrangementDropZone,
 	clientX: number,
 	clientY: number,
 	margin: number,
-): GraphArrangementTarget | undefined {
-	let closest: GraphArrangementTarget | undefined;
-	let closestRectDistance = Number.POSITIVE_INFINITY;
-	let closestCenterDistance = Number.POSITIVE_INFINITY;
-
-	for (const target of targets) {
-		if (!isPointInsideExpandedRect(
+	draggedBounds?: DOMRect,
+): boolean {
+	return dropZone.hitBounds.some((bounds) => (
+		isPointInsideExpandedRect(
 			clientX,
 			clientY,
-			target.bounds,
+			bounds,
 			margin,
-		)) {
-			continue;
-		}
-		const rectDistance = squaredDistanceToRect(
-			clientX,
-			clientY,
-			target.bounds,
-		);
-		const centerDeltaX = clientX
-			- (target.bounds.left + target.bounds.right) / 2;
-		const centerDeltaY = clientY
-			- (target.bounds.top + target.bounds.bottom) / 2;
-		const centerDistance = centerDeltaX * centerDeltaX
-			+ centerDeltaY * centerDeltaY;
-
-		if (
-			rectDistance < closestRectDistance
-			|| (
-				rectDistance === closestRectDistance
-				&& centerDistance < closestCenterDistance
-			)
-		) {
-			closest = target;
-			closestRectDistance = rectDistance;
-			closestCenterDistance = centerDistance;
-		}
-	}
-
-	return closest;
+		)
+		|| (
+			draggedBounds !== undefined
+			&& getRectIntersectionArea(draggedBounds, bounds) > 0
+		)
+	));
 }
 
-/** Pointer와 rect 사이의 축별 최단 거리 제곱을 반환한다. */
-function squaredDistanceToRect(
-	clientX: number,
-	clientY: number,
-	rect: DOMRect,
-): number {
-	const deltaX = clientX < rect.left
-		? rect.left - clientX
-		: clientX > rect.right
-			? clientX - rect.right
-			: 0;
-	const deltaY = clientY < rect.top
-		? rect.top - clientY
-		: clientY > rect.bottom
-			? clientY - rect.bottom
-			: 0;
+/** 두 client rect가 실제로 겹친 면적을 반환한다. */
+function getRectIntersectionArea(left: DOMRect, right: DOMRect): number {
+	const width = Math.max(
+		0,
+		Math.min(left.right, right.right) - Math.max(left.left, right.left),
+	);
+	const height = Math.max(
+		0,
+		Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top),
+	);
 
-	return deltaX * deltaX + deltaY * deltaY;
+	return width * height;
 }
 
 function createClientRect(

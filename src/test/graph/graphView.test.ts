@@ -63,6 +63,23 @@ suite('Graph View', () => {
 		assert.match(hiddenRule[0], /display:\s*none;/);
 	});
 
+	test('정렬 대상 강조는 Drag Card보다 위에 표시된다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const draggingRule = graphViewCss.match(
+			/\.graph-node\.is-dragging\s*\{[^}]*z-index:\s*(\d+);[^}]*\}/,
+		);
+		const targetRule = graphViewCss.match(
+			/\.graph-node\.is-arrangement-target,\s*\.graph-arrangement-placeholder\.is-arrangement-target\s*\{[^}]*z-index:\s*(\d+);[^}]*\}/,
+		);
+
+		assert.ok(draggingRule?.[1]);
+		assert.ok(targetRule?.[1]);
+		assert.ok(Number(targetRule[1]) > Number(draggingRule[1]));
+	});
+
 	test('한 번 생성한 Layout reference를 Renderer와 Navigator에 함께 적용한다', () => {
 		const layout = createGraphLayout(GRAPH_MOCK);
 		let rendererLayout: typeof layout | undefined;
@@ -4062,6 +4079,484 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('열린 descendant가 있는 unarranged Folder를 닫았다 다시 열어도 sibling flow 높이는 유지한다', () => {
+		const nestedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:toggle-target/nested',
+			name: 'nested',
+			status: 'loaded' as const,
+			children: [
+				{
+					kind: 'folder' as const,
+					id: 'folder:toggle-target/nested/first',
+					name: 'first',
+					status: 'loaded' as const,
+					children: [],
+				},
+				{
+					kind: 'folder' as const,
+					id: 'folder:toggle-target/nested/second',
+					name: 'second',
+					status: 'loaded' as const,
+					children: [],
+				},
+			],
+		};
+		const targetFolder = {
+			kind: 'folder' as const,
+			id: 'folder:toggle-target',
+			name: 'toggle-target',
+			status: 'loaded' as const,
+			children: [nestedFolder],
+		};
+		const aboveId = 'folder:toggle-above';
+		const belowId = 'folder:toggle-below';
+		const project: Project = {
+			kind: 'project',
+			id: 'project:unarranged-toggle',
+			name: 'unarranged-toggle',
+			status: 'loaded',
+			children: [
+				{
+					kind: 'folder',
+					id: aboveId,
+					name: 'above',
+					status: 'loaded',
+					children: [],
+				},
+				targetFolder,
+				{
+					kind: 'folder',
+					id: belowId,
+					name: 'below',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[targetFolder.id]: true,
+				[nestedFolder.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const above = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			aboveId,
+		);
+		const target = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetFolder.id,
+		);
+		const below = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			belowId,
+		);
+		performNodeDrop(target, 520, 260);
+		const movedTargetPosition = readTranslate(target.style.transform);
+		const arrangedSiblingTransforms = {
+			above: above.style.transform,
+			below: below.style.transform,
+		};
+
+		for (let index = 0; index < 2; index += 1) {
+			graphView.state.toggleFolder(targetFolder.id);
+			assert.strictEqual(above.style.transform, arrangedSiblingTransforms.above);
+			assert.strictEqual(below.style.transform, arrangedSiblingTransforms.below);
+
+			graphView.state.toggleFolder(targetFolder.id);
+			assert.strictEqual(above.style.transform, arrangedSiblingTransforms.above);
+			assert.strictEqual(below.style.transform, arrangedSiblingTransforms.below);
+			assert.deepStrictEqual(
+				readTranslate(target.style.transform),
+				movedTargetPosition,
+			);
+			assert.ok(findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				'folder:toggle-target/nested/second',
+			));
+		}
+
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 이동한 뒤에도 unarranged Child는 Parent 상대 위치를 유지한다', () => {
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:relative-parent/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:relative-parent',
+			name: 'relative-parent',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:relative-parent',
+			name: 'relative-parent',
+			status: 'loaded',
+			children: [
+				parent,
+				{
+					kind: 'folder',
+					id: 'folder:relative-parent-sibling',
+					name: 'sibling',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[parent.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		let childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+
+		performNodeDrop(childNode, 520, 260);
+		const initialRelativePosition = subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+
+		graphView.state.toggleFolder(parent.id);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		), undefined);
+		performNodeDrop(parentNode, 180, 160);
+		graphView.state.toggleFolder(parent.id);
+		childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		), initialRelativePosition);
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 비정렬 이동 후 재정렬해도 내부 Node의 상대 위치를 유지한다', () => {
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:relative-rearrange/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:relative-rearrange',
+			name: 'relative-rearrange',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const sibling = {
+			kind: 'folder' as const,
+			id: 'folder:relative-rearrange-sibling',
+			name: 'sibling',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:relative-rearrange',
+			name: 'relative-rearrange',
+			status: 'loaded',
+			children: [parent, sibling],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[parent.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		let childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const siblingNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			sibling.id,
+		);
+
+		performNodeDrop(childNode, 520, 260);
+		const initialRelativePosition = subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+		graphView.state.toggleFolder(parent.id);
+		performNodeDrop(parentNode, 180, 160);
+		const siblingPosition = readTranslate(siblingNode.style.transform);
+
+		performNodeDrop(
+			parentNode,
+			siblingPosition.x + 8,
+			siblingPosition.y + 8,
+		);
+		graphView.state.toggleFolder(parent.id);
+		childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		), initialRelativePosition);
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 Detach해도 unarranged 내부 subtree의 상대 위치를 새 Instance에 유지한다', () => {
+		const grandchild = {
+			kind: 'folder' as const,
+			id: 'folder:relative-detach/child/grandchild',
+			name: 'grandchild',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:relative-detach/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [grandchild],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:relative-detach',
+			name: 'relative-detach',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:relative-detach',
+			name: 'relative-detach',
+			status: 'loaded',
+			children: [parent],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[parent.id]: true,
+				[child.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		const childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const grandchildNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			grandchild.id,
+		);
+
+		performNodeDrop(childNode, 520, 260);
+		const childRelativePosition = subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+		const grandchildRelativePosition = subtractPositions(
+			readTranslate(grandchildNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+
+		graphView.state.toggleFolder(parent.id);
+		performNodeDrop(parentNode, 180, 160);
+		const handle = getDescendantByClass(parentNode, 'graph-detach-handle');
+
+		handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+		handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+		handle.dispatch('pointerup', createPointerEvent(handle, 1_200, 800));
+
+		const detachedRootId = createDetachedRootId(parent.id, 1);
+		const detachedParentId = createGraphLayoutNodeId(
+			detachedRootId,
+			parent.id,
+		);
+		const detachedChildId = createGraphLayoutNodeId(
+			detachedRootId,
+			child.id,
+		);
+		const detachedGrandchildId = createGraphLayoutNodeId(
+			detachedRootId,
+			grandchild.id,
+		);
+
+		graphView.state.toggleFolder(detachedParentId);
+		const detachedParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedParentId,
+		);
+		const detachedChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedChildId,
+		);
+		const detachedGrandchild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedGrandchildId,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(detachedChild.style.transform),
+			readTranslate(detachedParent.style.transform),
+		), childRelativePosition);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(detachedGrandchild.style.transform),
+			readTranslate(detachedParent.style.transform),
+		), grandchildRelativePosition);
+
+		graphView.state.toggleFolder(detachedParentId);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(parent.id),
+		);
+		const backlinkHandle = getDescendantByClass(
+			backlink,
+			'graph-detach-handle',
+		);
+
+		backlinkHandle.dispatch(
+			'pointerdown',
+			createPointerEvent(backlinkHandle, 10, 10),
+		);
+		backlinkHandle.dispatch(
+			'pointermove',
+			createPointerEvent(backlinkHandle, 30, 30),
+		);
+		backlinkHandle.dispatch(
+			'pointerup',
+			createPointerEvent(backlinkHandle, 1_600, 900),
+		);
+		const secondRootId = createDetachedRootId(parent.id, 2);
+		const secondParentId = createGraphLayoutNodeId(secondRootId, parent.id);
+		const secondChildId = createGraphLayoutNodeId(secondRootId, child.id);
+		const secondGrandchildId = createGraphLayoutNodeId(
+			secondRootId,
+			grandchild.id,
+		);
+
+		graphView.state.toggleFolder(secondParentId);
+		const secondParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondParentId,
+		);
+		const secondChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondChildId,
+		);
+		const secondGrandchild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondGrandchildId,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(secondChild.style.transform),
+			readTranslate(secondParent.style.transform),
+		), childRelativePosition);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(secondGrandchild.style.transform),
+			readTranslate(secondParent.style.transform),
+		), grandchildRelativePosition);
+
+		setClientBounds(backlink, 200, 100, 200, 42);
+		beginNodeDrag(secondParent, 300, 121);
+		secondParent.dispatch(
+			'pointerup',
+			createPointerEvent(secondParent, 300, 121),
+		);
+		beginNodeDrag(detachedParent, 300, 121);
+		detachedParent.dispatch(
+			'pointerup',
+			createPointerEvent(detachedParent, 300, 121),
+		);
+		graphView.state.toggleFolder(parent.id);
+		const restoredParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		const restoredChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const restoredGrandchild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			grandchild.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(restoredChild.style.transform),
+			readTranslate(restoredParent.style.transform),
+		), childRelativePosition);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(restoredGrandchild.style.transform),
+			readTranslate(restoredParent.style.transform),
+		), grandchildRelativePosition);
+		graphView.dispose();
+	});
+
 	test('grouped File을 밖으로 뺐다가 목록에 놓으면 standalone과 grouped 상태를 왕복한다', () => {
 		const files = ['a', 'b', 'c'].map((name) => ({
 			kind: 'file' as const,
@@ -4872,6 +5367,16 @@ function readTranslate(transform: string): { x: number; y: number } {
 
 	assert.ok(match?.[1] && match[2]);
 	return { x: Number(match[1]), y: Number(match[2]) };
+}
+
+function subtractPositions(
+	left: { readonly x: number; readonly y: number },
+	right: { readonly x: number; readonly y: number },
+): { x: number; y: number } {
+	return {
+		x: left.x - right.x,
+		y: left.y - right.y,
+	};
 }
 
 function getText(element: FakeElement): string {

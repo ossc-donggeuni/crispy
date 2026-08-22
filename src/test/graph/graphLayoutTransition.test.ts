@@ -116,6 +116,35 @@ suite('Graph Layout Transition', () => {
 		});
 	});
 
+	test('Layout에서 접힌 저장 Descendant는 현재 Parent의 이동량을 따른다', () => {
+		const previousLayout = createLayout([
+			createNode('parent', 100, 100),
+		]);
+		const nextLayout = createLayout([
+			createNode('parent', 160, 140),
+		]);
+
+		assert.deepStrictEqual(rebaseNodePositions(
+			previousLayout,
+			nextLayout,
+			{
+				parent: { x: 120, y: 130 },
+				'collapsed-child': { x: 620, y: 360 },
+				'collapsed-grandchild': { x: 920, y: 390 },
+			},
+			{
+				logicalParentByChild: new Map([
+					['collapsed-child', 'parent'],
+					['collapsed-grandchild', 'collapsed-child'],
+				]),
+			},
+		), {
+			parent: { x: 180, y: 170 },
+			'collapsed-child': { x: 680, y: 400 },
+			'collapsed-grandchild': { x: 980, y: 430 },
+		});
+	});
+
 	test('Detach는 Edge subtree 전체 실제 위치에 같은 Delta를 적용한다', () => {
 		const previousLayout = createSubtreeLayout({
 			root: { x: 300, y: 200 },
