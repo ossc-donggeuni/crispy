@@ -219,14 +219,64 @@ body {
 }
 
 #chat-drag-handle {
-	font-size: 18px;
 	cursor: grab;
 	touch-action: none;
 }
 
 #chat-collapse-toggle {
-	font-size: 16px;
 	cursor: pointer;
+}
+
+#chat-drag-handle::before,
+#chat-collapse-toggle::before,
+#chat-sticker-opener::before {
+	content: '';
+	display: block;
+	background-color: currentColor;
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	pointer-events: none;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+#chat-drag-handle::before {
+	width: 18px;
+	height: 18px;
+	mask-image: url('./graph/assets/ui-icons/drag-handle.svg');
+	-webkit-mask-image: url('./graph/assets/ui-icons/drag-handle.svg');
+}
+
+#chat-collapse-toggle::before,
+#chat-sticker-opener::before {
+	width: 12px;
+	height: 12px;
+}
+
+#chat-collapse-toggle[data-panel-icon='panel-up.svg']::before,
+#chat-sticker-opener[data-panel-icon='panel-up.svg']::before {
+	mask-image: url('./graph/assets/ui-icons/panel-up.svg');
+	-webkit-mask-image: url('./graph/assets/ui-icons/panel-up.svg');
+}
+
+#chat-collapse-toggle[data-panel-icon='panel-down.svg']::before,
+#chat-sticker-opener[data-panel-icon='panel-down.svg']::before {
+	mask-image: url('./graph/assets/ui-icons/panel-down.svg');
+	-webkit-mask-image: url('./graph/assets/ui-icons/panel-down.svg');
+}
+
+#chat-collapse-toggle[data-panel-icon='panel-left.svg']::before,
+#chat-sticker-opener[data-panel-icon='panel-left.svg']::before {
+	mask-image: url('./graph/assets/ui-icons/panel-left.svg');
+	-webkit-mask-image: url('./graph/assets/ui-icons/panel-left.svg');
+}
+
+#chat-collapse-toggle[data-panel-icon='panel-right.svg']::before,
+#chat-sticker-opener[data-panel-icon='panel-right.svg']::before {
+	mask-image: url('./graph/assets/ui-icons/panel-right.svg');
+	-webkit-mask-image: url('./graph/assets/ui-icons/panel-right.svg');
 }
 
 #chat-drag-handle:hover,

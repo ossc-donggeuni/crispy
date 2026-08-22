@@ -1239,9 +1239,27 @@
 }
 
 .graph-navigator-filter-chevron {
-	font-size: 12px;
-	line-height: 1;
+	display: block;
+	width: 10px;
+	height: 10px;
+	background-color: currentColor;
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
 	pointer-events: none;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-navigator-filter-chevron[data-filter-icon='filter-opened.svg'] {
+	mask-image: url('./assets/ui-icons/filter-opened.svg');
+	-webkit-mask-image: url('./assets/ui-icons/filter-opened.svg');
+}
+
+.graph-navigator-filter-chevron[data-filter-icon='filter-closed.svg'] {
+	mask-image: url('./assets/ui-icons/filter-closed.svg');
+	-webkit-mask-image: url('./assets/ui-icons/filter-closed.svg');
 }
 
 .graph-navigator-filter-checkbox {
@@ -1364,6 +1382,7 @@
 }
 
 .graph-navigator-action-icon[data-navigator-icon='navigator-filter.svg'] {
+	width: 24px;
 	mask-image: url('./assets/ui-icons/navigator-filter.svg');
 	-webkit-mask-image: url('./assets/ui-icons/navigator-filter.svg');
 }

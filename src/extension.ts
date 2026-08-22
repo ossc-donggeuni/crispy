@@ -669,15 +669,15 @@ function getWebviewHtml(
 						<div id="agent-panel-header">
 							<div id="agent-tab-strip"></div>
 							<div id="agent-top-bar"></div>
-							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
-							<button id="chat-collapse-toggle" type="button" aria-label="Hide Agent Chat" title="Hide Agent Chat">›</button>
+							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat"></button>
+							<button id="chat-collapse-toggle" type="button" aria-label="Hide Agent Chat" title="Hide Agent Chat" data-panel-icon="panel-right.svg"></button>
 						</div>
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
 						<div id="agent-dialog-host" hidden></div>
 					</section>
-					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" hidden>‹</button>
+					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
 				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}"></script>

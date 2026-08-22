@@ -61,6 +61,8 @@ const FILTER_LABEL = 'Workspace Filter';
 const FILTER_PANEL_ID = 'graph-navigator-filter-panel';
 const FILTER_PANEL_TITLE_ID = 'graph-navigator-filter-title';
 const FILTER_ICON_ASSET = 'navigator-filter.svg';
+const FILTER_OPENED_ICON_ASSET = 'filter-opened.svg';
+const FILTER_CLOSED_ICON_ASSET = 'filter-closed.svg';
 const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
 const FOLDER_ROOT_ICON_ASSET = 'folder-closed.svg';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -478,7 +480,10 @@ export function initializeGraphNavigator(
 		button.setAttribute('data-filter-toggle-id', directory.id);
 		chevron.className = 'graph-navigator-filter-chevron';
 		chevron.setAttribute('aria-hidden', 'true');
-		chevron.textContent = expanded ? '▾' : '▸';
+		chevron.setAttribute(
+			'data-filter-icon',
+			expanded ? FILTER_CLOSED_ICON_ASSET : FILTER_OPENED_ICON_ASSET,
+		);
 		button.append(chevron);
 		return button;
 	};

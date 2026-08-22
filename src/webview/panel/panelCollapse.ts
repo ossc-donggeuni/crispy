@@ -15,20 +15,20 @@ export interface PanelCollapseElements {
 	readonly stickerOpener: HTMLElement;
 }
 
-/** Dock 방향별 접기 버튼 아이콘이며 Panel이 접히는 방향을 가리킨다. */
-const COLLAPSE_ICONS: Readonly<Record<DockPosition, string>> = {
-	left: '‹',
-	right: '›',
-	top: '⌃',
-	bottom: '⌄',
+/** Dock 방향별 접기 버튼 SVG이며 Panel이 접히는 방향을 가리킨다. */
+const COLLAPSE_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
+	left: 'panel-left.svg',
+	right: 'panel-right.svg',
+	top: 'panel-up.svg',
+	bottom: 'panel-down.svg',
 };
 
-/** Dock 방향별 Sticker 아이콘이며 Panel이 다시 열리는 방향을 가리킨다. */
-const OPENER_ICONS: Readonly<Record<DockPosition, string>> = {
-	left: '›',
-	right: '‹',
-	top: '⌄',
-	bottom: '⌃',
+/** Dock 방향별 Sticker SVG이며 Panel이 다시 열리는 방향을 가리킨다. */
+const OPENER_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
+	left: 'panel-right.svg',
+	right: 'panel-left.svg',
+	top: 'panel-down.svg',
+	bottom: 'panel-up.svg',
 };
 
 /**
@@ -59,8 +59,8 @@ export function initializePanelCollapse(
 		elements.resizeHandle.hidden = state.collapsed;
 		elements.stickerOpener.hidden = !state.collapsed;
 		elements.stickerOpener.dataset.dock = dock;
-		elements.stickerOpener.textContent = OPENER_ICONS[dock];
-		elements.collapseButton.textContent = COLLAPSE_ICONS[dock];
+		elements.stickerOpener.dataset.panelIcon = OPENER_ICON_ASSETS[dock];
+		elements.collapseButton.dataset.panelIcon = COLLAPSE_ICON_ASSETS[dock];
 	};
 
 	/**

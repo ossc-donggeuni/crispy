@@ -32,10 +32,10 @@ suite('Panel Collapse', () => {
 
 	test('Sticker를 현재 Dock 방향에 맞춰 표시한다', () => {
 		const stickerIcons: Record<DockPosition, string> = {
-			left: '›',
-			right: '‹',
-			top: '⌄',
-			bottom: '⌃',
+			left: 'panel-right.svg',
+			right: 'panel-left.svg',
+			top: 'panel-down.svg',
+			bottom: 'panel-up.svg',
 		};
 
 		for (const dock of ['left', 'right', 'top', 'bottom'] as const) {
@@ -45,7 +45,10 @@ suite('Panel Collapse', () => {
 
 			assert.strictEqual(fixture.stickerOpener.hidden, false);
 			assert.strictEqual(fixture.stickerOpener.dataset.dock, dock);
-			assert.strictEqual(fixture.stickerOpener.textContent, stickerIcons[dock]);
+			assert.strictEqual(
+				fixture.stickerOpener.dataset.panelIcon,
+				stickerIcons[dock],
+			);
 		}
 	});
 
@@ -102,14 +105,23 @@ suite('Panel Collapse', () => {
 	test('Dock이 바뀌면 Sticker와 접기 버튼 아이콘을 다시 맞춘다', () => {
 		const fixture = createCollapseFixture('right');
 
-		assert.strictEqual(fixture.collapseButton.textContent, '›');
+		assert.strictEqual(
+			fixture.collapseButton.dataset.panelIcon,
+			'panel-right.svg',
+		);
 
 		fixture.state.preferredDock = 'bottom';
 		fixture.refreshCollapse();
 
-		assert.strictEqual(fixture.collapseButton.textContent, '⌄');
+		assert.strictEqual(
+			fixture.collapseButton.dataset.panelIcon,
+			'panel-down.svg',
+		);
 		assert.strictEqual(fixture.stickerOpener.dataset.dock, 'bottom');
-		assert.strictEqual(fixture.stickerOpener.textContent, '⌃');
+		assert.strictEqual(
+			fixture.stickerOpener.dataset.panelIcon,
+			'panel-up.svg',
+		);
 	});
 });
 
@@ -170,7 +182,6 @@ function createCollapseFixture(
 class FakeElement {
 	readonly dataset = {} as DOMStringMap;
 	hidden = false;
-	textContent: string | null = null;
 	private readonly listeners = new Map<string, () => void>();
 
 	asHtmlElement(): HTMLElement {

@@ -1303,6 +1303,11 @@ suite('Graph Navigator', () => {
 		const expandButton = getFilterToggle(initialFolderItem);
 		const expandEvent = createClickEvent(expandButton.asEventTarget(), 0, 0);
 
+		assert.strictEqual(
+			getFilterToggleIcon(expandButton).getAttribute('data-filter-icon'),
+			'filter-opened.svg',
+		);
+
 		fixture.filterTree.dispatch('click', expandEvent);
 		const expandedFolderItem = getFilterItem(
 			fixture.filterTree,
@@ -1313,6 +1318,12 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(
 			getFilterToggle(expandedFolderItem).getAttribute('aria-expanded'),
 			'true',
+		);
+		assert.strictEqual(
+			getFilterToggleIcon(getFilterToggle(expandedFolderItem)).getAttribute(
+				'data-filter-icon',
+			),
+			'filter-closed.svg',
 		);
 		assert.strictEqual(fixture.graphState.getState().openedFolders, openedFolders);
 		assert.strictEqual(expandEvent.propagationStopped, true);
@@ -1989,6 +2000,16 @@ function getFilterToggle(item: FakeElement): FakeElement {
 
 	assert.ok(toggle);
 	return toggle;
+}
+
+function getFilterToggleIcon(toggle: FakeElement): FakeElement {
+	const icons = getDescendantsByClass(
+		toggle,
+		'graph-navigator-filter-chevron',
+	);
+
+	assert.strictEqual(icons.length, 1);
+	return icons[0] as FakeElement;
 }
 
 function getFilterCheckbox(root: FakeElement, nodeId: string): FakeElement {
