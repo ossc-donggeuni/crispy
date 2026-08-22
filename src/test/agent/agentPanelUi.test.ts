@@ -424,7 +424,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(restart.disabled, true);
 		assert.strictEqual(fixture.dialog.requests.length, 1);
 		assert.deepStrictEqual(fixture.dialog.requests[0], {
-			message: 'MCP와 Agent를 다시 시작하면 이 탭에서 실행 중인 Codex와 현재 CLI 대화가 종료됩니다. 새 MCP 연결과 새 Codex 세션으로 다시 시작하시겠습니까?',
+			message: 'MCP와 Agent를 다시 시작하면 이 탭에서 실행 중인 Agent와 현재 CLI 대화가 종료됩니다. 새 MCP 연결과 새 Agent 세션으로 다시 시작하시겠습니까?',
 			acceptLabel: 'MCP와 Agent 다시 시작',
 		});
 
@@ -468,7 +468,7 @@ suite('Agent Panel UI', () => {
 		});
 
 		requireElement(fixture.topBar, 'agent-create-tab').click();
-		selectProvider(fixture.providerPicker, 'codex');
+		selectProvider(fixture.providerPicker, 'claude');
 		const second = fixture.controller.getSnapshot().tabs[1].id;
 		fixture.controller.handleHostMessage({
 			type: 'terminal.started', tabId: second, sessionId: 'session-second',

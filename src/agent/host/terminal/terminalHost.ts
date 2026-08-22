@@ -155,7 +155,6 @@ interface StructuredMcpProviderStartOptions<
 	readonly buildBarePlan: (
 		preparation: TPreparation,
 	) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
-	readonly publishStartupFailures: boolean;
 	readonly onAuthenticatedRequestReady?: (
 		session: TerminalSession,
 		preparation: TPreparation,
@@ -171,6 +170,13 @@ interface StructuredMcpProviderStartOptions<
  */
 function generateTerminalSessionId(): SessionId {
 	return `session-${randomUUID()}`;
+}
+
+/** MCP 자동 연결과 명시적 재시작을 지원하는 현재 provider allowlist다. */
+function isMcpProviderId(
+	providerId: ProviderId | undefined,
+): providerId is McpProviderId {
+	return providerId === 'codex' || providerId === 'claude';
 }
 
 /**
@@ -706,7 +712,7 @@ export class TerminalHost {
 		}
 
 		const providerId = this.providerByTab.get(tabId);
-		if (providerId === 'codex') {
+		if (isMcpProviderId(providerId)) {
 			this.mcpStatusBySession.set(session.sessionId, {
 				status: 'preparing',
 				published: false,
@@ -822,7 +828,6 @@ export class TerminalHost {
 				executable: preparation.executable,
 				cwd: preparation.cwd,
 			}),
-			publishStartupFailures: true,
 		});
 	}
 
@@ -849,7 +854,6 @@ export class TerminalHost {
 				executable: preparation.executable,
 				cwd: preparation.cwd,
 			}),
-			publishStartupFailures: false,
 			onAuthenticatedRequestReady: (
 				currentSession,
 				preparation,
@@ -885,9 +889,7 @@ export class TerminalHost {
 			return;
 		}
 		const recordStartupFailure = (reason: McpFailureReason): void => {
-			if (options.publishStartupFailures) {
-				this.recordMcpFailure(session, reason);
-			}
+			this.recordMcpFailure(session, reason);
 		};
 
 		let preparationResult: StructuredProviderPreparation<TPreparation>;
@@ -1120,9 +1122,7 @@ export class TerminalHost {
 				providerId: options.providerId,
 				generation,
 			});
-			if (options.publishStartupFailures) {
-				this.setMcpAwaitingActivity(session);
-			}
+			this.setMcpAwaitingActivity(session);
 		}
 		this.mcpPtySpawnStarted.add(session.sessionId);
 		try {
@@ -1384,7 +1384,7 @@ export class TerminalHost {
 	}
 
 	/**
-	 * retryable MCP failure에서만 실행 중 Codex와 adapter를 함께 정리하고 fresh session을 만든다.
+	 * retryable MCP failure에서만 실행 중 provider와 adapter를 함께 정리하고 fresh session을 만든다.
 	 * 같은 탭의 동시 요청은 최초 transaction Promise를 공유하며 다른 탭과는 독립적이다.
 	 */
 	restartMcpSession(tabId: TabId, sessionId: SessionId): Promise<void> {
@@ -1410,10 +1410,11 @@ export class TerminalHost {
 	private canRestartMcpSession(tabId: TabId, sessionId: SessionId): boolean {
 		const session = this.sessionsById.get(sessionId);
 		const status = this.mcpStatusBySession.get(sessionId);
+		const providerId = this.providerByTab.get(tabId);
 		return this.lifecycleActive
 			&& session !== undefined
 			&& this.ownsSession(tabId, sessionId)
-			&& this.providerByTab.get(tabId) === 'codex'
+			&& isMcpProviderId(providerId)
 			&& session.state.kind === 'running'
 			&& status?.status === 'failed'
 			&& status.failure !== undefined
@@ -1431,6 +1432,10 @@ export class TerminalHost {
 		if (session === undefined) {
 			return;
 		}
+		const providerId = this.providerByTab.get(tabId);
+		if (!isMcpProviderId(providerId)) {
+			return;
+		}
 
 		const dimensions = this.lastDimensionsByTab.get(tabId)
 			?? RESTART_FALLBACK_DIMENSIONS;
@@ -1441,7 +1446,7 @@ export class TerminalHost {
 		if (
 			!this.lifecycleActive
 			|| !this.registeredTabs.has(tabId)
-			|| this.providerByTab.get(tabId) !== 'codex'
+			|| this.providerByTab.get(tabId) !== providerId
 			|| this.getActiveSession(tabId) !== undefined
 			|| !this.mcpRestartByTab.has(tabId)
 		) {
@@ -1730,15 +1735,16 @@ export class TerminalHost {
 		}
 
 		const signal = event.signal ?? null;
-		const claudeFallbackPreparation = this.getClaudeFallbackPreparation(
+		const claudeFallback = this.getClaudeStartupFallback(
 			session,
 			event,
 		);
 		session.markExited(event.exitCode, signal);
-		if (claudeFallbackPreparation !== undefined) {
+		if (claudeFallback !== undefined) {
 			void this.relaunchClaudeBareAfterStartupRejection(
 				session,
-				claudeFallbackPreparation,
+				claudeFallback.preparation,
+				claudeFallback.reason,
 			);
 			return;
 		}
@@ -1765,14 +1771,15 @@ export class TerminalHost {
 		error.withBufferedOutput((output) => {
 			this.appendClaudeStartupOutput(session.sessionId, output);
 		});
-		const claudeFallbackPreparation = this.getClaudeFallbackPreparation(
+		const claudeFallback = this.getClaudeStartupFallback(
 			session,
 			error.event,
 		);
-		if (claudeFallbackPreparation !== undefined) {
+		if (claudeFallback !== undefined) {
 			void this.relaunchClaudeBareAfterStartupRejection(
 				session,
-				claudeFallbackPreparation,
+				claudeFallback.preparation,
+				claudeFallback.reason,
 			);
 			return;
 		}
@@ -1786,10 +1793,16 @@ export class TerminalHost {
 	}
 
 	/** Exact pre-interactive Claude diagnostics are the sole post-spawn bare fallback signal. */
-	private getClaudeFallbackPreparation(
+	private getClaudeStartupFallback(
 		session: TerminalSession,
 		event: PtyExitEvent,
-	): PreparedClaudeTerminalLaunch | undefined {
+	): Readonly<{
+		preparation: PreparedClaudeTerminalLaunch;
+		reason: Extract<
+			McpFailureReason,
+			'provider_config_rejected' | 'provider_policy_blocked'
+		>;
+	}> | undefined {
 		const startup = this.claudeStartupBySession.get(session.sessionId);
 		if (startup === undefined) {
 			return undefined;
@@ -1802,7 +1815,9 @@ export class TerminalHost {
 			stderr: startup.output,
 			expectedMcpServerName: startup.serverName,
 		});
-		return rejection === undefined ? undefined : startup.preparation;
+		return rejection === undefined
+			? undefined
+			: Object.freeze({ preparation: startup.preparation, reason: rejection });
 	}
 
 	/** Keeps only a small in-memory startup window used by the exact diagnostic classifier. */
@@ -1829,6 +1844,10 @@ export class TerminalHost {
 	private async relaunchClaudeBareAfterStartupRejection(
 		oldSession: TerminalSession,
 		preparation: PreparedClaudeTerminalLaunch,
+		reason: Extract<
+			McpFailureReason,
+			'provider_config_rejected' | 'provider_policy_blocked'
+		>,
 	): Promise<void> {
 		if (!this.isCurrentProviderSession(oldSession, 'claude')) {
 			return;
@@ -1877,6 +1896,7 @@ export class TerminalHost {
 			);
 			return;
 		}
+		this.recordMcpFailure(session, reason);
 		this.publish({ type: 'terminal.starting', tabId });
 
 		let request: AgentProcessSpawnRequest | undefined;
@@ -1980,22 +2000,19 @@ export class TerminalHost {
 
 		switch (event.type) {
 			case 'session.mcpActivityObserved':
-				if (ownership.providerId === 'codex') {
-					this.setMcpConnected(session);
-				} else {
+				if (ownership.providerId === 'claude') {
 					const startup = this.claudeStartupBySession.get(session.sessionId);
 					if (startup?.generation === event.generation) {
 						startup.activityObserved = true;
 					}
 				}
+				this.setMcpConnected(session);
 				break;
 			case 'runtime.failure':
-				if (ownership.providerId === 'codex') {
-					this.recordMcpFailure(session, event.failure.reason);
-				} else {
+				if (ownership.providerId === 'claude') {
 					this.claudeStartupBySession.delete(session.sessionId);
-					void this.cleanupMcpSession(session.sessionId);
 				}
+				this.recordMcpFailure(session, event.failure.reason);
 				break;
 			case 'session.crispyPingObserved':
 				if (ownership.providerId === 'claude') {

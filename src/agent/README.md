@@ -376,16 +376,16 @@ src/agent/
 | 탭 전환 | `tab.switch` | 활성 탭만 기록한다 |
 | 중앙 목록의 provider 선택 | `agent.switch` | provider를 기록하고 세션을 시작한다 |
 | `⟳` 후 재시작 확인 | `agent.reset` | 현재 세션과 xterm을 정리하고 같은 탭을 provider 미선택 상태로 되돌린다 |
-| retryable MCP 실패의 `MCP와 Agent 다시 시작` | `mcp.restart` | current tab/session의 Codex와 MCP를 정리한 뒤 같은 provider로 fresh session을 시작한다 |
+| retryable MCP 실패의 `MCP와 Agent 다시 시작` | `mcp.restart` | current tab/session의 Codex 또는 Claude와 MCP를 정리한 뒤 같은 provider로 fresh session을 시작한다 |
 | 탭 닫기 확인 | `tab.close` | 세션을 정리하고 탭 등록을 해제한다 |
 | 표면 준비 | `terminal.ready` | 크기를 기록하고 provider가 있으면 세션을 시작한다 |
 
 `terminal.ready`와 `agent.switch` 중 나중에 도착한 쪽이 첫 세션 시작을 유발한다. provider가
 정해지지 않은 탭에서는 어떤 경우에도 PTY를 만들지 않는다.
 
-## Codex MCP 상태와 명시적 재시작
+## Codex/Claude MCP 상태와 명시적 재시작
 
-Codex 탭의 MCP indicator는 탭별 current `tabId`와 Host 소유 `sessionId`가 모두 일치할
+Codex와 Claude 탭의 MCP indicator는 탭별 current `tabId`와 Host 소유 `sessionId`가 모두 일치할
 때만 반영된다. 준비 중이거나 아직 요청이 오지 않은 상태는 기존 `Starting…` 흐름에
 포함되며 별도 indicator가 없다. 요청 silence는 실패가 아니며 timeout 기반의 빨간 상태를
 만들지 않는다.
@@ -397,16 +397,16 @@ Codex 탭의 MCP indicator는 탭별 current `tabId`와 Host 소유 `sessionId`�
   인자와 credential을 표시하지 않는다.
 - retryable failure에만 `MCP와 Agent 다시 시작` 버튼을 표시한다. non-retryable failure는
   안전한 고정 문구만 표시한다.
-- 재시작 확인은 현재 Codex와 CLI 대화가 종료됨을 알린다. 수락하면 old process tree와
+- 재시작 확인은 현재 Agent와 CLI 대화가 종료됨을 알린다. 수락하면 old process tree와
   MCP runtime을 먼저 정리한 뒤 fresh sessionId, child, random port/route/token, generation,
   config와 PTY를 만든다.
-- CLI가 실행된 뒤 MCP child가 비정상 종료되면 Codex PTY와 입출력은 유지한다. 사용자가
-  확인하기 전에는 bare Codex나 새 adapter를 자동 실행하지 않는다.
+- CLI가 실행된 뒤 MCP child가 비정상 종료되면 해당 Codex/Claude PTY와 입출력은 유지한다.
+  사용자가 확인하기 전에는 bare provider나 새 adapter를 자동 실행하지 않는다.
 - 새 session, reset, provider 재선택, 정상 CLI exit, tab close, Panel dispose와 deactivate는
   이전 표시 상태를 지운다. old session/generation의 늦은 status는 fresh 상태를 지울 수 없다.
 
 상단의 기존 `⟳`는 provider 선택 화면으로 돌아가는 generic reset이다. MCP retry는 실행 중
-Codex를 같은 provider로 다시 해석하는 별도 protocol이며 두 동작은 서로 대체하지 않는다.
+현재 Codex 또는 Claude를 같은 provider로 다시 해석하는 별도 protocol이며 두 동작은 서로 대체하지 않는다.
 
 ## provider 자동 실행 정책
 
@@ -416,8 +416,8 @@ Antigravity는 현재 MCP 범위 밖이므로 기존 기본 Shell을 시작한 �
 
 | provider | PTY root | 현재 MCP 동작 |
 | --- | --- | --- |
-| Codex | `codex` 또는 Windows one-shot wrapper | session MCP 자동 준비·연결, C5 상태/retry UI |
-| Claude | `claude` 또는 Windows one-shot wrapper | `>=2.1.121`에서 session MCP 자동 준비·연결, L2에서는 상태/retry UI 미연결 |
+| Codex | `codex` 또는 Windows one-shot wrapper | session MCP 자동 준비·연결, 공통 상태/retry UI |
+| Claude | `claude` 또는 Windows one-shot wrapper | `>=2.1.121`에서 session MCP 자동 준비·연결, 공통 상태/retry UI |
 | Antigravity | 기존 interactive Shell | `agy` 자동 입력, MCP config/token 주입 없음 |
 
 Codex와 Claude는 공통 `AgentLaunchPlan`, final environment sanitizer, session별 MCP supervisor,
@@ -509,3 +509,20 @@ adapter ownership만 정리한다.
 exact managed-policy 또는 current session server의 exact schema diagnostic이 모두 일치할 때만 한 번
 수행한다. 정상 종료, login/auth, 일반 network 오류와 MCP request silence는 relaunch 근거가 아니다.
 L2는 Claude 상태 indicator와 MCP 재시작 UI를 아직 연결하지 않으며 해당 범위는 L3 gate로 남긴다.
+
+## Claude MCP Phase L3/L4 상태와 최종 범위 — 2026-08-22
+
+L3에서 Claude를 위의 공통 MCP 상태와 명시적 재시작 경계에 연결했다. authenticated activity 전에는
+indicator가 없고 정상 result 뒤에만 초록, current session의 명시적 failure에만 빨강을 표시한다.
+retryable failure에서 사용자 확인을 받으면 현재 Claude 탭만 fresh session/child/port/route/token/
+config/PTY로 교체하며 Codex와 다른 Claude 탭은 유지한다. Host와 Webview가 각각 중복 요청을 막고
+old session/generation의 늦은 event는 current 상태를 변경하지 못한다.
+
+L4에서는 Claude `2.1.121` inclusive minimum, 현재 설치 `2.1.239`, minimum 미만과 version probe
+실패/timeout/unparsable fake case를 포함해 Codex/Claude 공통 lifecycle 회귀를 다시 검증한다.
+최신 CLI의 credential-free version/config surface는 macOS 15, Ubuntu 24.04, Windows 2025 scheduled
+workflow에서 계속 확인하고, authenticated header expansion과 `crispy_ping`은 로그인된 provider
+smoke로 분리한다. 상세 명령, 실기 결과와 OS별 `not_run` 기록은 `../mcp/README.md`를 따른다.
+
+Antigravity는 계속 기존 bare `agy` 동작만 유지한다. Graph report tool/state와 사용자-visible
+`provider_update_required` 정책도 별도 제품 결정 전에는 연결하지 않는다.
