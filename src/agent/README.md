@@ -509,3 +509,20 @@ adapter ownership만 정리한다.
 exact managed-policy 또는 current session server의 exact schema diagnostic이 모두 일치할 때만 한 번
 수행한다. 정상 종료, login/auth, 일반 network 오류와 MCP request silence는 relaunch 근거가 아니다.
 L2는 Claude 상태 indicator와 MCP 재시작 UI를 아직 연결하지 않으며 해당 범위는 L3 gate로 남긴다.
+
+## Claude MCP Phase L3/L4 상태와 최종 범위 — 2026-08-22
+
+L3에서 Claude를 위의 공통 MCP 상태와 명시적 재시작 경계에 연결했다. authenticated activity 전에는
+indicator가 없고 정상 result 뒤에만 초록, current session의 명시적 failure에만 빨강을 표시한다.
+retryable failure에서 사용자 확인을 받으면 현재 Claude 탭만 fresh session/child/port/route/token/
+config/PTY로 교체하며 Codex와 다른 Claude 탭은 유지한다. Host와 Webview가 각각 중복 요청을 막고
+old session/generation의 늦은 event는 current 상태를 변경하지 못한다.
+
+L4에서는 Claude `2.1.121` inclusive minimum, 현재 설치 `2.1.239`, minimum 미만과 version probe
+실패/timeout/unparsable fake case를 포함해 Codex/Claude 공통 lifecycle 회귀를 다시 검증한다.
+최신 CLI의 credential-free version/config surface는 macOS 15, Ubuntu 24.04, Windows 2025 scheduled
+workflow에서 계속 확인하고, authenticated header expansion과 `crispy_ping`은 로그인된 provider
+smoke로 분리한다. 상세 명령, 실기 결과와 OS별 `not_run` 기록은 `../mcp/README.md`를 따른다.
+
+Antigravity는 계속 기존 bare `agy` 동작만 유지한다. Graph report tool/state와 사용자-visible
+`provider_update_required` 정책도 별도 제품 결정 전에는 연결하지 않는다.

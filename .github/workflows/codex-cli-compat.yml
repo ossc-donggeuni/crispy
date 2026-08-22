@@ -1,4 +1,4 @@
-name: Codex config and launch compatibility
+name: Provider CLI config and launch compatibility
 
 on:
   pull_request:
@@ -49,3 +49,28 @@ jobs:
       - name: Parse Crispy config through Codex and node-pty
         timeout-minutes: 2
         run: pnpm run smoke:codex-config-compat
+
+  latest-claude:
+    name: latest Claude (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - ubuntu-24.04
+          - windows-2025
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install --global pnpm@11.18.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install latest Claude Code
+        run: npm install --global @anthropic-ai/claude-code@latest
+      - name: Verify Claude version gate and session config CLI surface
+        timeout-minutes: 2
+        run: pnpm run smoke:claude-config-compat

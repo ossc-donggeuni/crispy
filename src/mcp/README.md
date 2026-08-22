@@ -6,9 +6,12 @@
 cd /Users/idonghyeon/crispy
 pnpm install
 codex --version
+claude --version
 ```
 
-Codex CLI는 미리 로그인되어 있어야 한다. Crispy Terminal은 신뢰된 로컬 단일-root workspace에서만 실행된다.
+실기 smoke를 실행할 Codex와 Claude CLI는 미리 로그인되어 있어야 한다. Crispy Terminal은 신뢰된
+로컬 단일-root workspace에서만 실행된다. Claude MCP 자동 연결의 기술적 최소 기능 호환 버전은
+`2.1.121`이며, 현재 설치 버전은 검증 환경일 뿐 runtime minimum으로 고정하지 않는다.
 실행 시 `codex --version`을 확인해 `0.149.0` 미만에는
 `shell_environment_policy.exclude=["CRISPY_MCP_TOKEN"]`을, `0.149.0` 이상에는
 `shell_environment_policy.filters.CRISPY_MCP_TOKEN="exclude"`를 사용한다. 버전 또는 config
@@ -20,9 +23,9 @@ Codex CLI는 미리 로그인되어 있어야 한다. Crispy Terminal은 신뢰�
 2. `F5`를 누르고 `Run Extension`을 실행한다.
 3. 새 Extension Development Host 창에서 테스트할 로컬 단일 폴더를 열고 Workspace Trust를 승인한다.
 4. Command Palette에서 `Crispy: Open Canvas`를 실행한다.
-5. Agent 영역에서 `Codex`를 선택한다.
+5. Agent 영역에서 `Codex` 또는 `Claude`를 선택한다.
 
-MCP 연결을 확인하려면 열린 Codex에 다음 프롬프트를 입력한다.
+MCP 연결을 확인하려면 열린 provider CLI에 다음 프롬프트를 입력한다.
 
 ```text
 Call the crispy_ping MCP tool once. Do not run shell commands and do not modify files.
@@ -73,7 +76,8 @@ pnpm run package:vsix -- --target darwin-arm64
 code --install-extension /Users/idonghyeon/crispy/artifacts/vsix/crispy-0.0.1-darwin-arm64.vsix --force
 ```
 
-설치 후 VS Code에서 `Developer: Reload Window`를 실행한 다음, 신뢰된 로컬 단일 폴더에서 `Crispy: Open Canvas`를 열고 `Codex`를 선택한다.
+설치 후 VS Code에서 `Developer: Reload Window`를 실행한 다음, 신뢰된 로컬 단일 폴더에서
+`Crispy: Open Canvas`를 열고 `Codex` 또는 `Claude`를 선택한다.
 
 ## 자동 smoke 실행
 
@@ -81,6 +85,9 @@ code --install-extension /Users/idonghyeon/crispy/artifacts/vsix/crispy-0.0.1-da
 cd /Users/idonghyeon/crispy
 pnpm run prepare:codex-mcp-smoke
 pnpm run smoke:codex-mcp
+pnpm run smoke:claude-config-compat
+pnpm run prepare:claude-mcp-smoke
+pnpm run smoke:claude-mcp
 ```
 
 정상 실행 결과는 다음과 같다.
@@ -114,6 +121,12 @@ Windows에서는 설치된 실제 `codex.cmd`의 config parsing과, 특수문자
 version probe가 실패하면 `spawn_error`, `exit_nonzero`, `timeout`,
 `unparsable_version`처럼 credential을 포함하지 않는 원인이 출력된다.
 
+`smoke:claude-config-compat`는 로그인이나 token 없이 설치된 Claude의 bounded version gate와
+공식 `--mcp-config`/`--strict-mcp-config` CLI surface를 검사한다. macOS 15, Ubuntu 24.04,
+Windows 2025의 scheduled workflow도 최신 Claude에 이 smoke를 실행한다. 이 검사는 authenticated
+header expansion을 대신하지 않으며, 그 계약은 `smoke:claude-mcp`의 positive/negative transaction이
+검증한다.
+
 production/VSIX와 process cleanup까지 포함한 release 확인은 다음 순서로 실행한다.
 
 ```bash
@@ -122,16 +135,19 @@ pnpm run lint
 pnpm run test
 pnpm run package
 pnpm run package:vsix -- --target darwin-arm64
-pnpm run inspect:vsix
+pnpm run inspect:vsix -- --target darwin-arm64
 pnpm run smoke:pty-kill
 pnpm run smoke:codex-config-compat
+pnpm run smoke:claude-config-compat
 pnpm run prepare:codex-mcp-smoke
 pnpm run smoke:codex-mcp
+pnpm run prepare:claude-mcp-smoke
+pnpm run smoke:claude-mcp
 pnpm run smoke:installed-vsix -- --target darwin-arm64
 ```
 
-실제 Codex smoke는 로그인된 provider와 loopback/PTY 실행 권한이 필요하므로 일반 CI unit gate와
-구분한다. C5 gate가 완료된 뒤에만 Claude L0을 시작한다. Antigravity MCP 연결과
+실제 Codex/Claude smoke는 로그인된 provider와 loopback/PTY 실행 권한이 필요하므로 일반 CI unit
+gate와 구분한다. C5 gate가 완료된 뒤에만 Claude L0을 시작한다. Antigravity MCP 연결과
 `provider_update_required`의 실제 emit/update 정책은 별도 제품 결정이며 이 단계에서는
 구현하지 않는다.
 
@@ -286,3 +302,36 @@ PTY 시작 뒤 adapter가 종료되면 Claude PTY와 input/output/resize를 유�
 Webview 양쪽이 중복 요청을 막고, Codex/Claude 동시 탭의 status와 restart transaction은 서로 영향을
 주지 않는다. 검증된 managed-policy 또는 current-server schema 거부로 bare Claude를 한 번 재실행한
 경우에는 새 bare session에 non-retryable 고정 실패 문구를 표시한다.
+
+## Claude Phase L4 최종 검증 기록 — 2026-08-22
+
+현재 macOS Apple Silicon 실기 환경은 macOS `26.5.2`, Codex `0.149.0`, Claude Code
+`2.1.239`다. 프로젝트가 요구하는 Node `24.x` 전체 회귀는 Codex desktop bundled Node
+`24.19.0`과 저장소 고정 pnpm `11.18.0`으로 다시 실행한다. L4에서 확인한 provider 결과는
+다음과 같다.
+
+Node `24.19.0`에서 typecheck, ESLint, production bundle과 VS Code Extension Test Suite의
+`1054 passing`을 확인했다.
+
+| provider/binary | L4 결과 |
+| --- | --- |
+| Codex `0.149.0` | keyed filter config가 node-pty에서 parse되고 실제 `crispy_ping` authenticated activity 성공 |
+| Claude 현재 설치 `2.1.239` | version/config surface, inline header env expansion, `crispy_ping`, authenticated activity 성공; token env 제거 시 activity 없음 |
+| Claude 격리 설치 `2.1.121` | inclusive minimum gate와 위 positive/negative MCP transaction 재통과; 사용자 설치를 덮어쓰지 않고 임시 설치 제거 |
+| Claude fake versions | `2.1.120`, probe spawn failure/timeout/unparsable은 credential 없는 bare fail-open, `2.1.121`과 임의의 더 높은 버전은 상한 없이 compatible |
+
+`Provider CLI config and launch compatibility` workflow는 최신 Codex와 최신 Claude를 각각
+macOS 15, Ubuntu 24.04, Windows 2025에 설치한다. Claude job은 로그인 secret 없이 version gate와
+session config CLI surface를 검증하고, Codex job은 config parsing과 node-pty launch를 검증한다.
+실제 Claude MCP 인증은 로컬 login-required smoke로 분리한다.
+
+현재 macOS에서 production bundle, `darwin-arm64` VSIX 생성/78-entry archive inspection,
+VS Code `1.125.0` clean-profile installed VSIX의 PTY input/output/resize/exit와 MCP child port cleanup,
+process-tree kill smoke를 통과했다. Linux x64 glibc와 Windows native x64의 installed VSIX 및
+최신 Claude 실기 workflow는 이 로컬 macOS 실행에서는 `not_run`이다. cross packaging은 저장소가
+의도적으로 거부하므로 각 native GitHub Actions runner에서 실행해야 하며, 이 변경 자체의 remote
+workflow run은 commit/push 전이라 아직 수행되지 않았다.
+
+이로써 Codex C0→C5 뒤 Claude L0→L4의 현재 MCP 자동 연결 범위는 code-complete다. Antigravity MCP,
+사용자-visible `provider_update_required` emit/update 정책, Graph report tool/state 연결은 각각
+별도 후속 제품 결정이며 L4 완료 범위에 포함하지 않는다.

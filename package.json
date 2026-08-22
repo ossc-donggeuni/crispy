@@ -68,6 +68,7 @@
     "smoke:codex-mcp": "node out/mcp/codexSmoke.js",
     "smoke:codex-config-compat": "pnpm run compile-tests && node scripts/smoke-codex-config-compat.js",
     "prepare:claude-mcp-smoke": "pnpm run compile-tests && pnpm run package",
+    "smoke:claude-config-compat": "pnpm run compile-tests && node out/mcp/claudeConfigCompatSmoke.js",
     "smoke:claude-mcp": "node out/mcp/claudeSmoke.js",
     "smoke:pty-kill": "pnpm run compile-tests && node out/test/smoke/ptyKillProcessTree.smoke.js",
     "test:process-tree-cleanup": "pnpm run compile-tests && node out/test/agent/processTreeCleanup.test.js && node out/test/agent/processTreeControllerFactory.test.js",
