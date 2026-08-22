@@ -11,6 +11,8 @@ import {
 import {
 	createFileBacklinkGroupId,
 	createFolderBacklinkId,
+	getDetachedRootOriginId,
+	isDetachedRootId,
 } from './graphRootPromotion';
 import {
 	FILE_GROUP_PAGE_SIZE,
@@ -52,6 +54,7 @@ export interface GraphFolderNode extends GraphLayoutNodeBase {
 export interface GraphFolderBacklinkNode extends GraphLayoutNodeBase {
 	readonly kind: 'folder-backlink';
 	readonly targetRootId: string;
+	readonly targetRootIds: readonly string[];
 	readonly targetNodeId: string;
 }
 
@@ -67,6 +70,7 @@ export interface GraphFileNode {
 	readonly hidden?: true;
 	readonly presentation: GraphFilePresentation;
 	readonly targetRootId?: string;
+	readonly targetRootIds?: readonly string[];
 }
 
 /** File Group Card의 표시 방식을 나타낸다. */
@@ -150,6 +154,55 @@ const GRAPH_LAYOUT_ROW_GAP = 6;
 const GRAPH_LAYOUT_COLUMN_WIDTH = GRAPH_FILE_GROUP_NODE_WIDTH;
 const GRAPH_NODE_BORDER_SIZE = 4;
 const GRAPH_LAYOUT_ROOT_GAP = 96;
+const GRAPH_LAYOUT_ROOT_SCOPE_DELIMITER = '::node:';
+
+/** Detached Root 안의 Source ID를 Root Instance별 Visual ID로 변환한다. */
+export function createGraphLayoutNodeId(rootId: string, sourceId: string): string {
+	return isDetachedRootId(rootId)
+		? `${rootId}${GRAPH_LAYOUT_ROOT_SCOPE_DELIMITER}${encodeURIComponent(sourceId)}`
+		: sourceId;
+}
+
+/** Root-scoped Visual ID에서 공유 Source ID를 복원한다. */
+export function getGraphLayoutSourceId(layoutNodeId: string): string {
+	const delimiterIndex = layoutNodeId.lastIndexOf(
+		GRAPH_LAYOUT_ROOT_SCOPE_DELIMITER,
+	);
+
+	if (delimiterIndex < 0) {
+		return layoutNodeId;
+	}
+
+	const encodedSourceId = layoutNodeId.slice(
+		delimiterIndex + GRAPH_LAYOUT_ROOT_SCOPE_DELIMITER.length,
+	);
+
+	try {
+		return decodeURIComponent(encodedSourceId);
+	} catch {
+		return layoutNodeId;
+	}
+}
+
+/** Root-scoped Visual ID를 소유한 Detached Root Instance ID를 반환한다. */
+export function getGraphLayoutRootId(layoutNodeId: string): string | undefined {
+	const delimiterIndex = layoutNodeId.lastIndexOf(
+		GRAPH_LAYOUT_ROOT_SCOPE_DELIMITER,
+	);
+
+	if (delimiterIndex < 0) {
+		return undefined;
+	}
+
+	const rootId = layoutNodeId.slice(0, delimiterIndex);
+
+	return isDetachedRootId(rootId) ? rootId : undefined;
+}
+
+/** GraphRoot가 실제 Card로 렌더링되는 Visual Layout Node ID를 반환한다. */
+export function getGraphRootLayoutNodeId(root: GraphRoot): string {
+	return createGraphLayoutNodeId(root.id, root.nodeId);
+}
 
 /** Layout 계산 단계에서 사용하는 재귀 Tree Node다. */
 interface LayoutTreeNode {
@@ -165,6 +218,7 @@ interface LayoutTreeNode {
 	readonly fileChildren?: readonly GraphFileNode[];
 	readonly fileGroupPresentation?: GraphFileGroupPresentation;
 	readonly targetRootId?: string;
+	readonly targetRootIds?: readonly string[];
 	readonly targetNodeId?: string;
 	readonly unarranged?: true;
 	readonly children: readonly LayoutTreeNode[];
@@ -188,10 +242,8 @@ export function createGraphLayout(
 	const nodes: GraphLayoutNode[] = [];
 	const edges: GraphLayoutEdge[] = [];
 	const rootContexts: Record<string, GraphRootContext> = {};
-	const rootsByNodeId = new Map(
-		graph.roots.map((root) => [root.nodeId, root]),
-	);
-	const rootNodeIds = new Set(rootsByNodeId.keys());
+	const rootsByNodeId = groupRootsByNodeId(graph.roots);
+	const rootNodeIds = new Set<string>();
 	let rootTop = GRAPH_LAYOUT_START_Y;
 
 	for (const root of graph.roots) {
@@ -203,10 +255,6 @@ export function createGraphLayout(
 			);
 		}
 
-		if (root.context) {
-			rootContexts[root.nodeId] = root.context;
-		}
-
 		const tree = rootNode.kind === 'file'
 			? createStandaloneFileGroupTree(
 				rootNode,
@@ -215,6 +263,7 @@ export function createGraphLayout(
 				undefined,
 				options.hiddenNodeIds?.[rootNode.id] === true,
 				options.unarrangedNodeIds ?? new Set(),
+				root,
 			)
 			: createContainerTree(
 				rootNode,
@@ -225,7 +274,13 @@ export function createGraphLayout(
 				options.hiddenNodeIds ?? {},
 				false,
 				options.unarrangedNodeIds ?? new Set(),
+				root,
 			);
+		rootNodeIds.add(tree.id);
+
+		if (root.context) {
+			rootContexts[tree.id] = root.context;
+		}
 		const subtreeHeight = placeTree(tree, rootTop, nodes, edges);
 
 		rootTop += subtreeHeight + GRAPH_LAYOUT_ROOT_GAP;
@@ -251,6 +306,22 @@ export function createGraphLayout(
 	};
 }
 
+/** Source Node별 Graph Root Instance 목록을 Root 순서대로 묶는다. */
+function groupRootsByNodeId(
+	roots: readonly GraphRoot[],
+): ReadonlyMap<string, readonly GraphRoot[]> {
+	const grouped = new Map<string, GraphRoot[]>();
+
+	for (const root of roots) {
+		const sourceRoots = grouped.get(root.nodeId) ?? [];
+
+		sourceRoots.push(root);
+		grouped.set(root.nodeId, sourceRoots);
+	}
+
+	return grouped;
+}
+
 /**
  * 같은 Container에 직접 속한 File Group의 안정적인 Graph Node ID를 만든다.
  *
@@ -267,30 +338,37 @@ function createContainerTree(
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
 	openedFolders: Readonly<Record<string, true>>,
-	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
+	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	inheritedHidden: boolean,
 	unarrangedNodeIds: ReadonlySet<string>,
+	layoutRoot: GraphRoot,
 ): LayoutTreeNode {
+	const id = createGraphLayoutNodeId(layoutRoot.id, container.id);
 	const hidden = inheritedHidden
 		|| (
 			container.kind === 'folder'
 			&& hiddenNodeIds[container.id] === true
 		);
-	const isOpened = openedFolders[container.id] === true;
+	const isOpened = openedFolders[id] === true
+		|| (id !== container.id && openedFolders[container.id] === true);
 	const visibleChildren = isOpened ? container.children : [];
 	const folderChildren = visibleChildren
 		.filter(isFolder)
 		.map((folder) => {
-			const targetRoot = rootsByNodeId.get(folder.id);
+			const targetRoots = getDetachedRootsForOccurrence(
+				rootsByNodeId.get(folder.id),
+				layoutRoot,
+			);
 			const folderHidden = hidden || hiddenNodeIds[folder.id] === true;
 
-			return targetRoot
+			return targetRoots
 				? createFolderBacklinkTree(
 					folder,
 					depth + 1,
-					targetRoot,
+					targetRoots,
 					folderHidden,
+					layoutRoot,
 				)
 				: createContainerTree(
 					folder,
@@ -301,6 +379,7 @@ function createContainerTree(
 					hiddenNodeIds,
 					hidden,
 					unarrangedNodeIds,
+					layoutRoot,
 				);
 		});
 	const files = visibleChildren.filter(isFile);
@@ -314,16 +393,17 @@ function createContainerTree(
 			hiddenNodeIds,
 			hidden,
 			unarrangedNodeIds,
+			layoutRoot,
 		)
 		: [];
 
 	return {
-		id: container.id,
+		id,
 		name: container.name,
 		kind: container.kind,
 		...(hidden ? { hidden: true as const } : {}),
 		status: container.status,
-		...(unarrangedNodeIds.has(container.id)
+		...(unarrangedNodeIds.has(id)
 			? { unarranged: true as const }
 			: {}),
 		depth,
@@ -337,11 +417,21 @@ function createContainerTree(
 function createFolderBacklinkTree(
 	folder: Folder,
 	depth: number,
-	targetRoot: GraphRoot,
+	targetRoots: readonly GraphRoot[],
 	hidden: boolean,
+	layoutRoot: GraphRoot,
 ): LayoutTreeNode {
+	const targetRoot = targetRoots[0];
+
+	if (!targetRoot) {
+		throw new Error(`Folder Backlink "${folder.id}"의 대상 Root가 없습니다.`);
+	}
+
 	return {
-		id: createFolderBacklinkId(targetRoot.id),
+		id: createGraphLayoutNodeId(
+			layoutRoot.id,
+			createFolderBacklinkId(folder.id),
+		),
 		name: folder.name,
 		kind: 'folder-backlink',
 		...(hidden ? { hidden: true } : {}),
@@ -349,6 +439,7 @@ function createFolderBacklinkTree(
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
 		targetRootId: targetRoot.id,
+		targetRootIds: targetRoots.map((root) => root.id),
 		targetNodeId: folder.id,
 		children: [],
 	};
@@ -360,13 +451,18 @@ function createFileLayoutTrees(
 	files: readonly File[],
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
-	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
+	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	inheritedHidden: boolean,
 	unarrangedNodeIds: ReadonlySet<string>,
+	layoutRoot: GraphRoot,
 ): readonly LayoutTreeNode[] {
 	const floatingFileIds = new Set(files.filter((file) => (
-		unarrangedNodeIds.has(file.id) && !rootsByNodeId.has(file.id)
+		unarrangedNodeIds.has(createGraphLayoutNodeId(layoutRoot.id, file.id))
+			&& getDetachedRootsForOccurrence(
+				rootsByNodeId.get(file.id),
+				layoutRoot,
+			) === undefined
 	)).map((file) => file.id));
 	const floatingFiles = files.filter((file) => (
 		floatingFileIds.has(file.id) && hiddenNodeIds[file.id] !== true
@@ -382,6 +478,7 @@ function createFileLayoutTrees(
 		inheritedHidden,
 		unarrangedNodeIds,
 		floatingFileIds.size > 0 && files.length > 1,
+		layoutRoot,
 	);
 	const floatingTrees = floatingFiles.map((file) => createStandaloneFileGroupTree(
 		file,
@@ -390,6 +487,7 @@ function createFileLayoutTrees(
 		undefined,
 		inheritedHidden,
 		unarrangedNodeIds,
+		layoutRoot,
 	));
 
 	return [...arrangedTrees, ...floatingTrees];
@@ -401,11 +499,12 @@ function createArrangedFileLayoutTrees(
 	files: readonly File[],
 	depth: number,
 	fileGroupPages: Readonly<Record<string, number>>,
-	rootsByNodeId: ReadonlyMap<string, GraphRoot>,
+	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	inheritedHidden: boolean,
 	unarrangedNodeIds: ReadonlySet<string>,
 	forceGroupedPresentation = false,
+	layoutRoot: GraphRoot,
 ): readonly LayoutTreeNode[] {
 	const singleton = files[0];
 
@@ -418,9 +517,13 @@ function createArrangedFileLayoutTrees(
 			singleton,
 			depth,
 			parent.id,
-			rootsByNodeId.get(singleton.id),
+			getDetachedRootsForOccurrence(
+				rootsByNodeId.get(singleton.id),
+				layoutRoot,
+			),
 			inheritedHidden,
 			unarrangedNodeIds,
+			layoutRoot,
 		)];
 	}
 
@@ -428,8 +531,9 @@ function createArrangedFileLayoutTrees(
 		return [];
 	}
 
-	const id = createFileGroupId(parent.id);
-	const page = fileGroupPages[id] ?? 1;
+	const sourceId = createFileGroupId(parent.id);
+	const id = createGraphLayoutNodeId(layoutRoot.id, sourceId);
+	const page = fileGroupPages[id] ?? fileGroupPages[sourceId] ?? 1;
 	const visibleFiles = files.filter((file) => hiddenNodeIds[file.id] !== true);
 
 	if (visibleFiles.length === 0) {
@@ -450,11 +554,15 @@ function createArrangedFileLayoutTrees(
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
-		parentId: parent.id,
+		parentId: createGraphLayoutNodeId(layoutRoot.id, parent.id),
 		fileChildren: visibleFiles.map((file) => toGraphFileNode(
 			file,
-			rootsByNodeId.get(file.id),
+			getDetachedRootsForOccurrence(
+				rootsByNodeId.get(file.id),
+				layoutRoot,
+			),
 			inheritedHidden,
+			layoutRoot,
 		)),
 		fileGroupPresentation: 'grouped',
 		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
@@ -467,11 +575,16 @@ function createStandaloneFileGroupTree(
 	file: File,
 	depth: number,
 	parentId?: string,
-	targetRoot?: GraphRoot,
+	targetRoots?: readonly GraphRoot[],
 	hidden = false,
 	unarrangedNodeIds: ReadonlySet<string> = new Set(),
+	layoutRoot?: GraphRoot,
 ): LayoutTreeNode {
-	const id = targetRoot ? createFileBacklinkGroupId(targetRoot.id) : file.id;
+	const targetRoot = targetRoots?.[0];
+	const sourceId = targetRoot ? createFileBacklinkGroupId(file.id) : file.id;
+	const id = layoutRoot
+		? createGraphLayoutNodeId(layoutRoot.id, sourceId)
+		: sourceId;
 
 	return {
 		id,
@@ -481,8 +594,10 @@ function createStandaloneFileGroupTree(
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
-		parentId,
-		fileChildren: [toGraphFileNode(file, targetRoot, hidden)],
+		parentId: parentId && layoutRoot
+			? createGraphLayoutNodeId(layoutRoot.id, parentId)
+			: parentId,
+		fileChildren: [toGraphFileNode(file, targetRoots, hidden, layoutRoot)],
 		fileGroupPresentation: 'standalone',
 		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
@@ -492,16 +607,24 @@ function createStandaloneFileGroupTree(
 /** Project File을 Group이 소유하는 최소 File Layout child로 변환한다. */
 function toGraphFileNode(
 	file: File,
-	targetRoot: GraphRoot | undefined,
+	targetRoots: readonly GraphRoot[] | undefined,
 	hidden: boolean,
+	layoutRoot?: GraphRoot,
 ): GraphFileNode {
+	const targetRoot = targetRoots?.[0];
+
 	return {
 		kind: 'file',
-		id: file.id,
+		id: layoutRoot
+			? createGraphLayoutNodeId(layoutRoot.id, file.id)
+			: file.id,
 		name: file.name,
 		...(hidden ? { hidden: true } : {}),
 		presentation: targetRoot ? 'backlink' : 'normal',
-		...(targetRoot === undefined ? {} : { targetRootId: targetRoot.id }),
+		...(targetRoot === undefined ? {} : {
+			targetRootId: targetRoot.id,
+			targetRootIds: targetRoots?.map((root) => root.id),
+		}),
 	};
 }
 
@@ -574,6 +697,25 @@ function placeTree(
 	return tree.unarranged ? 0 : subtreeHeight;
 }
 
+/** Detached child Root는 자신이 분리된 Graph Root Instance에만 Backlink로 표시한다. */
+function getDetachedRootsForOccurrence(
+	roots: readonly GraphRoot[] | undefined,
+	layoutRoot: GraphRoot,
+): readonly GraphRoot[] | undefined {
+	if (!roots) {
+		return undefined;
+	}
+
+	const occurrenceRootId = isDetachedRootId(layoutRoot.id)
+		? layoutRoot.id
+		: undefined;
+	const matchingRoots = roots.filter((root) => (
+		getDetachedRootOriginId(root.id) === occurrenceRootId
+	));
+
+	return matchingRoots.length > 0 ? matchingRoots : undefined;
+}
+
 /** 자신과 모든 Child를 충돌 없이 세로 배치하는 데 필요한 Subtree 높이를 계산한다. */
 function getSubtreeHeight(tree: LayoutTreeNode): number {
 	if (tree.unarranged) {
@@ -629,6 +771,7 @@ function toGraphLayoutNode(
 			...base,
 			kind: 'folder-backlink',
 			targetRootId: tree.targetRootId,
+			targetRootIds: tree.targetRootIds ?? [tree.targetRootId],
 			targetNodeId: tree.targetNodeId,
 		};
 	}

@@ -8,6 +8,7 @@ import {
 import {
 	createFileGroupId,
 	createGraphLayout,
+	getGraphRootLayoutNodeId,
 	getFileGroupHeight,
 	GRAPH_FOLDER_NODE_WIDTH,
 	type GraphLayout,
@@ -25,6 +26,7 @@ import {
 	addGraphRoot,
 	createFileBacklinkGroupId,
 	createFolderBacklinkId,
+	removeGraphRoot,
 } from '../../webview/graph/graphRootPromotion';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import {
@@ -686,7 +688,7 @@ suite('Graph Renderer / Node Drag', () => {
 				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
 				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
 				resolveRootId: (rootNodeId) => addition.graph.roots.find(
-					(root) => root.nodeId === rootNodeId,
+					(root) => getGraphRootLayoutNodeId(root) === rootNodeId,
 				)?.id,
 			},
 		);
@@ -704,7 +706,7 @@ suite('Graph Renderer / Node Drag', () => {
 		const actualRoot = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			targetFileId,
+			getGraphRootLayoutNodeId(addition.root),
 		);
 
 		assert.deepStrictEqual(
@@ -721,11 +723,15 @@ suite('Graph Renderer / Node Drag', () => {
 			backlinkRow.getAttribute('data-target-root-id'),
 			addition.root.id,
 		);
+		assert.ok(findDescendantByClass(backlinkRow, 'graph-detach-handle'));
 		assert.strictEqual(
-			findDescendantByClass(backlinkRow, 'graph-detach-handle'),
+			getDescendantsByClass(backlinkRow, 'graph-detach-handle').length,
+			1,
+		);
+		assert.strictEqual(
+			findDescendantByClass(backlinkRow, 'graph-backlink-indicator'),
 			undefined,
 		);
-		assert.ok(getText(backlinkRow).includes('↗'));
 		backlinkRow.boundsLeft = 120;
 		backlinkRow.boundsTop = 80;
 		backlinkRow.clientWidth = 160;
@@ -840,19 +846,19 @@ suite('Graph Renderer / Node Drag', () => {
 				onBacklinkClick: (rootId) => backlinkClicks.push(rootId),
 				onRootContextClick: (rootId) => rootContextClicks.push(rootId),
 				resolveRootId: (rootNodeId) => fileAddition.graph.roots.find(
-					(root) => root.nodeId === rootNodeId,
+					(root) => getGraphRootLayoutNodeId(root) === rootNodeId,
 				)?.id,
 			},
 		);
 		const folderBacklink = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			createFolderBacklinkId(folderAddition.root.id),
+			createFolderBacklinkId(folder.id),
 		);
 		const fileBacklink = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			createFileBacklinkGroupId(fileAddition.root.id),
+			createFileBacklinkGroupId(file.id),
 		);
 		const folderEvent = createClickEvent(folderBacklink);
 		const fileEvent = createClickEvent(fileBacklink);
@@ -898,12 +904,12 @@ suite('Graph Renderer / Node Drag', () => {
 		const folderRoot = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			folder.id,
+			getGraphRootLayoutNodeId(folderAddition.root),
 		);
 		const fileRoot = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			file.id,
+			getGraphRootLayoutNodeId(fileAddition.root),
 		);
 
 		for (const root of [folderRoot, fileRoot]) {
@@ -933,6 +939,81 @@ suite('Graph Renderer / Node Drag', () => {
 		renderer.dispose();
 	});
 
+	test('동일 Source Detached Root가 둘 이상일 때만 우측 하단 ordinal Badge를 표시한다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:badge-source',
+			name: 'badge-source',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:badge-source',
+			name: 'badge-source',
+			status: 'loaded',
+			children: [folder],
+		};
+		const first = addGraphRoot(
+			createSingleRootGraph(project, 'root:project'),
+			folder.id,
+		);
+
+		assert.ok(first);
+		const document = new FakeDocument();
+		const edgeLayer = document.createElementNS('', 'svg');
+		const nodeLayer = document.createElement('div');
+		const graphState = createGraphState({
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true },
+		});
+		const renderer = initializeGraphRenderer(
+			edgeLayer.asSvgElement(),
+			nodeLayer.asHtmlElement(),
+			createGraphLayout(first.graph, {
+				openedFolders: graphState.getState().openedFolders,
+			}),
+			graphState,
+		);
+		const getRoot = (rootId: string) => getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			getGraphRootLayoutNodeId({ id: rootId, nodeId: folder.id }),
+		);
+		const getBadge = (rootId: string) => findDescendantByClass(
+			getRoot(rootId),
+			'graph-detached-root-badge',
+		);
+
+		assert.strictEqual(getBadge(first.root.id), undefined);
+		const second = addGraphRoot(first.graph, folder.id);
+		assert.ok(second);
+		renderer.applyLayout(createGraphLayout(second.graph, {
+			openedFolders: graphState.getState().openedFolders,
+		}));
+		assert.strictEqual(getBadge(first.root.id)?.textContent, '1');
+		assert.strictEqual(getBadge(second.root.id)?.textContent, '2');
+
+		const onlySecondGraph = removeGraphRoot(second.graph, first.root.id);
+		renderer.applyLayout(createGraphLayout(onlySecondGraph, {
+			openedFolders: graphState.getState().openedFolders,
+		}));
+		assert.strictEqual(getBadge(second.root.id), undefined);
+		const third = addGraphRoot(onlySecondGraph, folder.id);
+		assert.ok(third);
+		renderer.applyLayout(createGraphLayout(third.graph, {
+			openedFolders: graphState.getState().openedFolders,
+		}));
+		assert.strictEqual(getBadge(second.root.id)?.textContent, '2');
+		assert.strictEqual(getBadge(third.root.id)?.textContent, '3');
+		assert.strictEqual(
+			getBadge(third.root.id)?.getAttribute('data-detached-ordinal'),
+			'3',
+		);
+		renderer.dispose();
+	});
+
 	test('Root Drag의 자기 Backlink Target은 진입/이탈하고 cancel·layout·dispose에서 정리된다', () => {
 		const folder = {
 			kind: 'folder' as const,
@@ -957,9 +1038,10 @@ suite('Graph Renderer / Node Drag', () => {
 		const document = new FakeDocument();
 		const edgeLayer = document.createElementNS('', 'svg');
 		const nodeLayer = document.createElement('div');
+		const rootNodeId = getGraphRootLayoutNodeId(addition.root);
 		const graphState = createGraphState({
 			camera: { x: 0, y: 0, scale: 1 },
-			nodePositions: { [folder.id]: { x: 600, y: 300 } },
+			nodePositions: { [rootNodeId]: { x: 600, y: 300 } },
 			openedFolders: { [project.id]: true },
 		});
 		const layout = createGraphLayout(addition.graph, {
@@ -973,7 +1055,7 @@ suite('Graph Renderer / Node Drag', () => {
 			graphState,
 			{
 				resolveRootId: (nodeId) => addition.graph.roots.find(
-					(root) => root.nodeId === nodeId,
+					(root) => getGraphRootLayoutNodeId(root) === nodeId,
 				)?.id,
 				onRootReattach: ({ rootId }) => {
 					reattachRequests.push(rootId);
@@ -984,12 +1066,12 @@ suite('Graph Renderer / Node Drag', () => {
 		const rootNode = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			folder.id,
+			rootNodeId,
 		);
 		const backlink = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
-			createFolderBacklinkId(addition.root.id),
+			createFolderBacklinkId(folder.id),
 		);
 
 		backlink.boundsLeft = 200;
@@ -1031,7 +1113,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(backlink.hasClass('is-reattach-target'), false);
 		assert.deepStrictEqual(reattachRequests, []);
 		assert.deepStrictEqual(
-			graphState.getState().nodePositions[folder.id],
+			graphState.getState().nodePositions[rootNodeId],
 			{ x: 600, y: 300 },
 		);
 	});

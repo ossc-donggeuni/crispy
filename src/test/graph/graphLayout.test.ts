@@ -1,7 +1,9 @@
 import * as assert from 'assert';
 import {
 	createFileGroupId,
+	createGraphLayoutNodeId,
 	createGraphLayout as createBaseGraphLayout,
+	getGraphRootLayoutNodeId,
 	getFileGroupHeight,
 	GRAPH_FILE_GROUP_CONTROL_HEIGHT,
 	GRAPH_FILE_GROUP_NODE_WIDTH,
@@ -282,12 +284,13 @@ suite('Graph Model / Layout', () => {
 				'folder:secondary/src': true,
 			},
 		});
-		const backlinkId = createFolderBacklinkId(addition.root.id);
+		const backlinkId = createFolderBacklinkId('folder:secondary/src');
+		const detachedFolderId = getGraphRootLayoutNodeId(addition.root);
 		const backlink = layout.nodes.find(
 			(node): node is GraphFolderBacklinkNode => node.id === backlinkId,
 		);
 		const actualFolders = layout.nodes.filter(
-			(node) => node.id === 'folder:secondary/src',
+			(node) => node.id === detachedFolderId,
 		);
 
 		assert.ok(backlink);
@@ -297,7 +300,10 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(backlink.targetNodeId, 'folder:secondary/src');
 		assert.strictEqual(actualFolders.length, 1);
 		assert.ok(layout.nodes.some(
-			(node) => node.id === 'file:secondary/src/index.ts',
+			(node) => node.id === createGraphLayoutNodeId(
+				addition.root.id,
+				'file:secondary/src/index.ts',
+			),
 		));
 		assert.ok(layout.edges.some((edge) => (
 			edge.sourceId === SECOND_PROJECT.id && edge.targetId === backlinkId
@@ -307,7 +313,7 @@ suite('Graph Model / Layout', () => {
 				&& edge.targetId === 'folder:secondary/src'
 		)));
 		assert.strictEqual(
-			layout.rootNodeIds.has('folder:secondary/src'),
+			layout.rootNodeIds.has(detachedFolderId),
 			true,
 		);
 	});
@@ -339,7 +345,8 @@ suite('Graph Model / Layout', () => {
 					&& node.kind === 'file-group'
 			),
 		);
-		const fileRoot = layout.nodes.find((node) => node.id === 'file:index');
+		const fileRootId = getGraphRootLayoutNodeId(addition.root);
+		const fileRoot = layout.nodes.find((node) => node.id === fileRootId);
 
 		assert.ok(group);
 		assert.deepStrictEqual(
@@ -355,7 +362,7 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(fileRoot.presentation, 'standalone');
 		assert.strictEqual(fileRoot.children[0]?.presentation, 'normal');
 		assert.strictEqual(
-			layout.nodes.filter((node) => node.id === 'file:index').length,
+			layout.nodes.filter((node) => node.id === fileRootId).length,
 			1,
 		);
 	});
@@ -368,12 +375,14 @@ suite('Graph Model / Layout', () => {
 		const layout = createBaseGraphLayout(addition.graph, {
 			openedFolders: { [SECOND_PROJECT.id]: true },
 		});
-		const backlinkGroupId = createFileBacklinkGroupId(addition.root.id);
+		const backlinkGroupId = createFileBacklinkGroupId(
+			'file:secondary/package.json',
+		);
 		const backlinkGroup = layout.nodes.find(
 			(node) => node.id === backlinkGroupId,
 		);
 		const actualRoot = layout.nodes.find(
-			(node) => node.id === 'file:secondary/package.json',
+			(node) => node.id === getGraphRootLayoutNodeId(addition.root),
 		);
 
 		assert.ok(backlinkGroup && backlinkGroup.kind === 'file-group');
@@ -384,6 +393,56 @@ suite('Graph Model / Layout', () => {
 		);
 		assert.ok(actualRoot && actualRoot.kind === 'file-group');
 		assert.strictEqual(actualRoot.children[0]?.presentation, 'normal');
+	});
+
+	test('동일 Source Folder의 여러 Root가 전체 Subtree를 Root-scoped ID로 각각 생성한다', () => {
+		const graph = createSingleRootGraph(SECOND_PROJECT, 'root:project');
+		const first = addGraphRoot(graph, 'folder:secondary/src');
+
+		assert.ok(first);
+		const second = addGraphRoot(first.graph, 'folder:secondary/src');
+		assert.ok(second);
+		const third = addGraphRoot(second.graph, 'folder:secondary/src');
+		assert.ok(third);
+		const layout = createBaseGraphLayout(third.graph, {
+			openedFolders: {
+				[SECOND_PROJECT.id]: true,
+				'folder:secondary/src': true,
+			},
+		});
+		const detachedRoots = [first.root, second.root, third.root];
+		const visualRootIds = detachedRoots.map(getGraphRootLayoutNodeId);
+		const visualChildIds = detachedRoots.map((root) => createGraphLayoutNodeId(
+			root.id,
+			'file:secondary/src/index.ts',
+		));
+		const backlink = layout.nodes.find(
+			(node): node is GraphFolderBacklinkNode => (
+				node.id === createFolderBacklinkId('folder:secondary/src')
+				&& node.kind === 'folder-backlink'
+			),
+		);
+
+		assert.ok(backlink);
+		assert.deepStrictEqual(
+			backlink.targetRootIds,
+			detachedRoots.map((root) => root.id),
+		);
+		assert.ok(visualRootIds.every((nodeId) => (
+			layout.rootNodeIds.has(nodeId)
+			&& layout.nodes.some((node) => node.id === nodeId)
+		)));
+		assert.ok(visualChildIds.every((nodeId) => (
+			layout.nodes.some((node) => node.id === nodeId)
+		)));
+		assert.strictEqual(new Set(layout.nodes.map((node) => node.id)).size, layout.nodes.length);
+		assert.strictEqual(new Set(layout.edges.map((edge) => edge.id)).size, layout.edges.length);
+		for (const [index, rootNodeId] of visualRootIds.entries()) {
+			assert.ok(layout.edges.some((edge) => (
+				edge.sourceId === rootNodeId
+				&& edge.targetId === visualChildIds[index]
+			)));
+		}
 	});
 
 	test('기존 Project 하나를 roots.length === 1인 Graph Layout으로 생성한다', () => {

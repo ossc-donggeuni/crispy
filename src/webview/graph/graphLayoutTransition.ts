@@ -1,4 +1,5 @@
 import {
+	getGraphLayoutSourceId,
 	resolveGraphLayoutNodePosition,
 	type GraphLayout,
 	type GraphLayoutNode,
@@ -173,13 +174,71 @@ export function translateDetachedSubtree(
 	const previousNodesById = indexNodes(previousLayout);
 	const nextNodesById = indexNodes(nextLayout);
 	const previousRoot = previousNodesById.get(rootNodeId);
+	const nextRoot = nextNodesById.get(rootNodeId);
 
-	if (!nextNodesById.has(rootNodeId)) {
+	if (!nextRoot) {
 		return translatedPositions;
 	}
 
 	if (!previousRoot) {
-		translatedPositions[rootNodeId] = { ...targetPosition };
+		const previousSourceRoot = previousNodesById.get(
+			getGraphLayoutSourceId(rootNodeId),
+		);
+
+		if (previousSourceRoot) {
+			const actualSourceRootPosition = resolveGraphLayoutNodePosition(
+				previousSourceRoot,
+				nodePositions,
+			);
+			const sourceDelta = {
+				x: targetPosition.x - actualSourceRootPosition.x,
+				y: targetPosition.y - actualSourceRootPosition.y,
+			};
+
+			for (const nodeId of collectGraphLayoutSubtreeNodeIds(
+				nextLayout,
+				rootNodeId,
+			)) {
+				const nextNode = nextNodesById.get(nodeId);
+				const previousSourceNode = nextNode
+					? previousNodesById.get(getGraphLayoutSourceId(nextNode.id))
+					: undefined;
+
+				if (!nextNode || !previousSourceNode) {
+					continue;
+				}
+
+				const previousPosition = resolveGraphLayoutNodePosition(
+					previousSourceNode,
+					nodePositions,
+				);
+
+				delete translatedPositions[previousSourceNode.id];
+				translatedPositions[nodeId] = {
+					x: previousPosition.x + sourceDelta.x,
+					y: previousPosition.y + sourceDelta.y,
+				};
+			}
+
+			return translatedPositions;
+		}
+
+		for (const nodeId of collectGraphLayoutSubtreeNodeIds(
+			nextLayout,
+			rootNodeId,
+		)) {
+			const nextNode = nextNodesById.get(nodeId);
+
+			if (!nextNode) {
+				continue;
+			}
+
+			translatedPositions[nodeId] = {
+				x: targetPosition.x + nextNode.position.x - nextRoot.position.x,
+				y: targetPosition.y + nextNode.position.y - nextRoot.position.y,
+			};
+		}
+
 		return translatedPositions;
 	}
 
@@ -231,9 +290,18 @@ export function rebaseReattachedSubtree(
 	const nextNodesById = indexNodes(nextLayout);
 	const previousRoot = previousNodesById.get(rootNodeId);
 
+	const previousSubtreeNodeIds = collectGraphLayoutSubtreeNodeIds(
+		previousLayout,
+		rootNodeId,
+	);
+
 	delete rebasedPositions[rootNodeId];
 
 	if (!previousRoot || !nextNodesById.has(rootNodeId)) {
+		for (const nodeId of previousSubtreeNodeIds) {
+			delete rebasedPositions[nodeId];
+		}
+
 		return rebasedPositions;
 	}
 
@@ -246,10 +314,7 @@ export function rebaseReattachedSubtree(
 		y: actualRootPosition.y - previousRoot.position.y,
 	};
 
-	for (const nodeId of collectGraphLayoutSubtreeNodeIds(
-		previousLayout,
-		rootNodeId,
-	)) {
+	for (const nodeId of previousSubtreeNodeIds) {
 		if (nodeId === rootNodeId) {
 			continue;
 		}
