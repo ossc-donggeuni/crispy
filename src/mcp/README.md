@@ -1,4 +1,4 @@
-# Codex MCP 실행 방법
+# MCP 실행 방법과 provider 검증 기록
 
 ## 사전 준비
 
@@ -134,3 +134,115 @@ pnpm run smoke:installed-vsix -- --target darwin-arm64
 구분한다. C5 gate가 완료된 뒤에만 Claude L0을 시작한다. Antigravity MCP 연결과
 `provider_update_required`의 실제 emit/update 정책은 별도 제품 결정이며 이 단계에서는
 구현하지 않는다.
+
+## Claude Phase L0 공식 계약 검증 — 2026-08-22
+
+### 검증 환경과 결론
+
+- 이 브랜치의 기준은 Codex C5 완료 commit `8b86ff9`다.
+- 현재 macOS Apple Silicon에 설치된 Claude Code는 `2.1.234 (Claude Code)`이며
+  `claude --help`에서 `--mcp-config <configs...>`와 `--strict-mcp-config`를 확인했다.
+- 공식 CLI reference는 `--mcp-config`가 JSON file 또는 JSON string을 현재 실행에 load한다고
+  명시한다. Crispy는 file을 만들지 않고 inline JSON string 하나만 argv에 전달한다.
+- 공식 MCP 문서의 remote HTTP shape는 `type: "http"`, `url`, `headers`이고 `headers` 안의
+  `${VAR}` expansion을 지원한다. 따라서 token 값은 JSON/argv에 넣지 않고 literal
+  `${CRISPY_MCP_TOKEN}`만 넣을 수 있다.
+- `alwaysLoad: true`는 모든 server type에서 지원되며 해당 server의 tool을 startup에 load한다.
+  이 대기는 연결 실패의 독자적인 Crispy timeout 근거가 아니고, authenticated activity가
+  늦어져도 `awaiting_activity`를 유지한다.
+- `--strict-mcp-config`는 inline config 외의 MCP config를 무시하므로 사용하지 않는다. 이 flag가
+  없으면 기존 user/project MCP source를 보존하면서 inline server를 추가할 수 있다. 이름 충돌은
+  session별 random server name으로 피한다.
+
+L1 serializer가 만들어야 하는 token-free argument의 의미는 다음과 같다. 아래 값은 설명용이며
+실제 URL과 server name은 session마다 새로 만든다.
+
+```json
+{
+  "mcpServers": {
+    "crispy_canvas_<random>": {
+      "type": "http",
+      "url": "http://127.0.0.1:<random-port>/mcp/<random-route>",
+      "headers": {
+        "Authorization": "Bearer ${CRISPY_MCP_TOKEN}"
+      },
+      "alwaysLoad": true
+    }
+  }
+}
+```
+
+`CRISPY_MCP_TOKEN`은 최종 PTY spawn boundary에서만 provider environment에 overlay한다. 공식
+문서상 required 변수가 없고 default도 없으면 config parsing이 실패한다. L1의 negative control은
+같은 inline config에서 token environment만 제거했을 때 Claude의 자연 종료까지 authenticated activity가
+관찰되지 않는지 확인한다. exit code는 config rejection 원인을 증명하지 않으므로 성공 조건으로 삼지
+않고, signal 종료는 관찰이 중단된 것으로 보고 `negative_control_inconclusive`로 실패한다. 성공 상태
+`negative_control_no_authenticated_activity`는 credential-isolation 관찰 결과일 뿐 config 오류 문구나
+Crispy server의 `401` 응답을 뜻하지 않는다. missing/wrong bearer token의 정확한 `401` 계약은 별도
+protocol integration test가 검증한다.
+
+### user MCP와 권한 보존 계약
+
+- `--strict-mcp-config`, `--tools`, `--disallowedTools`와 global permission deny를 주입하지 않는다.
+  특히 `--tools`는 MCP tool 제한 수단이 아니며, broad `mcp__*` deny는 사용자의 다른 MCP까지
+  막을 수 있다.
+- `MCP_DISCOVERY_CACHE`, `ENABLE_TOOL_SEARCH`, `MCP_CONNECTION_NONBLOCKING` 등 user의 다른 MCP
+  동작을 바꾸는 environment override를 주입하지 않는다.
+- Crispy Claude server의 최종 tool allowlist는 공통 server가 등록한 `crispy_ping` 하나뿐이다.
+  `alwaysLoad`는 이 작은 server에만 inline으로 적용한다.
+- managed `allowedMcpServers`/`deniedMcpServers`는 `--mcp-config` server에도 적용되며 Crispy가
+  우회하지 않는다.
+
+### startup diagnostic의 좁은 근거
+
+- workstation에 system `managed-mcp.json`이 있고 dynamic `--mcp-config`를 전달하면 공식 문서는
+  startup exit와 정확한 문구 `You cannot dynamically configure MCP servers when an enterprise MCP
+  config is present`를 명시한다. L1/L2에서 설치 버전의 non-zero exit, interactive prompt 미도달,
+  redacted stderr가 모두 일치할 때만 `provider_policy_blocked` 후보로 사용한다.
+- allowlist/denylist에 의해 Crispy server만 filter된 경우, 401/일반 network failure, login/auth
+  failure, 정상 사용자 종료, `alwaysLoad`의 최대 5초 대기는 startup config rejection이 아니다.
+  자동 bare relaunch 근거로 사용하지 않는다.
+- `provider_config_rejected`에 쓸 만큼 좁은 interactive startup signature는 L0 공식 문서만으로
+  확정하지 않았다. L1에서 token 없는 intentionally-invalid fixture로 exit/stderr를 수집해
+  deterministic하고 credential-free인 경우에만 pattern을 추가한다. 그 전에는 분류하거나 bare
+  relaunch하지 않는다.
+- `provider_update_required`의 최소 버전과 emit 정책은 정하지 않는다.
+
+### 공통 경계 재사용과 최소 구현 surface
+
+다음 C5 경계는 Claude에서도 그대로 재사용한다.
+
+- `McpAdapterSupervisor` / `McpSessionRuntime`: session별 child, port, route, token, generation과
+  stale cleanup 소유권
+- `AgentLaunchPlan`, `createAgentProcessSpawnRequest`, `spawnAgentPty`: credential을 최종 environment에
+  합성하고 direct 또는 Windows `cmd-one-shot` PTY root process로 실행하는 경계
+- `resolveAgentExecutable`: Claude의 `claude`, `claude.cmd`, `claude.exe`와 설정된 executable path
+- 공통 MCP protocol server, `crispy_ping`, authenticated activity 판정과 failure domain
+
+L1에서 추가할 최소 provider surface는 `src/mcp/**`의 Claude inline-config serializer,
+bare/authenticated launch-plan builder, 좁은 diagnostic matcher와 실제 smoke runner다. 새 unit test와
+fixture는 `src/test/**`에만 둔다. L2에서 Terminal Host의 Codex 전용 orchestration 이름과 generation
+map을 provider-neutral session orchestration으로 좁게 일반화하고 Extension wiring에 Claude
+preparation을 추가한다. L3 전에는 Claude status/retry UI를 연결하지 않는다.
+
+### L1 실제 smoke 계획
+
+1. 공통 supervisor가 준비한 current random URL/token으로 token-free inline JSON을 만든다.
+2. `claude`를 node-pty의 direct root process로 실행하고 token은 environment에만 넣는다.
+3. `crispy_ping` 한 번을 요청해 config 인식, HTTP header expansion, tool list/call과
+   `activity_observed`를 확인한다.
+4. argv/diagnostic/snapshot 전체에 token 값이 없고 inline JSON에는 literal placeholder만 있는지
+   검사한다.
+5. 같은 config에서 token env만 제거한 negative control이 자연 종료까지 authenticated activity를
+   만들지 않는지 확인한다. exit code에는 config rejection 의미를 부여하지 않고 signal 종료는
+   inconclusive로 실패시키며, provider output이나 Crispy server의 `401` 응답은 검증하지 않는다.
+6. `--strict-mcp-config`와 global tool/cache override가 없는지, 기존 user MCP source를 배제하지
+   않는지 argv 단위 테스트와 실제 `/mcp` 관찰로 확인한다.
+7. 정책/config rejection fixture의 exit, stderr, interactive prompt 도달 여부를 별도로 수집하되
+   login/network/정상 종료와 겹치는 pattern은 채택하지 않는다.
+
+공식 근거:
+
+- [Claude Code MCP](https://code.claude.com/docs/en/mcp)
+- [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
+- [Claude Code managed MCP](https://code.claude.com/docs/en/managed-mcp)
