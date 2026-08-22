@@ -742,7 +742,7 @@ suite('Graph Model / Layout', () => {
 		);
 	});
 
-	test('비정렬 File은 grouped 목록에서 standalone으로 분리하고 나머지 File은 빈틈없이 묶는다', () => {
+	test('grouped File의 개별 비정렬 요청은 standalone Card를 만들지 않는다', () => {
 		const project: Project = {
 			kind: 'project',
 			id: 'project:file-arrangement',
@@ -759,20 +759,22 @@ suite('Graph Model / Layout', () => {
 			unarrangedNodeIds: new Set(['file:floating']),
 		});
 		const group = getLayoutNode(layout.nodes, createFileGroupId(project.id));
-		const floating = getLayoutNode(layout.nodes, 'file:floating');
 
 		assert.ok(group.kind === 'file-group');
 		assert.deepStrictEqual(
 			group.children.map((file) => file.id),
-			['file:arranged-a', 'file:arranged-b'],
+			['file:arranged-a', 'file:floating', 'file:arranged-b'],
 		);
-		assert.ok(floating.kind === 'file-group');
-		assert.strictEqual(floating.presentation, 'standalone');
-		assert.strictEqual(layout.unarrangedNodeIds.has(floating.id), true);
+		assert.strictEqual(group.presentation, 'grouped');
+		assert.strictEqual(
+			layout.nodes.some((node) => node.id === 'file:floating'),
+			false,
+		);
+		assert.strictEqual(layout.unarrangedNodeIds.has('file:floating'), false);
 		assert.strictEqual(layout.arrangedNodeIds.has(group.id), true);
 	});
 
-	test('두 File 중 하나를 분리해도 복구 대상 File Group presentation을 유지한다', () => {
+	test('두 File 중 하나의 이전 비정렬 상태도 grouped presentation으로 정규화한다', () => {
 		const project: Project = {
 			kind: 'project',
 			id: 'project:file-arrangement-target',
@@ -788,16 +790,17 @@ suite('Graph Model / Layout', () => {
 			unarrangedNodeIds: new Set(['file:floating-target']),
 		});
 		const group = getLayoutNode(layout.nodes, createFileGroupId(project.id));
-		const floating = getLayoutNode(layout.nodes, 'file:floating-target');
 
 		assert.ok(group.kind === 'file-group');
 		assert.strictEqual(group.presentation, 'grouped');
 		assert.deepStrictEqual(
 			group.children.map((file) => file.id),
-			['file:arranged'],
+			['file:arranged', 'file:floating-target'],
 		);
-		assert.ok(floating.kind === 'file-group');
-		assert.strictEqual(floating.presentation, 'standalone');
+		assert.strictEqual(
+			layout.nodes.some((node) => node.id === 'file:floating-target'),
+			false,
+		);
 	});
 
 	test('열린 Folder의 직계 children만 포함하고 닫힌 descendant subtree는 제외한다', () => {
@@ -1137,7 +1140,7 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(folder.position.x - root.position.x, 302);
 	});
 
-	test('Filter 표시 상태를 Project를 제외한 Folder subtree와 File presentation에 계산한다', () => {
+	test('Filter된 Folder subtree는 Layout과 높이 계산에서 완전히 제외한다', () => {
 		const childFolder: Folder = {
 			kind: 'folder',
 			id: 'folder:filter/parent/child',
@@ -1177,9 +1180,15 @@ suite('Graph Model / Layout', () => {
 			hiddenNodeIds,
 		});
 		const projectNode = getLayoutNode(layout.nodes, project.id);
-		const parentNode = getLayoutNode(layout.nodes, parentFolder.id);
-		const childNode = getLayoutNode(layout.nodes, childFolder.id);
 		const fileGroup = getFileGroup(layout.nodes, project.id);
+		const projectedLayout = createBaseGraphLayout(createSingleRootGraph({
+			...project,
+			children: project.children.filter((child) => child !== parentFolder),
+		}), {
+			openedFolders: { [project.id]: true },
+			hiddenNodeIds: { 'file:filter/a.ts': true },
+		});
+		const projectedFileGroup = getFileGroup(projectedLayout.nodes, project.id);
 		const hiddenFile = fileGroup.children.find(
 			(file) => file.id === 'file:filter/a.ts',
 		);
@@ -1188,8 +1197,14 @@ suite('Graph Model / Layout', () => {
 		);
 
 		assert.strictEqual(projectNode.hidden, undefined);
-		assert.strictEqual(parentNode.hidden, true);
-		assert.strictEqual(childNode.hidden, true);
+		assert.strictEqual(
+			layout.nodes.some((node) => node.id === parentFolder.id),
+			false,
+		);
+		assert.strictEqual(
+			layout.nodes.some((node) => node.id === childFolder.id),
+			false,
+		);
 		assert.strictEqual(fileGroup.hidden, undefined);
 		assert.strictEqual(fileGroup.presentation, 'grouped');
 		assert.strictEqual(hiddenFile, undefined);
@@ -1199,18 +1214,76 @@ suite('Graph Model / Layout', () => {
 			['file:filter/b.ts'],
 		);
 		assert.strictEqual(
-			layout.edges.find((edge) => edge.targetId === parentFolder.id)?.hidden,
-			true,
+			layout.edges.some((edge) => edge.targetId === parentFolder.id),
+			false,
 		);
 		assert.strictEqual(
-			layout.edges.find((edge) => edge.targetId === childFolder.id)?.hidden,
-			true,
+			layout.edges.some((edge) => edge.targetId === childFolder.id),
+			false,
 		);
+		assert.deepStrictEqual(fileGroup.position, projectedFileGroup.position);
 		assert.deepStrictEqual(hiddenNodeIds, {
 			[project.id]: true,
 			[parentFolder.id]: true,
 			'file:filter/a.ts': true,
 		});
+	});
+
+	test('Filter된 Folder Root는 후속 Root 사이에 빈 공간을 남기지 않는다', () => {
+		const firstProject: Project = {
+			kind: 'project',
+			id: 'project:filter-root/first',
+			name: 'first',
+			status: 'loaded',
+			children: [],
+		};
+		const hiddenFolder: Folder = {
+			kind: 'folder',
+			id: 'folder:filter-root/hidden',
+			name: 'hidden',
+			status: 'loaded',
+			children: [],
+		};
+		const lastProject: Project = {
+			kind: 'project',
+			id: 'project:filter-root/last',
+			name: 'last',
+			status: 'loaded',
+			children: [],
+		};
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:filter-root/first', nodeId: firstProject.id },
+				{ id: 'root:filter-root/hidden', nodeId: hiddenFolder.id },
+				{ id: 'root:filter-root/last', nodeId: lastProject.id },
+			],
+			rootNodes: {
+				[firstProject.id]: firstProject,
+				[hiddenFolder.id]: hiddenFolder,
+				[lastProject.id]: lastProject,
+			},
+		};
+		const projectedGraph: Graph = {
+			roots: [
+				{ id: 'root:filter-root/first', nodeId: firstProject.id },
+				{ id: 'root:filter-root/last', nodeId: lastProject.id },
+			],
+			rootNodes: graph.rootNodes,
+		};
+		const filteredLayout = createBaseGraphLayout(graph, {
+			hiddenNodeIds: { [hiddenFolder.id]: true },
+		});
+		const projectedLayout = createBaseGraphLayout(projectedGraph);
+
+		assert.strictEqual(
+			filteredLayout.nodes.some((node) => node.id === hiddenFolder.id),
+			false,
+		);
+		assert.strictEqual(filteredLayout.rootNodeIds.has(hiddenFolder.id), false);
+		assert.deepStrictEqual(
+			filteredLayout.nodes.map(({ id, position }) => ({ id, position })),
+			projectedLayout.nodes.map(({ id, position }) => ({ id, position })),
+		);
 	});
 
 	test('File Group pagination과 높이는 hidden File을 제외한 projection을 기준으로 계산한다', () => {

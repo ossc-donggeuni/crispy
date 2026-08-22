@@ -530,6 +530,7 @@ function normalizeDetachedRootNodeIds(
 
 /** 기존 Source-keyed 위치를 복원된 Detached Root의 Instance-scoped 위치로 이관한다. */
 function scopeDetachedNodePositions(
+	graph: Graph,
 	layout: GraphLayout,
 	nodePositions: GraphStateSnapshot['nodePositions'],
 ): Record<string, { x: number; y: number }> {
@@ -537,21 +538,33 @@ function scopeDetachedNodePositions(
 		([nodeId, position]) => [nodeId, { ...position }],
 	));
 	const visibleNodeIds = new Set(layout.nodes.map((node) => node.id));
+	const logicalParentByChild = createGraphLogicalParentByChild(graph);
+	const copiedSourceNodeIds = new Set<string>();
 
-	for (const node of layout.nodes) {
-		if (!getGraphLayoutRootId(node.id) || scoped[node.id]) {
-			continue;
+	for (const root of graph.roots.filter((candidate) => (
+		isDetachedRootId(candidate.id)
+	))) {
+		for (const nodeId of collectGraphLogicalSubtreeNodeIds(
+			getGraphRootLayoutNodeId(root),
+			logicalParentByChild,
+		)) {
+			if (scoped[nodeId]) {
+				continue;
+			}
+
+			const sourceNodeId = getGraphLayoutSourceId(nodeId);
+			const sourcePosition = nodePositions[sourceNodeId];
+
+			if (!sourcePosition) {
+				continue;
+			}
+
+			scoped[nodeId] = { ...sourcePosition };
+			copiedSourceNodeIds.add(sourceNodeId);
 		}
+	}
 
-		const sourceNodeId = getGraphLayoutSourceId(node.id);
-		const sourcePosition = nodePositions[sourceNodeId];
-
-		if (!sourcePosition) {
-			continue;
-		}
-
-		scoped[node.id] = { ...sourcePosition };
-
+	for (const sourceNodeId of copiedSourceNodeIds) {
 		if (!visibleNodeIds.has(sourceNodeId)) {
 			delete scoped[sourceNodeId];
 		}
@@ -879,18 +892,31 @@ export function initializeGraphView(
 		hiddenNodeIds: snapshot.hiddenNodeIds,
 		unarrangedNodeIds,
 	});
-	const initialBaselineLayout = createLayout(currentGraph, {
+	const normalizedInitialSnapshot = {
 		...initialGraphState,
 		...normalizedInitialVisualState,
-	});
+	};
+	const initialBaselineLayout = createLayout(
+		currentGraph,
+		normalizedInitialSnapshot,
+	);
+	// Filter projection에는 포함하지 않되, 숨겨진 subtree의 저장 좌표와
+	// arrangement를 복원할 때는 동일 Graph의 전체 논리 Layout을 사용한다.
+	const initialStateLayout = Object.keys(initialGraphState.hiddenNodeIds).length === 0
+		? initialBaselineLayout
+		: createLayout(currentGraph, {
+			...normalizedInitialSnapshot,
+			hiddenNodeIds: {},
+		});
 	const scopedInitialNodePositions = scopeDetachedNodePositions(
-		initialBaselineLayout,
+		currentGraph,
+		initialStateLayout,
 		initialGraphState.nodePositions,
 	);
 	state.setState({
 		camera: initialGraphState.camera,
 		nodePositions: normalizeGraphNodePositions(
-			initialBaselineLayout,
+			initialStateLayout,
 			scopedInitialNodePositions,
 		),
 		fileGroupPages: normalizedInitialVisualState.fileGroupPages,
@@ -900,7 +926,7 @@ export function initializeGraphView(
 	});
 	initialGraphState = state.getState();
 	const initialArrangement = classifyGraphLayoutNodeArrangement(
-		initialBaselineLayout,
+		initialStateLayout,
 		initialGraphState.nodePositions,
 	);
 	let currentUnarrangedNodeIds = new Set([
@@ -1375,6 +1401,7 @@ export function initializeGraphView(
 				nextUnarrangedNodeIds,
 			);
 			const scopedNodePositions = scopeDetachedNodePositions(
+				nextGraph,
 				nextLayout,
 				snapshot.nodePositions,
 			);

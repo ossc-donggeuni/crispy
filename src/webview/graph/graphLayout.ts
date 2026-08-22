@@ -209,7 +209,6 @@ interface LayoutTreeNode {
 	readonly id: string;
 	readonly name: string;
 	readonly kind: GraphLayoutNode['kind'];
-	readonly hidden?: true;
 	readonly status?: ProjectContainer['status'];
 	readonly depth: number;
 	readonly width: number;
@@ -254,6 +253,12 @@ export function createGraphLayout(
 				`Graph Root \"${root.id}\"가 참조하는 Node \"${root.nodeId}\"를 찾을 수 없습니다.`,
 			);
 		}
+		if (
+			rootNode.kind !== 'project'
+			&& options.hiddenNodeIds?.[rootNode.id] === true
+		) {
+			continue;
+		}
 
 		const tree = rootNode.kind === 'file'
 			? createStandaloneFileGroupTree(
@@ -261,7 +266,6 @@ export function createGraphLayout(
 				0,
 				undefined,
 				undefined,
-				options.hiddenNodeIds?.[rootNode.id] === true,
 				options.unarrangedNodeIds ?? new Set(),
 				root,
 			)
@@ -272,7 +276,6 @@ export function createGraphLayout(
 				options.openedFolders ?? {},
 				rootsByNodeId,
 				options.hiddenNodeIds ?? {},
-				false,
 				options.unarrangedNodeIds ?? new Set(),
 				root,
 			);
@@ -340,34 +343,27 @@ function createContainerTree(
 	openedFolders: Readonly<Record<string, true>>,
 	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
-	inheritedHidden: boolean,
 	unarrangedNodeIds: ReadonlySet<string>,
 	layoutRoot: GraphRoot,
 ): LayoutTreeNode {
 	const id = createGraphLayoutNodeId(layoutRoot.id, container.id);
-	const hidden = inheritedHidden
-		|| (
-			container.kind === 'folder'
-			&& hiddenNodeIds[container.id] === true
-		);
 	const isOpened = openedFolders[id] === true
 		|| (id !== container.id && openedFolders[container.id] === true);
 	const visibleChildren = isOpened ? container.children : [];
 	const folderChildren = visibleChildren
 		.filter(isFolder)
+		.filter((folder) => hiddenNodeIds[folder.id] !== true)
 		.map((folder) => {
 			const targetRoots = getDetachedRootsForOccurrence(
 				rootsByNodeId.get(folder.id),
 				layoutRoot,
 			);
-			const folderHidden = hidden || hiddenNodeIds[folder.id] === true;
 
 			return targetRoots
 				? createFolderBacklinkTree(
 					folder,
 					depth + 1,
 					targetRoots,
-					folderHidden,
 					layoutRoot,
 				)
 				: createContainerTree(
@@ -377,7 +373,6 @@ function createContainerTree(
 					openedFolders,
 					rootsByNodeId,
 					hiddenNodeIds,
-					hidden,
 					unarrangedNodeIds,
 					layoutRoot,
 				);
@@ -391,7 +386,6 @@ function createContainerTree(
 			fileGroupPages,
 			rootsByNodeId,
 			hiddenNodeIds,
-			hidden,
 			unarrangedNodeIds,
 			layoutRoot,
 		)
@@ -401,7 +395,6 @@ function createContainerTree(
 		id,
 		name: container.name,
 		kind: container.kind,
-		...(hidden ? { hidden: true as const } : {}),
 		status: container.status,
 		...(unarrangedNodeIds.has(id)
 			? { unarranged: true as const }
@@ -418,7 +411,6 @@ function createFolderBacklinkTree(
 	folder: Folder,
 	depth: number,
 	targetRoots: readonly GraphRoot[],
-	hidden: boolean,
 	layoutRoot: GraphRoot,
 ): LayoutTreeNode {
 	const targetRoot = targetRoots[0];
@@ -434,7 +426,6 @@ function createFolderBacklinkTree(
 		),
 		name: folder.name,
 		kind: 'folder-backlink',
-		...(hidden ? { hidden: true } : {}),
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
@@ -453,47 +444,22 @@ function createFileLayoutTrees(
 	fileGroupPages: Readonly<Record<string, number>>,
 	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
-	inheritedHidden: boolean,
 	unarrangedNodeIds: ReadonlySet<string>,
 	layoutRoot: GraphRoot,
 ): readonly LayoutTreeNode[] {
-	const floatingFileIds = new Set(files.filter((file) => (
-		unarrangedNodeIds.has(createGraphLayoutNodeId(layoutRoot.id, file.id))
-			&& getDetachedRootsForOccurrence(
-				rootsByNodeId.get(file.id),
-				layoutRoot,
-			) === undefined
-	)).map((file) => file.id));
-	const floatingFiles = files.filter((file) => (
-		floatingFileIds.has(file.id) && hiddenNodeIds[file.id] !== true
-	));
-	const arrangedFiles = files.filter((file) => !floatingFileIds.has(file.id));
-	const arrangedTrees = createArrangedFileLayoutTrees(
+	return createArrangedFileLayoutTrees(
 		parent,
-		arrangedFiles,
+		files,
 		depth,
 		fileGroupPages,
 		rootsByNodeId,
 		hiddenNodeIds,
-		inheritedHidden,
 		unarrangedNodeIds,
-		floatingFileIds.size > 0 && files.length > 1,
 		layoutRoot,
 	);
-	const floatingTrees = floatingFiles.map((file) => createStandaloneFileGroupTree(
-		file,
-		depth,
-		parent.id,
-		undefined,
-		inheritedHidden,
-		unarrangedNodeIds,
-		layoutRoot,
-	));
-
-	return [...arrangedTrees, ...floatingTrees];
 }
 
-/** 정렬 흐름에 남은 File만 기존 singleton/grouped presentation 규칙으로 묶는다. */
+/** Filter를 통과한 File을 singleton/grouped presentation 규칙으로 묶는다. */
 function createArrangedFileLayoutTrees(
 	parent: ProjectContainer,
 	files: readonly File[],
@@ -501,14 +467,12 @@ function createArrangedFileLayoutTrees(
 	fileGroupPages: Readonly<Record<string, number>>,
 	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
-	inheritedHidden: boolean,
 	unarrangedNodeIds: ReadonlySet<string>,
-	forceGroupedPresentation = false,
 	layoutRoot: GraphRoot,
 ): readonly LayoutTreeNode[] {
 	const singleton = files[0];
 
-	if (!forceGroupedPresentation && files.length === 1 && singleton) {
+	if (files.length === 1 && singleton) {
 		if (hiddenNodeIds[singleton.id] === true) {
 			return [];
 		}
@@ -521,7 +485,6 @@ function createArrangedFileLayoutTrees(
 				rootsByNodeId.get(singleton.id),
 				layoutRoot,
 			),
-			inheritedHidden,
 			unarrangedNodeIds,
 			layoutRoot,
 		)];
@@ -544,13 +507,11 @@ function createArrangedFileLayoutTrees(
 	const remainingFileCount = getRemainingFileCount(visibleFiles.length, page);
 	const hasPaginationControls = remainingFileCount > 0
 		|| (visibleFiles.length > FILE_GROUP_PAGE_SIZE && page > 1);
-	const hidden = inheritedHidden;
 
 	return [{
 		id,
 		name: `${parent.name} files`,
 		kind: 'file-group',
-		...(hidden ? { hidden: true as const } : {}),
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
@@ -561,7 +522,6 @@ function createArrangedFileLayoutTrees(
 				rootsByNodeId.get(file.id),
 				layoutRoot,
 			),
-			inheritedHidden,
 			layoutRoot,
 		)),
 		fileGroupPresentation: 'grouped',
@@ -576,7 +536,6 @@ function createStandaloneFileGroupTree(
 	depth: number,
 	parentId?: string,
 	targetRoots?: readonly GraphRoot[],
-	hidden = false,
 	unarrangedNodeIds: ReadonlySet<string> = new Set(),
 	layoutRoot?: GraphRoot,
 ): LayoutTreeNode {
@@ -590,14 +549,13 @@ function createStandaloneFileGroupTree(
 		id,
 		name: file.name,
 		kind: 'file-group',
-		...(hidden ? { hidden: true } : {}),
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height: GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 		parentId: parentId && layoutRoot
 			? createGraphLayoutNodeId(layoutRoot.id, parentId)
 			: parentId,
-		fileChildren: [toGraphFileNode(file, targetRoots, hidden, layoutRoot)],
+		fileChildren: [toGraphFileNode(file, targetRoots, layoutRoot)],
 		fileGroupPresentation: 'standalone',
 		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
@@ -608,7 +566,6 @@ function createStandaloneFileGroupTree(
 function toGraphFileNode(
 	file: File,
 	targetRoots: readonly GraphRoot[] | undefined,
-	hidden: boolean,
 	layoutRoot?: GraphRoot,
 ): GraphFileNode {
 	const targetRoot = targetRoots?.[0];
@@ -619,7 +576,6 @@ function toGraphFileNode(
 			? createGraphLayoutNodeId(layoutRoot.id, file.id)
 			: file.id,
 		name: file.name,
-		...(hidden ? { hidden: true } : {}),
 		presentation: targetRoot ? 'backlink' : 'normal',
 		...(targetRoot === undefined ? {} : {
 			targetRootId: targetRoot.id,
@@ -676,9 +632,6 @@ function placeTree(
 			id: `${tree.id}->${child.id}`,
 			sourceId: tree.id,
 			targetId: child.id,
-			...(tree.hidden === true || child.hidden === true
-				? { hidden: true as const }
-				: {}),
 		});
 		if (child.unarranged) {
 			placeTree(child, nodeTop, nodes, edges);
@@ -745,7 +698,6 @@ function toGraphLayoutNode(
 	const base = {
 		id: tree.id,
 		name: tree.name,
-		...(tree.hidden === true ? { hidden: true as const } : {}),
 		depth: tree.depth,
 		position,
 		width: tree.width,

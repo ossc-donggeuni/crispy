@@ -1306,17 +1306,17 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			project.id,
 		);
-		const folderNode = getDescendantByAttribute(
+		const folderNode = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			hiddenFolder.id,
 		);
-		const fileGroup = getDescendantByAttribute(
+		const fileGroup = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			fileGroupId,
 		);
-		const descendantFolderNode = getDescendantByAttribute(
+		const descendantFolderNode = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			descendantFolder.id,
@@ -1326,24 +1326,17 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			siblingFile.id,
 		);
-		const fileRows = getDescendantsByClass(fileGroup, 'graph-file-item');
-		const explicitHiddenRow = fileRows.find(
-			(row) => row.getAttribute('data-file-id') === hiddenFile.id,
-		);
-		const inheritedHiddenRow = fileRows.find(
-			(row) => row.getAttribute('data-file-id') === visibleFile.id,
-		);
-		const projectToFolderEdge = getDescendantByAttribute(
+		const projectToFolderEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${project.id}->${hiddenFolder.id}`,
 		);
-		const folderToFilesEdge = getDescendantByAttribute(
+		const folderToFilesEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${hiddenFolder.id}->${fileGroupId}`,
 		);
-		const folderToDescendantEdge = getDescendantByAttribute(
+		const folderToDescendantEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${hiddenFolder.id}->${descendantFolder.id}`,
@@ -1353,20 +1346,14 @@ suite('Graph View', () => {
 			'graph-navigator-minimap-node-layer',
 		);
 
-		assert.strictEqual(explicitHiddenRow, undefined);
-		assert.ok(inheritedHiddenRow);
 		assert.strictEqual(projectNode.hidden, false);
-		assert.strictEqual(folderNode.hidden, true);
-		assert.strictEqual(descendantFolderNode.hidden, true);
-		assert.strictEqual(fileGroup.hidden, true);
+		assert.strictEqual(folderNode, undefined);
+		assert.strictEqual(descendantFolderNode, undefined);
+		assert.strictEqual(fileGroup, undefined);
 		assert.strictEqual(siblingNode.hidden, false);
-		assert.strictEqual(inheritedHiddenRow.hidden, true);
-		assert.strictEqual(projectToFolderEdge.getAttribute('visibility'), 'hidden');
-		assert.strictEqual(folderToFilesEdge.getAttribute('visibility'), 'hidden');
-		assert.strictEqual(
-			folderToDescendantEdge.getAttribute('visibility'),
-			'hidden',
-		);
+		assert.strictEqual(projectToFolderEdge, undefined);
+		assert.strictEqual(folderToFilesEdge, undefined);
+		assert.strictEqual(folderToDescendantEdge, undefined);
 		assert.strictEqual(findDescendantByAttribute(
 			minimapNodeLayer,
 			'data-graph-node-id',
@@ -1397,15 +1384,52 @@ suite('Graph View', () => {
 				[hiddenFile.id]: true,
 			},
 		});
+		const restoredFolderNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			hiddenFolder.id,
+		);
+		const restoredDescendantNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			descendantFolder.id,
+		);
+		const restoredFileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const visibleRows = getDescendantsByClass(
+			restoredFileGroup,
+			'graph-file-item',
+		);
+		const restoredProjectToFolderEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${hiddenFolder.id}`,
+		);
+		const restoredFolderToFilesEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${hiddenFolder.id}->${fileGroupId}`,
+		);
+		const restoredFolderToDescendantEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${hiddenFolder.id}->${descendantFolder.id}`,
+		);
 
 		assert.strictEqual(projectNode.hidden, false);
-		assert.strictEqual(folderNode.hidden, false);
-		assert.strictEqual(descendantFolderNode.hidden, false);
-		assert.strictEqual(fileGroup.hidden, false);
-		assert.strictEqual(inheritedHiddenRow.hidden, false);
-		assert.strictEqual(projectToFolderEdge.getAttribute('visibility'), null);
-		assert.strictEqual(folderToFilesEdge.getAttribute('visibility'), null);
-		assert.strictEqual(folderToDescendantEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderNode.hidden, false);
+		assert.strictEqual(restoredDescendantNode.hidden, false);
+		assert.strictEqual(restoredFileGroup.hidden, false);
+		assert.deepStrictEqual(
+			visibleRows.map((row) => row.getAttribute('data-file-id')),
+			[visibleFile.id],
+		);
+		assert.strictEqual(restoredProjectToFolderEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderToFilesEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderToDescendantEdge.getAttribute('visibility'), null);
 		assert.ok(findDescendantByAttribute(
 			minimapNodeLayer,
 			'data-graph-node-id',
@@ -1676,12 +1700,12 @@ suite('Graph View', () => {
 				[detachedFile.id]: true,
 			},
 		}, graph);
-		const folderRoot = getDescendantByAttribute(
+		const folderRoot = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			folderRootNodeId,
 		);
-		const folderBacklink = getDescendantByAttribute(
+		const folderBacklink = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			folderBacklinkId,
@@ -1695,7 +1719,7 @@ suite('Graph View', () => {
 		const siblingRow = getDescendantsByClass(root, 'graph-file-item').find(
 			(row) => row.getAttribute('data-file-id') === siblingFile.id,
 		);
-		const folderBacklinkEdge = getDescendantByAttribute(
+		const folderBacklinkEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${project.id}->${folderBacklinkId}`,
@@ -1706,13 +1730,13 @@ suite('Graph View', () => {
 		);
 		const initialState = graphView.state.getState();
 
-		assert.ok(fileRoot && siblingRow);
-		assert.strictEqual(folderRoot.hidden, true);
-		assert.strictEqual(folderBacklink.hidden, true);
-		assert.strictEqual(fileRoot.hidden, true);
+		assert.ok(siblingRow);
+		assert.strictEqual(folderRoot, undefined);
+		assert.strictEqual(folderBacklink, undefined);
+		assert.strictEqual(fileRoot, undefined);
 		assert.strictEqual(fileBacklink, undefined);
 		assert.strictEqual(siblingRow.hidden, false);
-		assert.strictEqual(folderBacklinkEdge.getAttribute('visibility'), 'hidden');
+		assert.strictEqual(folderBacklinkEdge, undefined);
 		for (const hiddenLayoutNodeId of [
 			detachedFolder.id,
 			folderBacklinkId,
@@ -1730,10 +1754,30 @@ suite('Graph View', () => {
 			nodePositions: initialState.nodePositions,
 			hiddenNodeIds: {},
 		});
+		const restoredFolderRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderRootNodeId,
+		);
+		const restoredFolderBacklink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderBacklinkId,
+		);
+		const restoredFileRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileRootNodeId,
+		);
+		const restoredFolderBacklinkEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${folderBacklinkId}`,
+		);
 
-		assert.strictEqual(folderRoot.hidden, false);
-		assert.strictEqual(folderBacklink.hidden, false);
-		assert.strictEqual(fileRoot.hidden, false);
+		assert.strictEqual(restoredFolderRoot.hidden, false);
+		assert.strictEqual(restoredFolderBacklink.hidden, false);
+		assert.strictEqual(restoredFileRoot.hidden, false);
 		const restoredFileBacklink = getDescendantsByClass(root, 'graph-file-item').find(
 			(row) => row.getAttribute('data-file-id') === detachedFile.id,
 		);
@@ -1744,7 +1788,7 @@ suite('Graph View', () => {
 			restoredFileBacklink.getAttribute('data-target-root-id'),
 			fileRootId,
 		);
-		assert.strictEqual(folderBacklinkEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderBacklinkEdge.getAttribute('visibility'), null);
 		for (const restoredLayoutNodeId of [
 			folderRootNodeId,
 			folderBacklinkId,
@@ -4753,7 +4797,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('grouped File을 밖으로 뺐다가 목록에 놓으면 standalone과 grouped 상태를 왕복한다', () => {
+	test('grouped File은 Row Drag로 standalone이 되지 않고 Detach Handle로만 분리된다', () => {
 		const files = ['a', 'b', 'c'].map((name) => ({
 			kind: 'file' as const,
 			id: `file:view-arrangement/${name}.ts`,
@@ -4788,65 +4832,11 @@ suite('Graph View', () => {
 		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
 		row.dispatch('pointerup', createPointerEvent(row, -500, -500));
 
-		const standalone = getDescendantByAttribute(
-			nodeLayer,
-			'data-graph-node-id',
-			file.id,
-		);
-
 		fileGroup = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
 			fileGroupId,
 		);
-		assert.deepStrictEqual(
-			getDescendantsByClass(fileGroup, 'graph-file-item').map(
-				(item) => item.getAttribute('data-file-id'),
-			),
-			[files[0]?.id, files[2]?.id],
-		);
-		assert.ok(graphView.state.getState().nodePositions[file.id]);
-		const parent = getDescendantByAttribute(
-			nodeLayer,
-			'data-graph-node-id',
-			project.id,
-		);
-		const parentPosition = readTranslate(parent.style.transform);
-
-		performNodeDrop(
-			standalone,
-			parentPosition.x + 8,
-			parentPosition.y + 8,
-		);
-		assert.strictEqual(
-			findDescendantByAttribute(
-				nodeLayer,
-				'data-graph-node-id',
-				file.id,
-			),
-			standalone,
-		);
-		assert.deepStrictEqual(
-			getDescendantsByClass(fileGroup, 'graph-file-item').map(
-				(item) => item.getAttribute('data-file-id'),
-			),
-			[files[0]?.id, files[2]?.id],
-		);
-		assert.ok(graphView.state.getState().nodePositions[file.id]);
-
-		const fileGroupPosition = readTranslate(fileGroup.style.transform);
-
-		performNodeDrop(
-			standalone,
-			fileGroupPosition.x + 8,
-			fileGroupPosition.y + 8,
-		);
-		fileGroup = getDescendantByAttribute(
-			nodeLayer,
-			'data-graph-node-id',
-			fileGroupId,
-		);
-
 		assert.strictEqual(findDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
@@ -4859,6 +4849,64 @@ suite('Graph View', () => {
 			files.map((entry) => entry.id),
 		);
 		assert.strictEqual(graphView.state.getState().nodePositions[file.id], undefined);
+		const currentRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			file.id,
+		);
+		const detachHandle = getDescendantByClass(
+			currentRow,
+			'graph-detach-handle',
+		);
+
+		detachHandle.dispatch(
+			'pointerdown',
+			createPointerEvent(detachHandle, 10, 10),
+		);
+		detachHandle.dispatch(
+			'pointermove',
+			createPointerEvent(detachHandle, 30, 30),
+		);
+		detachHandle.dispatch(
+			'pointerup',
+			createPointerEvent(detachHandle, 900, 600),
+		);
+		const detachedRootId = createPromotedGraphRootId(file.id);
+		const detachedNodeId = createGraphLayoutNodeId(detachedRootId, file.id);
+		const detachedNode = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			detachedNodeId,
+		);
+
+		fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const backlinkRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			file.id,
+		);
+
+		assert.strictEqual(
+			detachedNode.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.strictEqual(
+			backlinkRow.getAttribute('data-target-root-id'),
+			detachedRootId,
+		);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item').map(
+				(item) => item.getAttribute('data-file-id'),
+			),
+			files.map((entry) => entry.id),
+		);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[detachedRootId]: true,
+		});
 		graphView.dispose();
 	});
 

@@ -7,8 +7,6 @@ import {
 	createGraphLayoutNodeId,
 	getGraphLayoutRootId,
 	getGraphLayoutSourceId,
-	GRAPH_FILE_GROUP_NODE_WIDTH,
-	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 	resolveGraphLayoutNodePosition,
 } from './graphLayout';
 import type {
@@ -58,12 +56,6 @@ type FileRowRenderer = {
 	readonly element: HTMLLIElement;
 	readonly dispose: () => void;
 };
-
-type FileArrangementDragInitializer = (
-	element: HTMLElement,
-	file: GraphFileNode,
-	fileGroupId: string,
-) => () => void;
 
 type BacklinkInitializer = (
 	element: HTMLElement,
@@ -253,8 +245,6 @@ export function initializeGraphRenderer(
 		readonly wasUnarranged: boolean;
 		readonly dropZone?: GraphArrangementDropZone;
 		readonly placeholder?: HTMLElement;
-		readonly sourceElement?: HTMLElement;
-		readonly preview?: HTMLElement;
 		isDropZoneActive?: boolean;
 	} | undefined;
 	/** 정렬 Drag placeholder와 hover target 표시를 모두 제거한다. */
@@ -268,10 +258,6 @@ export function initializeGraphRenderer(
 		}
 
 		activeArrangementDrag.placeholder?.remove();
-		activeArrangementDrag.sourceElement?.classList.remove(
-			'is-arrangement-drag-source',
-		);
-		activeArrangementDrag.preview?.remove();
 		activeArrangementDrag = undefined;
 	};
 	/** 최신 World 위치와 Camera scale로 Node의 client rect를 계산한다. */
@@ -414,71 +400,13 @@ export function initializeGraphRenderer(
 			placeholder,
 		};
 	};
-	/** Grouped File Row Drag용 원래 목록 target과 standalone preview를 만든다. */
-	const beginFileArrangementDrag = (
-		file: GraphFileNode,
-		fileGroupId: string,
-		sourceElement: HTMLElement,
-	): HTMLElement | undefined => {
-		clearArrangementDrag();
-		const targetElement = nodeElements.get(fileGroupId);
-
-		if (!targetElement) {
-			return undefined;
-		}
-		const targetBounds = getNodeClientRect(fileGroupId);
-
-		const preview = ownerDocument.createElement('div');
-		const name = ownerDocument.createElement('span');
-
-		preview.className = 'graph-node graph-file-group-node graph-arrangement-drag-preview';
-		preview.setAttribute('data-graph-arrangement-preview-id', file.id);
-		preview.style.width = `${GRAPH_FILE_GROUP_NODE_WIDTH}px`;
-		preview.style.height = `${GRAPH_FILE_GROUP_STANDALONE_HEIGHT}px`;
-		name.className = 'graph-file-name';
-		name.textContent = file.name;
-		preview.append(name);
-		nodeLayer.append(preview);
-		sourceElement.classList.add('is-arrangement-drag-source');
-		activeArrangementDrag = {
-			nodeId: file.id,
-			wasUnarranged: false,
-			dropZone: targetBounds
-				? {
-					hitBounds: [targetBounds],
-					highlightElements: [targetElement],
-				}
-				: undefined,
-			sourceElement,
-			preview,
-		};
-		return preview;
-	};
-	/** Client Pointer 중심에 File preview를 두고 최종 World 좌표를 반환한다. */
-	const moveFileArrangementPreview = (
-		preview: HTMLElement,
-		clientX: number,
-		clientY: number,
-	): GraphLayoutPosition => {
-		const layerBounds = nodeLayer.getBoundingClientRect();
-		const scale = graphState.getState().camera.scale;
-		const position = {
-			x: (clientX - layerBounds.left) / scale
-				- GRAPH_FILE_GROUP_NODE_WIDTH / 2,
-			y: (clientY - layerBounds.top) / scale
-				- GRAPH_FILE_GROUP_STANDALONE_HEIGHT / 2,
-		};
-
-		preview.style.transform = `translate(${position.x}px, ${position.y}px)`;
-		return position;
-	};
 	/** Pointer/Card가 정렬 목록에 들어왔는지 판별하고 목록의 모든 슬롯을 강조한다. */
 	const updateArrangementTarget = (
 		clientX: number,
 		clientY: number,
 	): boolean => {
 		const session = activeArrangementDrag;
-		const draggedBounds = session && !session.preview
+		const draggedBounds = session
 			? getNodeClientRect(session.nodeId)
 			: undefined;
 		const isTarget = session?.dropZone
@@ -958,180 +886,6 @@ export function initializeGraphRenderer(
 			);
 		}
 	};
-	const initializeFileArrangementDrag: FileArrangementDragInitializer = (
-		element,
-		file,
-		fileGroupId,
-	) => {
-		let session: {
-			readonly pointerId: number;
-			readonly startClientX: number;
-			readonly startClientY: number;
-			preview?: HTMLElement;
-			position?: GraphLayoutPosition;
-			didDrag: boolean;
-		} | undefined;
-		let suppressNextClick = false;
-		let dragDisposed = false;
-		const stop = (pointerId: number, releaseCapture: boolean): void => {
-			session = undefined;
-
-			if (releaseCapture && element.hasPointerCapture(pointerId)) {
-				element.releasePointerCapture(pointerId);
-			}
-		};
-		const handlePointerDown = (event: PointerEvent): void => {
-			if (
-				dragDisposed
-				|| session
-				|| !event.isPrimary
-				|| event.button !== 0
-				|| shouldIgnoreFileArrangementDrag(element, event)
-			) {
-				return;
-			}
-
-			event.preventDefault();
-			event.stopPropagation();
-			suppressNextClick = false;
-			session = {
-				pointerId: event.pointerId,
-				startClientX: event.clientX,
-				startClientY: event.clientY,
-				didDrag: false,
-			};
-			element.setPointerCapture(event.pointerId);
-		};
-		const handlePointerMove = (event: PointerEvent): void => {
-			if (!session || event.pointerId !== session.pointerId) {
-				return;
-			}
-
-			event.preventDefault();
-			event.stopPropagation();
-			const distance = Math.hypot(
-				event.clientX - session.startClientX,
-				event.clientY - session.startClientY,
-			);
-
-			if (!session.didDrag && distance < 4) {
-				return;
-			}
-
-			if (!session.didDrag) {
-				session.didDrag = true;
-				session.preview = beginFileArrangementDrag(
-					file,
-					fileGroupId,
-					element,
-				);
-			}
-
-			if (session.preview) {
-				session.position = moveFileArrangementPreview(
-					session.preview,
-					event.clientX,
-					event.clientY,
-				);
-			}
-			updateArrangementTarget(event.clientX, event.clientY);
-		};
-		const handlePointerUp = (event: PointerEvent): void => {
-			if (!session || event.pointerId !== session.pointerId) {
-				return;
-			}
-
-			event.preventDefault();
-			event.stopPropagation();
-			const completedSession = session;
-
-			suppressNextClick = completedSession.didDrag;
-			const shouldArrange = completedSession.didDrag
-				&& updateArrangementTarget(event.clientX, event.clientY);
-
-			stop(event.pointerId, true);
-			clearArrangementDrag();
-
-			if (
-				completedSession.didDrag
-				&& !shouldArrange
-				&& completedSession.position
-			) {
-				const snapshot = graphState.getState();
-
-				graphState.setState({
-					camera: snapshot.camera,
-					nodePositions: {
-						...snapshot.nodePositions,
-						[file.id]: completedSession.position,
-					},
-				});
-				interactions.onNodeArrangementChange?.({
-					nodeId: file.id,
-					arranged: false,
-				});
-			}
-		};
-		const handlePointerCancel = (event: PointerEvent): void => {
-			if (!session || event.pointerId !== session.pointerId) {
-				return;
-			}
-
-			event.preventDefault();
-			event.stopPropagation();
-			suppressNextClick = false;
-			stop(event.pointerId, true);
-			clearArrangementDrag();
-		};
-		const handleLostPointerCapture = (event: PointerEvent): void => {
-			if (!session || event.pointerId !== session.pointerId) {
-				return;
-			}
-
-			suppressNextClick = false;
-			stop(event.pointerId, false);
-			clearArrangementDrag();
-		};
-		const handleClick = (event: MouseEvent): void => {
-			if (!suppressNextClick) {
-				return;
-			}
-
-			suppressNextClick = false;
-			event.preventDefault();
-			event.stopPropagation();
-		};
-
-		element.addEventListener('pointerdown', handlePointerDown);
-		element.addEventListener('pointermove', handlePointerMove);
-		element.addEventListener('pointerup', handlePointerUp);
-		element.addEventListener('pointercancel', handlePointerCancel);
-		element.addEventListener('lostpointercapture', handleLostPointerCapture);
-		element.addEventListener('click', handleClick);
-
-		return () => {
-			if (dragDisposed) {
-				return;
-			}
-
-			dragDisposed = true;
-			element.removeEventListener('pointerdown', handlePointerDown);
-			element.removeEventListener('pointermove', handlePointerMove);
-			element.removeEventListener('pointerup', handlePointerUp);
-			element.removeEventListener('pointercancel', handlePointerCancel);
-			element.removeEventListener(
-				'lostpointercapture',
-				handleLostPointerCapture,
-			);
-			element.removeEventListener('click', handleClick);
-
-			if (session) {
-				stop(session.pointerId, true);
-				clearArrangementDrag();
-			}
-		};
-	};
-
 	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
 	const addNode = (layoutNode: GraphLayoutNode): void => {
 		const element = createNodeElement(
@@ -1169,9 +923,8 @@ export function initializeGraphRenderer(
 				ownerDocument,
 				graphState,
 				interactions,
-					rootNodeIds,
-					initializeBacklink,
-					initializeFileArrangementDrag,
+				rootNodeIds,
+				initializeBacklink,
 				);
 
 			content.render(graphState.getFileGroupPage(
@@ -2072,22 +1825,6 @@ function createClientRect(
 	};
 }
 
-/** File Row 자신은 허용하되 내부 Detach Handle에서 시작한 Drag는 분리한다. */
-function shouldIgnoreFileArrangementDrag(
-	element: HTMLElement,
-	event: Event,
-): boolean {
-	const target = event.target;
-
-	if (target === null || typeof (target as Element).closest !== 'function') {
-		return true;
-	}
-
-	return (target as Element).closest(
-		`[${GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE}]`,
-	) !== element;
-}
-
 /** Root 카드에 Layout 비참여 absolute Context Label과 입력 차단 정책을 추가한다. */
 function initializeRootContextLabel(
 	rootNode: HTMLElement,
@@ -2330,7 +2067,6 @@ function initializeFileGroupContent(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
-	initializeFileArrangementDrag: FileArrangementDragInitializer,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
 	let renderedRootNodeIds = rootNodeIds;
@@ -2372,10 +2108,8 @@ function initializeFileGroupContent(
 					file,
 					ownerDocument,
 					interactions,
-						renderedRootNodeIds,
-						initializeBacklink,
-						initializeFileArrangementDrag,
-						renderedNode.id,
+					renderedRootNodeIds,
+					initializeBacklink,
 					);
 
 				list.append(row.element);
@@ -2493,8 +2227,6 @@ function createFileRow(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
-	initializeFileArrangementDrag: FileArrangementDragInitializer,
-	fileGroupId: string,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
@@ -2519,10 +2251,6 @@ function createFileRow(
 			ownerDocument,
 			interactions,
 		);
-	const disposeArrangementDrag = file.presentation === 'backlink'
-		|| rootNodeIds.has(file.id)
-		? undefined
-		: initializeFileArrangementDrag(item, file, fileGroupId);
 	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
 	const animateFileClick = (): void => {
 		item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
@@ -2553,7 +2281,6 @@ function createFileRow(
 		dispose: () => {
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
-			disposeArrangementDrag?.();
 			item.removeEventListener('click', handleFileClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
 			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
