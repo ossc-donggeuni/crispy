@@ -19,6 +19,10 @@ import {
 } from './agent/host/terminal/terminalRuntimeCleanup';
 import type {
 	ExtensionToWebviewMessage,
+	GraphNodeEffect,
+	GraphNodeEffectKind,
+	GraphNodeEffectSetMessage,
+	GraphNodeEffectTarget,
 	WorkspaceOpenFileMessage,
 	WorkspaceToWebviewMessage,
 } from './messages';
@@ -35,6 +39,7 @@ import {
 } from './workspace/workspaceMetadata';
 import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
+import type { GraphState } from './webview/graph/graphState';
 import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
@@ -79,6 +84,119 @@ interface CanvasRuntime {
 let currentRuntime: CanvasRuntime | undefined;
 let lastWebviewState: PersistedWebviewState | undefined;
 const pendingWorkspaceWrites = new Set<Promise<void>>();
+
+export const OPEN_CANVAS_COMMAND_ID = 'crispy.openCanvas';
+export const DEBUG_NODE_EFFECTS_COMMAND_ID = 'crispy.debugNodeEffects';
+export const CLEAR_NODE_EFFECTS_COMMAND_ID = 'crispy.clearNodeEffects';
+
+type GraphNodeEffectDebugTemplate =
+	| { readonly kind: Exclude<GraphNodeEffectKind, 'icon'> }
+	| { readonly kind: 'icon'; readonly icon: 'check' | 'cancel' | 'alert' };
+
+const GRAPH_NODE_EFFECT_DEBUG_TEMPLATES:
+	readonly (readonly GraphNodeEffectDebugTemplate[])[] = [
+		[{ kind: 'marching-dash' }],
+		[{ kind: 'pulse' }],
+		[{ kind: 'shimmer' }],
+		[{ kind: 'outline' }],
+		[{ kind: 'outline-strong' }],
+		[{ kind: 'icon', icon: 'check' }],
+		[{ kind: 'outline' }, { kind: 'icon', icon: 'alert' }],
+		[{ kind: 'outline' }, { kind: 'icon', icon: 'cancel' }],
+	];
+
+/** Debug Effect가 매 호출마다 구분 가능한 밝은 임의 색상을 사용하도록 한다. */
+function createRandomGraphNodeEffectColor(random: () => number): string {
+	const hue = Math.floor(random() * 36_000) / 100;
+
+	return `hsl(${hue}deg 84% 64%)`;
+}
+
+/** 현재 Workspace Graph의 Source Node를 안정적인 traversal 순서로 Debug 메시지에 배정한다. */
+export function createGraphNodeEffectDebugMessages(
+	graph: Graph,
+	graphState: Pick<
+		GraphState,
+		'fileGroupPages' | 'openedFolders' | 'hiddenNodeIds'
+	> = {},
+	random: () => number = Math.random,
+): GraphNodeEffectSetMessage[] {
+	const nodeIds: string[] = [];
+	const visitedNodeIds = new Set<string>();
+	const appendNodeId = (nodeId: string): void => {
+		if (visitedNodeIds.has(nodeId)) {
+			return;
+		}
+
+		visitedNodeIds.add(nodeId);
+		nodeIds.push(nodeId);
+	};
+
+	for (const root of graph.roots) {
+		const rootNode = graph.rootNodes[root.nodeId];
+
+		// Workspace Root는 Project다. Detached Folder/File Root는 후보로 보지 않는다.
+		if (rootNode?.kind !== 'project') {
+			continue;
+		}
+
+		for (const child of rootNode.children) {
+			if (graphState.hiddenNodeIds?.[child.id] !== true) {
+				appendNodeId(child.id);
+			}
+		}
+	}
+
+	const messages: GraphNodeEffectSetMessage[] = [];
+
+	for (
+		let index = 0;
+		index < Math.min(nodeIds.length, GRAPH_NODE_EFFECT_DEBUG_TEMPLATES.length);
+		index += 1
+	) {
+		const nodeId = nodeIds[index];
+		const templates = GRAPH_NODE_EFFECT_DEBUG_TEMPLATES[index];
+		const color = createRandomGraphNodeEffectColor(random);
+
+		if (!nodeId || !templates || !color) {
+			continue;
+		}
+
+		for (const template of templates) {
+			const effect: GraphNodeEffect = template.kind === 'icon'
+				? { kind: 'icon', color, icon: template.icon }
+				: { kind: template.kind, color };
+
+			messages.push({
+				type: 'graph.nodeEffect.set',
+				target: { nodeId },
+				effect,
+			});
+		}
+	}
+
+	return messages;
+}
+
+function collectEffectKindsByTarget(
+	messages: readonly GraphNodeEffectSetMessage[],
+): ReadonlyMap<string, ReadonlySet<GraphNodeEffectKind>> {
+	const kindsByTarget = new Map<string, Set<GraphNodeEffectKind>>();
+
+	for (const message of messages) {
+		const key = createEffectTargetKey(message.target);
+		const kinds = kindsByTarget.get(key) ?? new Set<GraphNodeEffectKind>();
+
+		kinds.add(message.effect.kind);
+		kindsByTarget.set(key, kinds);
+	}
+
+	return kindsByTarget;
+}
+
+function createEffectTargetKey(target: GraphNodeEffectTarget): string {
+	return JSON.stringify([target.nodeId, target.rootId ?? null]);
+}
 
 /** 검증된 terminal 메시지를 실제 TerminalHost 경계로 전달하는 최소 계약이다. */
 export interface TerminalMessageHost {
@@ -135,6 +253,22 @@ export interface CrispyExtensionApi {
  * @param context 확장의 구독 항목과 설치 경로를 제공하는 VS Code 확장 컨텍스트
  */
 export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
+	const workspaceGraphDependencies = {
+		loadWorkspaceFilters: () => loadOrCreateWorkspaceFilters(
+			getCurrentWorkspaceRootUris(),
+			context.extensionUri,
+		),
+		createWorkspaceSnapshot: (
+			rootFilters: readonly WorkspaceRootFilter[],
+		) => createWorkspaceSnapshot(
+			vscode.workspace,
+			vscode.workspace.fs,
+			console,
+			rootFilters,
+		),
+		convertWorkspaceSnapshotToGraph,
+	};
+	let debugEffectMessages: GraphNodeEffectSetMessage[] = [];
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
@@ -213,21 +347,6 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			},
 		);
 		
-		const workspaceGraphDependencies = {
-			loadWorkspaceFilters: () => loadOrCreateWorkspaceFilters(
-				getCurrentWorkspaceRootUris(),
-				context.extensionUri,
-			),
-			createWorkspaceSnapshot: (
-				rootFilters: readonly WorkspaceRootFilter[],
-			) => createWorkspaceSnapshot(
-				vscode.workspace,
-				vscode.workspace.fs,
-				console,
-				rootFilters,
-			),
-			convertWorkspaceSnapshotToGraph,
-		};
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({
 			...workspaceGraphDependencies,
 			postMessage: (message: WorkspaceToWebviewMessage) => (
@@ -244,6 +363,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 
 		panel.onDidDispose(() => {
 			panelDisposed = true;
+			if (currentRuntime === runtime) {
+				debugEffectMessages = [];
+			}
 			releaseCanvasRuntime(runtime);
 			runtime.detach();
 			void runtime.terminate().catch(() => undefined);
@@ -275,9 +397,90 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		return panel;
 	};
 
-	const disposable = vscode.commands.registerCommand('crispy.openCanvas', openCanvas);
+	const postGraphEffectMessage = async (
+		panel: vscode.WebviewPanel,
+		message: ExtensionToWebviewMessage,
+	): Promise<void> => {
+		try {
+			await panel.webview.postMessage(message);
+		} catch {
+			/** Debug command 실패가 Canvas 또는 다른 Extension command로 전파되지 않는다. */
+		}
+	};
+	const debugNodeEffects = async (): Promise<void> => {
+		const panel = await openCanvas();
+		let graph: Graph;
 
-	context.subscriptions.push(disposable);
+		try {
+			graph = await createCurrentWorkspaceGraph(workspaceGraphDependencies);
+		} catch {
+			return;
+		}
+
+		if (currentRuntime?.panel !== panel) {
+			return;
+		}
+		const nextMessages = createGraphNodeEffectDebugMessages(
+			graph,
+			lastWebviewState?.graph,
+		);
+		const nextKindsByTarget = collectEffectKindsByTarget(nextMessages);
+
+		for (const previousMessage of debugEffectMessages) {
+			const nextKinds = nextKindsByTarget.get(createEffectTargetKey(
+				previousMessage.target,
+			));
+
+			if (!nextKinds?.has(previousMessage.effect.kind)) {
+				await postGraphEffectMessage(panel, {
+					type: 'graph.nodeEffect.clear',
+					target: previousMessage.target,
+					kind: previousMessage.effect.kind,
+				});
+			}
+		}
+
+		for (const message of nextMessages) {
+			await postGraphEffectMessage(panel, message);
+		}
+		debugEffectMessages = nextMessages;
+	};
+	const clearNodeEffects = async (): Promise<void> => {
+		const panel = currentRuntime?.panel;
+
+		if (panel) {
+			const targets = new Map(debugEffectMessages.map((message) => [
+				createEffectTargetKey(message.target),
+				message.target,
+			]));
+
+			for (const target of targets.values()) {
+				await postGraphEffectMessage(panel, {
+					type: 'graph.nodeEffect.clear',
+					target,
+				});
+			}
+		}
+		debugEffectMessages = [];
+	};
+	const openCanvasDisposable = vscode.commands.registerCommand(
+		OPEN_CANVAS_COMMAND_ID,
+		openCanvas,
+	);
+	const debugNodeEffectsDisposable = vscode.commands.registerCommand(
+		DEBUG_NODE_EFFECTS_COMMAND_ID,
+		debugNodeEffects,
+	);
+	const clearNodeEffectsDisposable = vscode.commands.registerCommand(
+		CLEAR_NODE_EFFECTS_COMMAND_ID,
+		clearNodeEffects,
+	);
+
+	context.subscriptions.push(
+		openCanvasDisposable,
+		debugNodeEffectsDisposable,
+		clearNodeEffectsDisposable,
+	);
 
 	return Object.freeze({
 		deactivate,

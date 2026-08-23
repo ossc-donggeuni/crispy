@@ -5,6 +5,7 @@ import {
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
+	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
 	type WebviewToExtensionMessage,
 } from '../messages';
@@ -301,6 +302,23 @@ window.addEventListener('unload', () => {
  * @param message Extension Host에서 수신한 검증 전 메시지
  */
 function handleHostMessage(message: unknown): void {
+	const graphEffectMessage = parseGraphNodeEffectToWebviewMessage(message);
+
+	if (graphEffectMessage) {
+		if (graphEffectMessage.type === 'graph.nodeEffect.set') {
+			graphView.setNodeEffect(
+				graphEffectMessage.target,
+				graphEffectMessage.effect,
+			);
+		} else {
+			graphView.clearNodeEffect(
+				graphEffectMessage.target,
+				graphEffectMessage.kind,
+			);
+		}
+		return;
+	}
+
 	const workspaceMessage = parseWorkspaceToWebviewMessage(message);
 
 	if (workspaceMessage) {

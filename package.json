@@ -19,6 +19,14 @@
       {
         "command": "crispy.openCanvas",
         "title": "Crispy: Open Canvas"
+      },
+      {
+        "command": "crispy.debugNodeEffects",
+        "title": "Crispy: Debug Node Effects"
+      },
+      {
+        "command": "crispy.clearNodeEffects",
+        "title": "Crispy: Clear Node Effects"
       }
     ],
     "configuration": {
