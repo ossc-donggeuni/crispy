@@ -3,6 +3,7 @@ import {
 	type AgentPanelUiController,
 } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
+import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
 	parseAgentActivityToWebviewMessage,
@@ -89,6 +90,9 @@ const graphView = initializeGraphView(
 		),
 	},
 );
+
+/** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
+const agentActivityStore = createAgentActivityStore();
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
@@ -320,8 +324,25 @@ function handleHostMessage(message: unknown): void {
 		return;
 	}
 
-	if (parseAgentActivityToWebviewMessage(message)) {
-		/** G-12.1은 수신 계약만 열며 Activity 상태와 Graph Effect는 후속 단계가 소유한다. */
+	const agentActivityMessage = parseAgentActivityToWebviewMessage(message);
+
+	if (agentActivityMessage) {
+		if (agentActivityMessage.type === 'agent.activity.set') {
+			agentActivityStore.setAgentActivity(
+				agentActivityMessage.sessionId,
+				agentActivityMessage.target,
+				agentActivityMessage.activity,
+			);
+		} else if (agentActivityMessage.type === 'agent.activity.clear') {
+			agentActivityStore.clearAgentActivity(
+				agentActivityMessage.sessionId,
+				agentActivityMessage.target,
+			);
+		} else {
+			agentActivityStore.clearAgentActivitiesBySession(
+				agentActivityMessage.sessionId,
+			);
+		}
 		return;
 	}
 

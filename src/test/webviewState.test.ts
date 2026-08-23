@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { createAgentTabModel } from '../agent/UI/agentTabModel';
 import type {
+	AgentActivityKind,
 	GraphNodeEffect,
 	GraphNodeEffectKind,
 	GraphNodeEffectTarget,
@@ -482,6 +483,16 @@ suite('Webview State Wiring', () => {
 			readonly target: GraphNodeEffectTarget;
 			readonly kind?: GraphNodeEffectKind;
 		}> = [];
+		const agentActivitySets: Array<{
+			readonly sessionId: string;
+			readonly target: GraphNodeEffectTarget;
+			readonly activity: AgentActivityKind;
+		}> = [];
+		const agentActivityClears: Array<{
+			readonly sessionId: string;
+			readonly target: GraphNodeEffectTarget;
+		}> = [];
+		const agentActivitySessionClears: string[] = [];
 		const terminalHostMessages: unknown[] = [];
 		let currentGraphState: GraphStateSnapshot = {
 			camera: initialState.graph.camera,
@@ -523,6 +534,9 @@ suite('Webview State Wiring', () => {
 		const agentTerminalPoolModulePath = require.resolve(
 			'../agent/webview/agentTerminalPool',
 		);
+		const agentActivityStoreModulePath = require.resolve(
+			'../agent/webview/agentActivityStore',
+		);
 		const webviewModulePath = require.resolve('../webview/webview');
 		const graphViewModule = require(graphViewModulePath) as GraphViewModule;
 		const panelDockModule = require(panelDockModulePath) as PanelDockModule;
@@ -536,6 +550,9 @@ suite('Webview State Wiring', () => {
 		const agentTerminalPoolModule = require(
 			agentTerminalPoolModulePath,
 		) as AgentTerminalPoolModule;
+		const agentActivityStoreModule = require(
+			agentActivityStoreModulePath,
+		) as AgentActivityStoreModule;
 		const originalInitializeGraphView = graphViewModule.initializeGraphView;
 		const originalInitializePanelDock = panelDockModule.initializePanelDock;
 		const originalInitializePanelResize = panelResizeModule.initializePanelResize;
@@ -544,6 +561,8 @@ suite('Webview State Wiring', () => {
 		const originalInitializeAgentPanelUi = agentPanelUiModule.initializeAgentPanelUi;
 		const originalCreateDefaultAgentTerminalPool =
 			agentTerminalPoolModule.createDefaultAgentTerminalPool;
+		const originalCreateAgentActivityStore =
+			agentActivityStoreModule.createAgentActivityStore;
 		const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 		const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 		const originalAcquireVsCodeApi = Object.getOwnPropertyDescriptor(
@@ -700,6 +719,21 @@ suite('Webview State Wiring', () => {
 			},
 		})) as typeof agentTerminalPoolModule.createDefaultAgentTerminalPool;
 
+		agentActivityStoreModule.createAgentActivityStore = (() => ({
+			getActivities: () => [],
+			getSnapshot: () => [],
+			setAgentActivity(sessionId, target, activity): void {
+				agentActivitySets.push({ sessionId, target, activity });
+			},
+			clearAgentActivity(sessionId, target): void {
+				agentActivityClears.push({ sessionId, target });
+			},
+			clearAgentActivitiesBySession(sessionId): void {
+				agentActivitySessionClears.push(sessionId);
+			},
+			subscribe: () => () => undefined,
+		})) as typeof agentActivityStoreModule.createAgentActivityStore;
+
 		/**
 		 * 실제 Agent DOM 대신 초기화 여부와 Webview로 전달되는 콜백만 노출한다.
 		 * 실제 구현과 같이 초기 탭을 만들고 `onTabCreated`를 호출해 wiring을 재현한다.
@@ -849,6 +883,46 @@ suite('Webview State Wiring', () => {
 				},
 				kind: 'shimmer',
 			}]);
+
+			const activityTarget: GraphNodeEffectTarget = {
+				nodeId: 'file:app/index.ts',
+				rootId: 'detached:file:app/index.ts:1',
+			};
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.set',
+					sessionId: 'session-activity-a',
+					target: activityTarget,
+					activity: 'editing',
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.clear',
+					sessionId: 'session-activity-a',
+					target: activityTarget,
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.clearSession',
+					sessionId: 'session-activity-b',
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(agentActivitySets, [{
+				sessionId: 'session-activity-a',
+				target: activityTarget,
+				activity: 'editing',
+			}]);
+			assert.deepStrictEqual(agentActivityClears, [{
+				sessionId: 'session-activity-a',
+				target: activityTarget,
+			}]);
+			assert.deepStrictEqual(
+				agentActivitySessionClears,
+				['session-activity-b'],
+			);
 
 			const terminalStartingMessage = {
 				type: 'terminal.starting',
@@ -1150,6 +1224,8 @@ suite('Webview State Wiring', () => {
 			agentPanelUiModule.initializeAgentPanelUi = originalInitializeAgentPanelUi;
 			agentTerminalPoolModule.createDefaultAgentTerminalPool =
 				originalCreateDefaultAgentTerminalPool;
+			agentActivityStoreModule.createAgentActivityStore =
+				originalCreateAgentActivityStore;
 			restoreGlobalProperty('document', originalDocument);
 			restoreGlobalProperty('window', originalWindow);
 			restoreGlobalProperty('acquireVsCodeApi', originalAcquireVsCodeApi);
@@ -1181,6 +1257,11 @@ interface AgentPanelUiModule {
 interface AgentTerminalPoolModule {
 	createDefaultAgentTerminalPool:
 		typeof import('../agent/webview/agentTerminalPool').createDefaultAgentTerminalPool;
+}
+
+interface AgentActivityStoreModule {
+	createAgentActivityStore:
+		typeof import('../agent/webview/agentActivityStore').createAgentActivityStore;
 }
 
 function getStateChangedMessages(
