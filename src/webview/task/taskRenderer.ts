@@ -449,19 +449,6 @@ export function initializeTaskRenderer(
 		}
 
 		for (const edge of layout.edges) {
-			const source = nodesByRenderKey.get(createTaskNodeRenderKey(
-				edge.taskId,
-				edge.sourceId,
-			));
-			const target = nodesByRenderKey.get(createTaskNodeRenderKey(
-				edge.taskId,
-				edge.targetId,
-			));
-
-			if (!source || !target) {
-				continue;
-			}
-
 			const renderKey = createTaskEdgeRenderKey(edge.taskId, edge.id);
 			let element = edgeElements.get(renderKey);
 
@@ -595,7 +582,9 @@ function createTaskNodeContents(
 		prompt.textContent = node.prompt;
 		contents.push(prompt);
 	}
-	contents.push(createTaskWorkActions(ownerDocument));
+	if (node.canRemove) {
+		contents.push(createTaskWorkActions(ownerDocument));
+	}
 	return contents;
 }
 

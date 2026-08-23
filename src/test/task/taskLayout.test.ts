@@ -246,10 +246,15 @@ suite('Task Layout', () => {
 			id: 'task-node:parallel-c',
 			title: 'Parallel C',
 		};
+		const workD = {
+			...work,
+			id: 'task-node:parallel-d',
+			title: 'Parallel D',
+		};
 		const parallelTask: TaskBlueprint = {
 			...task,
-			nodes: [...task.nodes, workB, workC],
-			edges: [work, workB, workC].flatMap((parallelWork, index) => ([{
+			nodes: [...task.nodes, workB, workC, workD],
+			edges: [work, workB, workC, workD].flatMap((parallelWork, index) => ([{
 				id: `task-edge:parallel-in-${index}`,
 				source: start.id,
 				target: parallelWork.id,
@@ -266,7 +271,7 @@ suite('Task Layout', () => {
 		const endLayout = layout.nodes.find((node) => node.kind === 'end');
 
 		assert.strictEqual(new Set(works.map((node) => node.position.x)).size, 1);
-		assert.deepStrictEqual(works.map((node) => node.rank), [1, 1, 1]);
+		assert.deepStrictEqual(works.map((node) => node.rank), [1, 1, 1, 1]);
 		for (let index = 1; index < works.length; index += 1) {
 			const previous = works[index - 1];
 			const current = works[index];
@@ -280,7 +285,132 @@ suite('Task Layout', () => {
 			endLayout?.position.x,
 			task.origin.x + (TASK_NODE_WIDTH + TASK_NODE_HORIZONTAL_GAP) * 2,
 		);
-		assert.ok(layout.edges.every((edge) => !edge.canAddParallelWork));
+		assert.strictEqual(
+			endLayout ? endLayout.position.y + endLayout.height / 2 : undefined,
+			works.reduce((sum, node) => sum + node.position.y + node.height / 2, 0)
+				/ works.length,
+		);
+		assert.strictEqual(
+			layout.edges.filter((edge) => edge.canAddParallelWork).length,
+			4,
+		);
+	});
+
+	test('상단 Branch Edge에 삽입한 Work가 predecessor lane을 이어받는다', () => {
+		const task = createBranchTask({ x: 40, y: 70 });
+		let sequence = 0;
+		const state = createTaskState([task], () => `upper-${++sequence}`);
+		const before = createTaskGraphLayout([task]);
+		const updated = state.insertWorkBetween(task.id, 'task-edge:a-c');
+		const inserted = updated?.nodes.find((node) => (
+			node.kind === 'work' && !task.nodes.some((current) => current.id === node.id)
+		));
+
+		assert.ok(updated && inserted);
+		const after = createTaskGraphLayout([updated]);
+		const beforeA = readNodeCenterY(before, 'task-node:a');
+		const beforeB = readNodeCenterY(before, 'task-node:b');
+		const afterA = readNodeCenterY(after, 'task-node:a');
+		const afterB = readNodeCenterY(after, 'task-node:b');
+		const insertedY = readNodeCenterY(after, inserted.id);
+		const joinY = readNodeCenterY(after, 'task-node:c');
+
+		assert.ok(beforeA < beforeB);
+		assert.ok(afterA < afterB);
+		assert.strictEqual(insertedY, afterA);
+		assert.ok(insertedY < afterB);
+		assert.strictEqual(joinY, (insertedY + afterB) / 2);
+	});
+
+	test('하단 Branch Edge에 삽입한 Work가 predecessor lane을 이어받는다', () => {
+		const task = createBranchTask({ x: 40, y: 70 });
+		let sequence = 0;
+		const state = createTaskState([task], () => `lower-${++sequence}`);
+		const updated = state.insertWorkBetween(task.id, 'task-edge:b-c');
+		const inserted = updated?.nodes.find((node) => (
+			node.kind === 'work' && !task.nodes.some((current) => current.id === node.id)
+		));
+
+		assert.ok(updated && inserted);
+		const layout = createTaskGraphLayout([updated]);
+		const aY = readNodeCenterY(layout, 'task-node:a');
+		const bY = readNodeCenterY(layout, 'task-node:b');
+		const insertedY = readNodeCenterY(layout, inserted.id);
+
+		assert.ok(aY < bY);
+		assert.strictEqual(insertedY, bY);
+		assert.ok(insertedY > aY);
+	});
+
+	test('Branch 첫 Edge 분할도 기존 sibling 순서와 선택 Branch lane을 보존한다', () => {
+		const task = createBranchTask({ x: 40, y: 70 });
+		let sequence = 0;
+		const state = createTaskState([task], () => `branch-entry-${++sequence}`);
+		const updated = state.insertWorkBetween(task.id, 'task-edge:start-a');
+		const inserted = updated?.nodes.find((node) => (
+			node.kind === 'work' && !task.nodes.some((current) => current.id === node.id)
+		));
+
+		assert.ok(updated && inserted);
+		const layout = createTaskGraphLayout([updated]);
+		const insertedY = readNodeCenterY(layout, inserted.id);
+		const aY = readNodeCenterY(layout, 'task-node:a');
+		const bY = readNodeCenterY(layout, 'task-node:b');
+
+		assert.strictEqual(aY, insertedY);
+		assert.ok(insertedY < bY);
+	});
+
+	test('같은 Branch의 연속 삽입 Work가 동일한 lane을 유지한다', () => {
+		const task = createBranchTask({ x: 40, y: 70 });
+		let sequence = 0;
+		const state = createTaskState([task], () => `serial-lane-${++sequence}`);
+		const first = state.insertWorkBetween(task.id, 'task-edge:a-c');
+		const firstInserted = first?.nodes.find((node) => (
+			node.kind === 'work' && !task.nodes.some((current) => current.id === node.id)
+		));
+
+		assert.ok(first && firstInserted);
+		const nextEdge = first.edges.find((edge) => (
+			edge.source === firstInserted.id && edge.target === 'task-node:c'
+		));
+
+		assert.ok(nextEdge);
+		const second = state.insertWorkBetween(task.id, nextEdge.id);
+		const secondInserted = second?.nodes.find((node) => (
+			node.kind === 'work'
+				&& !first.nodes.some((current) => current.id === node.id)
+		));
+
+		assert.ok(second && secondInserted);
+		const layout = createTaskGraphLayout([second]);
+		assert.deepStrictEqual([
+			readNodeCenterY(layout, 'task-node:a'),
+			readNodeCenterY(layout, firstInserted.id),
+			readNodeCenterY(layout, secondInserted.id),
+		], [
+			readNodeCenterY(layout, 'task-node:a'),
+			readNodeCenterY(layout, 'task-node:a'),
+			readNodeCenterY(layout, 'task-node:a'),
+		]);
+	});
+
+	test('동일 topology의 task.nodes 순서가 달라도 Branch 위치가 뒤집히지 않는다', () => {
+		const task = createBranchTask({ x: 40, y: 70 });
+		const reordered: TaskBlueprint = {
+			...task,
+			nodes: [...task.nodes].reverse(),
+		};
+		const initial = createTaskGraphLayout([task]);
+		const shuffled = createTaskGraphLayout([reordered]);
+
+		for (const node of task.nodes) {
+			const initialNode = initial.nodes.find((candidate) => candidate.id === node.id);
+			const shuffledNode = shuffled.nodes.find((candidate) => candidate.id === node.id);
+
+			assert.ok(initialNode && shuffledNode);
+			assert.deepStrictEqual(shuffledNode.localPosition, initialNode.localPosition);
+		}
 	});
 
 	test('직렬 삽입은 longest path rank를 늘리고 origin 이동은 DAG 전체에 적용된다', () => {
@@ -334,6 +464,54 @@ function assertGeometryDelta(
 			}, delta);
 		}
 	}
+}
+
+function readNodeCenterY(
+	layout: ReturnType<typeof createTaskGraphLayout>,
+	nodeId: string,
+): number {
+	const node = layout.nodes.find((candidate) => candidate.id === nodeId);
+
+	assert.ok(node, `Layout Node ${nodeId}가 있어야 한다.`);
+	return node.position.y + node.height / 2;
+}
+
+function createBranchTask(
+	origin: { readonly x: number; readonly y: number },
+): TaskBlueprint {
+	const task = createTask(origin);
+	const [start, work, end] = task.nodes;
+
+	assert.ok(start && work?.kind === 'work' && end);
+	const workA = { ...work, id: 'task-node:a', title: 'Work A' };
+	const workB = { ...work, id: 'task-node:b', title: 'Work B' };
+	const workC = { ...work, id: 'task-node:c', title: 'Work C' };
+
+	return {
+		...task,
+		nodes: [start, workA, workB, workC, end],
+		edges: [{
+			id: 'task-edge:start-a',
+			source: start.id,
+			target: workA.id,
+		}, {
+			id: 'task-edge:start-b',
+			source: start.id,
+			target: workB.id,
+		}, {
+			id: 'task-edge:a-c',
+			source: workA.id,
+			target: workC.id,
+		}, {
+			id: 'task-edge:b-c',
+			source: workB.id,
+			target: workC.id,
+		}, {
+			id: 'task-edge:c-end',
+			source: workC.id,
+			target: end.id,
+		}],
+	};
 }
 
 /** 고정 ID와 표시 내용을 가진 기본 Task를 만든다. */

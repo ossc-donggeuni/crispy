@@ -1,7 +1,9 @@
 import {
 	assertValidTaskBlueprint,
 	canAddParallelWorkAtEdge,
+	canRemoveWorkNode,
 	type TaskBlueprint,
+	type TaskEdge,
 	type TaskNode,
 } from '../../task';
 
@@ -36,6 +38,7 @@ export interface TaskWorkLayoutNode extends TaskLayoutNodeBase {
 	readonly title: string;
 	readonly description: string;
 	readonly prompt: string;
+	readonly canRemove: boolean;
 }
 
 /** Task 종료점을 표시하는 Layout Node다. */
@@ -94,9 +97,15 @@ const TASK_FLOW_CENTER_Y = TASK_START_NODE_HEIGHT / 2;
 const TASK_EDGE_ANCHOR_SPACING = 12;
 const TASK_EDGE_MIN_CONTROL_OFFSET = 32;
 
+interface PreferredRankNode {
+	readonly node: TaskNode;
+	readonly preferredCenterY: number;
+	readonly topologyOrder: number;
+}
+
 /**
- * Task Blueprint 목록을 origin 기준의 Left → Right rank Layout으로 변환한다.
- * rank는 X축으로 진행하고 같은 rank의 병렬 Node는 중심선 주변 Y축에 배치한다.
+ * Task Blueprint 목록을 origin 기준의 Left → Right layered Layout으로 변환한다.
+ * rank는 X축, predecessor topology와 collision 해소 결과는 Y축을 결정한다.
  *
  * @param tasks 같은 Graph World에 표시할 Task Blueprint 목록
  * @returns Task 전용 Node geometry와 Edge 목록
@@ -120,39 +129,26 @@ export function createTaskGraphLayout(
 /** 내부 Node/Edge ID lookup이 다른 Task와 섞이지 않도록 한 Task만 Layout한다. */
 function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 	assertValidTaskBlueprint(task);
-	const ranks = createTaskNodeRanks(task);
-	const nodesByRank = new Map<number, TaskNode[]>();
+	const incomingByNodeId = new Map(task.nodes.map((node) => (
+		[node.id, [] as TaskEdge[]]
+	)));
+	const outgoingByNodeId = new Map(task.nodes.map((node) => (
+		[node.id, [] as TaskEdge[]]
+	)));
+	const edgeIndexes = new Map(task.edges.map((edge, index) => [edge.id, index]));
 
-	for (const node of task.nodes) {
-		const rank = ranks.get(node.id) ?? 0;
-		const rankNodes = nodesByRank.get(rank) ?? [];
-
-		rankNodes.push(node);
-		nodesByRank.set(rank, rankNodes);
+	for (const edge of task.edges) {
+		incomingByNodeId.get(edge.target)?.push(edge);
+		outgoingByNodeId.get(edge.source)?.push(edge);
 	}
 
-	const localPositions = new Map<string, TaskLayoutPosition>();
-	let localX = 0;
-	for (const rank of [...nodesByRank.keys()].sort((left, right) => left - right)) {
-		const rankNodes = nodesByRank.get(rank) ?? [];
-		const rankWidth = Math.max(...rankNodes.map((node) => (
-			getTaskNodeGeometry(node).width
-		)));
-		const rankHeight = rankNodes.reduce((height, node, index) => (
-			height
-			+ getTaskNodeGeometry(node).height
-			+ (index === 0 ? 0 : TASK_NODE_VERTICAL_GAP)
-		), 0);
-		let localY = TASK_FLOW_CENTER_Y - rankHeight / 2;
-
-		for (const node of rankNodes) {
-			const geometry = getTaskNodeGeometry(node);
-
-			localPositions.set(node.id, { x: localX, y: localY });
-			localY += geometry.height + TASK_NODE_VERTICAL_GAP;
-		}
-		localX += rankWidth + TASK_NODE_HORIZONTAL_GAP;
-	}
+	const ranks = createTaskNodeRanks(task, incomingByNodeId, outgoingByNodeId);
+	const localPositions = createTaskLocalPositions(
+		task,
+		ranks,
+		incomingByNodeId,
+		edgeIndexes,
+	);
 
 	const nodes: TaskLayoutNode[] = task.nodes.map((node) => {
 		const geometry = getTaskNodeGeometry(node);
@@ -184,13 +180,36 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				title: node.title,
 				description: node.description,
 				prompt: node.prompt,
+				canRemove: canRemoveWorkNode(task, node.id),
 			};
 		} else {
 			return { ...base, kind: node.kind };
 		}
 	});
 	const nodesById = new Map(nodes.map((node) => [node.id, node]));
-	const edgeIndexes = new Map(task.edges.map((edge, index) => [edge.id, index]));
+
+	for (const outgoing of outgoingByNodeId.values()) {
+		outgoing.sort((left, right) => {
+			const leftNode = nodesById.get(left.target);
+			const rightNode = nodesById.get(right.target);
+			const leftY = leftNode ? leftNode.position.y + leftNode.height / 2 : 0;
+			const rightY = rightNode ? rightNode.position.y + rightNode.height / 2 : 0;
+
+			return leftY - rightY
+				|| (edgeIndexes.get(left.id) ?? 0) - (edgeIndexes.get(right.id) ?? 0);
+		});
+	}
+	for (const incoming of incomingByNodeId.values()) {
+		incoming.sort((left, right) => {
+			const leftNode = nodesById.get(left.source);
+			const rightNode = nodesById.get(right.source);
+			const leftY = leftNode ? leftNode.position.y + leftNode.height / 2 : 0;
+			const rightY = rightNode ? rightNode.position.y + rightNode.height / 2 : 0;
+
+			return leftY - rightY
+				|| (edgeIndexes.get(left.id) ?? 0) - (edgeIndexes.get(right.id) ?? 0);
+		});
+	}
 
 	return {
 		nodes,
@@ -202,22 +221,8 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				throw new Error(`Task Layout edge endpoint is missing: ${edge.id}.`);
 			}
 
-			const outgoing = task.edges
-				.filter((candidate) => candidate.source === edge.source)
-				.sort((left, right) => compareEdgeTargets(
-					left,
-					right,
-					nodesById,
-					edgeIndexes,
-				));
-			const incoming = task.edges
-				.filter((candidate) => candidate.target === edge.target)
-				.sort((left, right) => compareEdgeSources(
-					left,
-					right,
-					nodesById,
-					edgeIndexes,
-				));
+			const outgoing = outgoingByNodeId.get(edge.source) ?? [];
+			const incoming = incomingByNodeId.get(edge.target) ?? [];
 
 			return {
 				id: edge.id,
@@ -238,49 +243,126 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 	};
 }
 
-function compareEdgeTargets(
-	left: TaskBlueprint['edges'][number],
-	right: TaskBlueprint['edges'][number],
-	nodesById: ReadonlyMap<string, TaskLayoutNode>,
+/** predecessor 중심을 선호 위치로 삼아 rank별 X와 collision-free Y를 계산한다. */
+function createTaskLocalPositions(
+	task: TaskBlueprint,
+	ranks: ReadonlyMap<string, number>,
+	incomingByNodeId: ReadonlyMap<string, readonly TaskEdge[]>,
 	edgeIndexes: ReadonlyMap<string, number>,
-): number {
-	return compareEdgeNodePositions(
-		nodesById.get(left.target),
-		nodesById.get(right.target),
-		left.id,
-		right.id,
-		edgeIndexes,
-	);
+): ReadonlyMap<string, TaskLayoutPosition> {
+	const nodesByRank = new Map<number, TaskNode[]>();
+	for (const node of task.nodes) {
+		const rank = ranks.get(node.id) ?? 0;
+		const rankNodes = nodesByRank.get(rank) ?? [];
+
+		rankNodes.push(node);
+		nodesByRank.set(rank, rankNodes);
+	}
+
+	const positions = new Map<string, TaskLayoutPosition>();
+	const centerYByNodeId = new Map<string, number>();
+	let localX = 0;
+
+	for (const rank of [...nodesByRank.keys()].sort((left, right) => left - right)) {
+		const rankNodes = nodesByRank.get(rank) ?? [];
+		const preferredNodes: PreferredRankNode[] = rankNodes.map((node) => {
+			const incoming = incomingByNodeId.get(node.id) ?? [];
+			const predecessorCenters = incoming
+				.map((edge) => centerYByNodeId.get(edge.source))
+				.filter((center): center is number => center !== undefined);
+			const preferredCenterY = node.kind === 'start'
+				|| predecessorCenters.length === 0
+				? TASK_FLOW_CENTER_Y
+				: predecessorCenters.reduce((sum, center) => sum + center, 0)
+					/ predecessorCenters.length;
+			const topologyOrder = incoming.reduce((minimum, edge) => Math.min(
+				minimum,
+				edgeIndexes.get(edge.id) ?? Number.MAX_SAFE_INTEGER,
+			), Number.MAX_SAFE_INTEGER);
+
+			return { node, preferredCenterY, topologyOrder };
+		});
+		const resolvedCenters = resolveRankNodeCenters(preferredNodes);
+
+		for (const node of rankNodes) {
+			const centerY = resolvedCenters.get(node.id) ?? TASK_FLOW_CENTER_Y;
+			const geometry = getTaskNodeGeometry(node);
+
+			centerYByNodeId.set(node.id, centerY);
+			positions.set(node.id, {
+				x: localX,
+				y: centerY - geometry.height / 2,
+			});
+		}
+		localX += Math.max(...rankNodes.map((node) => (
+			getTaskNodeGeometry(node).width
+		))) + TASK_NODE_HORIZONTAL_GAP;
+	}
+
+	return positions;
 }
 
-function compareEdgeSources(
-	left: TaskBlueprint['edges'][number],
-	right: TaskBlueprint['edges'][number],
-	nodesById: ReadonlyMap<string, TaskLayoutNode>,
-	edgeIndexes: ReadonlyMap<string, number>,
-): number {
-	return compareEdgeNodePositions(
-		nodesById.get(left.source),
-		nodesById.get(right.source),
-		left.id,
-		right.id,
-		edgeIndexes,
-	);
-}
+/** preferred Y 순서를 보존하며 실제 Node 높이와 gap만큼 sibling을 분산한다. */
+function resolveRankNodeCenters(
+	preferredNodes: readonly PreferredRankNode[],
+): ReadonlyMap<string, number> {
+	const sorted = [...preferredNodes].sort((left, right) => (
+		left.preferredCenterY - right.preferredCenterY
+		|| left.topologyOrder - right.topologyOrder
+		|| left.node.id.localeCompare(right.node.id)
+	));
+	const downward: number[] = [];
+	const upward: number[] = [];
 
-/** Branch/Join Edge 순서를 상대 Node의 중심 Y와 Blueprint 순서로 안정화한다. */
-function compareEdgeNodePositions(
-	left: TaskLayoutNode | undefined,
-	right: TaskLayoutNode | undefined,
-	leftEdgeId: string,
-	rightEdgeId: string,
-	edgeIndexes: ReadonlyMap<string, number>,
-): number {
-	const leftY = left ? left.position.y + left.height / 2 : 0;
-	const rightY = right ? right.position.y + right.height / 2 : 0;
+	for (let index = 0; index < sorted.length; index += 1) {
+		const current = sorted[index];
 
-	return leftY - rightY
-		|| (edgeIndexes.get(leftEdgeId) ?? 0) - (edgeIndexes.get(rightEdgeId) ?? 0);
+		if (!current || index === 0) {
+			downward[index] = current?.preferredCenterY ?? TASK_FLOW_CENTER_Y;
+			continue;
+		}
+		const previous = sorted[index - 1];
+		const previousCenter = downward[index - 1];
+
+		if (!previous || previousCenter === undefined) {
+			downward[index] = current.preferredCenterY;
+			continue;
+		}
+		const minimumCenter = previousCenter
+			+ getTaskNodeGeometry(previous.node).height / 2
+			+ TASK_NODE_VERTICAL_GAP
+			+ getTaskNodeGeometry(current.node).height / 2;
+
+		downward[index] = Math.max(current.preferredCenterY, minimumCenter);
+	}
+
+	for (let index = sorted.length - 1; index >= 0; index -= 1) {
+		const current = sorted[index];
+
+		if (!current || index === sorted.length - 1) {
+			upward[index] = current?.preferredCenterY ?? TASK_FLOW_CENTER_Y;
+			continue;
+		}
+		const next = sorted[index + 1];
+		const nextCenter = upward[index + 1];
+
+		if (!next || nextCenter === undefined) {
+			upward[index] = current.preferredCenterY;
+			continue;
+		}
+		const maximumCenter = nextCenter
+			- getTaskNodeGeometry(current.node).height / 2
+			- TASK_NODE_VERTICAL_GAP
+			- getTaskNodeGeometry(next.node).height / 2;
+
+		upward[index] = Math.min(current.preferredCenterY, maximumCenter);
+	}
+
+	return new Map(sorted.map((entry, index) => [
+		entry.node.id,
+		((downward[index] ?? entry.preferredCenterY)
+			+ (upward[index] ?? entry.preferredCenterY)) / 2,
+	]));
 }
 
 /** 한 Node의 여러 Edge anchor를 center 주변에 작은 Y offset으로 분산한다. */
@@ -372,16 +454,15 @@ export function getCubicBezierPoint(
 }
 
 /** DAG의 longest predecessor path를 실행 rank로 계산한다. */
-function createTaskNodeRanks(task: TaskBlueprint): ReadonlyMap<string, number> {
-	const incomingCounts = new Map(task.nodes.map((node) => [node.id, 0]));
-	const targetsBySource = new Map(task.nodes.map((node) => (
-		[node.id, [] as string[]]
-	)));
-
-	for (const edge of task.edges) {
-		incomingCounts.set(edge.target, (incomingCounts.get(edge.target) ?? 0) + 1);
-		targetsBySource.get(edge.source)?.push(edge.target);
-	}
+function createTaskNodeRanks(
+	task: TaskBlueprint,
+	incomingByNodeId: ReadonlyMap<string, readonly TaskEdge[]>,
+	outgoingByNodeId: ReadonlyMap<string, readonly TaskEdge[]>,
+): ReadonlyMap<string, number> {
+	const incomingCounts = new Map(task.nodes.map((node) => [
+		node.id,
+		incomingByNodeId.get(node.id)?.length ?? 0,
+	]));
 
 	const ranks = new Map(task.nodes.map((node) => [node.id, 0]));
 	const queue = task.nodes
@@ -394,7 +475,9 @@ function createTaskNodeRanks(task: TaskBlueprint): ReadonlyMap<string, number> {
 			continue;
 		}
 
-		for (const targetId of targetsBySource.get(sourceId) ?? []) {
+		for (const edge of outgoingByNodeId.get(sourceId) ?? []) {
+			const targetId = edge.target;
+
 			ranks.set(targetId, Math.max(
 				ranks.get(targetId) ?? 0,
 				(ranks.get(sourceId) ?? 0) + 1,

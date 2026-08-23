@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import {
 	assertValidTaskBlueprint,
+	canRemoveWorkNode,
 	createDefaultTaskBlueprint,
 	createTaskState,
 	TASK_BLUEPRINT_VERSION,
@@ -121,7 +122,7 @@ suite('Task Domain', () => {
 		assert.strictEqual(state.insertWorkBetween(task.id, 'task-edge:missing'), undefined);
 	});
 
-	test('병렬 Work 추가는 단순 A → B → C에서 A → N → C sibling을 만든다', () => {
+	test('같은 A → Work → C 그룹에 병렬 Work를 반복 추가한다', () => {
 		const state = createTaskState([], createSequentialIdSource());
 		const task = state.createTask({ title: 'Parallel Task' });
 		const [start, work, end] = task.nodes;
@@ -144,10 +145,26 @@ suite('Task Domain', () => {
 			`${parallel.id}->${end.id}`,
 		].sort());
 		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
-		assert.strictEqual(
-			state.addParallelWork(task.id, incoming.id),
-			undefined,
-		);
+		const second = state.addParallelWork(task.id, incoming.id, {
+			title: 'Parallel Work 2',
+		});
+		const third = state.addParallelWork(task.id, incoming.id, {
+			title: 'Parallel Work 3',
+		});
+
+		assert.ok(second && third);
+		const siblingWorks = third.nodes.filter((node) => node.kind === 'work');
+
+		assert.strictEqual(siblingWorks.length, 4);
+		for (const sibling of siblingWorks) {
+			assert.strictEqual(third.edges.filter((edge) => (
+				edge.source === start.id && edge.target === sibling.id
+			)).length, 1);
+			assert.strictEqual(third.edges.filter((edge) => (
+				edge.source === sibling.id && edge.target === end.id
+			)).length, 1);
+		}
+		assert.deepStrictEqual(validateTaskBlueprint(third), []);
 		assert.strictEqual(
 			state.addParallelWork(task.id, task.edges[1]?.id ?? ''),
 			undefined,
@@ -225,27 +242,83 @@ suite('Task Domain', () => {
 		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
 	});
 
-	test('병렬 Branch Work 삭제는 sibling을 보존하고 유효한 Join 연결을 복구한다', () => {
+	test('병렬 Branch Work 삭제는 sibling만 보존하고 bypass Edge를 만들지 않는다', () => {
 		const task = createTask();
 		const [start, work, end] = task.nodes;
-		const state = createTaskState([task], createSequentialIdSource());
+		let sequence = 0;
+		const state = createTaskState([task], () => `parallel-delete-${++sequence}`);
 
 		assert.ok(start && work && end);
+		const first = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
 		const branched = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
-		const parallel = branched?.nodes.find((node) => (
+		const siblings = branched?.nodes.filter((node) => (
 			node.kind === 'work' && node.id !== work.id
 		));
 
-		assert.ok(branched && parallel);
+		assert.ok(first && branched && siblings?.length === 2);
 		const updated = state.removeWork(task.id, work.id);
 
 		assert.ok(updated);
-		assert.deepStrictEqual(readConnections(updated), [
-			`${start.id}->${end.id}`,
-			`${start.id}->${parallel.id}`,
-			`${parallel.id}->${end.id}`,
-		].sort());
+		assert.deepStrictEqual(readConnections(updated), siblings.flatMap((sibling) => [
+			`${start.id}->${sibling.id}`,
+			`${sibling.id}->${end.id}`,
+		]).sort());
+		assert.strictEqual(updated.edges.some((edge) => (
+			edge.source === start.id && edge.target === end.id
+		)), false);
 		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
+	});
+
+	test('복수 predecessor 또는 successor Work는 삭제를 노출하거나 수행하지 않는다', () => {
+		const task = createTask();
+		const [start, work, end] = task.nodes;
+
+		assert.ok(start && work?.kind === 'work' && end);
+		const predecessor = {
+			...work,
+			id: 'task-node:predecessor',
+			title: 'Predecessor',
+		};
+		const successor = {
+			...work,
+			id: 'task-node:successor',
+			title: 'Successor',
+		};
+		const complexTask: TaskBlueprint = {
+			...task,
+			nodes: [start, predecessor, work, successor, end],
+			edges: [{
+				id: 'task-edge:start-work',
+				source: start.id,
+				target: work.id,
+			}, {
+				id: 'task-edge:start-predecessor',
+				source: start.id,
+				target: predecessor.id,
+			}, {
+				id: 'task-edge:predecessor-work',
+				source: predecessor.id,
+				target: work.id,
+			}, {
+				id: 'task-edge:work-end',
+				source: work.id,
+				target: end.id,
+			}, {
+				id: 'task-edge:work-successor',
+				source: work.id,
+				target: successor.id,
+			}, {
+				id: 'task-edge:successor-end',
+				source: successor.id,
+				target: end.id,
+			}],
+		};
+		const state = createTaskState([complexTask], createSequentialIdSource());
+
+		assert.strictEqual(canRemoveWorkNode(complexTask, work.id), false);
+		assert.strictEqual(state.removeWork(complexTask.id, work.id), undefined);
+		assert.deepStrictEqual(state.getTask(complexTask.id), complexTask);
+		assert.deepStrictEqual(validateTaskBlueprint(complexTask), []);
 	});
 
 	test('Start Node 누락과 중복을 거부한다', () => {

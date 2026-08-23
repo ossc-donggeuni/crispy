@@ -42,14 +42,14 @@ export interface TaskStateStore {
 		work?: CreateWorkNodeInput,
 	): TaskBlueprint | undefined;
 
-	/** 명확한 A → B → C 체인 구간의 B와 병렬인 Work를 추가한다. */
+	/** 선택한 A → B → C Work lane과 같은 sibling Work를 추가한다. */
 	addParallelWork(
 		taskId: string,
 		edgeId: string,
 		work?: CreateWorkNodeInput,
 	): TaskBlueprint | undefined;
 
-	/** Work를 제거하고 predecessor와 successor 사이의 유효한 연결을 복구한다. */
+	/** 단일 predecessor/successor Work를 제거하고 필요한 직렬 연결만 복구한다. */
 	removeWork(taskId: string, nodeId: string): TaskBlueprint | undefined;
 
 	/**
@@ -191,73 +191,85 @@ function insertWorkBetweenEdge(
 	return {
 		...task,
 		nodes: [...task.nodes, node],
-		edges: [
-			...task.edges.filter((candidate) => candidate.id !== edgeId),
-			createEdge(edge.source, node.id, createId),
-			createEdge(node.id, edge.target, createId),
-		],
+		edges: task.edges.flatMap((candidate) => candidate.id === edgeId
+			? [
+				createEdge(edge.source, node.id, createId),
+				createEdge(node.id, edge.target, createId),
+			]
+			: [candidate]),
 	};
 }
 
-interface SimpleParallelWorkSegment {
+interface WorkLaneSegment {
 	readonly incoming: TaskEdge;
 	readonly outgoing: TaskEdge;
 }
 
-/** A → B → C가 다른 Branch/Join과 겹치지 않는 단일 체인 구간인지 판별한다. */
+/** 선택 Edge target이 정확히 하나의 predecessor/successor를 가진 Work인지 판별한다. */
 export function canAddParallelWorkAtEdge(
 	task: TaskBlueprint,
 	edgeId: string,
 ): boolean {
-	return resolveSimpleParallelWorkSegment(task, edgeId) !== undefined;
+	return resolveParallelWorkLane(task, edgeId) !== undefined;
 }
 
-/** 선택 Edge target Work가 속한 예측 가능한 A → B → C 구간을 반환한다. */
-function resolveSimpleParallelWorkSegment(
+/** 삭제 의미가 명확한 단일 predecessor/successor Work인지 판별한다. */
+export function canRemoveWorkNode(task: TaskBlueprint, nodeId: string): boolean {
+	return resolveWorkLane(task, nodeId) !== undefined;
+}
+
+/** 선택 Edge가 target Work의 유일한 incoming인 A → B → C lane을 반환한다. */
+function resolveParallelWorkLane(
 	task: TaskBlueprint,
 	edgeId: string,
-): SimpleParallelWorkSegment | undefined {
+): WorkLaneSegment | undefined {
 	const incoming = task.edges.find((candidate) => candidate.id === edgeId);
 	if (!incoming) {
 		return undefined;
 	}
+	const lane = resolveWorkLane(task, incoming.target);
 
-	const target = task.nodes.find((node) => node.id === incoming.target);
-	const targetIncoming = task.edges.filter((edge) => edge.target === incoming.target);
-	const targetOutgoing = task.edges.filter((edge) => edge.source === incoming.target);
+	return lane?.incoming.id === edgeId ? lane : undefined;
+}
+
+/** Work가 속한 정확한 A → B → C 단일 lane을 반환한다. */
+function resolveWorkLane(
+	task: TaskBlueprint,
+	nodeId: string,
+): WorkLaneSegment | undefined {
+	const node = task.nodes.find((candidate) => candidate.id === nodeId);
+	const incoming = task.edges.filter((edge) => edge.target === nodeId);
+	const outgoing = task.edges.filter((edge) => edge.source === nodeId);
 	if (
-		target?.kind !== 'work'
-		|| targetIncoming.length !== 1
-		|| targetOutgoing.length !== 1
+		node?.kind !== 'work'
+		|| incoming.length !== 1
+		|| outgoing.length !== 1
 	) {
 		return undefined;
 	}
 
-	const outgoing = targetOutgoing[0];
-	if (!outgoing) {
+	const incomingEdge = incoming[0];
+	const outgoingEdge = outgoing[0];
+	if (
+		!incomingEdge
+		|| !outgoingEdge
+		|| !task.nodes.some((candidate) => candidate.id === incomingEdge.source)
+		|| !task.nodes.some((candidate) => candidate.id === outgoingEdge.target)
+	) {
 		return undefined;
 	}
 
-	const predecessorOutgoing = task.edges.filter(
-		(edge) => edge.source === incoming.source,
-	);
-	const successorIncoming = task.edges.filter(
-		(edge) => edge.target === outgoing.target,
-	);
-
-	return predecessorOutgoing.length === 1 && successorIncoming.length === 1
-		? { incoming, outgoing }
-		: undefined;
+	return { incoming: incomingEdge, outgoing: outgoingEdge };
 }
 
-/** 명확한 A → B → C 구간에 A → N → C sibling Branch를 추가한다. */
+/** A → B → C lane에 기존 sibling 수와 무관하게 A → N → C를 추가한다. */
 function addParallelWorkAtEdge(
 	task: TaskBlueprint,
 	edgeId: string,
 	work: CreateWorkNodeInput | undefined,
 	createId: TaskIdSource | undefined,
 ): TaskBlueprint | undefined {
-	const segment = resolveSimpleParallelWorkSegment(task, edgeId);
+	const segment = resolveParallelWorkLane(task, edgeId);
 	if (!segment) {
 		return undefined;
 	}
@@ -274,42 +286,40 @@ function addParallelWorkAtEdge(
 	};
 }
 
-/** Work 제거 뒤 predecessor×successor bridge를 중복 없이 추가한다. */
+/** 단일 Work lane을 제거하고 sibling이 없을 때만 직렬 연결을 복구한다. */
 function removeWorkNode(
 	task: TaskBlueprint,
 	nodeId: string,
 	createId: TaskIdSource | undefined,
 ): TaskBlueprint | undefined {
-	const node = task.nodes.find((candidate) => candidate.id === nodeId);
-	if (node?.kind !== 'work') {
+	const lane = resolveWorkLane(task, nodeId);
+	if (!lane) {
 		return undefined;
 	}
 
-	const predecessors = new Set(task.edges
-		.filter((edge) => edge.target === nodeId)
-		.map((edge) => edge.source));
-	const successors = new Set(task.edges
-		.filter((edge) => edge.source === nodeId)
-		.map((edge) => edge.target));
 	const edges = task.edges.filter((edge) => (
 		edge.source !== nodeId && edge.target !== nodeId
 	));
-	const connections = new Set(edges.map((edge) => (
-		createEdgeConnectionKey(edge.source, edge.target)
-	)));
-
-	for (const predecessorId of predecessors) {
-		for (const successorId of successors) {
-			const connectionKey = createEdgeConnectionKey(
-				predecessorId,
-				successorId,
-			);
-
-			if (!connections.has(connectionKey)) {
-				edges.push(createEdge(predecessorId, successorId, createId));
-				connections.add(connectionKey);
-			}
+	const hasSiblingLane = task.nodes.some((candidate) => {
+		if (candidate.id === nodeId || candidate.kind !== 'work') {
+			return false;
 		}
+		const sibling = resolveWorkLane(task, candidate.id);
+
+		return sibling?.incoming.source === lane.incoming.source
+			&& sibling.outgoing.target === lane.outgoing.target;
+	});
+	const hasDirectEdge = edges.some((edge) => (
+		edge.source === lane.incoming.source
+		&& edge.target === lane.outgoing.target
+	));
+
+	if (!hasSiblingLane && !hasDirectEdge) {
+		edges.push(createEdge(
+			lane.incoming.source,
+			lane.outgoing.target,
+			createId,
+		));
 	}
 
 	return {
@@ -329,10 +339,6 @@ function createEdge(
 		source: sourceId,
 		target: targetId,
 	};
-}
-
-function createEdgeConnectionKey(sourceId: string, targetId: string): string {
-	return JSON.stringify([sourceId, targetId]);
 }
 
 /** 초기 상태의 Task ID 충돌을 거부한다. */

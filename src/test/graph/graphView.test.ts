@@ -846,13 +846,12 @@ suite('Graph View', () => {
 		));
 		const beforePaths = edgeElements.map((edge) => edge.getAttribute('d'));
 		const movedAction = getTaskEdgeAction(root, task.id, incoming.id);
-		assert.strictEqual(
+		assert.ok(
 			findDescendantByAttribute(
 				movedAction,
 				TASK_EDGE_ACTION_ATTRIBUTE,
 				'add-parallel-work',
 			),
-			undefined,
 		);
 		const beforeActionPosition = {
 			x: Number.parseFloat(movedAction.style.left),
@@ -890,6 +889,52 @@ suite('Graph View', () => {
 			x: Number.parseFloat(movedAction.style.left) - beforeActionPosition.x,
 			y: Number.parseFloat(movedAction.style.top) - beforeActionPosition.y,
 		}, { x: 20, y: 15 });
+
+		graphView.dispose();
+	});
+
+	test('동일 Edge Action으로 4개 이상의 병렬 sibling을 반복 생성한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const incoming = task.edges[0];
+
+		assert.ok(incoming);
+		for (let index = 0; index < 3; index += 1) {
+			const action = getTaskEdgeAction(root, task.id, incoming.id);
+			const parallel = getDescendantByAttribute(
+				action,
+				TASK_EDGE_ACTION_ATTRIBUTE,
+				'add-parallel-work',
+			);
+
+			parallel.dispatch('click', createClickEvent(parallel));
+		}
+
+		const updated = graphView.taskState.getTask(task.id);
+		const works = updated?.nodes.filter((node) => node.kind === 'work') ?? [];
+		const positions = works.map((work) => readTranslate(getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		).style.transform));
+
+		assert.strictEqual(works.length, 4);
+		assert.strictEqual(new Set(positions.map((position) => position.x)).size, 1);
+		assert.strictEqual(new Set(positions.map((position) => position.y)).size, 4);
+		assert.ok(findDescendantByAttribute(
+			getTaskEdgeAction(root, task.id, incoming.id),
+			TASK_EDGE_ACTION_ATTRIBUTE,
+			'add-parallel-work',
+		));
 
 		graphView.dispose();
 	});
@@ -947,6 +992,73 @@ suite('Graph View', () => {
 			).length,
 			1,
 		);
+
+		graphView.dispose();
+	});
+
+	test('복수 predecessor/successor Work에는 삭제 Action을 만들지 않는다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const [start, work, end] = task.nodes;
+
+		assert.ok(start && work?.kind === 'work' && end);
+		const predecessor = {
+			...work,
+			id: 'task-node:complex-predecessor',
+		};
+		const successor = {
+			...work,
+			id: 'task-node:complex-successor',
+		};
+		const complexTask: TaskBlueprint = {
+			...task,
+			nodes: [start, predecessor, work, successor, end],
+			edges: [{
+				id: 'task-edge:start-work',
+				source: start.id,
+				target: work.id,
+			}, {
+				id: 'task-edge:start-predecessor',
+				source: start.id,
+				target: predecessor.id,
+			}, {
+				id: 'task-edge:predecessor-work',
+				source: predecessor.id,
+				target: work.id,
+			}, {
+				id: 'task-edge:work-end',
+				source: work.id,
+				target: end.id,
+			}, {
+				id: 'task-edge:work-successor',
+				source: work.id,
+				target: successor.id,
+			}, {
+				id: 'task-edge:successor-end',
+				source: successor.id,
+				target: end.id,
+			}],
+		};
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[complexTask],
+		);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		);
+
+		assert.strictEqual(findDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'remove-work',
+		), undefined);
 
 		graphView.dispose();
 	});

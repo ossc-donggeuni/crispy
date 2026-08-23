@@ -23,6 +23,7 @@ export {
 } from './taskValidation';
 export {
 	canAddParallelWorkAtEdge,
+	canRemoveWorkNode,
 	createTaskState,
 	type TaskBlueprintUpdater,
 	type TaskStateSnapshot,
