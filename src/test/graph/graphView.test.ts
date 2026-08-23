@@ -235,6 +235,144 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('동일한 내부 Node와 Edge ID를 가진 Task DOM과 geometry를 독립적으로 유지한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const taskA = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000001',
+			'Task A',
+			{ x: 100, y: 50 },
+		);
+		const taskB = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000002',
+			'Task B',
+			{ x: -300, y: 400 },
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[taskA, taskB],
+		);
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+		const edgeLayer = getDescendantByClass(root, 'graph-edge-layer');
+		const taskANodes = taskA.nodes.map((node) => getTaskElement(
+			root,
+			'data-task-node-id',
+			node.id,
+			taskA.id,
+		));
+		const taskBNodes = taskB.nodes.map((node) => getTaskElement(
+			root,
+			'data-task-node-id',
+			node.id,
+			taskB.id,
+		));
+		const taskAEdges = taskA.edges.map((edge) => getTaskElement(
+			root,
+			'data-task-edge-id',
+			edge.id,
+			taskA.id,
+		));
+		const taskBEdges = taskB.edges.map((edge) => getTaskElement(
+			root,
+			'data-task-edge-id',
+			edge.id,
+			taskB.id,
+		));
+
+		assert.strictEqual(getDescendantsByClass(root, 'task-node').length, 6);
+		assert.strictEqual(new Set([...taskAEdges, ...taskBEdges]).size, 4);
+		for (let index = 0; index < taskANodes.length; index += 1) {
+			assert.notStrictEqual(taskANodes[index], taskBNodes[index]);
+			assert.strictEqual(taskANodes[index]?.getAttribute('data-task-id'), taskA.id);
+			assert.strictEqual(taskBNodes[index]?.getAttribute('data-task-id'), taskB.id);
+		}
+		for (let index = 0; index < taskAEdges.length; index += 1) {
+			assert.notStrictEqual(taskAEdges[index], taskBEdges[index]);
+			assert.strictEqual(taskAEdges[index]?.getAttribute('data-task-id'), taskA.id);
+			assert.strictEqual(taskBEdges[index]?.getAttribute('data-task-id'), taskB.id);
+		}
+		assert.deepStrictEqual(
+			taskANodes.map((node) => node.style.transform),
+			[
+				'translate(100px, 50px)',
+				'translate(100px, 202px)',
+				'translate(170px, 382px)',
+			],
+		);
+		assert.deepStrictEqual(
+			taskBNodes.map((node) => node.style.transform),
+			[
+				'translate(-300px, 400px)',
+				'translate(-300px, 552px)',
+				'translate(-230px, 732px)',
+			],
+		);
+		assert.deepStrictEqual(
+			taskAEdges.map((edge) => edge.getAttribute('d')),
+			[
+				'M 240 154 C 240 178 240 178 240 202',
+				'M 240 334 C 240 358 240 358 240 382',
+			],
+		);
+		assert.deepStrictEqual(
+			taskBEdges.map((edge) => edge.getAttribute('d')),
+			[
+				'M -160 504 C -160 528 -160 528 -160 552',
+				'M -160 684 C -160 708 -160 708 -160 732',
+			],
+		);
+
+		const taskBTransforms = taskBNodes.map((node) => node.style.transform);
+		const taskBPaths = taskBEdges.map((edge) => edge.getAttribute('d'));
+		const taskBTexts = taskBNodes.map(getText);
+		const updatedTaskA: TaskBlueprint = {
+			...taskA,
+			title: 'Updated Task A',
+			origin: { x: 500, y: -100 },
+			nodes: taskA.nodes.map((node) => node.kind === 'work'
+				? { ...node, title: 'Updated Work A' }
+				: node),
+		};
+
+		graphView.updateTasks([updatedTaskA, taskB]);
+		assert.ok(getText(taskANodes[0] as FakeElement).includes('Updated Task A'));
+		assert.ok(getText(taskANodes[1] as FakeElement).includes('Updated Work A'));
+		assert.deepStrictEqual(
+			taskBNodes.map((node) => node.style.transform),
+			taskBTransforms,
+		);
+		assert.deepStrictEqual(
+			taskBEdges.map((edge) => edge.getAttribute('d')),
+			taskBPaths,
+		);
+		assert.deepStrictEqual(taskBNodes.map(getText), taskBTexts);
+		for (const node of taskB.nodes) {
+			assert.strictEqual(
+				getTaskElement(root, 'data-task-node-id', node.id, taskB.id),
+				taskBNodes[taskB.nodes.indexOf(node)],
+			);
+		}
+		for (const edge of taskB.edges) {
+			assert.strictEqual(
+				getTaskElement(root, 'data-task-edge-id', edge.id, taskB.id),
+				taskBEdges[taskB.edges.indexOf(edge)],
+			);
+		}
+
+		graphView.updateTasks([taskB]);
+		assert.strictEqual(getTaskElements(root, 'data-task-id', taskA.id).length, 0);
+		assert.strictEqual(getTaskElements(root, 'data-task-id', taskB.id).length, 5);
+		assert.ok(taskANodes.every((node) => !nodeLayer.children.includes(node)));
+		assert.ok(taskAEdges.every((edge) => !edgeLayer.children.includes(edge)));
+		assert.ok(taskBNodes.every((node) => nodeLayer.children.includes(node)));
+		assert.ok(taskBEdges.every((edge) => edgeLayer.children.includes(edge)));
+
+		graphView.dispose();
+	});
+
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
@@ -7092,6 +7230,33 @@ function findDescendantByAttribute(
 	return undefined;
 }
 
+function getTaskElements(
+	element: FakeElement,
+	attributeName: string,
+	attributeValue: string,
+): FakeElement[] {
+	return element.children.flatMap((child) => [
+		...(child.getAttribute(attributeName) === attributeValue ? [child] : []),
+		...getTaskElements(child, attributeName, attributeValue),
+	]);
+}
+
+function getTaskElement(
+	element: FakeElement,
+	entityAttributeName: string,
+	entityId: string,
+	taskId: string,
+): FakeElement {
+	const taskElement = getTaskElements(
+		element,
+		entityAttributeName,
+		entityId,
+	).find((candidate) => candidate.getAttribute('data-task-id') === taskId);
+
+	assert.ok(taskElement, `${taskId}의 ${entityAttributeName}="${entityId}" 요소가 있어야 한다.`);
+	return taskElement;
+}
+
 function getDescendantsByClass(
 	element: FakeElement,
 	className: string,
@@ -7373,4 +7538,33 @@ function createRenderingTask(
 			prompt: 'Reuse the existing Graph World layers.',
 		},
 	}, () => `render-${++sequence}`);
+}
+
+/** 서로 다른 Task가 공유할 고정 Node/Edge ID를 가진 Blueprint를 만든다. */
+function createCollidingRenderingTask(
+	taskId: string,
+	title: string,
+	origin: { readonly x: number; readonly y: number },
+): TaskBlueprint {
+	const ids = [
+		'unused-task-id',
+		'same-start',
+		'same-work',
+		'same-end',
+		'same-start-work',
+		'same-work-end',
+	];
+	let sequence = 0;
+	const task = createDefaultTaskBlueprint({
+		title,
+		description: `${title} description`,
+		origin,
+		work: {
+			title: `${title} Work`,
+			description: `${title} Work description`,
+			prompt: `${title} prompt`,
+		},
+	}, () => ids[sequence++] ?? `unexpected-${sequence}`);
+
+	return { ...task, id: taskId };
 }

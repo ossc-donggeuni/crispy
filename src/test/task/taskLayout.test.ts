@@ -80,6 +80,47 @@ suite('Task Layout', () => {
 			);
 		}
 	});
+
+	test('동일한 내부 Node와 Edge ID를 Task별 origin 및 endpoint로 격리한다', () => {
+		const taskA: TaskBlueprint = {
+			...createTask({ x: 100, y: 50 }),
+			id: 'task:00000000-0000-4000-8000-000000000001',
+		};
+		const taskB: TaskBlueprint = {
+			...createTask({ x: -300, y: 400 }),
+			id: 'task:00000000-0000-4000-8000-000000000002',
+		};
+		const layout = createTaskGraphLayout([taskA, taskB]);
+		const taskANodes = layout.nodes.filter((node) => node.taskId === taskA.id);
+		const taskBNodes = layout.nodes.filter((node) => node.taskId === taskB.id);
+		const taskAEdges = layout.edges.filter((edge) => edge.taskId === taskA.id);
+		const taskBEdges = layout.edges.filter((edge) => edge.taskId === taskB.id);
+
+		assert.deepStrictEqual(
+			taskANodes.map((node) => node.id),
+			taskBNodes.map((node) => node.id),
+		);
+		assert.deepStrictEqual(
+			taskAEdges.map((edge) => edge.id),
+			taskBEdges.map((edge) => edge.id),
+		);
+		assert.deepStrictEqual(taskANodes[0]?.position, taskA.origin);
+		assert.deepStrictEqual(taskBNodes[0]?.position, taskB.origin);
+
+		for (const [task, taskNodes, taskEdges] of [
+			[taskA, taskANodes, taskAEdges],
+			[taskB, taskBNodes, taskBEdges],
+		] as const) {
+			const nodeIds = new Set(taskNodes.map((node) => node.id));
+
+			assert.ok(taskNodes.every((node) => node.taskId === task.id));
+			assert.ok(taskEdges.every((edge) => (
+				edge.taskId === task.id
+				&& nodeIds.has(edge.sourceId)
+				&& nodeIds.has(edge.targetId)
+			)));
+		}
+	});
 });
 
 /** 고정 ID와 표시 내용을 가진 기본 Task를 만든다. */

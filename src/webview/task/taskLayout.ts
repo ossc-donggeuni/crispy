@@ -88,60 +88,70 @@ export function createTaskGraphLayout(
 	const edges: TaskLayoutEdge[] = [];
 
 	for (const task of tasks) {
-		assertValidTaskBlueprint(task);
-		let localY = 0;
+		const taskLayout = createTaskLayout(task);
 
-		for (const node of task.nodes) {
-			const geometry = getTaskNodeGeometry(node);
-			const localPosition = {
-				x: (TASK_NODE_WIDTH - geometry.width) / 2,
-				y: localY,
-			};
-			const base = {
-				id: node.id,
-				taskId: task.id,
-				localPosition,
-				position: {
-					x: task.origin.x + localPosition.x,
-					y: task.origin.y + localPosition.y,
-				},
-				width: geometry.width,
-				height: geometry.height,
-			};
-
-			if (node.kind === 'start') {
-				nodes.push({
-					...base,
-					kind: node.kind,
-					title: task.title,
-					description: task.description,
-				});
-			} else if (node.kind === 'work') {
-				nodes.push({
-					...base,
-					kind: node.kind,
-					title: node.title,
-					description: node.description,
-					prompt: node.prompt,
-				});
-			} else {
-				nodes.push({ ...base, kind: node.kind });
-			}
-
-			localY += geometry.height + TASK_NODE_VERTICAL_GAP;
-		}
-
-		for (const edge of task.edges) {
-			edges.push({
-				id: edge.id,
-				taskId: task.id,
-				sourceId: edge.source,
-				targetId: edge.target,
-			});
-		}
+		nodes.push(...taskLayout.nodes);
+		edges.push(...taskLayout.edges);
 	}
 
 	return { nodes, edges };
+}
+
+/** 내부 Node/Edge ID lookup이 다른 Task와 섞이지 않도록 한 Task만 Layout한다. */
+function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
+	assertValidTaskBlueprint(task);
+	const nodes: TaskLayoutNode[] = [];
+	let localY = 0;
+
+	for (const node of task.nodes) {
+		const geometry = getTaskNodeGeometry(node);
+		const localPosition = {
+			x: (TASK_NODE_WIDTH - geometry.width) / 2,
+			y: localY,
+		};
+		const base = {
+			id: node.id,
+			taskId: task.id,
+			localPosition,
+			position: {
+				x: task.origin.x + localPosition.x,
+				y: task.origin.y + localPosition.y,
+			},
+			width: geometry.width,
+			height: geometry.height,
+		};
+
+		if (node.kind === 'start') {
+			nodes.push({
+				...base,
+				kind: node.kind,
+				title: task.title,
+				description: task.description,
+			});
+		} else if (node.kind === 'work') {
+			nodes.push({
+				...base,
+				kind: node.kind,
+				title: node.title,
+				description: node.description,
+				prompt: node.prompt,
+			});
+		} else {
+			nodes.push({ ...base, kind: node.kind });
+		}
+
+		localY += geometry.height + TASK_NODE_VERTICAL_GAP;
+	}
+
+	return {
+		nodes,
+		edges: task.edges.map((edge) => ({
+			id: edge.id,
+			taskId: task.id,
+			sourceId: edge.source,
+			targetId: edge.target,
+		})),
+	};
 }
 
 /** Task Node kind에 대응하는 이번 단계의 고정 Card 크기를 반환한다. */

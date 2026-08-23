@@ -47,51 +47,66 @@ export function initializeTaskRenderer(
 			return;
 		}
 
-		const nextNodeIds = new Set(layout.nodes.map((node) => node.id));
-		const nextEdgeIds = new Set(layout.edges.map((edge) => edge.id));
+		const nextNodeKeys = new Set(layout.nodes.map((node) => (
+			createTaskNodeRenderKey(node.taskId, node.id)
+		)));
+		const nextEdgeKeys = new Set(layout.edges.map((edge) => (
+			createTaskEdgeRenderKey(edge.taskId, edge.id)
+		)));
 
-		for (const [nodeId, element] of nodeElements) {
-			if (!nextNodeIds.has(nodeId)) {
+		for (const [renderKey, element] of nodeElements) {
+			if (!nextNodeKeys.has(renderKey)) {
 				element.remove();
-				nodeElements.delete(nodeId);
+				nodeElements.delete(renderKey);
 			}
 		}
 
-		for (const [edgeId, element] of edgeElements) {
-			if (!nextEdgeIds.has(edgeId)) {
+		for (const [renderKey, element] of edgeElements) {
+			if (!nextEdgeKeys.has(renderKey)) {
 				element.remove();
-				edgeElements.delete(edgeId);
+				edgeElements.delete(renderKey);
 			}
 		}
 
-		const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
+		const nodesByRenderKey = new Map(layout.nodes.map((node) => [
+			createTaskNodeRenderKey(node.taskId, node.id),
+			node,
+		]));
 
 		for (const node of layout.nodes) {
-			let element = nodeElements.get(node.id);
+			const renderKey = createTaskNodeRenderKey(node.taskId, node.id);
+			let element = nodeElements.get(renderKey);
 
 			if (!element) {
 				element = ownerDocument.createElement('div');
 				nodeLayer.append(element);
-				nodeElements.set(node.id, element);
+				nodeElements.set(renderKey, element);
 			}
 
 			syncTaskNodeElement(element, node, ownerDocument);
 		}
 
 		for (const edge of layout.edges) {
-			const source = nodesById.get(edge.sourceId);
-			const target = nodesById.get(edge.targetId);
+			const source = nodesByRenderKey.get(createTaskNodeRenderKey(
+				edge.taskId,
+				edge.sourceId,
+			));
+			const target = nodesByRenderKey.get(createTaskNodeRenderKey(
+				edge.taskId,
+				edge.targetId,
+			));
 
 			if (!source || !target) {
 				continue;
 			}
 
-			let element = edgeElements.get(edge.id);
+			const renderKey = createTaskEdgeRenderKey(edge.taskId, edge.id);
+			let element = edgeElements.get(renderKey);
 
 			if (!element) {
 				element = ownerDocument.createElementNS(SVG_NAMESPACE, 'path');
 				edgeLayer.append(element);
-				edgeElements.set(edge.id, element);
+				edgeElements.set(renderKey, element);
 			}
 
 			syncTaskEdgeElement(element, edge, source, target);
@@ -118,6 +133,16 @@ export function initializeTaskRenderer(
 			edgeElements.clear();
 		},
 	};
+}
+
+/** 같은 내부 Node ID를 가진 Task DOM을 분리하는 Renderer 전용 identity다. */
+function createTaskNodeRenderKey(taskId: string, nodeId: string): string {
+	return `${taskId}:${nodeId}`;
+}
+
+/** 같은 내부 Edge ID를 가진 Task SVG를 분리하는 Renderer 전용 identity다. */
+function createTaskEdgeRenderKey(taskId: string, edgeId: string): string {
+	return `${taskId}:${edgeId}`;
 }
 
 /** Task Node Card의 내용, 식별 정보와 World geometry를 최신 Layout과 맞춘다. */
