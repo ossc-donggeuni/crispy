@@ -4,7 +4,7 @@
 	gap: 5px;
 	justify-content: center;
 	padding: 13px 16px;
-	cursor: pointer;
+	cursor: grab;
 }
 
 .task-node.is-selected {
@@ -12,11 +12,7 @@
 	--graph-node-shadow: var(--graph-node-active-shadow);
 }
 
-.task-start-node {
-	cursor: grab;
-}
-
-.task-start-node.is-dragging {
+.task-node.is-dragging {
 	cursor: grabbing;
 }
 

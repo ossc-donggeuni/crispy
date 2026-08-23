@@ -134,6 +134,97 @@ suite('Task Layout', () => {
 		assertGeometryDelta(initialLayout, movedLayout, { x: 300, y: 200 });
 	});
 
+	test('Work/End manual offset을 topology base 계산 뒤 해당 Node와 Edge에만 적용한다', () => {
+		const task = createBranchTask({ x: 40, y: 70 });
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(end);
+		const initial = createTaskGraphLayout([task]);
+		const adjustedTask: TaskBlueprint = {
+			...task,
+			nodeOffsets: {
+				'task-node:a': { x: 80, y: -30 },
+				[end.id]: { x: 25, y: 45 },
+			},
+		};
+		const adjusted = createTaskGraphLayout([adjustedTask]);
+
+		for (const initialNode of initial.nodes) {
+			const adjustedNode = adjusted.nodes.find((node) => node.id === initialNode.id);
+
+			assert.ok(adjustedNode);
+			const expectedOffset = adjustedTask.nodeOffsets?.[initialNode.id]
+				?? { x: 0, y: 0 };
+
+			assert.deepStrictEqual(adjustedNode.manualOffset, (
+				initialNode.kind === 'start' ? undefined : adjustedTask.nodeOffsets?.[initialNode.id]
+			));
+			assert.deepStrictEqual({
+				x: adjustedNode.localPosition.x - initialNode.localPosition.x,
+				y: adjustedNode.localPosition.y - initialNode.localPosition.y,
+			}, expectedOffset);
+			assert.deepStrictEqual({
+				x: adjustedNode.position.x - initialNode.position.x,
+				y: adjustedNode.position.y - initialNode.position.y,
+			}, expectedOffset);
+		}
+
+		const movedWork = adjusted.nodes.find((node) => node.id === 'task-node:a');
+		const movedEnd = adjusted.nodes.find((node) => node.id === end.id);
+		const outgoing = adjusted.edges.find((edge) => edge.sourceId === 'task-node:a');
+		const incoming = adjusted.edges.find((edge) => edge.targetId === end.id);
+
+		assert.ok(movedWork && movedEnd && outgoing && incoming);
+		assert.deepStrictEqual(outgoing.geometry.start, {
+			x: movedWork.position.x + movedWork.width,
+			y: movedWork.position.y + movedWork.height / 2,
+		});
+		assert.deepStrictEqual(incoming.geometry.end, {
+			x: movedEnd.position.x,
+			y: movedEnd.position.y + movedEnd.height / 2,
+		});
+		assert.notDeepStrictEqual(
+			outgoing.geometry.midpoint,
+			initial.edges.find((edge) => edge.id === outgoing.id)?.geometry.midpoint,
+		);
+		assert.notDeepStrictEqual(
+			incoming.geometry.midpoint,
+			initial.edges.find((edge) => edge.id === incoming.id)?.geometry.midpoint,
+		);
+	});
+
+	test('DAG 재계산 뒤에도 기존 manual offset을 새 base position에 더한다', () => {
+		const task = createTask({ x: 20, y: 30 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const incoming = task.edges.find((edge) => edge.target === work?.id);
+		let sequence = 0;
+		const state = createTaskState([task], () => `offset-relayout-${++sequence}`);
+
+		assert.ok(work && incoming);
+		assert.ok(state.setNodeOffset(task.id, work.id, { x: 80, y: -30 }));
+		const updated = state.insertWorkBetween(task.id, incoming.id);
+
+		assert.ok(updated);
+		const baseTask: TaskBlueprint = { ...updated, nodeOffsets: undefined };
+		const baseLayout = createTaskGraphLayout([baseTask]);
+		const adjustedLayout = createTaskGraphLayout([updated]);
+		const baseWork = baseLayout.nodes.find((node) => node.id === work.id);
+		const adjustedWork = adjustedLayout.nodes.find((node) => node.id === work.id);
+
+		assert.ok(baseWork && adjustedWork);
+		assert.deepStrictEqual(updated.nodeOffsets?.[work.id], { x: 80, y: -30 });
+		assert.deepStrictEqual(adjustedWork.localPosition, {
+			x: baseWork.localPosition.x + 80,
+			y: baseWork.localPosition.y - 30,
+		});
+		for (const baseNode of baseLayout.nodes.filter((node) => node.id !== work.id)) {
+			const adjustedNode = adjustedLayout.nodes.find((node) => node.id === baseNode.id);
+
+			assert.ok(adjustedNode);
+			assert.deepStrictEqual(adjustedNode.localPosition, baseNode.localPosition);
+		}
+	});
+
 	test('동일한 내부 Node와 Edge ID를 Task별 origin 및 endpoint로 격리한다', () => {
 		const taskA: TaskBlueprint = {
 			...createTask({ x: 100, y: 50 }),

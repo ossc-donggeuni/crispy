@@ -5,6 +5,7 @@ import {
 	type TaskBlueprint,
 	type TaskEdge,
 	type TaskNode,
+	type TaskNodeOffset,
 } from '../../task';
 
 /** Task Graph World에서 사용하는 좌표다. */
@@ -19,6 +20,9 @@ interface TaskLayoutNodeBase {
 	readonly taskId: string;
 	readonly kind: TaskNode['kind'];
 	readonly rank: number;
+	/** 자동 base 위치에 더한 현재 수동 offset이며 Start는 항상 undefined다. */
+	readonly manualOffset: TaskNodeOffset | undefined;
+	/** 자동 base와 manual offset을 합친 task-local 최종 위치다. */
 	readonly localPosition: TaskLayoutPosition;
 	readonly position: TaskLayoutPosition;
 	readonly width: number;
@@ -105,7 +109,7 @@ interface PreferredRankNode {
 
 /**
  * Task Blueprint 목록을 origin 기준의 Left → Right layered Layout으로 변환한다.
- * rank는 X축, predecessor topology와 collision 해소 결과는 Y축을 결정한다.
+ * rank와 predecessor topology가 base 위치를 정하고 manual offset은 마지막에 더한다.
  *
  * @param tasks 같은 Graph World에 표시할 Task Blueprint 목록
  * @returns Task 전용 Node geometry와 Edge 목록
@@ -143,7 +147,7 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 	}
 
 	const ranks = createTaskNodeRanks(task, incomingByNodeId, outgoingByNodeId);
-	const localPositions = createTaskLocalPositions(
+	const baseLocalPositions = createTaskLocalPositions(
 		task,
 		ranks,
 		incomingByNodeId,
@@ -152,11 +156,19 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 
 	const nodes: TaskLayoutNode[] = task.nodes.map((node) => {
 		const geometry = getTaskNodeGeometry(node);
-		const localPosition = localPositions.get(node.id) ?? { x: 0, y: 0 };
+		const baseLocalPosition = baseLocalPositions.get(node.id) ?? { x: 0, y: 0 };
+		const manualOffset = node.kind === 'start'
+			? undefined
+			: task.nodeOffsets?.[node.id];
+		const localPosition = {
+			x: baseLocalPosition.x + (manualOffset?.x ?? 0),
+			y: baseLocalPosition.y + (manualOffset?.y ?? 0),
+		};
 		const base = {
 			id: node.id,
 			taskId: task.id,
 			rank: ranks.get(node.id) ?? 0,
+			manualOffset,
 			localPosition,
 			position: {
 				x: task.origin.x + localPosition.x,

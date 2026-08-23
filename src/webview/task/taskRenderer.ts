@@ -3,8 +3,9 @@ import type {
 	TaskLayoutEdge,
 	TaskLayoutNode,
 } from './taskLayout';
-import type { TaskOrigin } from '../../task';
+import type { TaskNodeOffset, TaskOrigin } from '../../task';
 import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
+import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../graph/graphNodeDrag';
 
 /** T-03 interaction이 Task 소유권을 판별할 때 사용할 DOM attribute다. */
 export const TASK_ID_ATTRIBUTE = 'data-task-id';
@@ -37,6 +38,12 @@ export interface TaskRendererInteractions {
 	getCameraScale?: () => number;
 	/** Start Drag으로 계산한 Task origin을 Domain State 갱신 경계에 전달한다. */
 	onTaskOriginChange?: (taskId: string, origin: TaskOrigin) => void;
+	/** Work/End Drag으로 계산한 manual offset을 Domain State 갱신 경계에 전달한다. */
+	onTaskNodeOffsetChange?: (
+		taskId: string,
+		nodeId: string,
+		offset: TaskNodeOffset | undefined,
+	) => void;
 	/** Start/Work Double Click 대상을 Camera Focus 경계에 전달한다. */
 	onNodeFocus?: (node: TaskLayoutNode) => void;
 	/** 선택 Edge 사이에 직렬 Work를 삽입한다. */
@@ -47,17 +54,31 @@ export interface TaskRendererInteractions {
 	onWorkRemove?: (taskId: string, nodeId: string) => void;
 }
 
-/** Start Node Pointer Capture 동안 고정하는 Task 이동 기준이다. */
-interface TaskDragSession {
+/** 모든 Task Node Drag가 공유하는 Pointer와 화면 좌표 기준이다. */
+interface TaskDragSessionBase {
 	readonly pointerId: number;
 	readonly renderKey: string;
 	readonly taskId: string;
 	readonly startClientX: number;
 	readonly startClientY: number;
-	readonly startOrigin: TaskOrigin;
 	readonly cameraScale: number;
 	didDrag: boolean;
 }
+
+/** Start Drag가 복원하거나 갱신할 Task origin 기준이다. */
+interface TaskOriginDragSession extends TaskDragSessionBase {
+	readonly target: 'origin';
+	readonly startOrigin: TaskOrigin;
+}
+
+/** Work/End Drag가 복원하거나 갱신할 manual offset 기준이다. */
+interface TaskNodeOffsetDragSession extends TaskDragSessionBase {
+	readonly target: 'node-offset';
+	readonly nodeId: string;
+	readonly startOffset: TaskNodeOffset | undefined;
+}
+
+type TaskDragSession = TaskOriginDragSession | TaskNodeOffsetDragSession;
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const TASK_DRAG_THRESHOLD = 4;
@@ -119,6 +140,23 @@ export function initializeTaskRenderer(
 		) !== undefined
 	);
 
+	/** 기존 제외 attribute와 native interactive child에서는 Task Drag를 시작하지 않는다. */
+	const isTaskDragIgnoredTarget = (target: EventTarget | null): boolean => (
+		target !== null
+		&& typeof (target as Element).closest === 'function'
+		&& (target as Element).closest(
+			[
+				`[${GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE}]`,
+				'button',
+				'input',
+				'textarea',
+				'select',
+				'a[href]',
+				'[contenteditable]:not([contenteditable="false"])',
+			].join(', '),
+		) !== null
+	);
+
 	/** Task dataset을 Renderer 내부 복합 identity로 변환한다. */
 	const getTaskNodeRenderKey = (element: HTMLElement): string | undefined => {
 		const taskId = element.getAttribute(TASK_ID_ATTRIBUTE);
@@ -142,7 +180,7 @@ export function initializeTaskRenderer(
 		nodeElements.get(renderKey)?.classList.add('is-selected');
 	};
 
-	/** 활성 Start Drag과 Pointer Capture 및 시각 상태를 정리한다. */
+	/** 활성 Task Drag과 Pointer Capture 및 시각 상태를 정리한다. */
 	const stopTaskDrag = (releaseCapture: boolean): TaskDragSession | undefined => {
 		const session = dragSession;
 
@@ -160,11 +198,14 @@ export function initializeTaskRenderer(
 		return session;
 	};
 
-	/** Task Node Pointer 입력을 선택 후보로 만들고 Start에서만 Drag를 시작한다. */
+	/** Task Node Pointer 입력을 origin 또는 node-offset Drag 후보로 만든다. */
 	const handlePointerDown = (event: PointerEvent): void => {
 		if (isTaskActionTarget(event.target)) {
 			event.preventDefault();
 			event.stopPropagation();
+			return;
+		}
+		if (isTaskDragIgnoredTarget(event.target)) {
 			return;
 		}
 
@@ -187,7 +228,6 @@ export function initializeTaskRenderer(
 		if (
 			disposed
 			|| dragSession
-			|| node.kind !== 'start'
 			|| !event.isPrimary
 			|| event.button !== 0
 		) {
@@ -201,23 +241,34 @@ export function initializeTaskRenderer(
 		}
 
 		event.preventDefault();
-		dragSession = {
+		const sessionBase = {
 			pointerId: event.pointerId,
 			renderKey,
 			taskId: node.taskId,
 			startClientX: event.clientX,
 			startClientY: event.clientY,
-			startOrigin: {
-				x: node.position.x - node.localPosition.x,
-				y: node.position.y - node.localPosition.y,
-			},
 			cameraScale,
 			didDrag: false,
 		};
+		dragSession = node.kind === 'start'
+			? {
+				...sessionBase,
+				target: 'origin',
+				startOrigin: {
+					x: node.position.x - node.localPosition.x,
+					y: node.position.y - node.localPosition.y,
+				},
+			}
+			: {
+				...sessionBase,
+				target: 'node-offset',
+				nodeId: node.id,
+				startOffset: node.manualOffset,
+			};
 		element.setPointerCapture(event.pointerId);
 	};
 
-	/** Threshold를 넘은 Start Pointer 이동을 Task origin의 World delta로 반영한다. */
+	/** Threshold를 넘은 Pointer 이동을 origin 또는 manual offset에 반영한다. */
 	const handlePointerMove = (event: PointerEvent): void => {
 		const session = dragSession;
 
@@ -238,14 +289,30 @@ export function initializeTaskRenderer(
 		}
 
 		session.didDrag = true;
-		interactions.onTaskOriginChange?.(session.taskId, {
-			x: session.startOrigin.x + screenDeltaX / session.cameraScale,
-			y: session.startOrigin.y + screenDeltaY / session.cameraScale,
-		});
+		const worldDelta = {
+			x: screenDeltaX / session.cameraScale,
+			y: screenDeltaY / session.cameraScale,
+		};
+
+		if (session.target === 'origin') {
+			interactions.onTaskOriginChange?.(session.taskId, {
+				x: session.startOrigin.x + worldDelta.x,
+				y: session.startOrigin.y + worldDelta.y,
+			});
+		} else {
+			interactions.onTaskNodeOffsetChange?.(
+				session.taskId,
+				session.nodeId,
+				{
+					x: (session.startOffset?.x ?? 0) + worldDelta.x,
+					y: (session.startOffset?.y ?? 0) + worldDelta.y,
+				},
+			);
+		}
 		nodeElements.get(session.renderKey)?.classList.add('is-dragging');
 	};
 
-	/** Pointer Up은 최신 Domain origin을 유지하고 합성 Click/Double Click을 억제한다. */
+	/** Pointer Up은 최신 Domain 위치를 유지하고 합성 Click/Double Click을 억제한다. */
 	const handlePointerUp = (event: PointerEvent): void => {
 		if (!dragSession || event.pointerId !== dragSession.pointerId) {
 			return;
@@ -261,7 +328,7 @@ export function initializeTaskRenderer(
 		}
 	};
 
-	/** Cancel 또는 Capture 상실은 시작 origin으로 복원하고 session을 종료한다. */
+	/** Cancel 또는 Capture 상실은 시작 origin/offset으로 복원하고 session을 종료한다. */
 	const cancelTaskDrag = (event: PointerEvent, releaseCapture: boolean): void => {
 		if (!dragSession || event.pointerId !== dragSession.pointerId) {
 			return;
@@ -274,10 +341,18 @@ export function initializeTaskRenderer(
 		suppressDoubleClickKey = undefined;
 		if (cancelled?.didDrag) {
 			event.preventDefault();
-			interactions.onTaskOriginChange?.(
-				cancelled.taskId,
-				cancelled.startOrigin,
-			);
+			if (cancelled.target === 'origin') {
+				interactions.onTaskOriginChange?.(
+					cancelled.taskId,
+					cancelled.startOrigin,
+				);
+			} else {
+				interactions.onTaskNodeOffsetChange?.(
+					cancelled.taskId,
+					cancelled.nodeId,
+					cancelled.startOffset,
+				);
+			}
 		}
 	};
 	const handlePointerCancel = (event: PointerEvent): void => {
@@ -596,12 +671,14 @@ function createTaskWorkActions(ownerDocument: Document): HTMLElement {
 
 	actions.className = 'task-work-actions';
 	actions.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	actions.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	remove.className = 'graph-detached-root-action task-work-action';
 	remove.type = 'button';
 	remove.title = 'Work 삭제';
 	remove.setAttribute('aria-label', 'Work 삭제');
 	remove.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'remove-work');
 	remove.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	remove.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	icon.className = 'graph-detached-root-action-icon';
 	icon.setAttribute('data-ui-icon', 'delete.svg');
 	icon.setAttribute('aria-hidden', 'true');
@@ -645,6 +722,7 @@ function syncTaskEdgeActionElement(
 	element.setAttribute(TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE, edge.taskId);
 	element.setAttribute(TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE, edge.id);
 	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	element.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	element.style.left = `${edge.geometry.midpoint.x}px`;
 	element.style.top = `${edge.geometry.midpoint.y}px`;
 	hoverTarget.className = 'task-edge-hover-target';
@@ -682,6 +760,7 @@ function createTaskEdgeActionButton(
 	button.setAttribute('aria-label', label);
 	button.setAttribute(TASK_EDGE_ACTION_ATTRIBUTE, action);
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	icon.className = 'task-edge-action-symbol';
 	icon.textContent = symbol;
 	icon.setAttribute('aria-hidden', 'true');

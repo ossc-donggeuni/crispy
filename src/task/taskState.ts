@@ -8,6 +8,7 @@ import {
 	type TaskEdge,
 	type TaskIdSource,
 	type TaskNode,
+	type TaskNodeOffset,
 	type WorkNode,
 } from './taskModel';
 import { assertValidTaskBlueprint } from './taskValidation';
@@ -51,6 +52,13 @@ export interface TaskStateStore {
 
 	/** 단일 predecessor/successor Work를 제거하고 필요한 직렬 연결만 복구한다. */
 	removeWork(taskId: string, nodeId: string): TaskBlueprint | undefined;
+
+	/** Work/End의 task-local 수동 offset을 설정하거나 제거한다. */
+	setNodeOffset(
+		taskId: string,
+		nodeId: string,
+		offset: TaskNodeOffset | undefined,
+	): TaskBlueprint | undefined;
 
 	/**
 	 * 기존 Task를 갱신하고 검증된 snapshot을 반환한다.
@@ -155,9 +163,47 @@ export function createTaskState(
 			));
 		},
 
+		setNodeOffset(taskId, nodeId, offset): TaskBlueprint | undefined {
+			return commitTask(taskId, (task) => setTaskNodeOffset(
+				task,
+				nodeId,
+				offset,
+			));
+		},
+
 		updateTask(taskId, update): TaskBlueprint | undefined {
 			return commitTask(taskId, update);
 		},
+	};
+}
+
+/** Work/End의 absolute manual offset을 저장하며 undefined는 제거한다. */
+function setTaskNodeOffset(
+	task: TaskBlueprint,
+	nodeId: string,
+	offset: TaskNodeOffset | undefined,
+): TaskBlueprint | undefined {
+	const node = task.nodes.find((candidate) => candidate.id === nodeId);
+	if (
+		!node
+		|| node.kind === 'start'
+		|| (offset !== undefined && (
+			!Number.isFinite(offset.x) || !Number.isFinite(offset.y)
+		))
+	) {
+		return undefined;
+	}
+
+	const nodeOffsets = { ...task.nodeOffsets };
+	if (!offset) {
+		delete nodeOffsets[nodeId];
+	} else {
+		nodeOffsets[nodeId] = { x: offset.x, y: offset.y };
+	}
+
+	return {
+		...task,
+		nodeOffsets: Object.keys(nodeOffsets).length > 0 ? nodeOffsets : undefined,
 	};
 }
 
@@ -321,9 +367,13 @@ function removeWorkNode(
 			createId,
 		));
 	}
+	const nodeOffsets = { ...task.nodeOffsets };
+
+	delete nodeOffsets[nodeId];
 
 	return {
 		...task,
+		nodeOffsets: Object.keys(nodeOffsets).length > 0 ? nodeOffsets : undefined,
 		nodes: task.nodes.filter((candidate) => candidate.id !== nodeId),
 		edges,
 	};
@@ -365,6 +415,12 @@ function createStateSnapshot(
 /** Task 전체를 검증하고 중첩 값까지 복사해 고정한다. */
 function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 	assertValidTaskBlueprint(task);
+	const nodeOffsets = Object.fromEntries(Object.entries(task.nodeOffsets ?? {}).map(
+		([nodeId, offset]) => [
+			nodeId,
+			Object.freeze({ x: offset.x, y: offset.y }),
+		],
+	));
 
 	return Object.freeze({
 		version: task.version,
@@ -372,6 +428,9 @@ function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 		title: task.title,
 		description: task.description,
 		origin: Object.freeze({ x: task.origin.x, y: task.origin.y }),
+		...(Object.keys(nodeOffsets).length > 0
+			? { nodeOffsets: Object.freeze(nodeOffsets) }
+			: {}),
 		nodes: Object.freeze(task.nodes.map(createNodeSnapshot)),
 		edges: Object.freeze(task.edges.map(createEdgeSnapshot)),
 	});

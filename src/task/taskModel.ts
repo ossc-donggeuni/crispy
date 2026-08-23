@@ -7,6 +7,12 @@ export interface TaskOrigin {
 	readonly y: number;
 }
 
+/** 자동 Task Layout 위치에 더하는 사용자 지정 Node 보정값이다. */
+export interface TaskNodeOffset {
+	readonly x: number;
+	readonly y: number;
+}
+
 /** 모든 Task Node가 공통으로 가지는 식별 정보다. */
 interface TaskNodeBase {
 	readonly id: string;
@@ -47,6 +53,8 @@ export interface TaskBlueprint {
 	readonly title: string;
 	readonly description: string;
 	readonly origin: TaskOrigin;
+	/** Work와 End에만 허용하는 task-local 수동 위치 보정값이다. */
+	readonly nodeOffsets?: Readonly<Record<string, TaskNodeOffset>>;
 	readonly nodes: readonly TaskNode[];
 	readonly edges: readonly TaskEdge[];
 }

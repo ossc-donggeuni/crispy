@@ -5,6 +5,9 @@ export type TaskValidationIssueCode =
 	| 'start_node_count'
 	| 'end_node_count'
 	| 'duplicate_node_id'
+	| 'node_offset_node_missing'
+	| 'start_node_offset'
+	| 'invalid_node_offset'
 	| 'duplicate_edge_id'
 	| 'duplicate_edge'
 	| 'edge_source_missing'
@@ -58,6 +61,38 @@ export function validateTaskBlueprint(
 			});
 		}
 		nodeIds.add(node.id);
+	}
+
+	for (const [nodeId, offset] of Object.entries(blueprint.nodeOffsets ?? {})) {
+		const node = blueprint.nodes.find((candidate) => candidate.id === nodeId);
+
+		if (!node) {
+			issues.push({
+				code: 'node_offset_node_missing',
+				message: `Task node offset must reference an existing node: ${nodeId}.`,
+				nodeId,
+			});
+			continue;
+		}
+		if (node.kind === 'start') {
+			issues.push({
+				code: 'start_node_offset',
+				message: `Task start node cannot have a manual offset: ${nodeId}.`,
+				nodeId,
+			});
+		}
+		if (
+			typeof offset?.x !== 'number'
+			|| !Number.isFinite(offset.x)
+			|| typeof offset?.y !== 'number'
+			|| !Number.isFinite(offset.y)
+		) {
+			issues.push({
+				code: 'invalid_node_offset',
+				message: `Task node offset must contain finite coordinates: ${nodeId}.`,
+				nodeId,
+			});
+		}
 	}
 
 	const edgeIds = new Set<string>();

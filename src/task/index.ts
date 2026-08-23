@@ -12,6 +12,7 @@ export {
 	type TaskEdge,
 	type TaskIdSource,
 	type TaskNode,
+	type TaskNodeOffset,
 	type TaskOrigin,
 	type WorkNode,
 } from './taskModel';

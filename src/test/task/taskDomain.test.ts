@@ -29,6 +29,7 @@ suite('Task Domain', () => {
 		assert.strictEqual(task.title, 'Implement Task Graph');
 		assert.strictEqual(task.description, 'Build the minimum Task domain.');
 		assert.deepStrictEqual(task.origin, { x: 120, y: -40 });
+		assert.strictEqual(Object.hasOwn(task, 'nodeOffsets'), false);
 		assert.deepStrictEqual(task.nodes, [
 			{ id: 'task-node:id-2', kind: 'start' },
 			{
@@ -91,6 +92,76 @@ suite('Task Domain', () => {
 		assert.deepStrictEqual(replacementSnapshot.tasks, [replacement]);
 		assert.strictEqual(state.getTask(created.id), undefined);
 		assert.strictEqual(state.getTask(replacement.id), replacementSnapshot.tasks[0]);
+	});
+
+	test('Work/End manual offset을 immutable Task별 상태로 설정하고 제거한다', () => {
+		const task = createTask();
+		const [start, work, end] = task.nodes;
+		const inputOffset = { x: 80, y: -30 };
+		const state = createTaskState([task]);
+
+		assert.ok(start && work && end);
+		const workUpdated = state.setNodeOffset(task.id, work.id, inputOffset);
+
+		assert.deepStrictEqual(workUpdated?.nodeOffsets, {
+			[work.id]: { x: 80, y: -30 },
+		});
+		assert.deepStrictEqual(workUpdated?.origin, task.origin);
+		assert.deepStrictEqual(workUpdated?.nodes, task.nodes);
+		assert.deepStrictEqual(workUpdated?.edges, task.edges);
+		assert.strictEqual(Object.isFrozen(workUpdated?.nodeOffsets), true);
+		assert.strictEqual(
+			Object.isFrozen(workUpdated?.nodeOffsets?.[work.id]),
+			true,
+		);
+		inputOffset.x = 999;
+		assert.deepStrictEqual(workUpdated?.nodeOffsets?.[work.id], { x: 80, y: -30 });
+
+		const endUpdated = state.setNodeOffset(task.id, end.id, { x: 15, y: 25 });
+		assert.deepStrictEqual(endUpdated?.nodeOffsets, {
+			[work.id]: { x: 80, y: -30 },
+			[end.id]: { x: 15, y: 25 },
+		});
+		const snapshotBeforeInvalid = state.getSnapshot();
+
+		assert.strictEqual(state.setNodeOffset(task.id, start.id, { x: 1, y: 1 }), undefined);
+		assert.strictEqual(state.setNodeOffset(task.id, 'task-node:missing', { x: 1, y: 1 }), undefined);
+		assert.strictEqual(state.setNodeOffset(task.id, work.id, { x: Number.NaN, y: 0 }), undefined);
+		assert.strictEqual(state.setNodeOffset(task.id, work.id, { x: 0, y: Infinity }), undefined);
+		assert.strictEqual(state.getSnapshot(), snapshotBeforeInvalid);
+
+		const clearedWork = state.setNodeOffset(task.id, work.id, undefined);
+		assert.deepStrictEqual(clearedWork?.nodeOffsets, {
+			[end.id]: { x: 15, y: 25 },
+		});
+		const zeroEnd = state.setNodeOffset(task.id, end.id, { x: 0, y: 0 });
+		assert.deepStrictEqual(zeroEnd?.nodeOffsets, {
+			[end.id]: { x: 0, y: 0 },
+		});
+		const clearedEnd = state.setNodeOffset(task.id, end.id, undefined);
+		assert.strictEqual(clearedEnd?.nodeOffsets, undefined);
+	});
+
+	test('초기 manual offset snapshot은 외부 record와 값을 복사해 동결한다', () => {
+		const task = createTask();
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const mutableOffset = { x: 12, y: -7 };
+
+		assert.ok(work);
+		const mutableOffsets = { [work.id]: mutableOffset };
+		const state = createTaskState([{
+			...task,
+			nodeOffsets: mutableOffsets,
+		}]);
+		const snapshotOffsets = state.getTask(task.id)?.nodeOffsets;
+
+		mutableOffset.x = 999;
+		delete mutableOffsets[work.id];
+		assert.deepStrictEqual(snapshotOffsets, {
+			[work.id]: { x: 12, y: -7 },
+		});
+		assert.strictEqual(Object.isFrozen(snapshotOffsets), true);
+		assert.strictEqual(Object.isFrozen(snapshotOffsets?.[work.id]), true);
 	});
 
 	test('직렬 Work 추가는 선택 Edge를 A → N → B로 치환한다', () => {
@@ -210,10 +281,15 @@ suite('Task Domain', () => {
 		const state = createTaskState([task], createSequentialIdSource());
 
 		assert.ok(start && work && end);
+		assert.ok(state.setNodeOffset(task.id, work.id, { x: 40, y: -20 }));
+		assert.ok(state.setNodeOffset(task.id, end.id, { x: 10, y: 15 }));
 		const updated = state.removeWork(task.id, work.id);
 
 		assert.ok(updated);
 		assert.deepStrictEqual(updated.nodes, [start, end]);
+		assert.deepStrictEqual(updated.nodeOffsets, {
+			[end.id]: { x: 10, y: 15 },
+		});
 		assert.deepStrictEqual(readConnections(updated), [`${start.id}->${end.id}`]);
 		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
 		assert.strictEqual(state.removeWork(task.id, start.id), undefined);
@@ -429,6 +505,42 @@ suite('Task Domain', () => {
 			}],
 		})), /exactly one start node/);
 		assert.strictEqual(state.getTask(task.id)?.nodes.length, 3);
+	});
+
+	test('Manual offset은 존재하는 Work/End의 finite 좌표만 허용한다', () => {
+		const task = createTask();
+		const [start, work] = task.nodes;
+
+		assert.ok(start && work);
+		assertIssueCodes({
+			...task,
+			nodeOffsets: {
+				'task-node:missing': { x: 10, y: 20 },
+			},
+		}, ['node_offset_node_missing']);
+		assertIssueCodes({
+			...task,
+			nodeOffsets: {
+				[start.id]: { x: 10, y: 20 },
+			},
+		}, ['start_node_offset']);
+		assertIssueCodes({
+			...task,
+			nodeOffsets: {
+				[work.id]: { x: Number.NaN, y: Number.NEGATIVE_INFINITY },
+			},
+		}, ['invalid_node_offset']);
+
+		const state = createTaskState([task]);
+		const snapshotBeforeInvalidUpdate = state.getSnapshot();
+
+		assert.throws(() => state.updateTask(task.id, (current) => ({
+			...current,
+			nodeOffsets: {
+				[start.id]: { x: 10, y: 20 },
+			},
+		})), /start node cannot have a manual offset/);
+		assert.strictEqual(state.getSnapshot(), snapshotBeforeInvalidUpdate);
 	});
 
 	test('서로 다른 ID로 같은 source와 target을 잇는 중복 Edge를 거부한다', () => {

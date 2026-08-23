@@ -61,6 +61,7 @@ import { createGraphNodeEffects } from './graphNodeEffects';
 import {
 	createTaskState,
 	type TaskBlueprint,
+	type TaskNodeOffset,
 	type TaskOrigin,
 	type TaskStateStore,
 } from '../../task';
@@ -80,7 +81,7 @@ export interface GraphView {
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
-	/** Task 생성과 origin 갱신의 source of truth인 독립 Domain Store다. */
+	/** Task 생성과 origin/manual offset 갱신의 source of truth인 Domain Store다. */
 	readonly taskState: TaskStateStore;
 	/** Panel/Dock/Webview 변화 뒤 Visible Graph 기반 Overlay를 즉시 다시 배치한다. */
 	refreshVisibleGraphArea(): void;
@@ -1613,6 +1614,15 @@ export function initializeGraphView(
 			applyTaskState();
 		}
 	};
+	const handleTaskNodeOffsetChange = (
+		taskId: string,
+		nodeId: string,
+		offset: TaskNodeOffset | undefined,
+	): void => {
+		if (taskState.setNodeOffset(taskId, nodeId, offset)) {
+			applyTaskState();
+		}
+	};
 	const handleTaskNodeFocus = (node: TaskLayoutNode): void => {
 		camera.focusOn({
 			x: node.position.x + node.width / 2,
@@ -1655,6 +1665,7 @@ export function initializeGraphView(
 		{
 			getCameraScale: () => camera.getState().scale,
 			onTaskOriginChange: handleTaskOriginChange,
+			onTaskNodeOffsetChange: handleTaskNodeOffsetChange,
 			onNodeFocus: handleTaskNodeFocus,
 			onInsertWorkAtEdge: handleInsertWorkAtEdge,
 			onAddParallelWorkAtEdge: handleAddParallelWorkAtEdge,
