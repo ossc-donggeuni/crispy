@@ -1,21 +1,13 @@
 import * as assert from 'assert';
 import {
-	active,
-	AGENT_ACTIVITY_KINDS,
 	clearAgentActivitiesBySession,
 	clearAgentActivity,
-	completed,
-	editing,
-	mentioned,
 	parseAgentActivityEvent,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
-	planned,
-	rejected,
 	setAgentActivity,
 	type AgentActivityKind,
-	type AgentActivitySetMessage,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
@@ -168,12 +160,26 @@ suite('Agent Activity messages', () => {
 		nodeId: 'file:file:///workspace/app/src/index.ts',
 		rootId: 'detached:root:1',
 	};
+	const activityKinds = [
+		'planned',
+		'active',
+		'editing',
+		'completed',
+		'mentioned',
+		'rejected',
+	] as const satisfies readonly AgentActivityKind[];
 
-	test('6개 Activity kind와 정상 Event/set 메시지를 모두 허용한다', () => {
-		for (const activity of AGENT_ACTIVITY_KINDS) {
+	test('6개 Activity 각각 setAgentActivity 메시지를 생성하고 parsing한다', () => {
+		for (const activity of activityKinds) {
 			const event = { sessionId, target, activity };
 			const message = setAgentActivity(sessionId, target, activity);
 
+			assert.deepStrictEqual(message, {
+				type: 'agent.activity.set',
+				sessionId,
+				target,
+				activity,
+			});
 			assert.deepStrictEqual(parseAgentActivityEvent(event), event);
 			assert.deepStrictEqual(
 				parseAgentActivityToWebviewMessage(message),
@@ -181,21 +187,6 @@ suite('Agent Activity messages', () => {
 			);
 			const extensionMessage: ExtensionToWebviewMessage = message;
 			assert.strictEqual(extensionMessage.type, 'agent.activity.set');
-		}
-	});
-
-	test('semantic wrapper 6개가 공통 set 진입점과 같은 메시지를 만든다', () => {
-		const semanticSetters: Record<
-			AgentActivityKind,
-			(sessionId: string, target: GraphNodeEffectTarget) =>
-				AgentActivitySetMessage
-		> = { planned, active, editing, completed, mentioned, rejected };
-
-		for (const activity of AGENT_ACTIVITY_KINDS) {
-			assert.deepStrictEqual(
-				semanticSetters[activity](sessionId, target),
-				setAgentActivity(sessionId, target, activity),
-			);
 		}
 	});
 

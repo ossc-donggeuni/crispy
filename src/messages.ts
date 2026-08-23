@@ -56,7 +56,7 @@ export interface GraphNodeEffectTarget {
 }
 
 /** Agent가 Graph Target에 전달할 수 있는 의미 기반 Activity allowlist다. */
-export const AGENT_ACTIVITY_KINDS = [
+const AGENT_ACTIVITY_KINDS = [
 	'planned',
 	'active',
 	'editing',
@@ -121,54 +121,6 @@ export function clearAgentActivitiesBySession(
 	sessionId: SessionId,
 ): AgentActivityClearSessionMessage {
 	return { type: 'agent.activity.clearSession', sessionId };
-}
-
-/** planned Activity를 공통 set 진입점으로 전달한다. */
-export function planned(
-	sessionId: SessionId,
-	target: GraphNodeEffectTarget,
-): AgentActivitySetMessage {
-	return setAgentActivity(sessionId, target, 'planned');
-}
-
-/** active Activity를 공통 set 진입점으로 전달한다. */
-export function active(
-	sessionId: SessionId,
-	target: GraphNodeEffectTarget,
-): AgentActivitySetMessage {
-	return setAgentActivity(sessionId, target, 'active');
-}
-
-/** editing Activity를 공통 set 진입점으로 전달한다. */
-export function editing(
-	sessionId: SessionId,
-	target: GraphNodeEffectTarget,
-): AgentActivitySetMessage {
-	return setAgentActivity(sessionId, target, 'editing');
-}
-
-/** completed Activity를 공통 set 진입점으로 전달한다. */
-export function completed(
-	sessionId: SessionId,
-	target: GraphNodeEffectTarget,
-): AgentActivitySetMessage {
-	return setAgentActivity(sessionId, target, 'completed');
-}
-
-/** mentioned Activity를 공통 set 진입점으로 전달한다. */
-export function mentioned(
-	sessionId: SessionId,
-	target: GraphNodeEffectTarget,
-): AgentActivitySetMessage {
-	return setAgentActivity(sessionId, target, 'mentioned');
-}
-
-/** rejected Activity를 공통 set 진입점으로 전달한다. */
-export function rejected(
-	sessionId: SessionId,
-	target: GraphNodeEffectTarget,
-): AgentActivitySetMessage {
-	return setAgentActivity(sessionId, target, 'rejected');
 }
 
 /** Webview가 의미 상태를 해석하지 않고 그대로 표현하는 시각 효과 계약이다. */
