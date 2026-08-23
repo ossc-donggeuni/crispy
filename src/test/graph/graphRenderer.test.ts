@@ -370,11 +370,13 @@ suite('Graph Renderer / Node Drag', () => {
 		};
 		const savedPosition = { x: 640, y: 280 };
 		const fileClicks: string[] = [];
+		const fileOpenRequests: string[] = [];
 		const fixture = createRendererFixture(1, {
 			camera: { x: 0, y: 0, scale: 1 },
 			nodePositions: { [file.id]: savedPosition },
 		}, {
 			onFileClick: (fileId) => fileClicks.push(fileId),
+			onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
 		}, file);
 		const layoutNode = getLayoutNode(fixture.layout, file.id);
 		const node = fixture.getNode(file.id);
@@ -402,7 +404,21 @@ suite('Graph Renderer / Node Drag', () => {
 		node.dispatch('click', createClickEvent(node));
 		assert.deepStrictEqual(fileClicks, [file.id]);
 		assert.deepStrictEqual(fixture.graphState.getState().openedFolders, {});
+		let bubbledDoubleClicks = 0;
+		fixture.nodeLayer.addEventListener('dblclick', () => {
+			bubbledDoubleClicks += 1;
+		});
+		const doubleClick = createClickEvent(node);
+
+		node.dispatch('dblclick', doubleClick);
+
+		assert.deepStrictEqual(fileOpenRequests, [file.id]);
+		assert.strictEqual(bubbledDoubleClicks, 0);
+		assert.strictEqual(doubleClick.defaultPrevented, true);
+		assert.strictEqual(doubleClick.propagationStopped, true);
 		fixture.renderer.dispose();
+		node.dispatch('dblclick', createClickEvent(node));
+		assert.deepStrictEqual(fileOpenRequests, [file.id]);
 	});
 
 	test('Folder의 Singleton은 standalone Group, 두 File은 grouped Row로 렌더링한다', () => {

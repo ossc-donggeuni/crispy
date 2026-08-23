@@ -111,7 +111,7 @@ export interface GraphRendererInteractions {
 	onFileGroupClick?: (folderId: string) => void;
 	/** Standalone presentation 또는 File Row가 Click됐을 때 안정적인 File ID를 전달한다. */
 	onFileClick?: (fileId: string) => void;
-	/** 일반 File Row가 Double Click됐을 때 안정적인 File ID를 전달한다. */
+	/** Standalone presentation 또는 일반 File Row가 Double Click됐을 때 안정적인 File ID를 전달한다. */
 	onFileOpenRequest?: (fileId: string) => void;
 	/** Handle Drag가 완료됐을 때 대상 ID와 client 좌표를 상위로 전달한다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
@@ -247,6 +247,7 @@ export function initializeGraphRenderer(
 	);
 	const nodeDrags = new Map<string, GraphNodeDrag>();
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
+	const nodeFileOpenRequestCleanups = new Map<string, () => void>();
 	const backlinkClickCleanups = new Map<string, () => void>();
 	const backlinkElements = new Map<string, HTMLElement>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
@@ -944,6 +945,20 @@ export function initializeGraphRenderer(
 		);
 		element.hidden = layoutNode.hidden === true;
 		syncDetachDrag(layoutNode, element);
+		if (
+			layoutNode.kind === 'file-group'
+			&& layoutNode.presentation === 'standalone'
+			&& layoutNode.children[0]
+		) {
+			nodeFileOpenRequestCleanups.set(
+				layoutNode.id,
+				initializeFileOpenRequest(
+					element,
+					layoutNode.children[0],
+					interactions,
+				),
+			);
+		}
 		const backlinkTargetRootIds = getNodeBacklinkTargetRootIds(layoutNode);
 
 		if (backlinkTargetRootIds.length > 0) {
@@ -1200,6 +1215,8 @@ export function initializeGraphRenderer(
 		nodeDrags.delete(nodeId);
 		nodeDetachDrags.get(nodeId)?.dispose();
 		nodeDetachDrags.delete(nodeId);
+		nodeFileOpenRequestCleanups.get(nodeId)?.();
+		nodeFileOpenRequestCleanups.delete(nodeId);
 		backlinkClickCleanups.get(nodeId)?.();
 		backlinkClickCleanups.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
@@ -2418,7 +2435,40 @@ function createFileRow(
 		animateFileClick();
 		interactions.onFileClick?.(getGraphLayoutSourceId(file.id));
 	};
-	const handleFileDoubleClick = (event: MouseEvent): void => {
+	const disposeFileOpenRequest = initializeFileOpenRequest(
+		item,
+		file,
+		interactions,
+	);
+	const handleFileClickAnimationEnd = (event: AnimationEvent): void => {
+		if (event.target === item) {
+			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
+		}
+	};
+
+	item.addEventListener('click', handleFileClick);
+	item.addEventListener('animationend', handleFileClickAnimationEnd);
+
+	return {
+		element: item,
+		dispose: () => {
+			disposeBacklinkClick?.();
+			detachDrag?.dispose();
+			disposeFileOpenRequest();
+			item.removeEventListener('click', handleFileClick);
+			item.removeEventListener('animationend', handleFileClickAnimationEnd);
+			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
+		},
+	};
+}
+
+/** Standalone Card와 grouped Row가 공유하는 File Open 요청 listener를 등록한다. */
+function initializeFileOpenRequest(
+	element: HTMLElement,
+	file: GraphFileNode,
+	interactions: GraphRendererInteractions,
+): () => void {
+	const handleDoubleClick = (event: MouseEvent): void => {
 		event.stopPropagation();
 		event.preventDefault();
 
@@ -2428,26 +2478,11 @@ function createFileRow(
 
 		interactions.onFileOpenRequest?.(getGraphLayoutSourceId(file.id));
 	};
-	const handleFileClickAnimationEnd = (event: AnimationEvent): void => {
-		if (event.target === item) {
-			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
-		}
-	};
 
-	item.addEventListener('click', handleFileClick);
-	item.addEventListener('dblclick', handleFileDoubleClick);
-	item.addEventListener('animationend', handleFileClickAnimationEnd);
+	element.addEventListener('dblclick', handleDoubleClick);
 
-	return {
-		element: item,
-		dispose: () => {
-			disposeBacklinkClick?.();
-			detachDrag?.dispose();
-			item.removeEventListener('click', handleFileClick);
-			item.removeEventListener('dblclick', handleFileDoubleClick);
-			item.removeEventListener('animationend', handleFileClickAnimationEnd);
-			item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
-		},
+	return () => {
+		element.removeEventListener('dblclick', handleDoubleClick);
 	};
 }
 
