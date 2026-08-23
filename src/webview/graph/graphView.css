@@ -6,10 +6,164 @@
 }
 
 .graph-viewport {
+	/* Graph neutral presentation은 이 scope에서만 Theme token으로 파생한다. */
 	--graph-viewport-accent-color: var(
 		--vscode-focusBorder,
 		var(--vscode-contrastActiveBorder, var(--vscode-descriptionForeground))
 	);
+	--graph-node-foreground: var(--vscode-foreground);
+	--graph-node-default-outline-color: var(
+		--vscode-icon-foreground,
+		var(--vscode-foreground)
+	);
+	--graph-node-default-border-color: var(
+		--vscode-widget-border,
+		var(--vscode-panel-border, var(--vscode-contrastBorder, transparent))
+	);
+	--graph-node-default-background: var(
+		--vscode-editorWidget-background,
+		var(--vscode-editor-background)
+	);
+	--graph-node-default-shadow: 0 8px 24px -12px color-mix(
+		in srgb,
+		var(--vscode-widget-shadow, rgb(0 0 0 / 35%)) 36%,
+		transparent
+	);
+	--graph-node-effect-ambient-background: var(
+		--graph-node-background,
+		var(--graph-node-default-background)
+	);
+	--graph-project-node-outline-color: var(--graph-node-default-outline-color);
+	--graph-project-node-background: color-mix(
+		in srgb,
+		var(--vscode-foreground) 2%,
+		var(--graph-node-default-background)
+	);
+	--graph-project-node-shadow: var(--graph-node-default-shadow);
+	--graph-node-hover-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 6%,
+		var(--graph-node-default-background)
+	);
+	--graph-node-active-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 10%,
+		var(--graph-node-default-background)
+	);
+	--graph-node-hover-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 14%,
+			transparent
+		),
+		var(--graph-node-default-shadow);
+	--graph-node-active-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 20%,
+			transparent
+		),
+		var(--graph-node-default-shadow);
+	--graph-file-row-hover-background: var(
+		--vscode-list-hoverBackground,
+		color-mix(
+			in srgb,
+			var(--vscode-foreground) 6%,
+			var(--graph-node-default-background)
+		)
+	);
+	--graph-file-row-active-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 10%,
+		var(--graph-file-row-hover-background)
+	);
+	--graph-file-row-click-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 16%,
+		var(--graph-file-row-active-background)
+	);
+	--graph-file-row-click-outline-color: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 45%,
+		transparent
+	);
+	--graph-secondary-control-foreground: var(
+		--vscode-descriptionForeground,
+		var(--vscode-foreground)
+	);
+	--graph-secondary-control-muted-foreground: var(
+		--vscode-descriptionForeground,
+		var(--vscode-foreground)
+	);
+	--graph-secondary-control-background: color-mix(
+		in srgb,
+		var(--vscode-foreground) 5%,
+		var(--graph-node-default-background)
+	);
+	--graph-secondary-control-hover-foreground: var(--vscode-foreground);
+	--graph-secondary-control-strong-foreground: var(--vscode-foreground);
+	--graph-secondary-control-focus-color: var(--graph-viewport-accent-color);
+	--graph-secondary-control-hover-background: var(
+		--vscode-toolbar-hoverBackground,
+		var(--vscode-list-hoverBackground, var(--graph-secondary-control-background))
+	);
+	--graph-secondary-control-border: var(--graph-node-default-border-color);
+	--graph-floating-control-foreground: var(
+		--vscode-descriptionForeground,
+		var(--vscode-foreground)
+	);
+	--graph-floating-control-background: color-mix(
+		in srgb,
+		var(--vscode-foreground) 3%,
+		var(--graph-node-default-background)
+	);
+	--graph-floating-control-hover-background: var(
+		--vscode-toolbar-hoverBackground,
+		var(--graph-secondary-control-hover-background)
+	);
+	--graph-detach-handle-hover-background: var(
+		--graph-floating-control-hover-background
+	);
+	--graph-floating-control-active-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 12%,
+		var(--graph-floating-control-hover-background)
+	);
+	--graph-floating-control-shadow: 0 6px 18px -8px color-mix(
+		in srgb,
+		var(--vscode-widget-shadow, rgb(0 0 0 / 35%)) 32%,
+		transparent
+	);
+	--graph-edge-color: var(
+		--vscode-descriptionForeground,
+		var(--vscode-disabledForeground, var(--vscode-foreground))
+	);
+	--graph-unreadable-foreground: var(--vscode-errorForeground, #f14c4c);
+	--graph-unreadable-outline-color: var(--vscode-errorForeground, #f14c4c);
+	--graph-unreadable-background: color-mix(
+		in srgb,
+		var(--graph-unreadable-outline-color) 12%,
+		var(--graph-node-default-background)
+	);
+	--graph-unreadable-hover-background: color-mix(
+		in srgb,
+		var(--graph-unreadable-outline-color) 16%,
+		var(--graph-node-default-background)
+	);
+	--graph-unreadable-active-background: color-mix(
+		in srgb,
+		var(--graph-unreadable-outline-color) 20%,
+		var(--graph-node-default-background)
+	);
+	--graph-reattach-target-background: color-mix(
+		in srgb,
+		oklch(0.62 0.11 285) 10%,
+		var(--graph-node-default-background)
+	);
+	--graph-reattach-target-shadow:
+		0 0 0 3px oklch(0.62 0.11 285 / 16%),
+		0 0 28px oklch(0.62 0.11 285 / 22%),
+		var(--graph-node-default-shadow);
 
 	position: relative;
 	width: 100%;
@@ -24,6 +178,99 @@
 	background-size: 40px 40px;
 	touch-action: none;
 	cursor: grab;
+}
+
+/* 기존 Dark card의 밝기와 depth는 semantic variable override로 그대로 보존한다. */
+body.vscode-dark .graph-viewport {
+	--graph-node-foreground: #fcfcfc;
+	--graph-node-default-outline-color: oklch(0.34 0.01 270);
+	--graph-node-default-border-color: transparent;
+	--graph-node-default-background: oklch(0.22 0.0065 270);
+	--graph-node-default-shadow: 0 18px 48px -16px rgb(0 0 0 / 72%);
+	--graph-node-effect-ambient-background: black;
+	--graph-project-node-outline-color: oklch(0.36 0.012 270);
+	--graph-project-node-background: oklch(0.228 0.0075 270);
+	--graph-project-node-shadow: 0 20px 52px -16px rgb(0 0 0 / 78%);
+	--graph-node-hover-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 6%,
+		oklch(0.23 0.007 270)
+	);
+	--graph-node-active-background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 10%,
+		oklch(0.235 0.007 270)
+	);
+	--graph-node-hover-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 14%,
+			transparent
+		),
+		0 22px 54px -16px rgb(0 0 0 / 80%);
+	--graph-node-active-shadow:
+		0 0 0 3px color-mix(
+			in srgb,
+			var(--graph-viewport-accent-color) 20%,
+			transparent
+		),
+		0 24px 58px -16px rgb(0 0 0 / 84%);
+	--graph-file-row-hover-background: #303132;
+	--graph-file-row-active-background: #38393a;
+	--graph-file-row-click-background: #454647;
+	--graph-file-row-click-outline-color: rgba(214, 214, 214, 0.45);
+	--graph-secondary-control-foreground: #9a9a9a;
+	--graph-secondary-control-muted-foreground: #a3a3a3;
+	--graph-secondary-control-background: #282828;
+	--graph-secondary-control-hover-foreground: #b9b9b9;
+	--graph-secondary-control-strong-foreground: #d0d0d0;
+	--graph-secondary-control-focus-color: #a3a3a3;
+	--graph-secondary-control-hover-background: #323232;
+	--graph-secondary-control-border: oklch(0.38 0.01 270);
+	--graph-floating-control-foreground: var(
+		--vscode-descriptionForeground,
+		#c4c4c4
+	);
+	--graph-floating-control-background: oklch(0.225 0.007 270);
+	--graph-floating-control-hover-background: #363738;
+	--graph-detach-handle-hover-background: #3a3b3c;
+	--graph-floating-control-active-background: #404142;
+	--graph-floating-control-shadow: 0 10px 24px -8px rgb(0 0 0 / 78%);
+	--graph-edge-color: #a3a3a3;
+	--graph-unreadable-foreground: #ffd9dc;
+	--graph-unreadable-outline-color: oklch(0.55 0.12 20);
+	--graph-unreadable-background: oklch(0.23 0.04 20);
+	--graph-unreadable-hover-background: oklch(0.255 0.05 20);
+	--graph-unreadable-active-background: oklch(0.275 0.055 20);
+	--graph-reattach-target-background: oklch(0.248 0.022 280);
+	--graph-reattach-target-shadow:
+		0 0 0 3px oklch(0.62 0.11 285 / 16%),
+		0 0 28px oklch(0.62 0.11 285 / 22%),
+		0 20px 46px -12px rgb(0 0 0 / 84%);
+}
+
+body.vscode-high-contrast .graph-viewport,
+body.vscode-high-contrast-light .graph-viewport {
+	--graph-node-default-outline-color: var(
+		--vscode-contrastBorder,
+		var(--vscode-foreground)
+	);
+	--graph-node-default-border-color: var(
+		--vscode-contrastBorder,
+		var(--vscode-foreground)
+	);
+	--graph-node-default-shadow: 0 0 0 transparent;
+	--graph-project-node-outline-color: var(
+		--vscode-contrastBorder,
+		var(--vscode-foreground)
+	);
+	--graph-project-node-shadow: 0 0 0 transparent;
+	--graph-secondary-control-border: var(
+		--vscode-contrastBorder,
+		var(--vscode-foreground)
+	);
+	--graph-floating-control-shadow: 0 0 0 transparent;
+	--graph-edge-color: var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 
 .graph-viewport.is-space-pan-mode .graph-node {
@@ -67,10 +314,10 @@
 }
 
 .graph-node {
-	--graph-node-outline-color: oklch(0.34 0.01 270);
-	--graph-node-border-color: transparent;
-	--graph-node-background: oklch(0.22 0.0065 270);
-	--graph-node-shadow: 0 18px 48px -16px rgb(0 0 0 / 72%);
+	--graph-node-outline-color: var(--graph-node-default-outline-color);
+	--graph-node-border-color: var(--graph-node-default-border-color);
+	--graph-node-background: var(--graph-node-default-background);
+	--graph-node-shadow: var(--graph-node-default-shadow);
 
 	position: absolute;
 	top: 0;
@@ -78,7 +325,7 @@
 	display: flex;
 	box-sizing: border-box;
 	min-width: 0;
-	color: #fcfcfc;
+	color: var(--graph-node-foreground);
 	background: var(--graph-node-background);
 	border: 1px solid var(--graph-node-border-color);
 	border-radius: 11px;
@@ -289,7 +536,11 @@
 	overflow: hidden;
 	background: color-mix(
 		in srgb,
-		color-mix(in srgb, var(--graph-node-effect-color) 42%, black) 18%,
+		color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 42%,
+			var(--graph-node-effect-ambient-background)
+		) 18%,
 		transparent
 	);
 	border-radius: var(--graph-node-effect-surface-radius);
@@ -298,7 +549,11 @@
 .graph-node-effect-region .graph-node-effect-shimmer {
 	background: color-mix(
 		in srgb,
-		color-mix(in srgb, var(--graph-node-effect-color) 42%, black) 12%,
+		color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 42%,
+			var(--graph-node-effect-ambient-background)
+		) 12%,
 		transparent
 	);
 }
@@ -464,9 +719,9 @@
 }
 
 .graph-project-node {
-	--graph-node-outline-color: oklch(0.36 0.012 270);
-	--graph-node-background: oklch(0.228 0.0075 270);
-	--graph-node-shadow: 0 20px 52px -16px rgb(0 0 0 / 78%);
+	--graph-node-outline-color: var(--graph-project-node-outline-color);
+	--graph-node-background: var(--graph-project-node-background);
+	--graph-node-shadow: var(--graph-project-node-shadow);
 }
 
 .graph-node.is-dragging {
@@ -535,18 +790,8 @@
 .graph-file-group-node:hover {
 	--graph-node-outline-color: var(--graph-viewport-accent-color);
 	--graph-node-border-color: var(--graph-viewport-accent-color);
-	--graph-node-background: color-mix(
-		in srgb,
-		var(--graph-viewport-accent-color) 6%,
-		oklch(0.23 0.007 270)
-	);
-	--graph-node-shadow:
-		0 0 0 3px color-mix(
-			in srgb,
-			var(--graph-viewport-accent-color) 14%,
-			transparent
-		),
-		0 22px 54px -16px rgb(0 0 0 / 80%);
+	--graph-node-background: var(--graph-node-hover-background);
+	--graph-node-shadow: var(--graph-node-hover-shadow);
 
 	cursor: pointer;
 }
@@ -556,56 +801,34 @@
 .graph-file-group-node:active:not(:has(.graph-file-item:active, .graph-file-control:active)) {
 	--graph-node-outline-color: var(--graph-viewport-accent-color);
 	--graph-node-border-color: var(--graph-viewport-accent-color);
-	--graph-node-background: color-mix(
-		in srgb,
-		var(--graph-viewport-accent-color) 10%,
-		oklch(0.235 0.007 270)
-	);
-	--graph-node-shadow:
-		0 0 0 3px color-mix(
-			in srgb,
-			var(--graph-viewport-accent-color) 20%,
-			transparent
-		),
-		0 24px 58px -16px rgb(0 0 0 / 84%);
+	--graph-node-background: var(--graph-node-active-background);
+	--graph-node-shadow: var(--graph-node-active-shadow);
 }
 
 .graph-project-node.is-unreadable,
 .graph-folder-node.is-unreadable {
-	--graph-node-outline-color: oklch(0.55 0.12 20);
-	--graph-node-border-color: oklch(0.55 0.12 20);
-	--graph-node-background: oklch(0.23 0.04 20);
-	--graph-node-shadow: 0 20px 52px -16px rgb(0 0 0 / 78%);
+	--graph-node-outline-color: var(--graph-unreadable-outline-color);
+	--graph-node-border-color: var(--graph-unreadable-outline-color);
+	--graph-node-background: var(--graph-unreadable-background);
+	--graph-node-shadow: var(--graph-project-node-shadow);
 
-	color: #ffd9dc;
+	color: var(--graph-unreadable-foreground);
 }
 
 .graph-project-node.is-unreadable:hover,
 .graph-folder-node.is-unreadable:hover {
 	--graph-node-outline-color: var(--graph-viewport-accent-color);
 	--graph-node-border-color: var(--graph-viewport-accent-color);
-	--graph-node-background: oklch(0.255 0.05 20);
-	--graph-node-shadow:
-		0 0 0 3px color-mix(
-			in srgb,
-			var(--graph-viewport-accent-color) 14%,
-			transparent
-		),
-		0 22px 54px -16px rgb(0 0 0 / 80%);
+	--graph-node-background: var(--graph-unreadable-hover-background);
+	--graph-node-shadow: var(--graph-node-hover-shadow);
 }
 
 .graph-project-node.is-unreadable:active,
 .graph-folder-node.is-unreadable:active {
 	--graph-node-outline-color: var(--graph-viewport-accent-color);
 	--graph-node-border-color: var(--graph-viewport-accent-color);
-	--graph-node-background: oklch(0.275 0.055 20);
-	--graph-node-shadow:
-		0 0 0 3px color-mix(
-			in srgb,
-			var(--graph-viewport-accent-color) 20%,
-			transparent
-		),
-		0 24px 58px -16px rgb(0 0 0 / 84%);
+	--graph-node-background: var(--graph-unreadable-active-background);
+	--graph-node-shadow: var(--graph-node-active-shadow);
 }
 
 .graph-node.is-dragging,
@@ -654,9 +877,12 @@
 	box-sizing: border-box;
 	align-items: center;
 	justify-content: center;
-	color: #fcfcfc;
-	background: var(--graph-node-background, oklch(0.22 0.0065 270));
-	border: 1px solid var(--graph-node-outline-color, oklch(0.45 0.01 270));
+	color: var(--graph-node-foreground);
+	background: var(--graph-node-background, var(--graph-node-default-background));
+	border: 1px solid var(
+		--graph-node-outline-color,
+		var(--graph-node-default-outline-color)
+	);
 	border-radius: 50%;
 	font-size: 10px;
 	font-weight: 600;
@@ -702,25 +928,25 @@
 	align-items: center;
 	justify-content: center;
 	padding: 0;
-	color: var(--vscode-descriptionForeground, #c4c4c4);
-	background: oklch(0.225 0.007 270);
-	border: 1px solid oklch(0.38 0.01 270);
+	color: var(--graph-floating-control-foreground);
+	background: var(--graph-floating-control-background);
+	border: 1px solid var(--graph-secondary-control-border);
 	border-radius: 6px;
-	box-shadow: 0 10px 24px -8px rgb(0 0 0 / 78%);
+	box-shadow: var(--graph-floating-control-shadow);
 	touch-action: none;
 	cursor: pointer;
 }
 
 .graph-detached-root-action:hover,
 .graph-detached-root-action:focus-visible {
-	color: #fcfcfc;
-	background: #363738;
+	color: var(--graph-node-foreground);
+	background: var(--graph-floating-control-hover-background);
 	border-color: var(--graph-viewport-accent-color);
 	outline: none;
 }
 
 .graph-detached-root-action:active {
-	background: #404142;
+	background: var(--graph-floating-control-active-background);
 	transform: translateY(1px);
 }
 
@@ -805,7 +1031,7 @@
 	justify-content: center;
 	margin-left: auto;
 	padding: 0;
-	color: var(--vscode-descriptionForeground, #c4c4c4);
+	color: var(--graph-floating-control-foreground);
 	background: transparent;
 	border: 0;
 	border-radius: 3px;
@@ -829,8 +1055,8 @@
 }
 
 .graph-detach-handle:hover {
-	color: #fcfcfc;
-	background: #3a3b3c;
+	color: var(--graph-node-foreground);
+	background: var(--graph-detach-handle-hover-background);
 }
 
 .graph-detach-handle.is-detach-dragging {
@@ -875,7 +1101,7 @@
 }
 
 .graph-file-item:hover {
-	background: #303132;
+	background: var(--graph-file-row-hover-background);
 	cursor: pointer;
 }
 
@@ -897,18 +1123,15 @@
 .graph-file-item.is-backlink.is-reattach-target {
 	--graph-node-outline-color: oklch(0.62 0.11 285);
 	--graph-node-border-color: oklch(0.62 0.11 285);
-	--graph-node-background: oklch(0.248 0.022 280);
+	--graph-node-background: var(--graph-reattach-target-background);
 
 	opacity: 1;
 	background: var(--graph-node-background);
-	box-shadow:
-		0 0 0 3px oklch(0.62 0.11 285 / 16%),
-		0 0 28px oklch(0.62 0.11 285 / 22%),
-		0 20px 46px -12px rgb(0 0 0 / 84%);
+	box-shadow: var(--graph-reattach-target-shadow);
 }
 
 .graph-file-item:active {
-	background: #38393a;
+	background: var(--graph-file-row-active-background);
 }
 
 .graph-file-item.is-backlink:active {
@@ -921,14 +1144,18 @@
 
 @keyframes graph-file-item-click {
 	0% {
-		background: #454647;
-		box-shadow: inset 0 0 0 1px rgba(214, 214, 214, 0.45);
+		background: var(--graph-file-row-click-background);
+		box-shadow: inset 0 0 0 1px var(--graph-file-row-click-outline-color);
 		transform: scale(0.98);
 	}
 
 	55% {
-		background: #38393a;
-		box-shadow: inset 0 0 0 1px rgba(214, 214, 214, 0.2);
+		background: var(--graph-file-row-active-background);
+		box-shadow: inset 0 0 0 1px color-mix(
+			in srgb,
+			var(--graph-file-row-click-outline-color) 44%,
+			transparent
+		);
 		transform: scale(1);
 	}
 
@@ -1193,7 +1420,7 @@
 	height: 100%;
 	box-sizing: border-box;
 	padding: 0;
-	color: #9a9a9a;
+	color: var(--graph-secondary-control-foreground);
 	border: 0;
 	border-radius: 5px;
 	font-family: inherit;
@@ -1203,7 +1430,7 @@
 }
 
 .graph-file-control:focus-visible {
-	outline: 1px solid #a3a3a3;
+	outline: 1px solid var(--graph-secondary-control-focus-color);
 	outline-offset: 1px;
 }
 
@@ -1213,12 +1440,12 @@
 	flex: 1;
 	align-items: center;
 	justify-content: center;
-	background: #282828;
+	background: var(--graph-secondary-control-background);
 }
 
 .graph-file-more:hover {
-	color: #b9b9b9;
-	background: #323232;
+	color: var(--graph-secondary-control-hover-foreground);
+	background: var(--graph-secondary-control-hover-background);
 }
 
 .graph-file-collapse {
@@ -1227,14 +1454,18 @@
 	flex: none;
 	align-items: center;
 	justify-content: center;
-	color: #a3a3a3;
-	background: rgba(40, 40, 40, 0.55);
+	color: var(--graph-secondary-control-muted-foreground);
+	background: color-mix(
+		in srgb,
+		var(--graph-secondary-control-background) 55%,
+		transparent
+	);
 	opacity: 0.6;
 }
 
 .graph-file-collapse:hover {
-	color: #d0d0d0;
-	background: #323232;
+	color: var(--graph-secondary-control-strong-foreground);
+	background: var(--graph-secondary-control-hover-background);
 	opacity: 1;
 }
 
@@ -1247,7 +1478,7 @@
 
 .graph-edge {
 	fill: none;
-	stroke: #a3a3a3;
+	stroke: var(--graph-edge-color);
 	stroke-width: 0.5;
 	stroke-linecap: round;
 	vector-effect: non-scaling-stroke;

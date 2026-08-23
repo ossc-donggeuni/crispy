@@ -118,7 +118,7 @@ suite('Graph View', () => {
 		);
 	});
 
-	test('Shimmer는 전달된 색에서 파생한 어두운 ambient surface를 사용한다', () => {
+	test('Shimmer는 전달된 색과 현재 Node surface에서 ambient color를 파생한다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
 			'../../../src/webview/graph/graphView.css',
@@ -134,7 +134,7 @@ suite('Graph View', () => {
 		assert.match(shimmerRule[0], /background:\s*color-mix\(/);
 		assert.match(
 			shimmerRule[0],
-			/var\(--graph-node-effect-color\) 42%, black/,
+			/var\(--graph-node-effect-ambient-background\)/,
 		);
 		assert.ok(regionShimmerRule);
 		assert.match(regionShimmerRule[0], /transparent/);
