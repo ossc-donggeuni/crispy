@@ -34,11 +34,84 @@
 	--graph-node-border-color: var(--graph-node-outline-color);
 }
 
-.task-work-actions {
+.task-end-node {
+	--graph-node-outline-color: color-mix(
+		in srgb,
+		var(--vscode-descriptionForeground, #9d9d9d) 60%,
+		transparent
+	);
+	--graph-node-border-color: var(--graph-node-outline-color);
+
+	align-items: center;
+	padding: 10px 16px;
+}
+
+/* Incomplete feedback는 Card surface/body만 낮추고 Port와 Action은 선명하게 유지한다. */
+.task-start-node[data-task-flow-state='incomplete'],
+.task-end-node[data-task-flow-state='incomplete'] {
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-node-default-background) 62%,
+		transparent
+	);
+	--graph-node-shadow: none;
+}
+
+.task-start-node[data-task-flow-state='incomplete'] > .task-node-kind,
+.task-start-node[data-task-flow-state='incomplete'] > .task-node-title,
+.task-start-node[data-task-flow-state='incomplete'] > .task-node-description,
+.task-end-node[data-task-flow-state='incomplete'] > .task-node-kind {
+	opacity: 0.62;
+}
+
+.task-node-kind {
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 14px;
+	letter-spacing: 0.08em;
+	text-overflow: ellipsis;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.task-node-title {
+	display: -webkit-box;
+	overflow: hidden;
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 19px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+}
+
+.task-node-description,
+.task-node-prompt {
+	display: -webkit-box;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-size: 12px;
+	line-height: 16px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+}
+
+.task-node-prompt {
+	padding-top: 3px;
+	border-top: 1px solid color-mix(
+		in srgb,
+		var(--vscode-descriptionForeground, #9d9d9d) 24%,
+		transparent
+	);
+	-webkit-line-clamp: 1;
+}
+
+.task-node-actions {
 	position: absolute;
 	top: 8px;
 	right: 8px;
-	z-index: 2;
+	z-index: 3;
 	display: flex;
 	opacity: 0;
 	visibility: hidden;
@@ -46,11 +119,144 @@
 	transition: opacity 100ms ease;
 }
 
+.task-start-node:hover > .task-start-actions,
+.task-start-node:focus-within > .task-start-actions,
 .task-work-node:hover > .task-work-actions,
 .task-work-node:focus-within > .task-work-actions {
 	opacity: 1;
 	visibility: visible;
 	pointer-events: auto;
+}
+
+.task-node-action-symbol {
+	display: block;
+	font-size: 17px;
+	font-weight: 600;
+	line-height: 1;
+	pointer-events: none;
+}
+
+.task-node-port {
+	--task-port-color: var(--graph-node-border-color);
+
+	position: absolute;
+	top: 50%;
+	z-index: 4;
+	box-sizing: border-box;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	appearance: none;
+	opacity: 0.78;
+	cursor: pointer;
+	touch-action: none;
+	transition: opacity 100ms ease;
+}
+
+.task-node-port::after {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	box-sizing: border-box;
+	width: 12px;
+	height: 12px;
+	border: 2px solid var(--task-port-color);
+	border-radius: 50%;
+	background: var(--vscode-editor-background, #1e1e1e);
+	box-shadow: 0 0 0 2px color-mix(
+		in srgb,
+		var(--vscode-editor-background, #1e1e1e) 82%,
+		transparent
+	);
+	transform: translate(-50%, -50%);
+	content: '';
+	transition:
+		border-color 100ms ease,
+		background-color 100ms ease,
+		box-shadow 100ms ease;
+}
+
+.task-input-port {
+	left: 0;
+	transform: translate(-50%, -50%);
+}
+
+.task-output-port {
+	right: 0;
+	transform: translate(50%, -50%);
+}
+
+.task-node:hover > .task-node-port,
+.task-node:focus-within > .task-node-port,
+.graph-node-layer.is-task-connecting .task-node-port {
+	opacity: 1;
+}
+
+.task-node-port.is-connection-source {
+	--task-port-color: var(--graph-viewport-accent-color);
+}
+
+.task-node-port.is-connection-source::after {
+	background: var(--graph-viewport-accent-color);
+	box-shadow: 0 0 0 4px color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 24%,
+		transparent
+	);
+}
+
+.task-node-port.is-valid-target {
+	--task-port-color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.task-node-port.is-invalid-target {
+	--task-port-color: var(--vscode-testing-iconFailed, #f14c4c);
+	opacity: 0.62;
+}
+
+.task-node-port:focus-visible::after,
+.task-node-port.is-connection-target::after {
+	box-shadow: 0 0 0 5px color-mix(
+		in srgb,
+		var(--task-port-color) 25%,
+		transparent
+	);
+}
+
+.task-node-port.is-valid-target.is-connection-target::after {
+	background: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.task-node-port.is-invalid-target.is-connection-target::after {
+	background: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.task-edge {
+	stroke: color-mix(
+		in srgb,
+		var(--vscode-focusBorder, #007fd4) 72%,
+		var(--graph-edge-color)
+	);
+	stroke-width: 1.25;
+	pointer-events: stroke;
+	cursor: pointer;
+}
+
+.task-connection-preview {
+	stroke-dasharray: 7 5;
+	stroke-width: 1.5;
+	opacity: 0.82;
+	pointer-events: none;
+}
+
+.task-connection-preview.is-valid {
+	stroke: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.task-connection-preview.is-invalid {
+	stroke: var(--vscode-testing-iconFailed, #f14c4c);
 }
 
 .task-edge-actions {
@@ -100,70 +306,4 @@
 	font-weight: 600;
 	line-height: 1;
 	pointer-events: none;
-}
-
-.task-end-node {
-	--graph-node-outline-color: color-mix(
-		in srgb,
-		var(--vscode-descriptionForeground, #9d9d9d) 60%,
-		transparent
-	);
-	--graph-node-border-color: var(--graph-node-outline-color);
-
-	align-items: center;
-	padding: 10px 16px;
-}
-
-.task-node-kind {
-	overflow: hidden;
-	color: var(--vscode-descriptionForeground, #9d9d9d);
-	font-size: 10px;
-	font-weight: 700;
-	line-height: 14px;
-	letter-spacing: 0.08em;
-	text-overflow: ellipsis;
-	text-transform: uppercase;
-	white-space: nowrap;
-}
-
-.task-node-title {
-	display: -webkit-box;
-	overflow: hidden;
-	font-size: 15px;
-	font-weight: 600;
-	line-height: 19px;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 1;
-}
-
-.task-node-description,
-.task-node-prompt {
-	display: -webkit-box;
-	overflow: hidden;
-	color: var(--vscode-descriptionForeground, #9d9d9d);
-	font-size: 12px;
-	line-height: 16px;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
-}
-
-.task-node-prompt {
-	padding-top: 3px;
-	border-top: 1px solid color-mix(
-		in srgb,
-		var(--vscode-descriptionForeground, #9d9d9d) 24%,
-		transparent
-	);
-	-webkit-line-clamp: 1;
-}
-
-.task-edge {
-	stroke: color-mix(
-		in srgb,
-		var(--vscode-focusBorder, #007fd4) 72%,
-		var(--graph-edge-color)
-	);
-	stroke-width: 1.25;
-	pointer-events: stroke;
-	cursor: pointer;
 }

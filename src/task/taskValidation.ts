@@ -5,15 +5,21 @@ export type TaskValidationIssueCode =
 	| 'start_node_count'
 	| 'end_node_count'
 	| 'duplicate_node_id'
-	| 'node_offset_node_missing'
-	| 'start_node_offset'
-	| 'invalid_node_offset'
+	| 'node_position_missing'
+	| 'node_position_extra'
+	| 'start_node_position'
+	| 'invalid_node_position'
 	| 'duplicate_edge_id'
 	| 'duplicate_edge'
 	| 'edge_source_missing'
 	| 'edge_target_missing'
+	| 'start_node_incoming'
+	| 'end_node_outgoing'
 	| 'self_edge'
 	| 'cycle';
+
+/** Task DAG가 실행 가능한 흐름인지 구분한다. */
+export type TaskFlowStatus = 'ready' | 'incomplete';
 
 /** 호출자가 오류 원인과 관련 Node/Edge를 식별할 수 있는 validation 결과다. */
 export interface TaskValidationIssue {
@@ -52,6 +58,7 @@ export function validateTaskBlueprint(
 	}
 
 	const nodeIds = new Set<string>();
+	const nodesById = new Map(blueprint.nodes.map((node) => [node.id, node]));
 	for (const node of blueprint.nodes) {
 		if (nodeIds.has(node.id)) {
 			issues.push({
@@ -63,33 +70,44 @@ export function validateTaskBlueprint(
 		nodeIds.add(node.id);
 	}
 
-	for (const [nodeId, offset] of Object.entries(blueprint.nodeOffsets ?? {})) {
-		const node = blueprint.nodes.find((candidate) => candidate.id === nodeId);
+	const nodePositions = blueprint.nodePositions ?? {};
+	for (const node of blueprint.nodes) {
+		if (node.kind !== 'start' && !Object.hasOwn(nodePositions, node.id)) {
+			issues.push({
+				code: 'node_position_missing',
+				message: `Task node position is required: ${node.id}.`,
+				nodeId: node.id,
+			});
+		}
+	}
+
+	for (const [nodeId, position] of Object.entries(nodePositions)) {
+		const node = nodesById.get(nodeId);
 
 		if (!node) {
 			issues.push({
-				code: 'node_offset_node_missing',
-				message: `Task node offset must reference an existing node: ${nodeId}.`,
+				code: 'node_position_extra',
+				message: `Task node position must reference an existing node: ${nodeId}.`,
 				nodeId,
 			});
 			continue;
 		}
 		if (node.kind === 'start') {
 			issues.push({
-				code: 'start_node_offset',
-				message: `Task start node cannot have a manual offset: ${nodeId}.`,
+				code: 'start_node_position',
+				message: `Task start node cannot have an explicit position: ${nodeId}.`,
 				nodeId,
 			});
 		}
 		if (
-			typeof offset?.x !== 'number'
-			|| !Number.isFinite(offset.x)
-			|| typeof offset?.y !== 'number'
-			|| !Number.isFinite(offset.y)
+			typeof position?.x !== 'number'
+			|| !Number.isFinite(position.x)
+			|| typeof position?.y !== 'number'
+			|| !Number.isFinite(position.y)
 		) {
 			issues.push({
-				code: 'invalid_node_offset',
-				message: `Task node offset must contain finite coordinates: ${nodeId}.`,
+				code: 'invalid_node_position',
+				message: `Task node position must contain finite coordinates: ${nodeId}.`,
 				nodeId,
 			});
 		}
@@ -135,6 +153,24 @@ export function validateTaskBlueprint(
 			});
 		}
 
+		if (nodesById.get(edge.target)?.kind === 'start') {
+			issues.push({
+				code: 'start_node_incoming',
+				message: `Task start node cannot have an incoming edge: ${edge.id}.`,
+				edgeId: edge.id,
+				nodeId: edge.target,
+			});
+		}
+
+		if (nodesById.get(edge.source)?.kind === 'end') {
+			issues.push({
+				code: 'end_node_outgoing',
+				message: `Task end node cannot have an outgoing edge: ${edge.id}.`,
+				edgeId: edge.id,
+				nodeId: edge.source,
+			});
+		}
+
 		if (edge.source === edge.target) {
 			issues.push({
 				code: 'self_edge',
@@ -169,6 +205,75 @@ export function assertValidTaskBlueprint(blueprint: TaskBlueprint): void {
 			`Invalid TaskBlueprint: ${issues.map((issue) => issue.message).join(' ')}`,
 		);
 	}
+}
+
+/**
+ * Structurally valid Task가 Start에서 End까지 모든 Work를 연결한 흐름인지 판별한다.
+ * 편집 중의 disconnected Task는 정상 Blueprint이지만 incomplete이다.
+ */
+export function getTaskFlowStatus(blueprint: TaskBlueprint): TaskFlowStatus {
+	if (validateTaskBlueprint(blueprint).length > 0) {
+		return 'incomplete';
+	}
+
+	const start = blueprint.nodes.find((node) => node.kind === 'start');
+	const end = blueprint.nodes.find((node) => node.kind === 'end');
+	if (!start || !end) {
+		return 'incomplete';
+	}
+
+	const outgoingByNodeId = new Map(blueprint.nodes.map((node) => (
+		[node.id, [] as string[]]
+	)));
+	const incomingByNodeId = new Map(blueprint.nodes.map((node) => (
+		[node.id, [] as string[]]
+	)));
+
+	for (const edge of blueprint.edges) {
+		outgoingByNodeId.get(edge.source)?.push(edge.target);
+		incomingByNodeId.get(edge.target)?.push(edge.source);
+	}
+
+	const reachableFromStart = collectReachableNodes(start.id, outgoingByNodeId);
+	const reachingEnd = collectReachableNodes(end.id, incomingByNodeId);
+	if (!reachableFromStart.has(end.id)) {
+		return 'incomplete';
+	}
+
+	for (const node of blueprint.nodes) {
+		if (
+			(node.kind === 'work' && (
+				!reachableFromStart.has(node.id) || !reachingEnd.has(node.id)
+			))
+			|| (node.kind !== 'start' && incomingByNodeId.get(node.id)?.length === 0)
+			|| (node.kind !== 'end' && outgoingByNodeId.get(node.id)?.length === 0)
+		) {
+			return 'incomplete';
+		}
+	}
+
+	return 'ready';
+}
+
+/** 인접 Node map을 따라 시작 Node에서 도달 가능한 ID를 모은다. */
+function collectReachableNodes(
+	startNodeId: string,
+	adjacentByNodeId: ReadonlyMap<string, readonly string[]>,
+): ReadonlySet<string> {
+	const reachable = new Set<string>();
+	const pending = [startNodeId];
+
+	while (pending.length > 0) {
+		const nodeId = pending.pop();
+		if (!nodeId || reachable.has(nodeId)) {
+			continue;
+		}
+
+		reachable.add(nodeId);
+		pending.push(...(adjacentByNodeId.get(nodeId) ?? []));
+	}
+
+	return reachable;
 }
 
 /** 존재하는 Node 사이의 non-self Edge만으로 directed cycle을 검사한다. */

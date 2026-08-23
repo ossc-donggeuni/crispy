@@ -4,6 +4,7 @@ import { resolve } from 'path';
 import {
 	createDefaultTaskBlueprint,
 	createTaskState,
+	getTaskFlowStatus,
 	type TaskBlueprint,
 } from '../../task';
 import {
@@ -65,327 +66,14 @@ import {
 	TASK_EDGE_ACTION_ATTRIBUTE,
 	TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
 	TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE,
+	TASK_FLOW_STATE_ATTRIBUTE,
 	TASK_NODE_ACTION_ATTRIBUTE,
+	TASK_PORT_DIRECTION_ATTRIBUTE,
 } from '../../webview/task/taskRenderer';
+import { createTaskGraphLayout } from '../../webview/task/taskLayout';
 
 suite('Graph View', () => {
-	test('Workspace Graph와 Task Start/Work/End 및 Edge를 같은 World Layer에 렌더링한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 360, y: 80 });
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const startNode = task.nodes.find((node) => node.kind === 'start');
-		const workNode = task.nodes.find((node) => node.kind === 'work');
-		const endNode = task.nodes.find((node) => node.kind === 'end');
-
-		assert.ok(startNode);
-		assert.ok(workNode);
-		assert.ok(endNode);
-		const startElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			startNode.id,
-		);
-		const workElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			workNode.id,
-		);
-		const endElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			endNode.id,
-		);
-		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
-		const edgeLayer = getDescendantByClass(root, 'graph-edge-layer');
-		const workspaceRoot = getDescendantByAttribute(
-			root,
-			'data-graph-node-id',
-			GRAPH_MOCK_PROJECT.id,
-		);
-
-		assert.strictEqual(startElement.getAttribute('data-task-node-kind'), 'start');
-		assert.strictEqual(workElement.getAttribute('data-task-node-kind'), 'work');
-		assert.strictEqual(endElement.getAttribute('data-task-node-kind'), 'end');
-		assert.ok(getText(startElement).includes(task.title));
-		assert.ok(getText(startElement).includes(task.description));
-		assert.ok(getText(workElement).includes(workNode.title));
-		assert.ok(getText(workElement).includes(workNode.description));
-		assert.ok(getText(workElement).includes(workNode.prompt));
-		assert.ok(getText(endElement).includes('End'));
-		assert.ok(nodeLayer.children.includes(workspaceRoot));
-		assert.ok(nodeLayer.children.includes(startElement));
-
-		for (const edge of task.edges) {
-			const edgeElement = getDescendantByAttribute(
-				root,
-				'data-task-edge-id',
-				edge.id,
-			);
-
-			assert.ok(edgeLayer.children.includes(edgeElement));
-			assert.strictEqual(edgeElement.getAttribute('data-task-edge-source'), edge.source);
-			assert.strictEqual(edgeElement.getAttribute('data-task-edge-target'), edge.target);
-			assert.match(edgeElement.getAttribute('d') ?? '', /^M .+ C .+/);
-		}
-
-		graphView.dispose();
-	});
-
-	test('Task Blueprint 변경은 Node DOM을 재사용하며 내용, origin 위치와 Edge를 갱신한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 360, y: 80 });
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const startNode = task.nodes.find((node) => node.kind === 'start');
-		const workNode = task.nodes.find((node) => node.kind === 'work');
-		const firstEdge = task.edges[0];
-
-		assert.ok(startNode);
-		assert.ok(workNode);
-		assert.ok(firstEdge);
-		const startElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			startNode.id,
-		);
-		const workElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			workNode.id,
-		);
-		const edgeElement = getDescendantByAttribute(
-			root,
-			'data-task-edge-id',
-			firstEdge.id,
-		);
-		const workspaceRoot = getDescendantByAttribute(
-			root,
-			'data-graph-node-id',
-			GRAPH_MOCK_PROJECT.id,
-		);
-		const initialStartTransform = startElement.style.transform;
-		const initialEdgePath = edgeElement.getAttribute('d');
-		const updatedTask: TaskBlueprint = {
-			...task,
-			title: 'Updated Task title',
-			description: 'Updated Task description',
-			origin: { x: 660, y: 280 },
-			nodes: task.nodes.map((node) => node.kind === 'work'
-				? {
-					...node,
-					title: 'Updated Work title',
-					description: 'Updated Work description',
-					prompt: 'Updated prompt',
-				}
-				: node),
-		};
-
-		graphView.updateTasks([updatedTask]);
-
-		const updatedStartElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			startNode.id,
-		);
-		const updatedWorkElement = getDescendantByAttribute(
-			root,
-			'data-task-node-id',
-			workNode.id,
-		);
-		const updatedEdgeElement = getDescendantByAttribute(
-			root,
-			'data-task-edge-id',
-			firstEdge.id,
-		);
-
-		assert.strictEqual(updatedStartElement, startElement);
-		assert.strictEqual(updatedWorkElement, workElement);
-		assert.strictEqual(updatedEdgeElement, edgeElement);
-		assert.notStrictEqual(updatedStartElement.style.transform, initialStartTransform);
-		assert.notStrictEqual(updatedEdgeElement.getAttribute('d'), initialEdgePath);
-		assert.ok(getText(updatedStartElement).includes('Updated Task title'));
-		assert.ok(getText(updatedStartElement).includes('Updated Task description'));
-		assert.ok(getText(updatedWorkElement).includes('Updated Work title'));
-		assert.ok(getText(updatedWorkElement).includes('Updated prompt'));
-		assert.strictEqual(
-			getDescendantByAttribute(
-				root,
-				'data-graph-node-id',
-				GRAPH_MOCK_PROJECT.id,
-			),
-			workspaceRoot,
-		);
-
-		graphView.updateTasks([]);
-		assert.strictEqual(
-			findDescendantByAttribute(root, 'data-task-node-id', startNode.id),
-			undefined,
-		);
-		assert.strictEqual(
-			findDescendantByAttribute(root, 'data-task-edge-id', firstEdge.id),
-			undefined,
-		);
-		assert.ok(findDescendantByAttribute(
-			root,
-			'data-graph-node-id',
-			GRAPH_MOCK_PROJECT.id,
-		));
-
-		graphView.dispose();
-	});
-
-	test('동일한 내부 Node와 Edge ID를 가진 Task DOM과 geometry를 독립적으로 유지한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const taskA = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000001',
-			'Task A',
-			{ x: 100, y: 50 },
-		);
-		const taskB = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000002',
-			'Task B',
-			{ x: -300, y: 400 },
-		);
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[taskA, taskB],
-		);
-		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
-		const edgeLayer = getDescendantByClass(root, 'graph-edge-layer');
-		const taskANodes = taskA.nodes.map((node) => getTaskElement(
-			root,
-			'data-task-node-id',
-			node.id,
-			taskA.id,
-		));
-		const taskBNodes = taskB.nodes.map((node) => getTaskElement(
-			root,
-			'data-task-node-id',
-			node.id,
-			taskB.id,
-		));
-		const taskAEdges = taskA.edges.map((edge) => getTaskElement(
-			root,
-			'data-task-edge-id',
-			edge.id,
-			taskA.id,
-		));
-		const taskBEdges = taskB.edges.map((edge) => getTaskElement(
-			root,
-			'data-task-edge-id',
-			edge.id,
-			taskB.id,
-		));
-
-		assert.strictEqual(getDescendantsByClass(root, 'task-node').length, 6);
-		assert.strictEqual(new Set([...taskAEdges, ...taskBEdges]).size, 4);
-		for (let index = 0; index < taskANodes.length; index += 1) {
-			assert.notStrictEqual(taskANodes[index], taskBNodes[index]);
-			assert.strictEqual(taskANodes[index]?.getAttribute('data-task-id'), taskA.id);
-			assert.strictEqual(taskBNodes[index]?.getAttribute('data-task-id'), taskB.id);
-		}
-		for (let index = 0; index < taskAEdges.length; index += 1) {
-			assert.notStrictEqual(taskAEdges[index], taskBEdges[index]);
-			assert.strictEqual(taskAEdges[index]?.getAttribute('data-task-id'), taskA.id);
-			assert.strictEqual(taskBEdges[index]?.getAttribute('data-task-id'), taskB.id);
-		}
-		assert.deepStrictEqual(
-			taskANodes.map((node) => node.style.transform),
-			[
-				'translate(100px, 50px)',
-				'translate(444px, 36px)',
-				'translate(788px, 78px)',
-			],
-		);
-		assert.deepStrictEqual(
-			taskBNodes.map((node) => node.style.transform),
-			[
-				'translate(-300px, 400px)',
-				'translate(44px, 386px)',
-				'translate(388px, 428px)',
-			],
-		);
-		assert.deepStrictEqual(
-			taskAEdges.map((edge) => edge.getAttribute('d')),
-			[
-				'M 380 102 C 412 102 412 102 444 102',
-				'M 724 102 C 756 102 756 102 788 102',
-			],
-		);
-		assert.deepStrictEqual(
-			taskBEdges.map((edge) => edge.getAttribute('d')),
-			[
-				'M -20 452 C 12 452 12 452 44 452',
-				'M 324 452 C 356 452 356 452 388 452',
-			],
-		);
-
-		const taskBTransforms = taskBNodes.map((node) => node.style.transform);
-		const taskBPaths = taskBEdges.map((edge) => edge.getAttribute('d'));
-		const taskBTexts = taskBNodes.map(getText);
-		const updatedTaskA: TaskBlueprint = {
-			...taskA,
-			title: 'Updated Task A',
-			origin: { x: 500, y: -100 },
-			nodes: taskA.nodes.map((node) => node.kind === 'work'
-				? { ...node, title: 'Updated Work A' }
-				: node),
-		};
-
-		graphView.updateTasks([updatedTaskA, taskB]);
-		assert.ok(getText(taskANodes[0] as FakeElement).includes('Updated Task A'));
-		assert.ok(getText(taskANodes[1] as FakeElement).includes('Updated Work A'));
-		assert.deepStrictEqual(
-			taskBNodes.map((node) => node.style.transform),
-			taskBTransforms,
-		);
-		assert.deepStrictEqual(
-			taskBEdges.map((edge) => edge.getAttribute('d')),
-			taskBPaths,
-		);
-		assert.deepStrictEqual(taskBNodes.map(getText), taskBTexts);
-		for (const node of taskB.nodes) {
-			assert.strictEqual(
-				getTaskElement(root, 'data-task-node-id', node.id, taskB.id),
-				taskBNodes[taskB.nodes.indexOf(node)],
-			);
-		}
-		for (const edge of taskB.edges) {
-			assert.strictEqual(
-				getTaskElement(root, 'data-task-edge-id', edge.id, taskB.id),
-				taskBEdges[taskB.edges.indexOf(edge)],
-			);
-		}
-
-		graphView.updateTasks([taskB]);
-		assert.strictEqual(getTaskElements(root, 'data-task-id', taskA.id).length, 0);
-		assert.strictEqual(getTaskElements(root, 'data-task-id', taskB.id).length, 5);
-		assert.ok(taskANodes.every((node) => !nodeLayer.children.includes(node)));
-		assert.ok(taskAEdges.every((edge) => !edgeLayer.children.includes(edge)));
-		assert.ok(taskBNodes.every((node) => nodeLayer.children.includes(node)));
-		assert.ok(taskBEdges.every((edge) => edgeLayer.children.includes(edge)));
-
-		graphView.dispose();
-	});
-
-	test('Navigator Task 추가는 Visible Graph 중심에 기본 Task를 생성하고 겹침을 피한다', () => {
+	test('Navigator Task 추가는 viewport 중심에 incomplete Start/End를 생성한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
@@ -401,50 +89,297 @@ suite('Graph View', () => {
 
 		assert.strictEqual(addTaskButton.title, 'Task 추가');
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
-		const firstSnapshot = graphView.taskState.getSnapshot();
-		const firstTask = firstSnapshot.tasks[0];
+		const firstTask = graphView.taskState.getSnapshot().tasks[0];
 
 		assert.ok(firstTask);
-		assert.strictEqual(firstSnapshot.tasks.length, 1);
-		assert.deepStrictEqual(
-			firstTask.nodes.map((node) => node.kind),
-			['start', 'work', 'end'],
+		assert.deepStrictEqual(firstTask.nodes.map((node) => node.kind), ['start', 'end']);
+		assert.strictEqual(firstTask.edges.length, 0);
+		assert.strictEqual(getTaskFlowStatus(firstTask), 'incomplete');
+		const firstStart = firstTask.nodes.find((node) => node.kind === 'start');
+		const firstEnd = firstTask.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(firstStart && firstEnd);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			firstStart.id,
+			firstTask.id,
 		);
-		assert.deepStrictEqual(firstTask.edges.map((edge) => ({
-			source: edge.source,
-			target: edge.target,
-		})), [
-			{ source: firstTask.nodes[0]?.id, target: firstTask.nodes[1]?.id },
-			{ source: firstTask.nodes[1]?.id, target: firstTask.nodes[2]?.id },
-		]);
-		assert.deepStrictEqual(firstTask.origin, { x: 86, y: 348 });
-		assert.strictEqual(getTaskElements(root, 'data-task-id', firstTask.id).length, 5);
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			firstEnd.id,
+			firstTask.id,
+		);
+		const workspaceRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+
+		assert.strictEqual(startElement.getAttribute(TASK_FLOW_STATE_ATTRIBUTE), 'incomplete');
+		assert.strictEqual(endElement.getAttribute(TASK_FLOW_STATE_ATTRIBUTE), 'incomplete');
+		assert.ok(nodeLayer.children.includes(workspaceRoot));
+		assert.ok(nodeLayer.children.includes(startElement));
+		assert.deepStrictEqual(
+			readTranslate(endElement.style.transform),
+			{
+				x: firstTask.origin.x + firstTask.nodePositions[firstEnd.id].x,
+				y: firstTask.origin.y + firstTask.nodePositions[firstEnd.id].y,
+			},
+		);
 
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
 		const tasks = graphView.taskState.getSnapshot().tasks;
 
 		assert.strictEqual(tasks.length, 2);
 		assert.notStrictEqual(tasks[0]?.id, tasks[1]?.id);
-		assert.deepStrictEqual(tasks[1]?.origin, { x: 118, y: 380 });
-		assert.strictEqual(getDescendantsByClass(root, 'task-node').length, 6);
-		assert.strictEqual(getTaskElements(root, 'data-task-id', tasks[0]?.id ?? '').length, 5);
-		assert.strictEqual(getTaskElements(root, 'data-task-id', tasks[1]?.id ?? '').length, 5);
+		assert.notDeepStrictEqual(tasks[0]?.origin, tasks[1]?.origin);
+		assert.strictEqual(getDescendantsByClass(root, 'task-start-node').length, 2);
+		assert.strictEqual(getDescendantsByClass(root, 'task-end-node').length, 2);
 
 		graphView.dispose();
 	});
 
-	test('Task 선택은 동일 내부 Node ID도 taskId와 조합해 하나씩 독립 적용한다', () => {
+	test('Start Action은 겹치지 않는 Work를 추가하고 Node kind별 Port를 노출한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
-		const taskA = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000001',
-			'Task A',
-			{ x: 100, y: 50 },
+		let sequence = 0;
+		const task = createDefaultTaskBlueprint({
+			title: 'Editable Task',
+			origin: { x: 100, y: 80 },
+		}, () => 'ports-' + ++sequence);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
 		);
-		const taskB = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000002',
-			'Task B',
-			{ x: -300, y: 400 },
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && end);
+		for (let index = 0; index < 3; index += 1) {
+			const addWork = getDescendantByAttribute(
+				getTaskElement(
+					root,
+					'data-task-node-id',
+					start.id,
+					task.id,
+				),
+				TASK_NODE_ACTION_ATTRIBUTE,
+				'add-work',
+			);
+
+			addWork.dispatch('click', createClickEvent(addWork));
+		}
+		const updated = graphView.taskState.getTask(task.id);
+
+		assert.ok(updated);
+		const works = updated.nodes.filter((node) => node.kind === 'work');
+
+		assert.strictEqual(works.length, 3);
+		assert.strictEqual(updated.edges.length, 0);
+		assert.strictEqual(getTaskFlowStatus(updated), 'incomplete');
+		const workPositions = works.map((work) => updated.nodePositions[work.id]);
+
+		assert.ok(workPositions.every((position) => position?.x === 320));
+		for (let index = 1; index < workPositions.length; index += 1) {
+			assert.ok(
+				(workPositions[index]?.y ?? 0) - (workPositions[index - 1]?.y ?? 0) >= 132,
+			);
+		}
+
+		assert.ok(getTaskPort(root, task.id, start.id, 'output'));
+		assert.strictEqual(
+			findTaskPort(root, task.id, start.id, 'input'),
+			undefined,
+		);
+		assert.ok(getTaskPort(root, task.id, end.id, 'input'));
+		assert.strictEqual(
+			findTaskPort(root, task.id, end.id, 'output'),
+			undefined,
+		);
+		for (const work of works) {
+			const input = getTaskPort(root, task.id, work.id, 'input');
+			const output = getTaskPort(root, task.id, work.id, 'output');
+
+			assert.strictEqual(
+				input.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+				true,
+			);
+			assert.strictEqual(
+				output.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
+				true,
+			);
+			assert.ok(getTaskElement(
+				root,
+				'data-task-node-id',
+				work.id,
+				task.id,
+			));
+		}
+		const interactiveWork = works[0];
+
+		assert.ok(interactiveWork);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			interactiveWork.id,
+			task.id,
+		);
+		const output = getTaskPort(root, task.id, interactiveWork.id, 'output');
+		const initialPosition = updated.nodePositions[interactiveWork.id];
+		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		output.dispatch('pointerdown', createPointerEvent(output, 10, 10));
+		output.dispatch('pointermove', createPointerEvent(output, 70, 50));
+		output.dispatch('pointerup', createPointerEvent(output, 70, 50));
+		output.dispatch('click', createClickEvent(output));
+		output.dispatch('dblclick', createClickEvent(output));
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(task.id)?.nodePositions[interactiveWork.id],
+			initialPosition,
+		);
+		assert.strictEqual(workElement.hasPointerCapture(1), false);
+		assert.strictEqual(workElement.hasClass('is-dragging'), false);
+		assert.strictEqual(workElement.hasClass('is-selected'), false);
+		assert.strictEqual(focusPoints.length, 0);
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
+
+		graphView.dispose();
+	});
+
+	test('Port Click으로 직렬과 병렬 DAG를 연결하며 explicit Node 위치를 유지한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		let sequence = 0;
+		const task = createDefaultTaskBlueprint({
+			title: 'Port DAG',
+			origin: { x: 40, y: 60 },
+		}, () => 'connect-' + ++sequence);
+		const state = createTaskState([task], () => 'connect-edit-' + ++sequence);
+
+		state.addWork(task.id, { title: 'A' });
+		state.addWork(task.id, { title: 'B' });
+		state.addWork(task.id, { title: 'C' });
+		state.addWork(task.id, { title: 'D' });
+		const prepared = state.getTask(task.id);
+
+		assert.ok(prepared);
+		const start = prepared.nodes.find((node) => node.kind === 'start');
+		const [workA, workB, workC, workD] = prepared.nodes.filter(
+			(node) => node.kind === 'work',
+		);
+		const end = prepared.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && workA && workB && workC && workD && end);
+		const initialPositions = prepared.nodePositions;
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[prepared],
+		);
+
+		connectTaskPorts(root, task.id, start.id, workA.id);
+		connectTaskPorts(root, task.id, start.id, workB.id);
+		const previewSource = getTaskPort(root, task.id, start.id, 'output');
+
+		previewSource.dispatch('click', createClickEvent(previewSource));
+		const previewTarget = getTaskPort(root, task.id, workD.id, 'input');
+
+		previewTarget.dispatch(
+			'pointermove',
+			createPointerEvent(previewTarget, 640, 240),
+		);
+		assert.strictEqual(previewTarget.hasClass('is-valid-target'), true);
+		const previewPath = getDescendantByClass(
+			root,
+			'task-connection-preview',
+		).getAttribute('d');
+
+		previewTarget.dispatch('click', createClickEvent(previewTarget));
+		const previewCommittedTask = graphView.taskState.getTask(task.id);
+		const previewCommittedEdge = previewCommittedTask?.edges.find((edge) => (
+			edge.source === start.id && edge.target === workD.id
+		));
+
+		assert.ok(previewCommittedEdge);
+		assert.strictEqual(
+			getTaskElement(
+				root,
+				'data-task-edge-id',
+				previewCommittedEdge.id,
+				task.id,
+			).getAttribute('d'),
+			previewPath,
+		);
+		connectTaskPorts(root, task.id, workA.id, workC.id);
+		connectTaskPorts(root, task.id, workB.id, workC.id);
+		connectTaskPorts(root, task.id, workD.id, workC.id);
+		connectTaskPorts(root, task.id, workC.id, end.id);
+		const connected = graphView.taskState.getTask(task.id);
+
+		assert.ok(connected);
+		assert.deepStrictEqual(connected.nodePositions, initialPositions);
+		assert.strictEqual(connected.edges.length, 7);
+		assert.deepStrictEqual(
+			connected.edges.map((edge) => [edge.source, edge.target]),
+			[
+				[start.id, workA.id],
+				[start.id, workB.id],
+				[start.id, workD.id],
+				[workA.id, workC.id],
+				[workB.id, workC.id],
+				[workD.id, workC.id],
+				[workC.id, end.id],
+			],
+		);
+		assert.strictEqual(getTaskFlowStatus(connected), 'ready');
+		for (const node of connected.nodes) {
+			assert.strictEqual(
+				getTaskElement(
+					root,
+					'data-task-node-id',
+					node.id,
+					task.id,
+				).getAttribute(TASK_FLOW_STATE_ATTRIBUTE),
+				'ready',
+			);
+		}
+		assert.strictEqual(
+			getTaskElements(root, 'data-task-edge-id', connected.edges[0]?.id ?? '').length,
+			1,
+		);
+		const duplicateSource = getTaskPort(root, task.id, start.id, 'output');
+		const duplicateTarget = getTaskPort(root, task.id, workA.id, 'input');
+
+		duplicateSource.dispatch('click', createClickEvent(duplicateSource));
+		assert.strictEqual(duplicateTarget.hasClass('is-invalid-target'), true);
+		duplicateTarget.dispatch('click', createClickEvent(duplicateTarget));
+		assert.strictEqual(graphView.taskState.getTask(task.id)?.edges.length, 7);
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
+
+		graphView.dispose();
+	});
+
+	test('Port 연결 후보는 cross-task와 cycle을 invalid로 표시하고 요청을 거부한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const taskA = createSerialRenderingTask(
+			'task:cycle-a',
+			{ x: 100, y: 80 },
+			2,
+		);
+		const taskB = createSerialRenderingTask(
+			'task:cycle-b',
+			{ x: 900, y: 80 },
+			1,
 		);
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
@@ -453,144 +388,210 @@ suite('Graph View', () => {
 			{},
 			[taskA, taskB],
 		);
-		const taskAStart = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskA.nodes[0]?.id ?? '',
-			taskA.id,
-		);
-		const taskAWork = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskA.nodes[1]?.id ?? '',
-			taskA.id,
-		);
-		const taskBStart = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskB.nodes[0]?.id ?? '',
-			taskB.id,
-		);
+		const [workA, workB] = taskA.nodes.filter((node) => node.kind === 'work');
+		const taskBWork = taskB.nodes.find((node) => node.kind === 'work');
 
-		taskAStart.dispatch('click', createClickEvent(taskAStart));
-		assert.strictEqual(taskAStart.hasClass('is-selected'), true);
-		assert.strictEqual(taskBStart.hasClass('is-selected'), false);
+		assert.ok(workA && workB && taskBWork);
+		const cycleSource = getTaskPort(root, taskA.id, workB.id, 'output');
+		const cycleTarget = getTaskPort(root, taskA.id, workA.id, 'input');
 
-		taskAWork.dispatch('click', createClickEvent(taskAWork));
-		assert.strictEqual(taskAStart.hasClass('is-selected'), false);
-		assert.strictEqual(taskAWork.hasClass('is-selected'), true);
+		cycleSource.dispatch('click', createClickEvent(cycleSource));
+		assert.strictEqual(cycleSource.hasClass('is-connection-source'), true);
+		assert.strictEqual(cycleTarget.hasClass('is-invalid-target'), true);
+		cycleTarget.dispatch('click', createClickEvent(cycleTarget));
+		assert.strictEqual(
+			graphView.taskState.getTask(taskA.id)?.edges.length,
+			taskA.edges.length,
+		);
+		assert.strictEqual(cycleSource.hasClass('is-connection-source'), true);
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
 
-		taskBStart.dispatch('click', createClickEvent(taskBStart));
-		assert.strictEqual(taskAWork.hasClass('is-selected'), false);
-		assert.strictEqual(taskBStart.hasClass('is-selected'), true);
-		assert.strictEqual(getDescendantsByClass(root, 'is-selected').length, 1);
-		assert.ok(graphView.taskState.getSnapshot().tasks.every((task) => (
-			task.nodes.every((node) => !Object.hasOwn(node, 'selected'))
-		)));
+		const crossSource = getTaskPort(root, taskA.id, workA.id, 'output');
+		const crossTarget = getTaskPort(root, taskB.id, taskBWork.id, 'input');
+
+		crossSource.dispatch('click', createClickEvent(crossSource));
+		assert.strictEqual(crossTarget.hasClass('is-invalid-target'), true);
+		crossTarget.dispatch('click', createClickEvent(crossTarget));
+		assert.strictEqual(
+			graphView.taskState.getTask(taskA.id)?.edges.length,
+			taskA.edges.length,
+		);
+		assert.strictEqual(
+			graphView.taskState.getTask(taskB.id)?.edges.length,
+			taskB.edges.length,
+		);
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
 
 		graphView.dispose();
 	});
 
-	test('Start Drag은 Camera scale의 World delta로 Task origin과 전체 geometry만 갱신한다', () => {
+	test('Escape, blank viewport와 source 재클릭은 연결 Preview와 후보 상태를 정리한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
-		const taskA = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000001',
-			'Task A',
-			{ x: 100, y: 50 },
-		);
-		const taskB = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000002',
-			'Task B',
-			{ x: -300, y: 400 },
-		);
+		const task = createRenderingTask({ x: 100, y: 80 });
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
 			INITIAL_GRAPH_STATE,
 			GRAPH_MOCK,
 			{},
-			[taskA, taskB],
+			[task],
 		);
-		const taskANodes = taskA.nodes.map((node) => getTaskElement(
-			root,
-			'data-task-node-id',
-			node.id,
-			taskA.id,
-		));
-		const taskBNodes = taskB.nodes.map((node) => getTaskElement(
-			root,
-			'data-task-node-id',
-			node.id,
-			taskB.id,
-		));
-		const taskAEdges = taskA.edges.map((edge) => getTaskElement(
-			root,
-			'data-task-edge-id',
-			edge.id,
-			taskA.id,
-		));
-		const taskBTransforms = taskBNodes.map((node) => node.style.transform);
-		const taskBCameraState: GraphCameraState = { x: 0, y: 0, scale: 2 };
+		const start = task.nodes.find((node) => node.kind === 'start');
 
-		graphView.camera.setState(taskBCameraState);
-		assert.ok(taskANodes.every((node) => (
-			node.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE)
-		)));
-		taskANodes[0]?.dispatch('pointerdown', createPointerEvent(
-			taskANodes[0] as FakeElement,
-			10,
-			10,
-		));
-		taskANodes[0]?.dispatch('pointermove', createPointerEvent(
-			taskANodes[0] as FakeElement,
-			50,
-			30,
-		));
+		assert.ok(start);
+		const source = getTaskPort(root, task.id, start.id, 'output');
+		const viewport = getDescendantByClass(root, 'graph-viewport');
+		const assertActive = () => {
+			assert.strictEqual(source.hasClass('is-connection-source'), true);
+			assert.strictEqual(getDescendantsByClass(
+				root,
+				'task-connection-preview',
+			).length, 1);
+		};
+		const assertInactive = () => {
+			assert.strictEqual(source.hasClass('is-connection-source'), false);
+			assert.strictEqual(getDescendantsByClass(
+				root,
+				'task-connection-preview',
+			).length, 0);
+			assert.strictEqual(getDescendantsByClass(root, 'is-valid-target').length, 0);
+			assert.strictEqual(getDescendantsByClass(root, 'is-invalid-target').length, 0);
+		};
 
-		assert.deepStrictEqual(
-			graphView.taskState.getTask(taskA.id)?.origin,
-			{ x: 120, y: 60 },
-		);
-		assert.deepStrictEqual(
-			taskANodes.map((node) => node.style.transform),
-			[
-				'translate(120px, 60px)',
-				'translate(464px, 46px)',
-				'translate(808px, 88px)',
-			],
-		);
-		assert.deepStrictEqual(
-			taskAEdges.map((edge) => edge.getAttribute('d')),
-			[
-				'M 400 112 C 432 112 432 112 464 112',
-				'M 744 112 C 776 112 776 112 808 112',
-			],
-		);
-		assert.deepStrictEqual(
-			taskBNodes.map((node) => node.style.transform),
-			taskBTransforms,
-		);
-		assert.strictEqual(taskANodes[0]?.hasClass('is-dragging'), true);
+		source.dispatch('click', createClickEvent(source));
+		viewport.dispatch('pointermove', createPointerEvent(viewport, 500, 300));
+		assertActive();
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
+		assertInactive();
 
-		taskANodes[0]?.dispatch('pointerup', createPointerEvent(
-			taskANodes[0] as FakeElement,
-			50,
-			30,
-		));
-		taskANodes[0]?.dispatch('click', createClickEvent(taskANodes[0] as FakeElement));
-		assert.strictEqual(taskANodes[0]?.hasClass('is-dragging'), false);
-		assert.strictEqual(taskANodes[0]?.hasClass('is-selected'), false);
+		source.dispatch('click', createClickEvent(source));
+		assertActive();
+		source.dispatch('click', createClickEvent(source));
+		assertInactive();
 
-		assert.deepStrictEqual(
-			graphView.taskState.getTask(taskA.id)?.origin,
-			{ x: 120, y: 60 },
+		source.dispatch('click', createClickEvent(source));
+		assertActive();
+		viewport.dispatch('pointerdown', createPointerEvent(viewport, 600, 400));
+		assertInactive();
+
+		graphView.dispose();
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
+		assertInactive();
+	});
+
+	test('Edge disconnect Action은 정확한 Edge만 제거하고 Node 위치를 보존한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 80 });
+		const secondTask: TaskBlueprint = {
+			...task,
+			id: 'task:disconnect-second',
+			title: 'Second Task',
+			origin: { x: 900, y: 80 },
+		};
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task, secondTask],
 		);
-		assert.deepStrictEqual(graphView.camera.getState(), taskBCameraState);
+		const edge = task.edges[0];
+
+		assert.ok(edge);
+		const edgeAction = getTaskEdgeAction(root, task.id, edge.id);
+		const disconnect = getDescendantByAttribute(
+			edgeAction,
+			TASK_EDGE_ACTION_ATTRIBUTE,
+			'disconnect-edge',
+		);
+		const initialPositions = task.nodePositions;
+
+		disconnect.dispatch('click', createClickEvent(disconnect));
+		const updated = graphView.taskState.getTask(task.id);
+
+		assert.ok(updated);
+		assert.strictEqual(updated.edges.length, task.edges.length - 1);
+		assert.strictEqual(updated.edges.some((candidate) => candidate.id === edge.id), false);
+		assert.deepStrictEqual(updated.nodePositions, initialPositions);
+		assert.strictEqual(getTaskFlowStatus(updated), 'incomplete');
+		assert.deepStrictEqual(graphView.taskState.getTask(secondTask.id), secondTask);
+		assert.strictEqual(
+			findTaskEdgeAction(root, task.id, edge.id),
+			undefined,
+		);
+		assert.ok(findTaskEdgeAction(root, secondTask.id, edge.id));
+		assert.strictEqual(
+			getTaskElements(root, 'data-task-edge-id', edge.id).length,
+			1,
+		);
+		assert.strictEqual(
+			getTaskElement(root, 'data-task-edge-id', edge.id, secondTask.id)
+				.getAttribute('data-task-id'),
+			secondTask.id,
+		);
 
 		graphView.dispose();
 	});
 
-	test('Work Grab은 해당 offset과 연결 geometry만 갱신하고 Start Drag 뒤에도 유지한다', () => {
+	test('Work 삭제는 incident Edge만 제거하고 직렬 dependency bypass를 만들지 않는다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createSerialRenderingTask('task:delete', { x: 100, y: 80 }, 2);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const [workA, workB] = task.nodes.filter((node) => node.kind === 'work');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && workA && workB && end);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			workB.id,
+			task.id,
+		);
+		const remove = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'remove-work',
+		);
+
+		assert.strictEqual(remove.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), true);
+		remove.dispatch('click', createClickEvent(remove));
+		const updated = graphView.taskState.getTask(task.id);
+
+		assert.ok(updated);
+		assert.deepStrictEqual(
+			updated.nodes.filter((node) => node.kind === 'work').map((node) => node.id),
+			[workA.id],
+		);
+		assert.strictEqual(updated.nodePositions[workB.id], undefined);
+		assert.deepStrictEqual(updated.nodePositions[workA.id], task.nodePositions[workA.id]);
+		assert.deepStrictEqual(updated.nodePositions[end.id], task.nodePositions[end.id]);
+		assert.deepStrictEqual(
+			updated.edges.map((edge) => [edge.source, edge.target]),
+			[[start.id, workA.id]],
+		);
+		assert.strictEqual(
+			updated.edges.some((edge) => edge.source === workA.id && edge.target === end.id),
+			false,
+		);
+		assert.strictEqual(getTaskFlowStatus(updated), 'incomplete');
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-task-node-id', workB.id),
+			undefined,
+		);
+
+		graphView.dispose();
+	});
+
+	test('Start Drag은 origin만, Work/End Grab은 explicit position과 Edge geometry만 갱신한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const task = createRenderingTask({ x: 100, y: 50 });
@@ -609,238 +610,38 @@ suite('Graph View', () => {
 		const start = getTaskElement(root, 'data-task-node-id', startNode.id, task.id);
 		const work = getTaskElement(root, 'data-task-node-id', workNode.id, task.id);
 		const end = getTaskElement(root, 'data-task-node-id', endNode.id, task.id);
-		const edges = task.edges.map((edge) => getTaskElement(
-			root,
-			'data-task-edge-id',
-			edge.id,
-			task.id,
-		));
-		const actions = task.edges.map((edge) => getTaskEdgeAction(
-			root,
-			task.id,
-			edge.id,
-		));
-		const initialTransforms = [start, work, end].map((node) => node.style.transform);
-		const initialPaths = edges.map((edge) => edge.getAttribute('d'));
-		const initialActions = actions.map((action) => ({
-			left: action.style.left,
-			top: action.style.top,
-		}));
-		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+		assertRenderedTaskGeometry(root, task);
 
-		graphView.camera.setState({ x: 0, y: 0, scale: 2 });
-		graphView.camera.focusOn = (point) => focusPoints.push(point);
-		work.dispatch('pointerdown', createPointerEvent(work, 10, 10));
-		work.dispatch('pointermove', createPointerEvent(work, 50, 30));
+		performTaskDrag(work, { x: 10, y: 10 }, { x: 50, y: 30 });
+		let updated = graphView.taskState.getTask(task.id);
 
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, task.origin);
-		assert.deepStrictEqual(
-			graphView.taskState.getTask(task.id)?.nodeOffsets?.[workNode.id],
-			{ x: 20, y: 10 },
-		);
-		assert.strictEqual(start.style.transform, initialTransforms[0]);
-		assert.deepStrictEqual(readTranslate(work.style.transform), {
-			x: readTranslate(initialTransforms[1] ?? '').x + 20,
-			y: readTranslate(initialTransforms[1] ?? '').y + 10,
-		});
-		assert.strictEqual(end.style.transform, initialTransforms[2]);
-		assert.ok(edges.every((edge, index) => edge.getAttribute('d') !== initialPaths[index]));
-		assert.ok(actions.every((action, index) => (
-			action.style.left !== initialActions[index]?.left
-			|| action.style.top !== initialActions[index]?.top
-		)));
-		assert.strictEqual(work.hasClass('is-dragging'), true);
+		assert.ok(updated);
+		assert.deepStrictEqual(updated.origin, task.origin);
+		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: 6 });
+		assert.deepStrictEqual(updated.nodePositions[endNode.id], task.nodePositions[endNode.id]);
+		assertRenderedTaskGeometry(root, updated);
 
-		work.dispatch('pointerup', createPointerEvent(work, 50, 30));
-		work.dispatch('click', createClickEvent(work));
-		work.dispatch('dblclick', createClickEvent(work));
-		assert.strictEqual(work.hasClass('is-dragging'), false);
-		assert.strictEqual(work.hasClass('is-selected'), false);
-		assert.deepStrictEqual(focusPoints, []);
+		performTaskDrag(end, { x: 20, y: 20 }, { x: -10, y: 60 });
+		updated = graphView.taskState.getTask(task.id);
 
-		work.dispatch('pointerdown', createPointerEvent(work, 10, 10));
-		work.dispatch('pointermove', createPointerEvent(work, 12, 12));
-		work.dispatch('pointerup', createPointerEvent(work, 12, 12));
-		work.dispatch('click', createClickEvent(work));
-		work.dispatch('dblclick', createClickEvent(work));
-		assert.strictEqual(work.hasClass('is-selected'), true);
-		const workPosition = readTranslate(work.style.transform);
+		assert.ok(updated);
+		assert.deepStrictEqual(updated.origin, task.origin);
+		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 68 });
+		assertRenderedTaskGeometry(root, updated);
 
-		assert.deepStrictEqual(focusPoints, [{
-			x: workPosition.x + 140,
-			y: workPosition.y + 66,
-		}]);
+		performTaskDrag(start, { x: 10, y: 10 }, { x: 30, y: 40 });
+		updated = graphView.taskState.getTask(task.id);
 
-		const beforeStartDrag = [start, work, end].map((node) => readTranslate(
-			node.style.transform,
-		));
-		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
-		start.dispatch('pointermove', createPointerEvent(start, 50, 30));
-		start.dispatch('pointerup', createPointerEvent(start, 50, 30));
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, {
-			x: task.origin.x + 20,
-			y: task.origin.y + 10,
-		});
-		assert.deepStrictEqual(
-			graphView.taskState.getTask(task.id)?.nodeOffsets?.[workNode.id],
-			{ x: 20, y: 10 },
-		);
-		for (let index = 0; index < beforeStartDrag.length; index += 1) {
-			const before = beforeStartDrag[index];
-			const node = [start, work, end][index];
-
-			assert.ok(before && node);
-			const after = readTranslate(node.style.transform);
-			assert.deepStrictEqual({
-				x: after.x - before.x,
-				y: after.y - before.y,
-			}, { x: 20, y: 10 });
-		}
+		assert.ok(updated);
+		assert.deepStrictEqual(updated.origin, { x: 120, y: 80 });
+		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: 6 });
+		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 68 });
+		assertRenderedTaskGeometry(root, updated);
 
 		graphView.dispose();
 	});
 
-	test('End Grab은 End offset과 모든 incoming Edge/Action을 최신 위치로 갱신한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const initialTask = createRenderingTask({ x: 100, y: 50 });
-		let extraIdSequence = 0;
-		const task = createTaskState(
-			[initialTask],
-			() => `end-grab-${++extraIdSequence}`,
-		).addParallelWork(initialTask.id, initialTask.edges[0]?.id ?? '');
-
-		assert.ok(task);
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const endNode = task.nodes.find((node) => node.kind === 'end');
-		const incoming = task.edges.filter((edge) => edge.target === endNode?.id);
-
-		assert.ok(endNode);
-		assert.strictEqual(incoming.length, 2);
-		const end = getTaskElement(root, 'data-task-node-id', endNode.id, task.id);
-		const otherTransforms = task.nodes.filter((node) => node.id !== endNode.id).map(
-			(node) => getTaskElement(
-				root,
-				'data-task-node-id',
-				node.id,
-				task.id,
-			).style.transform,
-		);
-		const edges = incoming.map((edge) => getTaskElement(
-			root,
-			'data-task-edge-id',
-			edge.id,
-			task.id,
-		));
-		const actions = incoming.map((edge) => getTaskEdgeAction(
-			root,
-			task.id,
-			edge.id,
-		));
-		const initialEnd = readTranslate(end.style.transform);
-		const initialPaths = edges.map((edge) => edge.getAttribute('d'));
-		const initialActions = actions.map((action) => ({
-			left: action.style.left,
-			top: action.style.top,
-		}));
-		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
-
-		graphView.camera.setState({ x: 0, y: 0, scale: 2 });
-		graphView.camera.focusOn = (point) => focusPoints.push(point);
-		end.dispatch('pointerdown', createPointerEvent(end, 20, 20));
-		end.dispatch('pointermove', createPointerEvent(end, -10, 60));
-
-		assert.deepStrictEqual(
-			graphView.taskState.getTask(task.id)?.nodeOffsets?.[endNode.id],
-			{ x: -15, y: 20 },
-		);
-		assert.deepStrictEqual(readTranslate(end.style.transform), {
-			x: initialEnd.x - 15,
-			y: initialEnd.y + 20,
-		});
-		assert.deepStrictEqual(task.nodes.filter((node) => node.id !== endNode.id).map(
-			(node) => getTaskElement(
-				root,
-				'data-task-node-id',
-				node.id,
-				task.id,
-			).style.transform,
-		), otherTransforms);
-		assert.ok(edges.every((edge, index) => (
-			edge.getAttribute('d') !== initialPaths[index]
-		)));
-		assert.ok(actions.every((action, index) => (
-			action.style.left !== initialActions[index]?.left
-			|| action.style.top !== initialActions[index]?.top
-		)));
-
-		end.dispatch('pointerup', createPointerEvent(end, -10, 60));
-		end.dispatch('dblclick', createClickEvent(end));
-		assert.deepStrictEqual(focusPoints, []);
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, task.origin);
-
-		graphView.dispose();
-	});
-
-	test('Work/End Drag cancel과 capture 상실은 시작 offset shape까지 복원한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const original = createRenderingTask({ x: 100, y: 50 });
-		const workNode = original.nodes.find((node) => node.kind === 'work');
-		const endNode = original.nodes.find((node) => node.kind === 'end');
-
-		assert.ok(workNode && endNode);
-		const task: TaskBlueprint = {
-			...original,
-			nodeOffsets: {
-				[workNode.id]: { x: 5, y: -6 },
-			},
-		};
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const work = getTaskElement(root, 'data-task-node-id', workNode.id, task.id);
-		const end = getTaskElement(root, 'data-task-node-id', endNode.id, task.id);
-
-		work.dispatch('pointerdown', createPointerEvent(work, 10, 10));
-		work.dispatch('pointermove', createPointerEvent(work, 40, 30));
-		work.dispatch('pointercancel', createPointerEvent(work, 40, 30));
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.nodeOffsets, {
-			[workNode.id]: { x: 5, y: -6 },
-		});
-		assert.strictEqual(work.hasPointerCapture(1), false);
-		assert.strictEqual(work.hasClass('is-dragging'), false);
-
-		end.dispatch('pointerdown', createPointerEvent(end, 10, 10));
-		end.dispatch('pointermove', createPointerEvent(end, 40, 30));
-		end.losePointerCapture(1);
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.nodeOffsets, {
-			[workNode.id]: { x: 5, y: -6 },
-		});
-		assert.strictEqual(end.hasClass('is-dragging'), false);
-
-		work.dispatch('pointerdown', createPointerEvent(work, 10, 10));
-		work.dispatch('pointermove', createPointerEvent(work, 50, 50));
-		const offsetsAtDispose = graphView.taskState.getTask(task.id)?.nodeOffsets;
-
-		graphView.dispose();
-		work.dispatch('pointermove', createPointerEvent(work, 100, 100));
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.nodeOffsets, offsetsAtDispose);
-		assert.strictEqual(work.hasPointerCapture(1), false);
-		assert.strictEqual(work.hasClass('is-dragging'), false);
-	});
-
-	test('동일 내부 Work ID를 가진 Task 중 Grab한 Task의 offset과 DOM만 변경한다', () => {
+	test('Task Grab cancel/capture 상실과 동일 내부 ID Task 격리를 유지한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const taskA = createCollidingRenderingTask(
@@ -851,7 +652,7 @@ suite('Graph View', () => {
 		const taskB = createCollidingRenderingTask(
 			'task:00000000-0000-4000-8000-000000000002',
 			'Task B',
-			{ x: -300, y: 400 },
+			{ x: 900, y: 400 },
 		);
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
@@ -861,81 +662,71 @@ suite('Graph View', () => {
 			[taskA, taskB],
 		);
 		const workId = taskA.nodes.find((node) => node.kind === 'work')?.id;
+		const endId = taskA.nodes.find((node) => node.kind === 'end')?.id;
+		const startId = taskA.nodes.find((node) => node.kind === 'start')?.id;
 
-		assert.ok(workId && workId === taskB.nodes.find((node) => node.kind === 'work')?.id);
-		const taskAWork = getTaskElement(root, 'data-task-node-id', workId, taskA.id);
-		const taskBWork = getTaskElement(root, 'data-task-node-id', workId, taskB.id);
-		const taskBTransform = taskBWork.style.transform;
-		const taskBPaths = taskB.edges.map((edge) => getTaskElement(
+		assert.ok(workId && endId && startId);
+		const workA = getTaskElement(root, 'data-task-node-id', workId, taskA.id);
+		const endA = getTaskElement(root, 'data-task-node-id', endId, taskA.id);
+		const startA = getTaskElement(root, 'data-task-node-id', startId, taskA.id);
+		const workB = getTaskElement(root, 'data-task-node-id', workId, taskB.id);
+		const taskBWorkTransform = workB.style.transform;
+		const taskBEdgePaths = taskB.edges.map((edge) => getTaskElement(
 			root,
 			'data-task-edge-id',
 			edge.id,
 			taskB.id,
 		).getAttribute('d'));
 
-		taskAWork.dispatch('pointerdown', createPointerEvent(taskAWork, 10, 10));
-		taskAWork.dispatch('pointermove', createPointerEvent(taskAWork, 40, 25));
-		taskAWork.dispatch('pointerup', createPointerEvent(taskAWork, 40, 25));
-
+		beginTaskDrag(workA, { x: 10, y: 10 }, { x: 50, y: 30 });
+		workA.dispatch('pointercancel', createPointerEvent(workA, 50, 30));
 		assert.deepStrictEqual(
-			graphView.taskState.getTask(taskA.id)?.nodeOffsets?.[workId],
-			{ x: 30, y: 15 },
+			graphView.taskState.getTask(taskA.id)?.nodePositions[workId],
+			taskA.nodePositions[workId],
 		);
-		assert.strictEqual(graphView.taskState.getTask(taskB.id)?.nodeOffsets, undefined);
-		assert.notStrictEqual(taskAWork.style.transform, taskBWork.style.transform);
-		assert.strictEqual(taskBWork.style.transform, taskBTransform);
+		assert.strictEqual(workA.hasClass('is-dragging'), false);
+
+		beginTaskDrag(endA, { x: 10, y: 10 }, { x: 40, y: 50 });
+		endA.losePointerCapture(1);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(taskA.id)?.nodePositions[endId],
+			taskA.nodePositions[endId],
+		);
+
+		beginTaskDrag(startA, { x: 10, y: 10 }, { x: 40, y: 50 });
+		startA.dispatch('pointercancel', createPointerEvent(startA, 40, 50));
+		assert.deepStrictEqual(graphView.taskState.getTask(taskA.id)?.origin, taskA.origin);
+
+		performTaskDrag(workA, { x: 10, y: 10 }, { x: 40, y: 25 });
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(taskA.id)?.nodePositions[workId],
+			{ x: 350, y: 1 },
+		);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(taskB.id)?.nodePositions[workId],
+			taskB.nodePositions[workId],
+		);
+		assert.strictEqual(workB.style.transform, taskBWorkTransform);
 		assert.deepStrictEqual(taskB.edges.map((edge) => getTaskElement(
 			root,
 			'data-task-edge-id',
 			edge.id,
 			taskB.id,
-		).getAttribute('d')), taskBPaths);
+		).getAttribute('d')), taskBEdgePaths);
+		beginTaskDrag(workA, { x: 10, y: 10 }, { x: 70, y: 60 });
+		const positionAtDispose = graphView.taskState.getTask(taskA.id)
+			?.nodePositions[workId];
 
 		graphView.dispose();
+		workA.dispatch('pointermove', createPointerEvent(workA, 120, 90));
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(taskA.id)?.nodePositions[workId],
+			positionAtDispose,
+		);
+		assert.strictEqual(workA.hasPointerCapture(1), false);
 	});
 
-	test('Task Drag cancel, capture 상실과 dispose는 origin 및 listener lifecycle을 정리한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 100, y: 50 });
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const start = getTaskElement(
-			root,
-			'data-task-node-id',
-			task.nodes[0]?.id ?? '',
-			task.id,
-		);
-
-		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
-		start.dispatch('pointermove', createPointerEvent(start, 30, 40));
-		start.dispatch('pointercancel', createPointerEvent(start, 30, 40));
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, task.origin);
-		assert.strictEqual(start.hasPointerCapture(1), false);
-		assert.strictEqual(start.hasClass('is-dragging'), false);
-
-		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
-		start.dispatch('pointermove', createPointerEvent(start, 40, 20));
-		start.losePointerCapture(1);
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, task.origin);
-		assert.strictEqual(start.hasClass('is-dragging'), false);
-
-		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
-		start.dispatch('pointermove', createPointerEvent(start, 50, 50));
-		const originAtDispose = graphView.taskState.getTask(task.id)?.origin;
-
-		graphView.dispose();
-		start.dispatch('pointermove', createPointerEvent(start, 100, 100));
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, originAtDispose);
-		assert.strictEqual(start.hasPointerCapture(1), false);
-	});
-
-	test('Start와 Work Double Click은 복합 identity의 최신 Layout 중심으로 Focus한다', () => {
+	test('Task 선택과 Focus는 (taskId,nodeId) 기준이며 Drag 직후 Focus를 억제한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const taskA = createCollidingRenderingTask(
@@ -955,456 +746,72 @@ suite('Graph View', () => {
 			{},
 			[taskA, taskB],
 		);
+		const startId = taskA.nodes.find((node) => node.kind === 'start')?.id;
+		const workId = taskA.nodes.find((node) => node.kind === 'work')?.id;
+		const endId = taskA.nodes.find((node) => node.kind === 'end')?.id;
+
+		assert.ok(startId && workId && endId);
+		const taskAWork = getTaskElement(root, 'data-task-node-id', workId, taskA.id);
+		const taskBWork = getTaskElement(root, 'data-task-node-id', workId, taskB.id);
+		const taskAStart = getTaskElement(root, 'data-task-node-id', startId, taskA.id);
+		const taskAEnd = getTaskElement(root, 'data-task-node-id', endId, taskA.id);
 		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
-		const taskAStart = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskA.nodes[0]?.id ?? '',
-			taskA.id,
-		);
-		const taskAWork = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskA.nodes[1]?.id ?? '',
-			taskA.id,
-		);
-		const taskAEnd = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskA.nodes[2]?.id ?? '',
-			taskA.id,
-		);
-		const taskBStart = getTaskElement(
-			root,
-			'data-task-node-id',
-			taskB.nodes[0]?.id ?? '',
-			taskB.id,
-		);
 
 		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		taskAWork.dispatch('click', createClickEvent(taskAWork));
+		assert.strictEqual(taskAWork.hasClass('is-selected'), true);
+		taskBWork.dispatch('click', createClickEvent(taskBWork));
+		assert.strictEqual(taskAWork.hasClass('is-selected'), false);
+		assert.strictEqual(taskBWork.hasClass('is-selected'), true);
+
 		taskAStart.dispatch('dblclick', createClickEvent(taskAStart));
 		taskAWork.dispatch('dblclick', createClickEvent(taskAWork));
-		taskBStart.dispatch('dblclick', createClickEvent(taskBStart));
 		taskAEnd.dispatch('dblclick', createClickEvent(taskAEnd));
-
 		assert.deepStrictEqual(focusPoints, [
 			{ x: 240, y: 102 },
-			{ x: 584, y: 102 },
-			{ x: -160, y: 452 },
+			{ x: 560, y: 102 },
 		]);
 
-		graphView.dispose();
-	});
-
-	test('Edge Action은 동일 내부 Edge ID를 taskId와 조합해 정확한 Task만 직렬 편집한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const taskA = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000001',
-			'Task A',
-			{ x: 100, y: 50 },
-		);
-		const taskB = createCollidingRenderingTask(
-			'task:00000000-0000-4000-8000-000000000002',
-			'Task B',
-			{ x: -300, y: 400 },
-		);
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[taskA, taskB],
-		);
-		const edgeId = taskA.edges[0]?.id;
-
-		assert.ok(edgeId && edgeId === taskB.edges[0]?.id);
-		const taskAAction = getTaskEdgeAction(root, taskA.id, edgeId);
-		const taskBAction = getTaskEdgeAction(root, taskB.id, edgeId);
-		const taskAEndEdgeId = taskA.edges[1]?.id;
-
-		assert.ok(taskAEndEdgeId);
-		const taskAEndAction = getTaskEdgeAction(
-			root,
-			taskA.id,
-			taskAEndEdgeId,
-		);
-		const insert = getDescendantByAttribute(
-			taskAAction,
-			TASK_EDGE_ACTION_ATTRIBUTE,
-			'insert-work',
-		);
-
-		assert.notStrictEqual(taskAAction, taskBAction);
-		assert.strictEqual(taskAAction.style.left, '412px');
-		assert.strictEqual(taskAAction.style.top, '102px');
-		assert.strictEqual(
-			getDescendantsByClass(taskAAction, 'task-edge-action').length,
-			2,
-		);
-		assert.notStrictEqual(taskAAction, taskAEndAction);
-		assert.strictEqual(
-			getDescendantsByClass(taskAEndAction, 'task-edge-action').length,
-			1,
-		);
-		insert.dispatch('click', createClickEvent(insert));
-
-		const updatedA = graphView.taskState.getTask(taskA.id);
-		const unchangedB = graphView.taskState.getTask(taskB.id);
-
-		assert.ok(updatedA && unchangedB);
-		assert.strictEqual(updatedA.nodes.length, 4);
-		assert.strictEqual(updatedA.edges.length, 3);
-		assert.strictEqual(updatedA.edges.some((edge) => edge.id === edgeId), false);
-		assert.deepStrictEqual(unchangedB.nodes, taskB.nodes);
-		assert.deepStrictEqual(unchangedB.edges, taskB.edges);
-		assert.strictEqual(
-			getTaskEdgeAction(root, taskB.id, edgeId),
-			taskBAction,
-		);
-		assert.strictEqual(
-			findTaskEdgeAction(root, taskA.id, edgeId),
-			undefined,
-		);
+		performTaskDrag(taskAWork, { x: 10, y: 10 }, { x: 40, y: 30 });
+		taskAWork.dispatch('dblclick', createClickEvent(taskAWork));
+		assert.strictEqual(focusPoints.length, 2);
 
 		graphView.dispose();
 	});
 
-	test('병렬 Edge Action으로 추가된 Work는 Selection, Focus와 Start 전체 Drag를 유지한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 100, y: 50 });
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const incoming = task.edges[0];
-
-		assert.ok(incoming);
-		const edgeAction = getTaskEdgeAction(root, task.id, incoming.id);
-		const parallelButton = getDescendantByAttribute(
-			edgeAction,
-			TASK_EDGE_ACTION_ATTRIBUTE,
-			'add-parallel-work',
-		);
-
-		parallelButton.dispatch('click', createClickEvent(parallelButton));
-		const updated = graphView.taskState.getTask(task.id);
-		const originalWork = task.nodes.find((node) => node.kind === 'work');
-		const parallelWork = updated?.nodes.find((node) => (
-			node.kind === 'work' && node.id !== originalWork?.id
-		));
-
-		assert.ok(updated && originalWork && parallelWork);
-		assert.strictEqual(updated.edges.length, 4);
-		const originalElement = getTaskElement(
-			root,
-			'data-task-node-id',
-			originalWork.id,
-			task.id,
-		);
-		const parallelElement = getTaskElement(
-			root,
-			'data-task-node-id',
-			parallelWork.id,
-			task.id,
-		);
-		const originalPosition = readTranslate(originalElement.style.transform);
-		const parallelPosition = readTranslate(parallelElement.style.transform);
-
-		assert.strictEqual(originalPosition.x, parallelPosition.x);
-		assert.notStrictEqual(originalPosition.y, parallelPosition.y);
-		parallelElement.dispatch('click', createClickEvent(parallelElement));
-		assert.strictEqual(parallelElement.hasClass('is-selected'), true);
-		assert.strictEqual(originalElement.hasClass('is-selected'), false);
-
-		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
-
-		graphView.camera.focusOn = (point) => focusPoints.push(point);
-		parallelElement.dispatch('dblclick', createClickEvent(parallelElement));
-		assert.deepStrictEqual(focusPoints, [{
-			x: parallelPosition.x + 140,
-			y: parallelPosition.y + 66,
-		}]);
-
-		const start = getTaskElement(
-			root,
-			'data-task-node-id',
-			task.nodes[0]?.id ?? '',
-			task.id,
-		);
-		const beforePositions = updated.nodes.map((node) => readTranslate(
-			getTaskElement(root, 'data-task-node-id', node.id, task.id).style.transform,
-		));
-		const edgeElements = updated.edges.map((edge) => getTaskElement(
-			root,
-			'data-task-edge-id',
-			edge.id,
-			task.id,
-		));
-		const beforePaths = edgeElements.map((edge) => edge.getAttribute('d'));
-		const movedAction = getTaskEdgeAction(root, task.id, incoming.id);
-		assert.ok(
-			findDescendantByAttribute(
-				movedAction,
-				TASK_EDGE_ACTION_ATTRIBUTE,
-				'add-parallel-work',
-			),
-		);
-		const beforeActionPosition = {
-			x: Number.parseFloat(movedAction.style.left),
-			y: Number.parseFloat(movedAction.style.top),
-		};
-
-		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
-		start.dispatch('pointermove', createPointerEvent(start, 30, 25));
-		start.dispatch('pointerup', createPointerEvent(start, 30, 25));
-		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, {
-			x: 120,
-			y: 65,
-		});
-		for (let index = 0; index < updated.nodes.length; index += 1) {
-			const node = updated.nodes[index];
-			const before = beforePositions[index];
-
-			assert.ok(node && before);
-			const after = readTranslate(getTaskElement(
-				root,
-				'data-task-node-id',
-				node.id,
-				task.id,
-			).style.transform);
-
-			assert.deepStrictEqual({ x: after.x - before.x, y: after.y - before.y }, {
-				x: 20,
-				y: 15,
-			});
-		}
-		assert.ok(edgeElements.every((edge, index) => (
-			edge.getAttribute('d') !== beforePaths[index]
-		)));
-		assert.deepStrictEqual({
-			x: Number.parseFloat(movedAction.style.left) - beforeActionPosition.x,
-			y: Number.parseFloat(movedAction.style.top) - beforeActionPosition.y,
-		}, { x: 20, y: 15 });
-
-		graphView.dispose();
-	});
-
-	test('동일 Edge Action으로 4개 이상의 병렬 sibling을 반복 생성한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 100, y: 50 });
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const incoming = task.edges[0];
-
-		assert.ok(incoming);
-		for (let index = 0; index < 3; index += 1) {
-			const action = getTaskEdgeAction(root, task.id, incoming.id);
-			const parallel = getDescendantByAttribute(
-				action,
-				TASK_EDGE_ACTION_ATTRIBUTE,
-				'add-parallel-work',
-			);
-
-			parallel.dispatch('click', createClickEvent(parallel));
-		}
-
-		const updated = graphView.taskState.getTask(task.id);
-		const works = updated?.nodes.filter((node) => node.kind === 'work') ?? [];
-		const positions = works.map((work) => readTranslate(getTaskElement(
-			root,
-			'data-task-node-id',
-			work.id,
-			task.id,
-		).style.transform));
-
-		assert.strictEqual(works.length, 4);
-		assert.strictEqual(new Set(positions.map((position) => position.x)).size, 1);
-		assert.strictEqual(new Set(positions.map((position) => position.y)).size, 4);
-		assert.ok(findDescendantByAttribute(
-			getTaskEdgeAction(root, task.id, incoming.id),
-			TASK_EDGE_ACTION_ATTRIBUTE,
-			'add-parallel-work',
-		));
-
-		graphView.dispose();
-	});
-
-	test('Work Hover 삭제 Action은 Node를 제거하고 predecessor와 successor를 연결한다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 100, y: 50 });
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[task],
-		);
-		const start = task.nodes.find((node) => node.kind === 'start');
-		const work = task.nodes.find((node) => node.kind === 'work');
-		const end = task.nodes.find((node) => node.kind === 'end');
-
-		assert.ok(start && work && end);
-		const workElement = getTaskElement(
-			root,
-			'data-task-node-id',
-			work.id,
-			task.id,
-		);
-		const remove = getDescendantByAttribute(
-			workElement,
-			TASK_NODE_ACTION_ATTRIBUTE,
-			'remove-work',
-		);
-
-		assert.strictEqual(
-			remove.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
-			true,
-		);
-		remove.dispatch('pointerdown', createPointerEvent(remove, 10, 10));
-		remove.dispatch('pointermove', createPointerEvent(remove, 60, 40));
-		remove.dispatch('pointerup', createPointerEvent(remove, 60, 40));
-		assert.strictEqual(graphView.taskState.getTask(task.id)?.nodeOffsets, undefined);
-		assert.strictEqual(workElement.hasPointerCapture(1), false);
-		assert.strictEqual(workElement.hasClass('is-dragging'), false);
-		const input = ownerDocument.createElement('input');
-
-		workElement.append(input);
-		input.dispatch('pointerdown', createPointerEvent(input, 10, 10));
-		input.dispatch('pointermove', createPointerEvent(input, 60, 40));
-		input.dispatch('pointerup', createPointerEvent(input, 60, 40));
-		assert.strictEqual(workElement.hasPointerCapture(1), false);
-		assert.strictEqual(graphView.taskState.getTask(task.id)?.nodeOffsets, undefined);
-		workElement.dispatch('click', createClickEvent(workElement));
-		assert.strictEqual(workElement.hasClass('is-selected'), true);
-		remove.dispatch('click', createClickEvent(remove));
-
-		const updated = graphView.taskState.getTask(task.id);
-
-		assert.ok(updated);
-		assert.deepStrictEqual(updated.nodes.map((node) => node.id), [start.id, end.id]);
-		assert.deepStrictEqual(updated.edges.map((edge) => ({
-			source: edge.source,
-			target: edge.target,
-		})), [{ source: start.id, target: end.id }]);
-		assert.strictEqual(
-			findDescendantByAttribute(root, 'data-task-node-id', work.id),
-			undefined,
-		);
-		assert.strictEqual(getDescendantsByClass(root, 'is-selected').length, 0);
-		assert.strictEqual(
-			getTaskElements(
-				root,
-				'data-task-edge-id',
-				updated.edges[0]?.id ?? '',
-			).length,
-			1,
-		);
-
-		graphView.dispose();
-	});
-
-	test('복수 predecessor/successor Work에는 삭제 Action을 만들지 않는다', () => {
-		const ownerDocument = new FakeDocument();
-		const root = ownerDocument.createElement('section');
-		const task = createRenderingTask({ x: 100, y: 50 });
-		const [start, work, end] = task.nodes;
-
-		assert.ok(start && work?.kind === 'work' && end);
-		const predecessor = {
-			...work,
-			id: 'task-node:complex-predecessor',
-		};
-		const successor = {
-			...work,
-			id: 'task-node:complex-successor',
-		};
-		const complexTask: TaskBlueprint = {
-			...task,
-			nodes: [start, predecessor, work, successor, end],
-			edges: [{
-				id: 'task-edge:start-work',
-				source: start.id,
-				target: work.id,
-			}, {
-				id: 'task-edge:start-predecessor',
-				source: start.id,
-				target: predecessor.id,
-			}, {
-				id: 'task-edge:predecessor-work',
-				source: predecessor.id,
-				target: work.id,
-			}, {
-				id: 'task-edge:work-end',
-				source: work.id,
-				target: end.id,
-			}, {
-				id: 'task-edge:work-successor',
-				source: work.id,
-				target: successor.id,
-			}, {
-				id: 'task-edge:successor-end',
-				source: successor.id,
-				target: end.id,
-			}],
-		};
-		const graphView = initializeGraphView(
-			root.asHtmlElement(),
-			INITIAL_GRAPH_STATE,
-			GRAPH_MOCK,
-			{},
-			[complexTask],
-		);
-		const workElement = getTaskElement(
-			root,
-			'data-task-node-id',
-			work.id,
-			task.id,
-		);
-
-		assert.strictEqual(findDescendantByAttribute(
-			workElement,
-			TASK_NODE_ACTION_ATTRIBUTE,
-			'remove-work',
-		), undefined);
-
-		graphView.dispose();
-	});
-
-	test('Task Edge/Work Hover Action CSS는 Pointer bridge와 기존 Action 스타일을 유지한다', () => {
+	test('Task Port/Action/Grab CSS는 연결 상태와 pointer 충돌 규약을 표현한다', () => {
 		const taskViewCss = readFileSync(resolve(
 			__dirname,
 			'../../../src/webview/task/taskView.css',
 		), 'utf8');
 
-		assert.match(taskViewCss, /\.task-edge-actions\s*\{[^}]*pointer-events:\s*auto;/s);
-		assert.match(taskViewCss, /\.task-edge-action-list\s*\{[^}]*visibility:\s*hidden;/s);
-		assert.match(
-			taskViewCss,
-			/\.task-edge-actions:hover\s*>\s*\.task-edge-action-list,[^{]*\{[^}]*pointer-events:\s*auto;/s,
-		);
-		assert.match(
-			taskViewCss,
-			/\.task-work-node:hover\s*>\s*\.task-work-actions,[^{]*\{[^}]*pointer-events:\s*auto;/s,
-		);
 		assert.match(taskViewCss, /\.task-node\s*\{[^}]*cursor:\s*grab;/s);
 		assert.match(
 			taskViewCss,
 			/\.task-node\.is-dragging\s*\{[^}]*cursor:\s*grabbing;/s,
 		);
+		assert.match(taskViewCss, /\.task-node-port\s*\{/s);
+		assert.match(taskViewCss, /\.task-node-port\s*\{[^}]*opacity:\s*0\.78;/s);
+		assert.match(taskViewCss, /\.task-node-port\s*\{[^}]*top:\s*50%;/s);
+		assert.match(
+			taskViewCss,
+			/\.task-input-port\s*\{[^}]*left:\s*0;[^}]*translate\(-50%,\s*-50%\)/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-output-port\s*\{[^}]*right:\s*0;[^}]*translate\(50%,\s*-50%\)/s,
+		);
+		assert.match(taskViewCss, /\.task-node-port\.is-connection-source/s);
+		assert.match(taskViewCss, /\.task-node-port\.is-valid-target/s);
+		assert.match(taskViewCss, /\.task-node-port\.is-invalid-target/s);
+		assert.match(taskViewCss, /\.task-connection-preview\s*\{[^}]*pointer-events:\s*none;/s);
+		assert.match(
+			taskViewCss,
+			/\.task-start-node\[data-task-flow-state=['"]incomplete['"]\],[^{]*\{[^}]*--graph-node-background:[^}]*62%/s,
+		);
+		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);
+		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);
 	});
-
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
@@ -8032,12 +7439,31 @@ suite('Graph View', () => {
 type GraphEventListener = (event: Event) => void;
 
 class FakeDocument {
+	private readonly listeners = new Map<string, Set<GraphEventListener>>();
+
 	createElement(tagName = 'div'): FakeElement {
 		return new FakeElement(this, tagName.toLowerCase());
 	}
 
 	createElementNS(_namespace?: string, qualifiedName = 'div'): FakeElement {
 		return new FakeElement(this, qualifiedName.toLowerCase());
+	}
+
+	addEventListener(type: string, listener: GraphEventListener): void {
+		const listeners = this.listeners.get(type) ?? new Set();
+
+		listeners.add(listener);
+		this.listeners.set(type, listeners);
+	}
+
+	removeEventListener(type: string, listener: GraphEventListener): void {
+		this.listeners.get(type)?.delete(listener);
+	}
+
+	dispatch(type: string, event: Event): void {
+		for (const listener of this.listeners.get(type) ?? []) {
+			listener(event);
+		}
 	}
 }
 
@@ -8085,6 +7511,17 @@ class FakeElement {
 			for (const token of tokens) {
 				this.classNames.delete(token);
 			}
+		},
+		contains: (token: string) => this.hasClass(token),
+		toggle: (token: string, force?: boolean) => {
+			const enabled = force ?? !this.hasClass(token);
+
+			if (enabled) {
+				this.classNames.add(token);
+			} else {
+				this.classNames.delete(token);
+			}
+			return enabled;
 		},
 	};
 	className = '';
@@ -8183,7 +7620,8 @@ class FakeElement {
 
 	hasClass(className: string): boolean {
 		return this.classNames.has(className)
-			|| this.className.split(/\s+/).includes(className);
+			|| this.className.split(/\s+/).includes(className)
+			|| (this.getAttribute('class') ?? '').split(/\s+/).includes(className);
 	}
 
 	addEventListener(type: string, listener: GraphEventListener): void {
@@ -8314,6 +7752,48 @@ function getTaskElement(
 
 	assert.ok(taskElement, `${taskId}의 ${entityAttributeName}="${entityId}" 요소가 있어야 한다.`);
 	return taskElement;
+}
+
+function findTaskPort(
+	element: FakeElement,
+	taskId: string,
+	nodeId: string,
+	direction: 'input' | 'output',
+): FakeElement | undefined {
+	const node = getTaskElements(element, 'data-task-node-id', nodeId).find(
+		(candidate) => candidate.getAttribute('data-task-id') === taskId,
+	);
+
+	return node
+		? findDescendantByAttribute(node, TASK_PORT_DIRECTION_ATTRIBUTE, direction)
+		: undefined;
+}
+
+function getTaskPort(
+	element: FakeElement,
+	taskId: string,
+	nodeId: string,
+	direction: 'input' | 'output',
+): FakeElement {
+	const port = findTaskPort(element, taskId, nodeId, direction);
+
+	assert.ok(port, `${taskId}/${nodeId} ${direction} Port가 있어야 한다.`);
+	return port;
+}
+
+function connectTaskPorts(
+	element: FakeElement,
+	taskId: string,
+	sourceNodeId: string,
+	targetNodeId: string,
+): void {
+	const output = getTaskPort(element, taskId, sourceNodeId, 'output');
+
+	output.dispatch('click', createClickEvent(output));
+	const input = getTaskPort(element, taskId, targetNodeId, 'input');
+
+	assert.strictEqual(input.hasClass('is-valid-target'), true);
+	input.dispatch('click', createClickEvent(input));
 }
 
 function findTaskEdgeAction(
@@ -8451,6 +7931,21 @@ function createClickEvent(
 			return propagationStopped;
 		},
 	} as unknown as MouseEvent & { readonly propagationStopped: boolean };
+}
+
+function createKeyboardEvent(key: string): KeyboardEvent {
+	let propagationStopped = false;
+
+	return {
+		key,
+		preventDefault: () => undefined,
+		stopPropagation: () => {
+			propagationStopped = true;
+		},
+		get propagationStopped() {
+			return propagationStopped;
+		},
+	} as unknown as KeyboardEvent;
 }
 
 function createPointerEvent(
@@ -8607,22 +8102,134 @@ function getText(element: FakeElement): string {
 	return [element.textContent, ...element.children.map(getText)].join(' ');
 }
 
+function assertRenderedTaskGeometry(
+	root: FakeElement,
+	task: TaskBlueprint,
+): void {
+	const layout = createTaskGraphLayout([task]);
+
+	for (const edge of layout.edges) {
+		const source = layout.nodes.find((node) => (
+			node.taskId === edge.taskId && node.id === edge.sourceId
+		));
+		const target = layout.nodes.find((node) => (
+			node.taskId === edge.taskId && node.id === edge.targetId
+		));
+
+		assert.ok(source && target);
+		assert.deepStrictEqual(edge.geometry.start, {
+			x: source.position.x + source.width,
+			y: source.position.y + source.height / 2,
+		});
+		assert.deepStrictEqual(edge.geometry.end, {
+			x: target.position.x,
+			y: target.position.y + target.height / 2,
+		});
+		assert.strictEqual(
+			getTaskElement(
+				root,
+				'data-task-edge-id',
+				edge.id,
+				edge.taskId,
+			).getAttribute('d'),
+			[
+				`M ${edge.geometry.start.x} ${edge.geometry.start.y}`,
+				`C ${edge.geometry.control1.x} ${edge.geometry.control1.y}`,
+				`${edge.geometry.control2.x} ${edge.geometry.control2.y}`,
+				`${edge.geometry.end.x} ${edge.geometry.end.y}`,
+			].join(' '),
+		);
+		const action = getTaskEdgeAction(root, edge.taskId, edge.id);
+
+		assert.strictEqual(action.style.left, `${edge.geometry.midpoint.x}px`);
+		assert.strictEqual(action.style.top, `${edge.geometry.midpoint.y}px`);
+	}
+}
+
+function createSerialRenderingTask(
+	taskId: string,
+	origin: { readonly x: number; readonly y: number },
+	workCount: number,
+): TaskBlueprint {
+	let sequence = 0;
+	const task = createDefaultTaskBlueprint({
+		title: 'Serial Task',
+		origin,
+	}, () => 'serial-' + ++sequence);
+	const start = task.nodes.find((node) => node.kind === 'start');
+	const end = task.nodes.find((node) => node.kind === 'end');
+
+	assert.ok(start && end);
+	const works = Array.from({ length: workCount }, (_, index) => ({
+		id: 'task-node:serial-work-' + index,
+		kind: 'work' as const,
+		title: 'Work ' + (index + 1),
+		description: '',
+		prompt: '',
+	}));
+	const nodes = [start, ...works, end];
+
+	return {
+		...task,
+		id: taskId,
+		nodePositions: {
+			...Object.fromEntries(works.map((work, index) => [
+				work.id,
+				{ x: 320 * (index + 1), y: -14 },
+			])),
+			[end.id]: { x: 320 * (workCount + 1), y: 28 },
+		},
+		nodes,
+		edges: nodes.slice(0, -1).map((node, index) => ({
+			id: 'task-edge:serial-' + index,
+			source: node.id,
+			target: nodes[index + 1]?.id ?? end.id,
+		})),
+	};
+}
+
 /** Graph View 통합 테스트에 사용할 고정 ID Task Blueprint를 만든다. */
 function createRenderingTask(
 	origin: { readonly x: number; readonly y: number },
 ): TaskBlueprint {
 	let sequence = 0;
-
-	return createDefaultTaskBlueprint({
+	const state = createTaskState([], () => `render-${++sequence}`);
+	const task = state.createTask({
 		title: 'Render Task Graph',
 		description: 'Show Task and Workspace Graph together.',
 		origin,
-		work: {
-			title: 'Render Task nodes',
-			description: 'Render Start, Work, and End nodes.',
-			prompt: 'Reuse the existing Graph World layers.',
-		},
-	}, () => `render-${++sequence}`);
+	});
+	const withWork = state.addWork(task.id, {
+		title: 'Render Task nodes',
+		description: 'Render Start, Work, and End nodes.',
+		prompt: 'Reuse the existing Graph World layers.',
+	});
+	const start = withWork?.nodes.find((node) => node.kind === 'start');
+	const work = withWork?.nodes.find((node) => node.kind === 'work');
+	const end = withWork?.nodes.find((node) => node.kind === 'end');
+
+	assert.ok(withWork && start && work && end);
+	assert.ok(state.connect(task.id, start.id, task.id, work.id));
+	assert.ok(state.connect(task.id, work.id, task.id, end.id));
+	return state.getTask(task.id) ?? assert.fail('Ready rendering Task가 있어야 한다.');
+}
+
+function beginTaskDrag(
+	node: FakeElement,
+	start: { readonly x: number; readonly y: number },
+	end: { readonly x: number; readonly y: number },
+): void {
+	node.dispatch('pointerdown', createPointerEvent(node, start.x, start.y));
+	node.dispatch('pointermove', createPointerEvent(node, end.x, end.y));
+}
+
+function performTaskDrag(
+	node: FakeElement,
+	start: { readonly x: number; readonly y: number },
+	end: { readonly x: number; readonly y: number },
+): void {
+	beginTaskDrag(node, start, end);
+	node.dispatch('pointerup', createPointerEvent(node, end.x, end.y));
 }
 
 /** 서로 다른 Task가 공유할 고정 Node/Edge ID를 가진 Blueprint를 만든다. */
@@ -8634,22 +8241,42 @@ function createCollidingRenderingTask(
 	const ids = [
 		'unused-task-id',
 		'same-start',
-		'same-work',
 		'same-end',
-		'same-start-work',
-		'same-work-end',
 	];
 	let sequence = 0;
 	const task = createDefaultTaskBlueprint({
 		title,
 		description: `${title} description`,
 		origin,
-		work: {
-			title: `${title} Work`,
-			description: `${title} Work description`,
-			prompt: `${title} prompt`,
-		},
 	}, () => ids[sequence++] ?? `unexpected-${sequence}`);
+	const start = task.nodes.find((node) => node.kind === 'start');
+	const end = task.nodes.find((node) => node.kind === 'end');
 
-	return { ...task, id: taskId };
+	assert.ok(start && end);
+	const work = {
+		id: 'task-node:same-work',
+		kind: 'work' as const,
+		title: `${title} Work`,
+		description: `${title} Work description`,
+		prompt: `${title} prompt`,
+	};
+
+	return {
+		...task,
+		id: taskId,
+		nodePositions: {
+			...task.nodePositions,
+			[work.id]: { x: 320, y: -14 },
+		},
+		nodes: [start, work, end],
+		edges: [{
+			id: 'task-edge:same-start-work',
+			source: start.id,
+			target: work.id,
+		}, {
+			id: 'task-edge:same-work-end',
+			source: work.id,
+			target: end.id,
+		}],
+	};
 }

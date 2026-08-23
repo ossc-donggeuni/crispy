@@ -60,16 +60,15 @@ import type {
 import { createGraphNodeEffects } from './graphNodeEffects';
 import {
 	createTaskState,
+	TASK_DEFAULT_END_POSITION,
 	type TaskBlueprint,
-	type TaskNodeOffset,
+	type TaskNodePosition,
 	type TaskOrigin,
 	type TaskStateStore,
 } from '../../task';
 import {
 	createTaskGraphLayout,
 	TASK_END_NODE_WIDTH,
-	TASK_NODE_HORIZONTAL_GAP,
-	TASK_NODE_WIDTH,
 	TASK_START_NODE_HEIGHT,
 	type TaskLayoutNode,
 } from '../task/taskLayout';
@@ -81,7 +80,7 @@ export interface GraphView {
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
-	/** Task 생성과 origin/manual offset 갱신의 source of truth인 Domain Store다. */
+	/** Task 생성, 연결과 explicit Node 위치의 source of truth인 Domain Store다. */
 	readonly taskState: TaskStateStore;
 	/** Panel/Dock/Webview 변화 뒤 Visible Graph 기반 Overlay를 즉시 다시 배치한다. */
 	refreshVisibleGraphArea(): void;
@@ -98,9 +97,8 @@ export interface GraphView {
 }
 
 const TASK_CREATION_OFFSET = 32;
-const DEFAULT_TASK_LAYOUT_WIDTH = TASK_NODE_WIDTH * 2
-	+ TASK_END_NODE_WIDTH
-	+ TASK_NODE_HORIZONTAL_GAP * 2;
+const DEFAULT_TASK_LAYOUT_WIDTH = TASK_DEFAULT_END_POSITION.x
+	+ TASK_END_NODE_WIDTH;
 
 /** 현재 Visible Graph 중심을 기본 Task 전체 중심으로 사용하고 겹친 origin은 비켜 놓는다. */
 function createTaskOriginInVisibleArea(
@@ -1614,12 +1612,12 @@ export function initializeGraphView(
 			applyTaskState();
 		}
 	};
-	const handleTaskNodeOffsetChange = (
+	const handleTaskNodePositionChange = (
 		taskId: string,
 		nodeId: string,
-		offset: TaskNodeOffset | undefined,
+		position: TaskNodePosition,
 	): void => {
-		if (taskState.setNodeOffset(taskId, nodeId, offset)) {
+		if (taskState.setNodePosition(taskId, nodeId, position)) {
 			applyTaskState();
 		}
 	};
@@ -1629,13 +1627,30 @@ export function initializeGraphView(
 			y: node.position.y + node.height / 2,
 		});
 	};
-	const handleInsertWorkAtEdge = (taskId: string, edgeId: string): void => {
-		if (taskState.insertWorkBetween(taskId, edgeId)) {
+	const handleTaskWorkAdd = (taskId: string): void => {
+		if (taskState.addWork(taskId)) {
 			applyTaskState();
 		}
 	};
-	const handleAddParallelWorkAtEdge = (taskId: string, edgeId: string): void => {
-		if (taskState.addParallelWork(taskId, edgeId)) {
+	const handleTaskConnect = (
+		sourceTaskId: string,
+		sourceNodeId: string,
+		targetTaskId: string,
+		targetNodeId: string,
+	): boolean => {
+		if (taskState.connect(
+			sourceTaskId,
+			sourceNodeId,
+			targetTaskId,
+			targetNodeId,
+		)) {
+			applyTaskState();
+			return true;
+		}
+		return false;
+	};
+	const handleTaskEdgeDisconnect = (taskId: string, edgeId: string): void => {
+		if (taskState.disconnect(taskId, edgeId)) {
 			applyTaskState();
 		}
 	};
@@ -1661,15 +1676,26 @@ export function initializeGraphView(
 	taskRenderer = initializeTaskRenderer(
 		edgeLayer,
 		nodeLayer,
+		viewport,
 		createTaskGraphLayout(taskState.getSnapshot().tasks),
 		{
 			getCameraScale: () => camera.getState().scale,
+			clientToWorld: ({ x, y }) => {
+				const bounds = viewport.getBoundingClientRect();
+
+				return camera.viewportToWorld({
+					x: x - bounds.left,
+					y: y - bounds.top,
+				});
+			},
 			onTaskOriginChange: handleTaskOriginChange,
-			onTaskNodeOffsetChange: handleTaskNodeOffsetChange,
+			onTaskNodePositionChange: handleTaskNodePositionChange,
 			onNodeFocus: handleTaskNodeFocus,
-			onInsertWorkAtEdge: handleInsertWorkAtEdge,
-			onAddParallelWorkAtEdge: handleAddParallelWorkAtEdge,
+			onWorkAdd: handleTaskWorkAdd,
 			onWorkRemove: handleTaskWorkRemove,
+			canConnectNodes: (...connection) => taskState.canConnect(...connection),
+			onNodesConnect: handleTaskConnect,
+			onEdgeDisconnect: handleTaskEdgeDisconnect,
 		},
 	);
 	navigator = initializeGraphNavigator(

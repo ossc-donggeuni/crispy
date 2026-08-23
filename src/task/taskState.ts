@@ -8,7 +8,7 @@ import {
 	type TaskEdge,
 	type TaskIdSource,
 	type TaskNode,
-	type TaskNodeOffset,
+	type TaskNodePosition,
 	type WorkNode,
 } from './taskModel';
 import { assertValidTaskBlueprint } from './taskValidation';
@@ -33,31 +33,42 @@ export interface TaskStateStore {
 	/** ID가 일치하는 Task를 반환하며 없으면 undefined를 반환한다. */
 	getTask(taskId: string): TaskBlueprint | undefined;
 
-	/** 기본 Start → Work → End Task를 생성해 상태에 추가한다. */
+	/** Start와 End만 가진 기본 Task를 생성해 상태에 추가한다. */
 	createTask(input: CreateTaskBlueprintInput): TaskBlueprint;
 
-	/** 선택 Edge를 새 Work 앞뒤의 두 Edge로 치환한다. */
-	insertWorkBetween(
+	/** 연결하지 않은 Work를 다음 기본 위치에 추가한다. */
+	addWork(
 		taskId: string,
-		edgeId: string,
 		work?: CreateWorkNodeInput,
 	): TaskBlueprint | undefined;
 
-	/** 선택한 A → B → C Work lane과 같은 sibling Work를 추가한다. */
-	addParallelWork(
-		taskId: string,
-		edgeId: string,
-		work?: CreateWorkNodeInput,
-	): TaskBlueprint | undefined;
-
-	/** 단일 predecessor/successor Work를 제거하고 필요한 직렬 연결만 복구한다. */
+	/** Work와 incident Edge, local position을 제거하며 연결을 자동 복구하지 않는다. */
 	removeWork(taskId: string, nodeId: string): TaskBlueprint | undefined;
 
-	/** Work/End의 task-local 수동 offset을 설정하거나 제거한다. */
-	setNodeOffset(
+	/** 두 Task Node Port를 구조적으로 연결할 수 있는지 판별한다. */
+	canConnect(
+		sourceTaskId: string,
+		sourceNodeId: string,
+		targetTaskId: string,
+		targetNodeId: string,
+	): boolean;
+
+	/** 허용된 두 Port 사이에 Edge 하나를 추가한다. */
+	connect(
+		sourceTaskId: string,
+		sourceNodeId: string,
+		targetTaskId: string,
+		targetNodeId: string,
+	): TaskBlueprint | undefined;
+
+	/** 정확한 Edge 하나를 제거해 incomplete 편집 상태를 허용한다. */
+	disconnect(taskId: string, edgeId: string): TaskBlueprint | undefined;
+
+	/** Work/End의 명시적 task-local 위치를 갱신한다. */
+	setNodePosition(
 		taskId: string,
 		nodeId: string,
-		offset: TaskNodeOffset | undefined,
+		position: TaskNodePosition,
 	): TaskBlueprint | undefined;
 
 	/**
@@ -137,19 +148,9 @@ export function createTaskState(
 			return task;
 		},
 
-		insertWorkBetween(taskId, edgeId, work): TaskBlueprint | undefined {
-			return commitTask(taskId, (task) => insertWorkBetweenEdge(
+		addWork(taskId, work): TaskBlueprint | undefined {
+			return commitTask(taskId, (task) => addWorkNode(
 				task,
-				edgeId,
-				work,
-				createId,
-			));
-		},
-
-		addParallelWork(taskId, edgeId, work): TaskBlueprint | undefined {
-			return commitTask(taskId, (task) => addParallelWorkAtEdge(
-				task,
-				edgeId,
 				work,
 				createId,
 			));
@@ -159,15 +160,43 @@ export function createTaskState(
 			return commitTask(taskId, (task) => removeWorkNode(
 				task,
 				nodeId,
+			));
+		},
+
+		canConnect(sourceTaskId, sourceNodeId, targetTaskId, targetNodeId): boolean {
+			if (sourceTaskId !== targetTaskId) {
+				return false;
+			}
+			const task = snapshot.tasks.find((candidate) => candidate.id === sourceTaskId);
+
+			return task !== undefined && canConnectTaskNodes(
+				task,
+				sourceNodeId,
+				targetNodeId,
+			);
+		},
+
+		connect(sourceTaskId, sourceNodeId, targetTaskId, targetNodeId): TaskBlueprint | undefined {
+			if (sourceTaskId !== targetTaskId) {
+				return undefined;
+			}
+			return commitTask(sourceTaskId, (task) => connectTaskNodes(
+				task,
+				sourceNodeId,
+				targetNodeId,
 				createId,
 			));
 		},
 
-		setNodeOffset(taskId, nodeId, offset): TaskBlueprint | undefined {
-			return commitTask(taskId, (task) => setTaskNodeOffset(
+		disconnect(taskId, edgeId): TaskBlueprint | undefined {
+			return commitTask(taskId, (task) => disconnectTaskEdge(task, edgeId));
+		},
+
+		setNodePosition(taskId, nodeId, position): TaskBlueprint | undefined {
+			return commitTask(taskId, (task) => setTaskNodePosition(
 				task,
 				nodeId,
-				offset,
+				position,
 			));
 		},
 
@@ -177,33 +206,28 @@ export function createTaskState(
 	};
 }
 
-/** Work/End의 absolute manual offset을 저장하며 undefined는 제거한다. */
-function setTaskNodeOffset(
+/** Work/End의 explicit task-local position을 갱신한다. */
+function setTaskNodePosition(
 	task: TaskBlueprint,
 	nodeId: string,
-	offset: TaskNodeOffset | undefined,
+	position: TaskNodePosition,
 ): TaskBlueprint | undefined {
 	const node = task.nodes.find((candidate) => candidate.id === nodeId);
 	if (
 		!node
 		|| node.kind === 'start'
-		|| (offset !== undefined && (
-			!Number.isFinite(offset.x) || !Number.isFinite(offset.y)
-		))
+		|| !Number.isFinite(position.x)
+		|| !Number.isFinite(position.y)
 	) {
 		return undefined;
 	}
 
-	const nodeOffsets = { ...task.nodeOffsets };
-	if (!offset) {
-		delete nodeOffsets[nodeId];
-	} else {
-		nodeOffsets[nodeId] = { x: offset.x, y: offset.y };
-	}
-
 	return {
 		...task,
-		nodeOffsets: Object.keys(nodeOffsets).length > 0 ? nodeOffsets : undefined,
+		nodePositions: {
+			...task.nodePositions,
+			[nodeId]: { x: position.x, y: position.y },
+		},
 	};
 }
 
@@ -221,162 +245,150 @@ function createWorkNode(
 	};
 }
 
-/** A → B를 A → N → B로 치환하는 최소 immutable 편집이다. */
-function insertWorkBetweenEdge(
+/** 새 Work를 연결 없이 추가하고 사용 중이 아닌 첫 기본 위치를 배정한다. */
+function addWorkNode(
 	task: TaskBlueprint,
-	edgeId: string,
 	work: CreateWorkNodeInput | undefined,
 	createId: TaskIdSource | undefined,
-): TaskBlueprint | undefined {
-	const edge = task.edges.find((candidate) => candidate.id === edgeId);
-	if (!edge) {
-		return undefined;
-	}
-
+): TaskBlueprint {
+	const position = findNextWorkPosition(task.nodePositions);
 	const node = createWorkNode(work, createId);
+
 	return {
 		...task,
+		nodePositions: {
+			...task.nodePositions,
+			[node.id]: position,
+		},
 		nodes: [...task.nodes, node],
-		edges: task.edges.flatMap((candidate) => candidate.id === edgeId
-			? [
-				createEdge(edge.source, node.id, createId),
-				createEdge(node.id, edge.target, createId),
-			]
-			: [candidate]),
 	};
 }
 
-interface WorkLaneSegment {
-	readonly incoming: TaskEdge;
-	readonly outgoing: TaskEdge;
-}
+/** x=320 lane에서 -14부터 180 간격의 첫 빈 위치를 찾는다. */
+function findNextWorkPosition(
+	nodePositions: Readonly<Record<string, TaskNodePosition>>,
+): TaskNodePosition {
+	let y = -14;
 
-/** 선택 Edge target이 정확히 하나의 predecessor/successor를 가진 Work인지 판별한다. */
-export function canAddParallelWorkAtEdge(
-	task: TaskBlueprint,
-	edgeId: string,
-): boolean {
-	return resolveParallelWorkLane(task, edgeId) !== undefined;
-}
-
-/** 삭제 의미가 명확한 단일 predecessor/successor Work인지 판별한다. */
-export function canRemoveWorkNode(task: TaskBlueprint, nodeId: string): boolean {
-	return resolveWorkLane(task, nodeId) !== undefined;
-}
-
-/** 선택 Edge가 target Work의 유일한 incoming인 A → B → C lane을 반환한다. */
-function resolveParallelWorkLane(
-	task: TaskBlueprint,
-	edgeId: string,
-): WorkLaneSegment | undefined {
-	const incoming = task.edges.find((candidate) => candidate.id === edgeId);
-	if (!incoming) {
-		return undefined;
+	while (Object.values(nodePositions).some((position) => (
+		position.x === 320 && position.y === y
+	))) {
+		y += 180;
 	}
-	const lane = resolveWorkLane(task, incoming.target);
 
-	return lane?.incoming.id === edgeId ? lane : undefined;
+	return { x: 320, y };
 }
 
-/** Work가 속한 정확한 A → B → C 단일 lane을 반환한다. */
-function resolveWorkLane(
+/** Work와 incident Edge, explicit position만 제거하고 우회 Edge를 만들지 않는다. */
+function removeWorkNode(
 	task: TaskBlueprint,
 	nodeId: string,
-): WorkLaneSegment | undefined {
-	const node = task.nodes.find((candidate) => candidate.id === nodeId);
-	const incoming = task.edges.filter((edge) => edge.target === nodeId);
-	const outgoing = task.edges.filter((edge) => edge.source === nodeId);
-	if (
-		node?.kind !== 'work'
-		|| incoming.length !== 1
-		|| outgoing.length !== 1
-	) {
-		return undefined;
-	}
-
-	const incomingEdge = incoming[0];
-	const outgoingEdge = outgoing[0];
-	if (
-		!incomingEdge
-		|| !outgoingEdge
-		|| !task.nodes.some((candidate) => candidate.id === incomingEdge.source)
-		|| !task.nodes.some((candidate) => candidate.id === outgoingEdge.target)
-	) {
-		return undefined;
-	}
-
-	return { incoming: incomingEdge, outgoing: outgoingEdge };
-}
-
-/** A → B → C lane에 기존 sibling 수와 무관하게 A → N → C를 추가한다. */
-function addParallelWorkAtEdge(
-	task: TaskBlueprint,
-	edgeId: string,
-	work: CreateWorkNodeInput | undefined,
-	createId: TaskIdSource | undefined,
 ): TaskBlueprint | undefined {
-	const segment = resolveParallelWorkLane(task, edgeId);
-	if (!segment) {
+	const node = task.nodes.find((candidate) => candidate.id === nodeId);
+	if (node?.kind !== 'work') {
 		return undefined;
 	}
 
-	const node = createWorkNode(work, createId);
+	const nodePositions = { ...task.nodePositions };
+
+	delete nodePositions[nodeId];
+
 	return {
 		...task,
-		nodes: [...task.nodes, node],
+		nodePositions,
+		nodes: task.nodes.filter((candidate) => candidate.id !== nodeId),
+		edges: task.edges.filter((edge) => (
+			edge.source !== nodeId && edge.target !== nodeId
+		)),
+	};
+}
+
+/** Node kind Port 방향과 DAG 불변 조건을 모두 만족하는 연결인지 판별한다. */
+function canConnectTaskNodes(
+	task: TaskBlueprint,
+	sourceNodeId: string,
+	targetNodeId: string,
+): boolean {
+	const source = task.nodes.find((node) => node.id === sourceNodeId);
+	const target = task.nodes.find((node) => node.id === targetNodeId);
+
+	return source !== undefined
+		&& target !== undefined
+		&& source.id !== target.id
+		&& source.kind !== 'end'
+		&& target.kind !== 'start'
+		&& !task.edges.some((edge) => (
+			edge.source === source.id && edge.target === target.id
+		))
+		&& !hasNodePath(task, target.id, source.id);
+}
+
+/** canConnect가 허용한 source→target Edge만 새 ID로 추가한다. */
+function connectTaskNodes(
+	task: TaskBlueprint,
+	sourceNodeId: string,
+	targetNodeId: string,
+	createId: TaskIdSource | undefined,
+): TaskBlueprint | undefined {
+	if (!canConnectTaskNodes(task, sourceNodeId, targetNodeId)) {
+		return undefined;
+	}
+
+	return {
+		...task,
 		edges: [
 			...task.edges,
-			createEdge(segment.incoming.source, node.id, createId),
-			createEdge(node.id, segment.outgoing.target, createId),
+			createEdge(sourceNodeId, targetNodeId, createId),
 		],
 	};
 }
 
-/** 단일 Work lane을 제거하고 sibling이 없을 때만 직렬 연결을 복구한다. */
-function removeWorkNode(
+/** 정확한 Edge를 찾아 제거하고 없으면 상태를 바꾸지 않는다. */
+function disconnectTaskEdge(
 	task: TaskBlueprint,
-	nodeId: string,
-	createId: TaskIdSource | undefined,
+	edgeId: string,
 ): TaskBlueprint | undefined {
-	const lane = resolveWorkLane(task, nodeId);
-	if (!lane) {
+	if (!task.edges.some((edge) => edge.id === edgeId)) {
 		return undefined;
 	}
 
-	const edges = task.edges.filter((edge) => (
-		edge.source !== nodeId && edge.target !== nodeId
-	));
-	const hasSiblingLane = task.nodes.some((candidate) => {
-		if (candidate.id === nodeId || candidate.kind !== 'work') {
-			return false;
-		}
-		const sibling = resolveWorkLane(task, candidate.id);
-
-		return sibling?.incoming.source === lane.incoming.source
-			&& sibling.outgoing.target === lane.outgoing.target;
-	});
-	const hasDirectEdge = edges.some((edge) => (
-		edge.source === lane.incoming.source
-		&& edge.target === lane.outgoing.target
-	));
-
-	if (!hasSiblingLane && !hasDirectEdge) {
-		edges.push(createEdge(
-			lane.incoming.source,
-			lane.outgoing.target,
-			createId,
-		));
-	}
-	const nodeOffsets = { ...task.nodeOffsets };
-
-	delete nodeOffsets[nodeId];
-
 	return {
 		...task,
-		nodeOffsets: Object.keys(nodeOffsets).length > 0 ? nodeOffsets : undefined,
-		nodes: task.nodes.filter((candidate) => candidate.id !== nodeId),
-		edges,
+		edges: task.edges.filter((edge) => edge.id !== edgeId),
 	};
+}
+
+/** source에서 target으로 이미 도달할 수 있는지 DFS로 확인한다. */
+function hasNodePath(
+	task: TaskBlueprint,
+	sourceNodeId: string,
+	targetNodeId: string,
+): boolean {
+	const targetsBySource = new Map<string, string[]>();
+
+	for (const edge of task.edges) {
+		const targets = targetsBySource.get(edge.source) ?? [];
+
+		targets.push(edge.target);
+		targetsBySource.set(edge.source, targets);
+	}
+
+	const pending = [sourceNodeId];
+	const visited = new Set<string>();
+	while (pending.length > 0) {
+		const nodeId = pending.pop();
+
+		if (!nodeId || visited.has(nodeId)) {
+			continue;
+		}
+		if (nodeId === targetNodeId) {
+			return true;
+		}
+		visited.add(nodeId);
+		pending.push(...(targetsBySource.get(nodeId) ?? []));
+	}
+
+	return false;
 }
 
 function createEdge(
@@ -415,10 +427,10 @@ function createStateSnapshot(
 /** Task 전체를 검증하고 중첩 값까지 복사해 고정한다. */
 function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 	assertValidTaskBlueprint(task);
-	const nodeOffsets = Object.fromEntries(Object.entries(task.nodeOffsets ?? {}).map(
-		([nodeId, offset]) => [
+	const nodePositions = Object.fromEntries(Object.entries(task.nodePositions).map(
+		([nodeId, position]) => [
 			nodeId,
-			Object.freeze({ x: offset.x, y: offset.y }),
+			Object.freeze({ x: position.x, y: position.y }),
 		],
 	));
 
@@ -428,9 +440,7 @@ function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 		title: task.title,
 		description: task.description,
 		origin: Object.freeze({ x: task.origin.x, y: task.origin.y }),
-		...(Object.keys(nodeOffsets).length > 0
-			? { nodeOffsets: Object.freeze(nodeOffsets) }
-			: {}),
+		nodePositions: Object.freeze(nodePositions),
 		nodes: Object.freeze(task.nodes.map(createNodeSnapshot)),
 		edges: Object.freeze(task.edges.map(createEdgeSnapshot)),
 	});

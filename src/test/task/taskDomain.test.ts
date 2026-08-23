@@ -1,10 +1,11 @@
 import * as assert from 'assert';
 import {
 	assertValidTaskBlueprint,
-	canRemoveWorkNode,
 	createDefaultTaskBlueprint,
 	createTaskState,
+	getTaskFlowStatus,
 	TASK_BLUEPRINT_VERSION,
+	TASK_DEFAULT_END_POSITION,
 	validateTaskBlueprint,
 	type TaskBlueprint,
 	type TaskIdSource,
@@ -12,54 +13,32 @@ import {
 } from '../../task';
 
 suite('Task Domain', () => {
-	test('기본 Task를 Start → Work → End 구조와 정상 Edge로 생성한다', () => {
+	test('기본 Task는 연결되지 않은 Start/End와 End explicit position을 생성한다', () => {
 		const task = createDefaultTaskBlueprint({
-			title: 'Implement Task Graph',
-			description: 'Build the minimum Task domain.',
+			title: 'Direct Task Graph',
+			description: 'Connect ports directly.',
 			origin: { x: 120, y: -40 },
-			work: {
-				title: 'Implement domain',
-				description: 'Add the Task model and validation.',
-				prompt: 'Implement T-01.',
-			},
 		}, createSequentialIdSource());
 
 		assert.strictEqual(task.version, TASK_BLUEPRINT_VERSION);
 		assert.strictEqual(task.id, 'task:id-1');
-		assert.strictEqual(task.title, 'Implement Task Graph');
-		assert.strictEqual(task.description, 'Build the minimum Task domain.');
+		assert.strictEqual(task.title, 'Direct Task Graph');
+		assert.strictEqual(task.description, 'Connect ports directly.');
 		assert.deepStrictEqual(task.origin, { x: 120, y: -40 });
-		assert.strictEqual(Object.hasOwn(task, 'nodeOffsets'), false);
 		assert.deepStrictEqual(task.nodes, [
 			{ id: 'task-node:id-2', kind: 'start' },
-			{
-				id: 'task-node:id-3',
-				kind: 'work',
-				title: 'Implement domain',
-				description: 'Add the Task model and validation.',
-				prompt: 'Implement T-01.',
-			},
-			{ id: 'task-node:id-4', kind: 'end' },
+			{ id: 'task-node:id-3', kind: 'end' },
 		]);
-		assert.strictEqual(Object.hasOwn(task.nodes[0], 'title'), false);
-		assert.strictEqual(Object.hasOwn(task.nodes[0], 'description'), false);
-		assert.strictEqual(Object.hasOwn(task.nodes[2], 'title'), false);
-		assert.deepStrictEqual(task.edges, [
-			{
-				id: 'task-edge:id-5',
-				source: 'task-node:id-2',
-				target: 'task-node:id-3',
-			},
-			{
-				id: 'task-edge:id-6',
-				source: 'task-node:id-3',
-				target: 'task-node:id-4',
-			},
-		]);
+		assert.deepStrictEqual(task.nodePositions, {
+			'task-node:id-3': TASK_DEFAULT_END_POSITION,
+		});
+		assert.deepStrictEqual(task.edges, []);
+		assert.strictEqual(Object.hasOwn(task.nodePositions, 'task-node:id-2'), false);
 		assert.deepStrictEqual(validateTaskBlueprint(task), []);
+		assert.strictEqual(getTaskFlowStatus(task), 'incomplete');
 	});
 
-	test('Task 상태에서 기본 Task를 생성하고 ID로 조회 및 갱신한다', () => {
+	test('Task 상태는 structural snapshot을 생성하고 ID로 조회·갱신·교체한다', () => {
 		const state = createTaskState([], createSequentialIdSource());
 		const created = state.createTask({ title: 'Initial Task' });
 
@@ -67,6 +46,7 @@ suite('Task Domain', () => {
 		assert.deepStrictEqual(state.getSnapshot().tasks, [created]);
 		assert.strictEqual(Object.isFrozen(created), true);
 		assert.strictEqual(Object.isFrozen(created.nodes), true);
+		assert.strictEqual(Object.isFrozen(created.nodePositions), true);
 
 		const updated = state.updateTask(created.id, (task) => ({
 			...task,
@@ -94,479 +74,526 @@ suite('Task Domain', () => {
 		assert.strictEqual(state.getTask(replacement.id), replacementSnapshot.tasks[0]);
 	});
 
-	test('Work/End manual offset을 immutable Task별 상태로 설정하고 제거한다', () => {
-		const task = createTask();
-		const [start, work, end] = task.nodes;
-		const inputOffset = { x: 80, y: -30 };
-		const state = createTaskState([task]);
+	test('Work를 Edge 없이 deterministic vertical lane에 추가한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Placement Task' });
+		const first = state.addWork(task.id, { title: 'First' });
+		const second = state.addWork(task.id);
+		const third = state.addWork(task.id);
+		const fourth = state.addWork(task.id);
 
-		assert.ok(start && work && end);
-		const workUpdated = state.setNodeOffset(task.id, work.id, inputOffset);
+		assert.ok(first && second && third && fourth);
+		const works = fourth.nodes.filter((node) => node.kind === 'work');
 
-		assert.deepStrictEqual(workUpdated?.nodeOffsets, {
-			[work.id]: { x: 80, y: -30 },
-		});
-		assert.deepStrictEqual(workUpdated?.origin, task.origin);
-		assert.deepStrictEqual(workUpdated?.nodes, task.nodes);
-		assert.deepStrictEqual(workUpdated?.edges, task.edges);
-		assert.strictEqual(Object.isFrozen(workUpdated?.nodeOffsets), true);
-		assert.strictEqual(
-			Object.isFrozen(workUpdated?.nodeOffsets?.[work.id]),
-			true,
-		);
-		inputOffset.x = 999;
-		assert.deepStrictEqual(workUpdated?.nodeOffsets?.[work.id], { x: 80, y: -30 });
-
-		const endUpdated = state.setNodeOffset(task.id, end.id, { x: 15, y: 25 });
-		assert.deepStrictEqual(endUpdated?.nodeOffsets, {
-			[work.id]: { x: 80, y: -30 },
-			[end.id]: { x: 15, y: 25 },
-		});
-		const snapshotBeforeInvalid = state.getSnapshot();
-
-		assert.strictEqual(state.setNodeOffset(task.id, start.id, { x: 1, y: 1 }), undefined);
-		assert.strictEqual(state.setNodeOffset(task.id, 'task-node:missing', { x: 1, y: 1 }), undefined);
-		assert.strictEqual(state.setNodeOffset(task.id, work.id, { x: Number.NaN, y: 0 }), undefined);
-		assert.strictEqual(state.setNodeOffset(task.id, work.id, { x: 0, y: Infinity }), undefined);
-		assert.strictEqual(state.getSnapshot(), snapshotBeforeInvalid);
-
-		const clearedWork = state.setNodeOffset(task.id, work.id, undefined);
-		assert.deepStrictEqual(clearedWork?.nodeOffsets, {
-			[end.id]: { x: 15, y: 25 },
-		});
-		const zeroEnd = state.setNodeOffset(task.id, end.id, { x: 0, y: 0 });
-		assert.deepStrictEqual(zeroEnd?.nodeOffsets, {
-			[end.id]: { x: 0, y: 0 },
-		});
-		const clearedEnd = state.setNodeOffset(task.id, end.id, undefined);
-		assert.strictEqual(clearedEnd?.nodeOffsets, undefined);
+		assert.deepStrictEqual(works.map((node) => node.id), [
+			'task-node:id-4',
+			'task-node:id-5',
+			'task-node:id-6',
+			'task-node:id-7',
+		]);
+		assert.strictEqual(works[0]?.title, 'First');
+		assert.strictEqual(works[1]?.title, 'New Work');
+		assert.deepStrictEqual(works.map((node) => fourth.nodePositions[node.id]), [
+			{ x: 320, y: -14 },
+			{ x: 320, y: 166 },
+			{ x: 320, y: 346 },
+			{ x: 320, y: 526 },
+		]);
+		assert.deepStrictEqual(fourth.edges, []);
+		assert.deepStrictEqual(validateTaskBlueprint(fourth), []);
+		assert.strictEqual(getTaskFlowStatus(fourth), 'incomplete');
+		assert.strictEqual(state.addWork('task:missing'), undefined);
 	});
 
-	test('초기 manual offset snapshot은 외부 record와 값을 복사해 동결한다', () => {
+	test('삭제로 빈 Work 기본 위치를 다음 추가에서 재사용한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Reuse Position' });
+		const first = state.addWork(task.id);
+		const second = state.addWork(task.id);
+		const firstWork = first?.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(second && firstWork);
+		assert.ok(state.removeWork(task.id, firstWork.id));
+		const added = state.addWork(task.id);
+		const newest = added?.nodes.at(-1);
+
+		assert.ok(added && newest?.kind === 'work');
+		assert.deepStrictEqual(added.nodePositions[newest.id], { x: 320, y: -14 });
+	});
+
+	test('Work/End explicit position을 Task별 immutable snapshot으로 갱신한다', () => {
 		const task = createTask();
-		const work = task.nodes.find((node) => node.kind === 'work');
-		const mutableOffset = { x: 12, y: -7 };
+		const state = createTaskState([task], createSequentialIdSource());
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		const added = state.addWork(task.id);
+		const work = added?.nodes.find((node) => node.kind === 'work');
+		const inputPosition = { x: 450, y: -70 };
 
 		assert.ok(work);
-		const mutableOffsets = { [work.id]: mutableOffset };
+		const workUpdated = state.setNodePosition(task.id, work.id, inputPosition);
+
+		assert.deepStrictEqual(workUpdated?.nodePositions[work.id], { x: 450, y: -70 });
+		assert.deepStrictEqual(workUpdated?.origin, task.origin);
+		assert.strictEqual(Object.isFrozen(workUpdated?.nodePositions), true);
+		assert.strictEqual(Object.isFrozen(workUpdated?.nodePositions[work.id]), true);
+		inputPosition.x = 999;
+		assert.deepStrictEqual(workUpdated?.nodePositions[work.id], { x: 450, y: -70 });
+
+		const endUpdated = state.setNodePosition(task.id, end.id, { x: 700, y: 55 });
+		assert.deepStrictEqual(endUpdated?.nodePositions[end.id], { x: 700, y: 55 });
+		const snapshotBeforeInvalid = state.getSnapshot();
+
+		assert.strictEqual(
+			state.setNodePosition(task.id, start.id, { x: 1, y: 1 }),
+			undefined,
+		);
+		assert.strictEqual(
+			state.setNodePosition(task.id, 'task-node:missing', { x: 1, y: 1 }),
+			undefined,
+		);
+		assert.strictEqual(
+			state.setNodePosition(task.id, work.id, { x: Number.NaN, y: 0 }),
+			undefined,
+		);
+		assert.strictEqual(
+			state.setNodePosition(task.id, end.id, { x: 0, y: Infinity }),
+			undefined,
+		);
+		assert.strictEqual(state.getSnapshot(), snapshotBeforeInvalid);
+	});
+
+	test('초기 nodePositions snapshot은 외부 record와 각 값을 복사해 동결한다', () => {
+		const task = createTask();
+		const end = getNode(task, 'end');
+		const mutablePosition = { x: 640, y: 28 };
+		const mutablePositions = { [end.id]: mutablePosition };
 		const state = createTaskState([{
 			...task,
-			nodeOffsets: mutableOffsets,
+			nodePositions: mutablePositions,
 		}]);
-		const snapshotOffsets = state.getTask(task.id)?.nodeOffsets;
+		const snapshotPositions = state.getTask(task.id)?.nodePositions;
 
-		mutableOffset.x = 999;
-		delete mutableOffsets[work.id];
-		assert.deepStrictEqual(snapshotOffsets, {
-			[work.id]: { x: 12, y: -7 },
+		mutablePosition.x = 999;
+		delete mutablePositions[end.id];
+		assert.deepStrictEqual(snapshotPositions, {
+			[end.id]: { x: 640, y: 28 },
 		});
-		assert.strictEqual(Object.isFrozen(snapshotOffsets), true);
-		assert.strictEqual(Object.isFrozen(snapshotOffsets?.[work.id]), true);
+		assert.strictEqual(Object.isFrozen(snapshotPositions), true);
+		assert.strictEqual(Object.isFrozen(snapshotPositions?.[end.id]), true);
 	});
 
-	test('직렬 Work 추가는 선택 Edge를 A → N → B로 치환한다', () => {
+	test('Start→End direct Edge를 연결하면 Work 없이도 ready가 된다', () => {
 		const state = createTaskState([], createSequentialIdSource());
-		const task = state.createTask({ title: 'Serial Task' });
-		const [start, work, end] = task.nodes;
-		const selectedEdge = task.edges[0];
+		const task = state.createTask({ title: 'Direct Ready Task' });
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
 
-		assert.ok(start && work && end && selectedEdge);
-		const updated = state.insertWorkBetween(task.id, selectedEdge.id);
-		const inserted = updated?.nodes.find((node) => (
-			node.kind === 'work' && node.id !== work.id
-		));
+		assert.strictEqual(state.canConnect(task.id, start.id, task.id, end.id), true);
+		const connected = state.connect(task.id, start.id, task.id, end.id);
 
-		assert.ok(updated && inserted?.kind === 'work');
-		assert.strictEqual(inserted.title, 'New Work');
-		assert.strictEqual(updated.nodes.length, task.nodes.length + 1);
-		assert.strictEqual(updated.edges.length, task.edges.length + 1);
-		assert.strictEqual(
-			updated.edges.some((edge) => edge.id === selectedEdge.id),
-			false,
-		);
-		assert.deepStrictEqual(readConnections(updated), [
-			`${work.id}->${end.id}`,
-			`${start.id}->${inserted.id}`,
-			`${inserted.id}->${work.id}`,
-		].sort());
-		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
-		assert.strictEqual(state.insertWorkBetween(task.id, 'task-edge:missing'), undefined);
+		assert.ok(connected);
+		assert.deepStrictEqual(connected.edges, [{
+			id: 'task-edge:id-4',
+			source: start.id,
+			target: end.id,
+		}]);
+		assert.strictEqual(getTaskFlowStatus(connected), 'ready');
+		const snapshotBeforeDuplicate = state.getSnapshot();
+
+		assert.strictEqual(state.canConnect(task.id, start.id, task.id, end.id), false);
+		assert.strictEqual(state.connect(task.id, start.id, task.id, end.id), undefined);
+		assert.strictEqual(state.getSnapshot(), snapshotBeforeDuplicate);
 	});
 
-	test('같은 A → Work → C 그룹에 병렬 Work를 반복 추가한다', () => {
+	test('disconnect는 정확한 Edge만 제거하고 structurally valid incomplete Task를 유지한다', () => {
 		const state = createTaskState([], createSequentialIdSource());
-		const task = state.createTask({ title: 'Parallel Task' });
-		const [start, work, end] = task.nodes;
-		const incoming = task.edges[0];
+		const task = state.createTask({ title: 'Disconnect Task' });
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		const connected = state.connect(task.id, start.id, task.id, end.id);
+		const edge = connected?.edges[0];
 
-		assert.ok(start && work && end && incoming);
-		const updated = state.addParallelWork(task.id, incoming.id, {
-			title: 'Parallel Work',
-		});
-		const parallel = updated?.nodes.find((node) => (
-			node.kind === 'work' && node.id !== work.id
-		));
+		assert.ok(edge);
+		const disconnected = state.disconnect(task.id, edge.id);
 
-		assert.ok(updated && parallel?.kind === 'work');
-		assert.strictEqual(parallel.title, 'Parallel Work');
-		assert.deepStrictEqual(readConnections(updated), [
-			`${start.id}->${work.id}`,
-			`${start.id}->${parallel.id}`,
-			`${work.id}->${end.id}`,
-			`${parallel.id}->${end.id}`,
-		].sort());
-		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
-		const second = state.addParallelWork(task.id, incoming.id, {
-			title: 'Parallel Work 2',
-		});
-		const third = state.addParallelWork(task.id, incoming.id, {
-			title: 'Parallel Work 3',
-		});
+		assert.ok(disconnected);
+		assert.deepStrictEqual(disconnected.edges, []);
+		assert.deepStrictEqual(validateTaskBlueprint(disconnected), []);
+		assert.strictEqual(getTaskFlowStatus(disconnected), 'incomplete');
+		const snapshotBeforeMissing = state.getSnapshot();
 
-		assert.ok(second && third);
-		const siblingWorks = third.nodes.filter((node) => node.kind === 'work');
+		assert.strictEqual(state.disconnect(task.id, edge.id), undefined);
+		assert.strictEqual(state.disconnect('task:missing', edge.id), undefined);
+		assert.strictEqual(state.getSnapshot(), snapshotBeforeMissing);
+	});
 
-		assert.strictEqual(siblingWorks.length, 4);
-		for (const sibling of siblingWorks) {
-			assert.strictEqual(third.edges.filter((edge) => (
-				edge.source === start.id && edge.target === sibling.id
-			)).length, 1);
-			assert.strictEqual(third.edges.filter((edge) => (
-				edge.source === sibling.id && edge.target === end.id
-			)).length, 1);
+	test('canConnect/connect는 cross-task·missing·self·Port 방향 오류를 거부한다', () => {
+		const taskA = createTask('Task A', 'a');
+		const taskB: TaskBlueprint = {
+			...taskA,
+			id: 'task:b',
+			title: 'Task B',
+		};
+		const state = createTaskState([taskA, taskB], createSequentialIdSource());
+		const start = getNode(taskA, 'start');
+		const end = getNode(taskA, 'end');
+
+		for (const [sourceTaskId, sourceId, targetTaskId, targetId] of [
+			[taskA.id, start.id, taskB.id, end.id],
+			[taskA.id, 'task-node:missing', taskA.id, end.id],
+			[taskA.id, start.id, taskA.id, 'task-node:missing'],
+			[taskA.id, start.id, taskA.id, start.id],
+			[taskA.id, end.id, taskA.id, start.id],
+		] as const) {
+			assert.strictEqual(
+				state.canConnect(sourceTaskId, sourceId, targetTaskId, targetId),
+				false,
+			);
+			assert.strictEqual(
+				state.connect(sourceTaskId, sourceId, targetTaskId, targetId),
+				undefined,
+			);
 		}
-		assert.deepStrictEqual(validateTaskBlueprint(third), []);
+		assert.deepStrictEqual(state.getTask(taskA.id)?.edges, []);
+		assert.deepStrictEqual(state.getTask(taskB.id)?.edges, []);
+	});
+
+	test('connect는 일반 Work DAG의 Branch/Join을 허용하고 cycle을 사전에 거부한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Branch Task' });
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		state.addWork(task.id, { title: 'A' });
+		const second = state.addWork(task.id, { title: 'B' });
+		const works = second?.nodes.filter((node) => node.kind === 'work');
+
+		assert.ok(second && works?.length === 2);
+		const [workA, workB] = works;
+
+		assert.ok(workA && workB);
+		assert.ok(state.connect(task.id, start.id, task.id, workA.id));
+		assert.ok(state.connect(task.id, start.id, task.id, workB.id));
+		assert.ok(state.connect(task.id, workA.id, task.id, end.id));
+		const ready = state.connect(task.id, workB.id, task.id, end.id);
+
+		assert.ok(ready);
+		assert.strictEqual(getTaskFlowStatus(ready), 'ready');
+		assert.strictEqual(state.canConnect(task.id, workA.id, task.id, workB.id), true);
+		assert.ok(state.connect(task.id, workA.id, task.id, workB.id));
+		assert.strictEqual(state.canConnect(task.id, workB.id, task.id, workA.id), false);
 		assert.strictEqual(
-			state.addParallelWork(task.id, task.edges[1]?.id ?? ''),
+			state.connect(task.id, workB.id, task.id, workA.id),
 			undefined,
 		);
 	});
 
-	test('복수 successor가 있는 Work의 모호한 병렬 추가를 거부한다', () => {
-		const task = createTask();
-		const [start, work, end] = task.nodes;
+	test('removeWork는 복수 predecessor/successor에서도 incident 자료만 제거하고 rewrite하지 않는다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Remove Work' });
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		state.addWork(task.id, { title: 'A' });
+		state.addWork(task.id, { title: 'B' });
+		const withWorks = state.addWork(task.id, { title: 'C' });
+		const works = withWorks?.nodes.filter((node) => node.kind === 'work');
 
-		assert.ok(start && work && end);
-		const successorWork = {
-			id: 'task-node:successor',
-			kind: 'work' as const,
-			title: 'Successor',
-			description: '',
-			prompt: '',
-		};
-		const branchedTask: TaskBlueprint = {
-			...task,
-			nodes: [...task.nodes, successorWork],
-			edges: [...task.edges, {
-				id: 'task-edge:work-successor',
-				source: work.id,
-				target: successorWork.id,
-			}, {
-				id: 'task-edge:successor-end',
-				source: successorWork.id,
-				target: end.id,
-			}],
-		};
-		const state = createTaskState([branchedTask], createSequentialIdSource());
-		const updated = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
+		assert.ok(works?.length === 3);
+		const [workA, workB, workC] = works;
 
-		assert.strictEqual(updated, undefined);
-		assert.deepStrictEqual(state.getTask(task.id), branchedTask);
-		assert.deepStrictEqual(validateTaskBlueprint(branchedTask), []);
-	});
-
-	test('Work 삭제는 predecessor×successor 연결을 중복 없이 복구한다', () => {
-		const task = createTask();
-		const [start, work, end] = task.nodes;
-		const state = createTaskState([task], createSequentialIdSource());
-
-		assert.ok(start && work && end);
-		assert.ok(state.setNodeOffset(task.id, work.id, { x: 40, y: -20 }));
-		assert.ok(state.setNodeOffset(task.id, end.id, { x: 10, y: 15 }));
-		const updated = state.removeWork(task.id, work.id);
+		assert.ok(workA && workB && workC);
+		assert.ok(state.connect(task.id, start.id, task.id, workA.id));
+		assert.ok(state.connect(task.id, start.id, task.id, workB.id));
+		assert.ok(state.connect(task.id, workA.id, task.id, workB.id));
+		assert.ok(state.connect(task.id, workB.id, task.id, workC.id));
+		assert.ok(state.connect(task.id, workB.id, task.id, end.id));
+		assert.ok(state.connect(task.id, workC.id, task.id, end.id));
+		const before = state.getTask(task.id);
+		const untouchedEdgeIds = before?.edges.filter((edge) => (
+			edge.source !== workB.id && edge.target !== workB.id
+		)).map((edge) => edge.id);
+		const updated = state.removeWork(task.id, workB.id);
 
 		assert.ok(updated);
-		assert.deepStrictEqual(updated.nodes, [start, end]);
-		assert.deepStrictEqual(updated.nodeOffsets, {
-			[end.id]: { x: 10, y: 15 },
-		});
-		assert.deepStrictEqual(readConnections(updated), [`${start.id}->${end.id}`]);
+		assert.strictEqual(updated.nodes.some((node) => node.id === workB.id), false);
+		assert.strictEqual(Object.hasOwn(updated.nodePositions, workB.id), false);
+		assert.strictEqual(updated.edges.some((edge) => (
+			edge.source === workB.id || edge.target === workB.id
+		)), false);
+		assert.deepStrictEqual(updated.edges.map((edge) => edge.id), untouchedEdgeIds);
+		assert.strictEqual(updated.edges.some((edge) => (
+			edge.source === workA.id && edge.target === workC.id
+		)), false);
 		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
 		assert.strictEqual(state.removeWork(task.id, start.id), undefined);
 		assert.strictEqual(state.removeWork(task.id, end.id), undefined);
+		assert.strictEqual(state.removeWork(task.id, 'task-node:missing'), undefined);
 	});
 
-	test('기존 direct Edge가 있는 Work 삭제는 같은 연결을 중복하지 않는다', () => {
+	test('Structural validation은 disconnected Task를 허용하고 Start/End 개수를 강제한다', () => {
 		const task = createTask();
-		const [start, work, end] = task.nodes;
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
 
-		assert.ok(start && work && end);
-		const taskWithDirectEdge: TaskBlueprint = {
-			...task,
-			edges: [...task.edges, {
-				id: 'task-edge:direct',
-				source: start.id,
-				target: end.id,
-			}],
-		};
-		const state = createTaskState([taskWithDirectEdge], createSequentialIdSource());
-		const updated = state.removeWork(task.id, work.id);
-
-		assert.ok(updated);
-		assert.deepStrictEqual(readConnections(updated), [`${start.id}->${end.id}`]);
-		assert.strictEqual(updated.edges[0]?.id, 'task-edge:direct');
-		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
-	});
-
-	test('병렬 Branch Work 삭제는 sibling만 보존하고 bypass Edge를 만들지 않는다', () => {
-		const task = createTask();
-		const [start, work, end] = task.nodes;
-		let sequence = 0;
-		const state = createTaskState([task], () => `parallel-delete-${++sequence}`);
-
-		assert.ok(start && work && end);
-		const first = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
-		const branched = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
-		const siblings = branched?.nodes.filter((node) => (
-			node.kind === 'work' && node.id !== work.id
-		));
-
-		assert.ok(first && branched && siblings?.length === 2);
-		const updated = state.removeWork(task.id, work.id);
-
-		assert.ok(updated);
-		assert.deepStrictEqual(readConnections(updated), siblings.flatMap((sibling) => [
-			`${start.id}->${sibling.id}`,
-			`${sibling.id}->${end.id}`,
-		]).sort());
-		assert.strictEqual(updated.edges.some((edge) => (
-			edge.source === start.id && edge.target === end.id
-		)), false);
-		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
-	});
-
-	test('복수 predecessor 또는 successor Work는 삭제를 노출하거나 수행하지 않는다', () => {
-		const task = createTask();
-		const [start, work, end] = task.nodes;
-
-		assert.ok(start && work?.kind === 'work' && end);
-		const predecessor = {
-			...work,
-			id: 'task-node:predecessor',
-			title: 'Predecessor',
-		};
-		const successor = {
-			...work,
-			id: 'task-node:successor',
-			title: 'Successor',
-		};
-		const complexTask: TaskBlueprint = {
-			...task,
-			nodes: [start, predecessor, work, successor, end],
-			edges: [{
-				id: 'task-edge:start-work',
-				source: start.id,
-				target: work.id,
-			}, {
-				id: 'task-edge:start-predecessor',
-				source: start.id,
-				target: predecessor.id,
-			}, {
-				id: 'task-edge:predecessor-work',
-				source: predecessor.id,
-				target: work.id,
-			}, {
-				id: 'task-edge:work-end',
-				source: work.id,
-				target: end.id,
-			}, {
-				id: 'task-edge:work-successor',
-				source: work.id,
-				target: successor.id,
-			}, {
-				id: 'task-edge:successor-end',
-				source: successor.id,
-				target: end.id,
-			}],
-		};
-		const state = createTaskState([complexTask], createSequentialIdSource());
-
-		assert.strictEqual(canRemoveWorkNode(complexTask, work.id), false);
-		assert.strictEqual(state.removeWork(complexTask.id, work.id), undefined);
-		assert.deepStrictEqual(state.getTask(complexTask.id), complexTask);
-		assert.deepStrictEqual(validateTaskBlueprint(complexTask), []);
-	});
-
-	test('Start Node 누락과 중복을 거부한다', () => {
-		const task = createTask();
-		const startNode = task.nodes.find((node) => node.kind === 'start');
-		assert.ok(startNode);
-
+		assert.deepStrictEqual(validateTaskBlueprint(task), []);
 		assertIssueCodes({
 			...task,
 			nodes: task.nodes.filter((node) => node.kind !== 'start'),
 		}, ['start_node_count']);
 		assertIssueCodes({
 			...task,
-			nodes: [...task.nodes, { ...startNode, id: 'task-node:start-copy' }],
+			nodes: [...task.nodes, { ...start, id: 'task-node:start-copy' }],
 		}, ['start_node_count']);
-	});
-
-	test('End Node 누락과 중복을 거부한다', () => {
-		const task = createTask();
-		const endNode = task.nodes.find((node) => node.kind === 'end');
-		assert.ok(endNode);
-
 		assertIssueCodes({
 			...task,
 			nodes: task.nodes.filter((node) => node.kind !== 'end'),
+			nodePositions: {},
 		}, ['end_node_count']);
 		assertIssueCodes({
 			...task,
-			nodes: [...task.nodes, { ...endNode, id: 'task-node:end-copy' }],
+			nodes: [...task.nodes, { ...end, id: 'task-node:end-copy' }],
+			nodePositions: {
+				...task.nodePositions,
+				'task-node:end-copy': { x: 800, y: 28 },
+			},
 		}, ['end_node_count']);
 	});
 
-	test('존재하지 않는 source 또는 target Node를 가리키는 Edge를 거부한다', () => {
+	test('Structural validation은 Work/End position missing·extra·Start·non-finite를 거부한다', () => {
 		const task = createTask();
-		const workNode = task.nodes.find((node) => node.kind === 'work');
-		assert.ok(workNode);
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
 
+		assertIssueCodes({ ...task, nodePositions: {} }, ['node_position_missing']);
 		assertIssueCodes({
 			...task,
-			edges: [
-				{
-					id: 'task-edge:missing-source',
-					source: 'task-node:missing-source',
-					target: workNode.id,
-				},
-				{
-					id: 'task-edge:missing-target',
-					source: workNode.id,
-					target: 'task-node:missing-target',
-				},
-			],
-		}, ['edge_source_missing', 'edge_target_missing']);
+			nodePositions: {
+				...task.nodePositions,
+				'task-node:missing': { x: 10, y: 20 },
+			},
+		}, ['node_position_extra']);
+		assertIssueCodes({
+			...task,
+			nodePositions: {
+				...task.nodePositions,
+				[start.id]: { x: 0, y: 0 },
+			},
+		}, ['start_node_position']);
+		assertIssueCodes({
+			...task,
+			nodePositions: {
+				[end.id]: { x: Number.NaN, y: Number.NEGATIVE_INFINITY },
+			},
+		}, ['invalid_node_position']);
+
+		const state = createTaskState([task]);
+		const snapshotBeforeInvalid = state.getSnapshot();
+
+		assert.throws(() => state.updateTask(task.id, (current) => ({
+			...current,
+			nodePositions: {},
+		})), /node position is required/);
+		assert.strictEqual(state.getSnapshot(), snapshotBeforeInvalid);
 	});
 
-	test('자기 자신을 연결하는 Edge를 거부한다', () => {
+	test('Structural validation은 dangling·self·duplicate Edge와 cycle을 거부한다', () => {
 		const task = createTask();
-		const workNode = task.nodes.find((node) => node.kind === 'work');
-		assert.ok(workNode);
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
 
 		assertIssueCodes({
 			...task,
 			edges: [{
-				id: 'task-edge:self',
-				source: workNode.id,
-				target: workNode.id,
+				id: 'task-edge:missing-source',
+				source: 'task-node:missing',
+				target: end.id,
+			}, {
+				id: 'task-edge:missing-target',
+				source: start.id,
+				target: 'task-node:missing',
 			}],
+		}, ['edge_source_missing', 'edge_target_missing']);
+
+		const withWorks = addWorks(task, ['A', 'B']);
+		const [workA, workB] = withWorks.nodes.filter((node) => node.kind === 'work');
+
+		assert.ok(workA && workB);
+		assertIssueCodes({
+			...withWorks,
+			edges: [{ id: 'task-edge:self', source: workA.id, target: workA.id }],
 		}, ['self_edge']);
-	});
-
-	test('두 개 이상의 Node로 돌아오는 directed cycle을 거부한다', () => {
-		const task = createTask();
-		const startNode = task.nodes.find((node) => node.kind === 'start');
-		const endNode = task.nodes.find((node) => node.kind === 'end');
-		assert.ok(startNode);
-		assert.ok(endNode);
-
 		assertIssueCodes({
 			...task,
-			edges: [
-				...task.edges,
-				{
-					id: 'task-edge:cycle',
-					source: endNode.id,
-					target: startNode.id,
-				},
-			],
-		}, ['cycle']);
-	});
-
-	test('중복 Node/Edge ID와 유효하지 않은 상태 갱신을 거부한다', () => {
-		const task = createTask();
-		assertIssueCodes({
-			...task,
-			nodes: [...task.nodes, task.nodes[1]],
-			edges: [...task.edges, task.edges[0]],
-		}, ['duplicate_node_id', 'duplicate_edge_id']);
-		assert.throws(
-			() => createTaskState([task, task]),
-			/Task ID must be unique/,
-		);
-
-		const state = createTaskState([task]);
-		assert.throws(() => state.updateTask(task.id, (current) => ({
-			...current,
-			nodes: [...current.nodes, {
-				id: 'task-node:extra-start',
-				kind: 'start',
-			}],
-		})), /exactly one start node/);
-		assert.strictEqual(state.getTask(task.id)?.nodes.length, 3);
-	});
-
-	test('Manual offset은 존재하는 Work/End의 finite 좌표만 허용한다', () => {
-		const task = createTask();
-		const [start, work] = task.nodes;
-
-		assert.ok(start && work);
-		assertIssueCodes({
-			...task,
-			nodeOffsets: {
-				'task-node:missing': { x: 10, y: 20 },
-			},
-		}, ['node_offset_node_missing']);
-		assertIssueCodes({
-			...task,
-			nodeOffsets: {
-				[start.id]: { x: 10, y: 20 },
-			},
-		}, ['start_node_offset']);
-		assertIssueCodes({
-			...task,
-			nodeOffsets: {
-				[work.id]: { x: Number.NaN, y: Number.NEGATIVE_INFINITY },
-			},
-		}, ['invalid_node_offset']);
-
-		const state = createTaskState([task]);
-		const snapshotBeforeInvalidUpdate = state.getSnapshot();
-
-		assert.throws(() => state.updateTask(task.id, (current) => ({
-			...current,
-			nodeOffsets: {
-				[start.id]: { x: 10, y: 20 },
-			},
-		})), /start node cannot have a manual offset/);
-		assert.strictEqual(state.getSnapshot(), snapshotBeforeInvalidUpdate);
-	});
-
-	test('서로 다른 ID로 같은 source와 target을 잇는 중복 Edge를 거부한다', () => {
-		const task = createTask();
-		const edge = task.edges[0];
-
-		assert.ok(edge);
-		assertIssueCodes({
-			...task,
-			edges: [...task.edges, {
-				...edge,
-				id: 'task-edge:duplicate-connection',
+			edges: [{ id: 'task-edge:one', source: start.id, target: end.id }, {
+				id: 'task-edge:two',
+				source: start.id,
+				target: end.id,
 			}],
 		}, ['duplicate_edge']);
+		const cyclicTask: TaskBlueprint = {
+			...withWorks,
+			edges: [{ id: 'task-edge:cycle-a', source: workA.id, target: workB.id }, {
+				id: 'task-edge:cycle-b',
+				source: workB.id,
+				target: workA.id,
+			}],
+		};
+
+		assertIssueCodes(cyclicTask, ['cycle']);
+		assert.strictEqual(getTaskFlowStatus(cyclicTask), 'incomplete');
+	});
+
+	test('Structural validation은 Start incoming과 End outgoing Port 방향을 거부한다', () => {
+		const task = createTask();
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		const withWork = addWorks(task, ['A']);
+		const work = withWork.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work);
+		assertIssueCodes({
+			...withWork,
+			edges: [{ id: 'task-edge:into-start', source: work.id, target: start.id }, {
+				id: 'task-edge:out-of-end',
+				source: end.id,
+				target: work.id,
+			}],
+		}, ['start_node_incoming', 'end_node_outgoing']);
+	});
+
+	test('Flow status는 orphan/source/leaf Work를 incomplete로 유지한다', () => {
+		const direct = connectRaw(createTask(), 'start', 'end', 'task-edge:direct');
+		const orphan = addWorks(direct, ['Orphan']);
+		const start = getNode(orphan, 'start');
+		const end = getNode(orphan, 'end');
+		const work = orphan.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work);
+		assert.strictEqual(getTaskFlowStatus(orphan), 'incomplete');
+		assert.strictEqual(getTaskFlowStatus({
+			...orphan,
+			edges: [...orphan.edges, {
+				id: 'task-edge:work-end',
+				source: work.id,
+				target: end.id,
+			}],
+		}), 'incomplete');
+		assert.strictEqual(getTaskFlowStatus({
+			...orphan,
+			edges: [...orphan.edges, {
+				id: 'task-edge:start-work',
+				source: start.id,
+				target: work.id,
+			}],
+		}), 'incomplete');
+	});
+
+	test('Flow status는 모든 Work가 Start에서 End로 이어진 Branch/Join을 ready로 판별한다', () => {
+		const task = addWorks(createTask(), ['A', 'B']);
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		const works = task.nodes.filter((node) => node.kind === 'work');
+		const edges = works.flatMap((work, index) => [{
+			id: `task-edge:start-${index}`,
+			source: start.id,
+			target: work.id,
+		}, {
+			id: `task-edge:end-${index}`,
+			source: work.id,
+			target: end.id,
+		}]);
+		const ready = { ...task, edges };
+
+		assert.deepStrictEqual(validateTaskBlueprint(ready), []);
+		assert.strictEqual(getTaskFlowStatus(ready), 'ready');
+		assert.strictEqual(getTaskFlowStatus({
+			...ready,
+			nodePositions: {},
+		}), 'incomplete');
+	});
+
+	test('중복 Task ID와 중복 Node/Edge ID를 거부하고 Task 내부 ID는 다른 Task와 격리한다', () => {
+		const task = createTask();
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+
+		assert.throws(() => createTaskState([task, task]), /Task ID must be unique/);
+		assertIssueCodes({
+			...task,
+			nodes: [...task.nodes, task.nodes[0]],
+		}, ['duplicate_node_id']);
+		assertIssueCodes({
+			...task,
+			edges: [{ id: 'task-edge:same', source: start.id, target: end.id }, {
+				id: 'task-edge:same',
+				source: start.id,
+				target: end.id,
+			}],
+		}, ['duplicate_edge_id']);
+
+		const taskB = { ...task, id: 'task:other' };
+		const state = createTaskState([task, taskB]);
+
+		assert.strictEqual(
+			state.canConnect(task.id, start.id, taskB.id, end.id),
+			false,
+		);
+		assert.strictEqual(
+			state.connect(task.id, start.id, taskB.id, end.id),
+			undefined,
+		);
+		assert.deepStrictEqual(state.getTask(task.id)?.edges, []);
+		assert.deepStrictEqual(state.getTask(taskB.id)?.edges, []);
 	});
 });
 
-function readConnections(task: TaskBlueprint): string[] {
-	return task.edges.map((edge) => `${edge.source}->${edge.target}`).sort();
+function getNode(
+	task: TaskBlueprint,
+	kind: 'start' | 'end',
+): TaskBlueprint['nodes'][number] {
+	const node = task.nodes.find((candidate) => candidate.kind === kind);
+
+	assert.ok(node);
+	return node;
+}
+
+/** 정상 기본 Task에 disconnected Work를 지정한 순서로 추가한다. */
+function addWorks(task: TaskBlueprint, titles: readonly string[]): TaskBlueprint {
+	let sequence = 0;
+	const state = createTaskState([task], () => `fixture-${++sequence}`);
+
+	for (const title of titles) {
+		assert.ok(state.addWork(task.id, { title }));
+	}
+
+	const updated = state.getTask(task.id);
+
+	assert.ok(updated);
+	return updated;
+}
+
+/** 기본 Task의 지정 kind Node 사이에 raw 테스트 Edge를 추가한다. */
+function connectRaw(
+	task: TaskBlueprint,
+	sourceKind: 'start' | 'end',
+	targetKind: 'start' | 'end',
+	edgeId: string,
+): TaskBlueprint {
+	return {
+		...task,
+		edges: [...task.edges, {
+			id: edgeId,
+			source: getNode(task, sourceKind).id,
+			target: getNode(task, targetKind).id,
+		}],
+	};
 }
 
 /** 결정적인 ID를 사용하는 정상 기본 Task를 만든다. */
-function createTask(): TaskBlueprint {
+function createTask(title = 'Task', prefix = 'id'): TaskBlueprint {
 	return createDefaultTaskBlueprint(
-		{ title: 'Task' },
-		createSequentialIdSource(),
+		{ title },
+		createSequentialIdSource(prefix),
 	);
 }
 
@@ -589,7 +616,7 @@ function assertIssueCodes(
 }
 
 /** 호출 순서를 ID suffix로 노출하는 테스트용 생성 함수를 만든다. */
-function createSequentialIdSource(): TaskIdSource {
+function createSequentialIdSource(prefix = 'id'): TaskIdSource {
 	let sequence = 0;
-	return () => `id-${++sequence}`;
+	return () => `${prefix}-${++sequence}`;
 }

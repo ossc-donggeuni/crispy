@@ -3,6 +3,7 @@ export {
 	createTaskEdgeId,
 	createTaskId,
 	createTaskNodeId,
+	TASK_DEFAULT_END_POSITION,
 	TASK_BLUEPRINT_VERSION,
 	type CreateTaskBlueprintInput,
 	type CreateWorkNodeInput,
@@ -12,19 +13,19 @@ export {
 	type TaskEdge,
 	type TaskIdSource,
 	type TaskNode,
-	type TaskNodeOffset,
+	type TaskNodePosition,
 	type TaskOrigin,
 	type WorkNode,
 } from './taskModel';
 export {
 	assertValidTaskBlueprint,
+	getTaskFlowStatus,
 	validateTaskBlueprint,
+	type TaskFlowStatus,
 	type TaskValidationIssue,
 	type TaskValidationIssueCode,
 } from './taskValidation';
 export {
-	canAddParallelWorkAtEdge,
-	canRemoveWorkNode,
 	createTaskState,
 	type TaskBlueprintUpdater,
 	type TaskStateSnapshot,

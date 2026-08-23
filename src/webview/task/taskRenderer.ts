@@ -1,15 +1,18 @@
-import type {
-	TaskGraphLayout,
-	TaskLayoutEdge,
-	TaskLayoutNode,
+import {
+	createTaskEdgeGeometry,
+	getTaskPortCenter,
+	type TaskGraphLayout,
+	type TaskLayoutEdge,
+	type TaskLayoutNode,
+	type TaskLayoutPosition,
 } from './taskLayout';
-import type { TaskNodeOffset, TaskOrigin } from '../../task';
+import type { TaskNodePosition, TaskOrigin } from '../../task';
 import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../graph/graphNodeDrag';
 
-/** T-03 interaction이 Task 소유권을 판별할 때 사용할 DOM attribute다. */
+/** Task interaction이 Task 소유권을 판별할 때 사용할 DOM attribute다. */
 export const TASK_ID_ATTRIBUTE = 'data-task-id';
-/** T-03 interaction이 안정적인 Task Node ID를 읽을 DOM attribute다. */
+/** Task interaction이 안정적인 Task Node ID를 읽을 DOM attribute다. */
 export const TASK_NODE_ID_ATTRIBUTE = 'data-task-node-id';
 /** Task Node 역할을 DOM에서 판별하는 attribute다. */
 export const TASK_NODE_KIND_ATTRIBUTE = 'data-task-node-kind';
@@ -21,8 +24,12 @@ export const TASK_EDGE_ACTION_ATTRIBUTE = 'data-task-edge-action';
 export const TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE = 'data-task-edge-action-task-id';
 /** Edge Action Overlay가 가리키는 Edge를 식별하는 Renderer 전용 attribute다. */
 export const TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE = 'data-task-edge-action-edge-id';
-/** Work Node의 최소 삭제 Action을 식별하는 attribute다. */
+/** Task Node Action을 식별하는 attribute다. */
 export const TASK_NODE_ACTION_ATTRIBUTE = 'data-task-node-action';
+/** Task 연결 Port의 input/output 방향을 식별하는 attribute다. */
+export const TASK_PORT_DIRECTION_ATTRIBUTE = 'data-task-port-direction';
+/** Task의 ready/incomplete 표시 상태를 Node DOM에 전달하는 attribute다. */
+export const TASK_FLOW_STATE_ATTRIBUTE = 'data-task-flow-state';
 
 /** Task Node/Edge DOM을 ID 기반으로 갱신하고 정리하는 lifecycle 경계다. */
 export interface TaskRenderer {
@@ -38,23 +45,38 @@ export interface TaskRendererInteractions {
 	getCameraScale?: () => number;
 	/** Start Drag으로 계산한 Task origin을 Domain State 갱신 경계에 전달한다. */
 	onTaskOriginChange?: (taskId: string, origin: TaskOrigin) => void;
-	/** Work/End Drag으로 계산한 manual offset을 Domain State 갱신 경계에 전달한다. */
-	onTaskNodeOffsetChange?: (
+	/** Work/End Drag으로 계산한 task-local position을 Domain State에 전달한다. */
+	onTaskNodePositionChange?: (
 		taskId: string,
 		nodeId: string,
-		offset: TaskNodeOffset | undefined,
+		position: TaskNodePosition,
 	) => void;
 	/** Start/Work Double Click 대상을 Camera Focus 경계에 전달한다. */
 	onNodeFocus?: (node: TaskLayoutNode) => void;
-	/** 선택 Edge 사이에 직렬 Work를 삽입한다. */
-	onInsertWorkAtEdge?: (taskId: string, edgeId: string) => void;
-	/** 선택 Edge target Work와 같은 실행 단계에 병렬 Work를 추가한다. */
-	onAddParallelWorkAtEdge?: (taskId: string, edgeId: string) => void;
-	/** Work Node를 제거하고 Domain에서 연결을 복구한다. */
+	/** Start Action으로 연결 전 Work 하나를 추가한다. */
+	onWorkAdd?: (taskId: string) => void;
+	/** Work Node와 incident Edge를 제거한다. */
 	onWorkRemove?: (taskId: string, nodeId: string) => void;
+	/** 두 Task Port의 연결 가능성을 Domain DAG 기준으로 판정한다. */
+	canConnectNodes?: (
+		sourceTaskId: string,
+		sourceNodeId: string,
+		targetTaskId: string,
+		targetNodeId: string,
+	) => boolean;
+	/** 유효한 두 Task Port를 연결하고 성공 여부를 반환한다. */
+	onNodesConnect?: (
+		sourceTaskId: string,
+		sourceNodeId: string,
+		targetTaskId: string,
+		targetNodeId: string,
+	) => boolean;
+	/** 정확한 Task Edge 하나를 연결 해제한다. */
+	onEdgeDisconnect?: (taskId: string, edgeId: string) => void;
+	/** Pointer client 좌표를 Graph World 좌표로 변환한다. */
+	clientToWorld?: (point: TaskLayoutPosition) => TaskLayoutPosition;
 }
 
-/** 모든 Task Node Drag가 공유하는 Pointer와 화면 좌표 기준이다. */
 interface TaskDragSessionBase {
 	readonly pointerId: number;
 	readonly renderKey: string;
@@ -65,36 +87,47 @@ interface TaskDragSessionBase {
 	didDrag: boolean;
 }
 
-/** Start Drag가 복원하거나 갱신할 Task origin 기준이다. */
 interface TaskOriginDragSession extends TaskDragSessionBase {
 	readonly target: 'origin';
 	readonly startOrigin: TaskOrigin;
 }
 
-/** Work/End Drag가 복원하거나 갱신할 manual offset 기준이다. */
-interface TaskNodeOffsetDragSession extends TaskDragSessionBase {
-	readonly target: 'node-offset';
+interface TaskNodePositionDragSession extends TaskDragSessionBase {
+	readonly target: 'node-position';
 	readonly nodeId: string;
-	readonly startOffset: TaskNodeOffset | undefined;
+	readonly startPosition: TaskNodePosition;
 }
 
-type TaskDragSession = TaskOriginDragSession | TaskNodeOffsetDragSession;
+type TaskDragSession = TaskOriginDragSession | TaskNodePositionDragSession;
+type TaskPortDirection = 'input' | 'output';
+
+interface TaskPortTarget {
+	readonly node: TaskLayoutNode;
+	readonly renderKey: string;
+	readonly direction: TaskPortDirection;
+}
+
+/** 한 번에 하나만 유지하는 click-click 연결의 source와 현재 pointer 상태다. */
+interface TaskConnectionSession {
+	readonly taskId: string;
+	readonly nodeId: string;
+	readonly renderKey: string;
+	pointerWorld: TaskLayoutPosition;
+	hoveredTargetKey?: string;
+}
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const TASK_DRAG_THRESHOLD = 4;
+const TASK_CONNECTION_SOURCE_CLASS = 'is-connection-source';
+const TASK_CONNECTION_VALID_CLASS = 'is-valid-target';
+const TASK_CONNECTION_INVALID_CLASS = 'is-invalid-target';
+const TASK_CONNECTION_HOVER_CLASS = 'is-connection-target';
 
-/**
- * 기존 Graph World의 Edge/Node Layer에 Task 전용 DOM을 렌더링한다.
- * Workspace GraphRenderer와 Map이나 모델을 공유하지 않고 DOM Layer만 공유한다.
- *
- * @param edgeLayer Workspace Edge와 함께 표시할 기존 SVG Layer
- * @param nodeLayer Workspace Node와 함께 표시할 기존 HTML Layer
- * @param initialLayout 최초 Task Layout
- * @returns Layout 갱신과 정리를 제공하는 Task Renderer
- */
+/** 기존 Graph World의 Edge/Node Layer에 Task 전용 DOM을 렌더링한다. */
 export function initializeTaskRenderer(
 	edgeLayer: SVGSVGElement,
 	nodeLayer: HTMLElement,
+	viewport: HTMLElement,
 	initialLayout: TaskGraphLayout,
 	interactions: TaskRendererInteractions = {},
 ): TaskRenderer {
@@ -105,12 +138,15 @@ export function initializeTaskRenderer(
 	let nodesByRenderKey = new Map<string, TaskLayoutNode>();
 	let selectedNodeKey: string | undefined;
 	let dragSession: TaskDragSession | undefined;
+	let connectionSession: TaskConnectionSession | undefined;
+	let previewEdgeElement: SVGPathElement | undefined;
 	let suppressClickKey: string | undefined;
 	let suppressDoubleClickKey: string | undefined;
 	let disposed = false;
 
-	/** Event target에서 Task dataset을 가진 실제 Node Card를 찾는다. */
-	const resolveTaskNodeElement = (target: EventTarget | null): HTMLElement | undefined => {
+	const resolveTaskNodeElement = (
+		target: EventTarget | null,
+	): HTMLElement | undefined => {
 		if (target === null || typeof (target as Element).closest !== 'function') {
 			return undefined;
 		}
@@ -120,8 +156,7 @@ export function initializeTaskRenderer(
 		) ?? undefined;
 	};
 
-	/** Event target 또는 조상에서 지정한 Task Action attribute 요소를 찾는다. */
-	const resolveTaskActionElement = (
+	const resolveTaskAttributeElement = (
 		target: EventTarget | null,
 		attribute: string,
 	): HTMLElement | undefined => {
@@ -133,14 +168,13 @@ export function initializeTaskRenderer(
 	};
 
 	const isTaskActionTarget = (target: EventTarget | null): boolean => (
-		resolveTaskActionElement(target, TASK_NODE_ACTION_ATTRIBUTE) !== undefined
-		|| resolveTaskActionElement(
+		resolveTaskAttributeElement(target, TASK_NODE_ACTION_ATTRIBUTE) !== undefined
+		|| resolveTaskAttributeElement(
 			target,
 			TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
 		) !== undefined
 	);
 
-	/** 기존 제외 attribute와 native interactive child에서는 Task Drag를 시작하지 않는다. */
 	const isTaskDragIgnoredTarget = (target: EventTarget | null): boolean => (
 		target !== null
 		&& typeof (target as Element).closest === 'function'
@@ -157,7 +191,6 @@ export function initializeTaskRenderer(
 		) !== null
 	);
 
-	/** Task dataset을 Renderer 내부 복합 identity로 변환한다. */
 	const getTaskNodeRenderKey = (element: HTMLElement): string | undefined => {
 		const taskId = element.getAttribute(TASK_ID_ATTRIBUTE);
 		const nodeId = element.getAttribute(TASK_NODE_ID_ATTRIBUTE);
@@ -167,7 +200,41 @@ export function initializeTaskRenderer(
 			: undefined;
 	};
 
-	/** 선택된 Node 하나만 시각 상태를 유지한다. */
+	const resolveTaskPort = (target: EventTarget | null): TaskPortTarget | undefined => {
+		const portElement = resolveTaskAttributeElement(
+			target,
+			TASK_PORT_DIRECTION_ATTRIBUTE,
+		);
+		const nodeElement = portElement
+			? resolveTaskNodeElement(portElement)
+			: undefined;
+		const renderKey = nodeElement
+			? getTaskNodeRenderKey(nodeElement)
+			: undefined;
+		const node = renderKey ? nodesByRenderKey.get(renderKey) : undefined;
+		const direction = portElement?.getAttribute(TASK_PORT_DIRECTION_ATTRIBUTE);
+
+		if (
+			!portElement
+			|| !renderKey
+			|| !node
+			|| (direction !== 'input' && direction !== 'output')
+		) {
+			return undefined;
+		}
+
+		return { node, renderKey, direction };
+	};
+
+	const getTaskNodePort = (
+		renderKey: string,
+		direction: TaskPortDirection,
+	): HTMLElement | undefined => Array.from(
+		nodeElements.get(renderKey)?.children ?? [],
+	).find((child) => (
+		(child as HTMLElement).getAttribute(TASK_PORT_DIRECTION_ATTRIBUTE) === direction
+	)) as HTMLElement | undefined;
+
 	const selectTaskNode = (renderKey: string): void => {
 		if (selectedNodeKey === renderKey) {
 			return;
@@ -180,7 +247,6 @@ export function initializeTaskRenderer(
 		nodeElements.get(renderKey)?.classList.add('is-selected');
 	};
 
-	/** 활성 Task Drag과 Pointer Capture 및 시각 상태를 정리한다. */
 	const stopTaskDrag = (releaseCapture: boolean): TaskDragSession | undefined => {
 		const session = dragSession;
 
@@ -198,7 +264,131 @@ export function initializeTaskRenderer(
 		return session;
 	};
 
-	/** Task Node Pointer 입력을 origin 또는 node-offset Drag 후보로 만든다. */
+	const clearTaskConnectionFeedback = (): void => {
+		nodeLayer.classList.remove('is-task-connecting');
+		for (const element of nodeElements.values()) {
+			for (const child of Array.from(element.children)) {
+				const port = child as HTMLElement;
+
+				if (!port.hasAttribute(TASK_PORT_DIRECTION_ATTRIBUTE)) {
+					continue;
+				}
+				port.classList.remove(
+					TASK_CONNECTION_SOURCE_CLASS,
+					TASK_CONNECTION_VALID_CLASS,
+					TASK_CONNECTION_INVALID_CLASS,
+					TASK_CONNECTION_HOVER_CLASS,
+				);
+				port.removeAttribute('aria-pressed');
+				port.removeAttribute('aria-disabled');
+			}
+		}
+	};
+
+	const cancelTaskConnection = (): void => {
+		connectionSession = undefined;
+		clearTaskConnectionFeedback();
+		previewEdgeElement?.remove();
+		previewEdgeElement = undefined;
+	};
+
+	const canConnectToNode = (
+		session: TaskConnectionSession,
+		target: TaskLayoutNode,
+	): boolean => interactions.canConnectNodes?.(
+		session.taskId,
+		session.nodeId,
+		target.taskId,
+		target.id,
+	) ?? false;
+
+	const syncTaskConnection = (): void => {
+		const session = connectionSession;
+
+		if (!session) {
+			return;
+		}
+
+		const source = nodesByRenderKey.get(session.renderKey);
+		const sourcePort = getTaskNodePort(session.renderKey, 'output');
+
+		if (!source || !sourcePort || source.kind === 'end') {
+			cancelTaskConnection();
+			return;
+		}
+
+		clearTaskConnectionFeedback();
+		nodeLayer.classList.add('is-task-connecting');
+		sourcePort.classList.add(TASK_CONNECTION_SOURCE_CLASS);
+		sourcePort.setAttribute('aria-pressed', 'true');
+
+		let hoveredTarget: TaskLayoutNode | undefined;
+		let hoveredTargetPort: HTMLElement | undefined;
+		let hoveredIsValid = false;
+		for (const [renderKey, node] of nodesByRenderKey) {
+			const inputPort = getTaskNodePort(renderKey, 'input');
+
+			if (!inputPort) {
+				continue;
+			}
+			const isValid = canConnectToNode(session, node);
+
+			inputPort.classList.add(
+				isValid
+					? TASK_CONNECTION_VALID_CLASS
+					: TASK_CONNECTION_INVALID_CLASS,
+			);
+			if (!isValid) {
+				inputPort.setAttribute('aria-disabled', 'true');
+			}
+			if (session.hoveredTargetKey === renderKey) {
+				hoveredTarget = node;
+				hoveredTargetPort = inputPort;
+				hoveredIsValid = isValid;
+				inputPort.classList.add(TASK_CONNECTION_HOVER_CLASS);
+			}
+		}
+
+		if (session.hoveredTargetKey && !hoveredTargetPort) {
+			session.hoveredTargetKey = undefined;
+		}
+
+		if (!previewEdgeElement) {
+			previewEdgeElement = ownerDocument.createElementNS(
+				SVG_NAMESPACE,
+				'path',
+			);
+			previewEdgeElement.setAttribute('aria-hidden', 'true');
+			edgeLayer.append(previewEdgeElement);
+		}
+
+		const start = getTaskPortCenter(source, 'output');
+		const end = hoveredTarget
+			? getTaskPortCenter(hoveredTarget, 'input')
+			: session.pointerWorld;
+		const geometry = createTaskEdgeGeometry(start, end);
+		const connectionClass = hoveredTarget
+			? hoveredIsValid ? ' is-valid' : ' is-invalid'
+			: '';
+
+		previewEdgeElement.setAttribute(
+			'class',
+			`graph-edge task-edge task-connection-preview${connectionClass}`,
+		);
+		previewEdgeElement.setAttribute('d', createTaskEdgePath(geometry));
+	};
+
+	const startTaskConnection = (source: TaskPortTarget): void => {
+		cancelTaskConnection();
+		connectionSession = {
+			taskId: source.node.taskId,
+			nodeId: source.node.id,
+			renderKey: source.renderKey,
+			pointerWorld: getTaskPortCenter(source.node, 'output'),
+		};
+		syncTaskConnection();
+	};
+
 	const handlePointerDown = (event: PointerEvent): void => {
 		if (isTaskActionTarget(event.target)) {
 			event.preventDefault();
@@ -217,6 +407,7 @@ export function initializeTaskRenderer(
 			return;
 		}
 
+		cancelTaskConnection();
 		event.stopPropagation();
 		if (suppressClickKey === renderKey) {
 			suppressClickKey = undefined;
@@ -224,7 +415,6 @@ export function initializeTaskRenderer(
 		if (suppressDoubleClickKey === renderKey) {
 			suppressDoubleClickKey = undefined;
 		}
-
 		if (
 			disposed
 			|| dragSession
@@ -261,14 +451,16 @@ export function initializeTaskRenderer(
 			}
 			: {
 				...sessionBase,
-				target: 'node-offset',
+				target: 'node-position',
 				nodeId: node.id,
-				startOffset: node.manualOffset,
+				startPosition: {
+					x: node.localPosition.x,
+					y: node.localPosition.y,
+				},
 			};
 		element.setPointerCapture(event.pointerId);
 	};
 
-	/** Threshold를 넘은 Pointer 이동을 origin 또는 manual offset에 반영한다. */
 	const handlePointerMove = (event: PointerEvent): void => {
 		const session = dragSession;
 
@@ -300,19 +492,18 @@ export function initializeTaskRenderer(
 				y: session.startOrigin.y + worldDelta.y,
 			});
 		} else {
-			interactions.onTaskNodeOffsetChange?.(
+			interactions.onTaskNodePositionChange?.(
 				session.taskId,
 				session.nodeId,
 				{
-					x: (session.startOffset?.x ?? 0) + worldDelta.x,
-					y: (session.startOffset?.y ?? 0) + worldDelta.y,
+					x: session.startPosition.x + worldDelta.x,
+					y: session.startPosition.y + worldDelta.y,
 				},
 			);
 		}
 		nodeElements.get(session.renderKey)?.classList.add('is-dragging');
 	};
 
-	/** Pointer Up은 최신 Domain 위치를 유지하고 합성 Click/Double Click을 억제한다. */
 	const handlePointerUp = (event: PointerEvent): void => {
 		if (!dragSession || event.pointerId !== dragSession.pointerId) {
 			return;
@@ -328,14 +519,13 @@ export function initializeTaskRenderer(
 		}
 	};
 
-	/** Cancel 또는 Capture 상실은 시작 origin/offset으로 복원하고 session을 종료한다. */
-	const cancelTaskDrag = (event: PointerEvent, releaseCapture: boolean): void => {
+	const cancelTaskDrag = (event: PointerEvent): void => {
 		if (!dragSession || event.pointerId !== dragSession.pointerId) {
 			return;
 		}
 
 		event.stopPropagation();
-		const cancelled = stopTaskDrag(releaseCapture);
+		const cancelled = stopTaskDrag(event.type !== 'lostpointercapture');
 
 		suppressClickKey = undefined;
 		suppressDoubleClickKey = undefined;
@@ -347,65 +537,107 @@ export function initializeTaskRenderer(
 					cancelled.startOrigin,
 				);
 			} else {
-				interactions.onTaskNodeOffsetChange?.(
+				interactions.onTaskNodePositionChange?.(
 					cancelled.taskId,
 					cancelled.nodeId,
-					cancelled.startOffset,
+					cancelled.startPosition,
 				);
 			}
 		}
 	};
-	const handlePointerCancel = (event: PointerEvent): void => {
-		cancelTaskDrag(event, true);
-	};
-	const handleLostPointerCapture = (event: PointerEvent): void => {
-		cancelTaskDrag(event, false);
+
+	const handleTaskPortClick = (
+		event: MouseEvent,
+		port: TaskPortTarget,
+	): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		if (port.direction === 'output') {
+			if (connectionSession?.renderKey === port.renderKey) {
+				cancelTaskConnection();
+			} else {
+				startTaskConnection(port);
+			}
+			return;
+		}
+		if (!connectionSession) {
+			return;
+		}
+
+		connectionSession.hoveredTargetKey = port.renderKey;
+		if (!canConnectToNode(connectionSession, port.node)) {
+			syncTaskConnection();
+			return;
+		}
+
+		const connected = interactions.onNodesConnect?.(
+			connectionSession.taskId,
+			connectionSession.nodeId,
+			port.node.taskId,
+			port.node.id,
+		) ?? false;
+
+		if (connected) {
+			cancelTaskConnection();
+		} else {
+			syncTaskConnection();
+		}
 	};
 
-	/** Drag로 소비되지 않은 Task Node Click만 복합 identity 기준으로 선택한다. */
 	const handleClick = (event: MouseEvent): void => {
-		const edgeAction = resolveTaskActionElement(
+		const port = resolveTaskPort(event.target);
+
+		if (port) {
+			handleTaskPortClick(event, port);
+			return;
+		}
+
+		const edgeAction = resolveTaskAttributeElement(
 			event.target,
 			TASK_EDGE_ACTION_ATTRIBUTE,
 		);
 		if (edgeAction) {
-			const action = edgeAction.getAttribute(TASK_EDGE_ACTION_ATTRIBUTE);
-			const taskId = resolveTaskActionElement(
+			const taskId = resolveTaskAttributeElement(
 				edgeAction,
 				TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE,
 			)?.getAttribute(TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE);
-			const edgeId = resolveTaskActionElement(
+			const edgeId = resolveTaskAttributeElement(
 				edgeAction,
 				TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
 			)?.getAttribute(TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE);
 
 			event.preventDefault();
 			event.stopPropagation();
-			if (taskId && edgeId && action === 'insert-work') {
-				interactions.onInsertWorkAtEdge?.(taskId, edgeId);
-			} else if (taskId && edgeId && action === 'add-parallel-work') {
-				interactions.onAddParallelWorkAtEdge?.(taskId, edgeId);
+			cancelTaskConnection();
+			if (
+				taskId
+				&& edgeId
+				&& edgeAction.getAttribute(TASK_EDGE_ACTION_ATTRIBUTE) === 'disconnect-edge'
+			) {
+				interactions.onEdgeDisconnect?.(taskId, edgeId);
 			}
 			return;
 		}
 
-		const nodeAction = resolveTaskActionElement(
+		const nodeAction = resolveTaskAttributeElement(
 			event.target,
 			TASK_NODE_ACTION_ATTRIBUTE,
 		);
 		if (nodeAction) {
 			const nodeElement = resolveTaskNodeElement(nodeAction);
-			const taskId = nodeElement?.getAttribute(TASK_ID_ATTRIBUTE);
-			const nodeId = nodeElement?.getAttribute(TASK_NODE_ID_ATTRIBUTE);
+			const renderKey = nodeElement
+				? getTaskNodeRenderKey(nodeElement)
+				: undefined;
+			const node = renderKey ? nodesByRenderKey.get(renderKey) : undefined;
+			const action = nodeAction.getAttribute(TASK_NODE_ACTION_ATTRIBUTE);
 
 			event.preventDefault();
 			event.stopPropagation();
-			if (
-				taskId
-				&& nodeId
-				&& nodeAction.getAttribute(TASK_NODE_ACTION_ATTRIBUTE) === 'remove-work'
-			) {
-				interactions.onWorkRemove?.(taskId, nodeId);
+			cancelTaskConnection();
+			if (node?.kind === 'start' && action === 'add-work') {
+				interactions.onWorkAdd?.(node.taskId);
+			} else if (node?.kind === 'work' && action === 'remove-work') {
+				interactions.onWorkRemove?.(node.taskId, node.id);
 			}
 			return;
 		}
@@ -427,9 +659,12 @@ export function initializeTaskRenderer(
 		selectTaskNode(renderKey);
 	};
 
-	/** Start/Work Double Click을 최신 Layout Node 식별 및 Focus 경계로 전달한다. */
 	const handleDoubleClick = (event: MouseEvent): void => {
-		if (isTaskActionTarget(event.target)) {
+		if (
+			resolveTaskPort(event.target)
+			|| isTaskActionTarget(event.target)
+			|| isTaskDragIgnoredTarget(event.target)
+		) {
 			event.preventDefault();
 			event.stopPropagation();
 			return;
@@ -456,6 +691,48 @@ export function initializeTaskRenderer(
 		interactions.onNodeFocus?.(node);
 	};
 
+	const handleViewportPointerMove = (event: PointerEvent): void => {
+		if (!connectionSession) {
+			return;
+		}
+
+		connectionSession.pointerWorld = interactions.clientToWorld?.({
+			x: event.clientX,
+			y: event.clientY,
+		}) ?? { x: event.clientX, y: event.clientY };
+		const port = resolveTaskPort(event.target);
+
+		connectionSession.hoveredTargetKey = port?.direction === 'input'
+			? port.renderKey
+			: undefined;
+		syncTaskConnection();
+	};
+
+	const handleViewportBlankInteraction = (
+		event: MouseEvent | PointerEvent,
+	): void => {
+		if (
+			!connectionSession
+			|| resolveTaskPort(event.target)
+			|| resolveTaskNodeElement(event.target)
+			|| isTaskActionTarget(event.target)
+		) {
+			return;
+		}
+
+		cancelTaskConnection();
+	};
+
+	const handleDocumentKeyDown = (event: KeyboardEvent): void => {
+		if (!connectionSession || event.key !== 'Escape') {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		cancelTaskConnection();
+	};
+
 	const applyLayout = (layout: TaskGraphLayout): void => {
 		if (disposed) {
 			return;
@@ -474,6 +751,9 @@ export function initializeTaskRenderer(
 		if (selectedNodeKey && !nextNodeKeys.has(selectedNodeKey)) {
 			selectedNodeKey = undefined;
 		}
+		if (connectionSession && !nextNodeKeys.has(connectionSession.renderKey)) {
+			cancelTaskConnection();
+		}
 
 		for (const [renderKey, element] of nodeElements) {
 			if (!nextNodeKeys.has(renderKey)) {
@@ -481,7 +761,6 @@ export function initializeTaskRenderer(
 				nodeElements.delete(renderKey);
 			}
 		}
-
 		for (const [renderKey, element] of edgeElements) {
 			if (!nextEdgeKeys.has(renderKey)) {
 				element.remove();
@@ -543,16 +822,22 @@ export function initializeTaskRenderer(
 			}
 			syncTaskEdgeActionElement(actionElement, edge, ownerDocument);
 		}
+
+		syncTaskConnection();
 	};
 
 	applyLayout(initialLayout);
 	nodeLayer.addEventListener('pointerdown', handlePointerDown);
 	nodeLayer.addEventListener('pointermove', handlePointerMove);
 	nodeLayer.addEventListener('pointerup', handlePointerUp);
-	nodeLayer.addEventListener('pointercancel', handlePointerCancel);
-	nodeLayer.addEventListener('lostpointercapture', handleLostPointerCapture);
+	nodeLayer.addEventListener('pointercancel', cancelTaskDrag);
+	nodeLayer.addEventListener('lostpointercapture', cancelTaskDrag);
 	nodeLayer.addEventListener('click', handleClick);
 	nodeLayer.addEventListener('dblclick', handleDoubleClick);
+	viewport.addEventListener('pointerdown', handleViewportBlankInteraction);
+	viewport.addEventListener('pointermove', handleViewportPointerMove);
+	viewport.addEventListener('click', handleViewportBlankInteraction);
+	ownerDocument.addEventListener?.('keydown', handleDocumentKeyDown);
 
 	return {
 		applyLayout,
@@ -565,14 +850,19 @@ export function initializeTaskRenderer(
 			nodeLayer.removeEventListener('pointerdown', handlePointerDown);
 			nodeLayer.removeEventListener('pointermove', handlePointerMove);
 			nodeLayer.removeEventListener('pointerup', handlePointerUp);
-			nodeLayer.removeEventListener('pointercancel', handlePointerCancel);
+			nodeLayer.removeEventListener('pointercancel', cancelTaskDrag);
 			nodeLayer.removeEventListener(
 				'lostpointercapture',
-				handleLostPointerCapture,
+				cancelTaskDrag,
 			);
 			nodeLayer.removeEventListener('click', handleClick);
 			nodeLayer.removeEventListener('dblclick', handleDoubleClick);
+			viewport.removeEventListener('pointerdown', handleViewportBlankInteraction);
+			viewport.removeEventListener('pointermove', handleViewportPointerMove);
+			viewport.removeEventListener('click', handleViewportBlankInteraction);
+			ownerDocument.removeEventListener?.('keydown', handleDocumentKeyDown);
 			stopTaskDrag(true);
+			cancelTaskConnection();
 			selectedNodeKey = undefined;
 			nodesByRenderKey.clear();
 			for (const element of nodeElements.values()) {
@@ -591,17 +881,14 @@ export function initializeTaskRenderer(
 	};
 }
 
-/** 같은 내부 Node ID를 가진 Task DOM을 분리하는 Renderer 전용 identity다. */
 function createTaskNodeRenderKey(taskId: string, nodeId: string): string {
 	return `${taskId}:${nodeId}`;
 }
 
-/** 같은 내부 Edge ID를 가진 Task SVG를 분리하는 Renderer 전용 identity다. */
 function createTaskEdgeRenderKey(taskId: string, edgeId: string): string {
 	return `${taskId}:${edgeId}`;
 }
 
-/** Task Node Card의 내용, 식별 정보와 World geometry를 최신 Layout과 맞춘다. */
 function syncTaskNodeElement(
 	element: HTMLElement,
 	node: TaskLayoutNode,
@@ -611,6 +898,7 @@ function syncTaskNodeElement(
 	element.setAttribute(TASK_ID_ATTRIBUTE, node.taskId);
 	element.setAttribute(TASK_NODE_ID_ATTRIBUTE, node.id);
 	element.setAttribute(TASK_NODE_KIND_ATTRIBUTE, node.kind);
+	element.setAttribute(TASK_FLOW_STATE_ATTRIBUTE, node.flowState);
 	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	element.setAttribute('role', 'group');
 	element.setAttribute('aria-label', createTaskNodeAriaLabel(node));
@@ -620,7 +908,6 @@ function syncTaskNodeElement(
 	element.replaceChildren(...createTaskNodeContents(node, ownerDocument));
 }
 
-/** Task Node kind에 맞는 label과 Blueprint 텍스트 DOM을 생성한다. */
 function createTaskNodeContents(
 	node: TaskLayoutNode,
 	ownerDocument: Document,
@@ -633,7 +920,7 @@ function createTaskNodeContents(
 		: node.kind === 'work' ? 'Work' : 'End';
 
 	if (node.kind === 'end') {
-		return [kind];
+		return [kind, createTaskPort(ownerDocument, node, 'input')];
 	}
 
 	const title = ownerDocument.createElement('strong');
@@ -645,49 +932,89 @@ function createTaskNodeContents(
 	description.textContent = node.description;
 
 	if (node.kind === 'start') {
-		return [kind, title, description];
+		return [
+			kind,
+			title,
+			description,
+			createTaskNodeAction(ownerDocument, 'add-work'),
+			createTaskPort(ownerDocument, node, 'output'),
+		];
 	}
 
-	const contents = [kind, title, description];
+	const contents = [
+		kind,
+		title,
+		description,
+		createTaskPort(ownerDocument, node, 'input'),
+		createTaskPort(ownerDocument, node, 'output'),
+	];
 
 	if (node.prompt.length > 0) {
 		const prompt = ownerDocument.createElement('span');
 
 		prompt.className = 'task-node-prompt';
 		prompt.textContent = node.prompt;
-		contents.push(prompt);
+		contents.splice(3, 0, prompt);
 	}
 	if (node.canRemove) {
-		contents.push(createTaskWorkActions(ownerDocument));
+		contents.push(createTaskNodeAction(ownerDocument, 'remove-work'));
 	}
 	return contents;
 }
 
-/** Work 카드에 Inspector와 무관한 최소 삭제 Action을 추가한다. */
-function createTaskWorkActions(ownerDocument: Document): HTMLElement {
-	const actions = ownerDocument.createElement('div');
-	const remove = ownerDocument.createElement('button');
-	const icon = ownerDocument.createElement('span');
+function createTaskPort(
+	ownerDocument: Document,
+	node: TaskLayoutNode,
+	direction: TaskPortDirection,
+): HTMLButtonElement {
+	const port = ownerDocument.createElement('button');
+	const directionLabel = direction === 'input' ? '입력 연결' : '출력 연결';
 
-	actions.className = 'task-work-actions';
+	port.className = `task-node-port task-${direction}-port`;
+	port.type = 'button';
+	port.title = directionLabel;
+	port.setAttribute('aria-label', `${createTaskNodeAriaLabel(node)} ${directionLabel}`);
+	port.setAttribute(TASK_PORT_DIRECTION_ATTRIBUTE, direction);
+	port.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	port.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	return port;
+}
+
+function createTaskNodeAction(
+	ownerDocument: Document,
+	action: 'add-work' | 'remove-work',
+): HTMLElement {
+	const actions = ownerDocument.createElement('div');
+	const button = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
+	const isAdd = action === 'add-work';
+	const label = isAdd ? 'Work 추가' : 'Work 삭제';
+
+	actions.className = `task-node-actions task-${isAdd ? 'start' : 'work'}-actions`;
 	actions.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	actions.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-	remove.className = 'graph-detached-root-action task-work-action';
-	remove.type = 'button';
-	remove.title = 'Work 삭제';
-	remove.setAttribute('aria-label', 'Work 삭제');
-	remove.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'remove-work');
-	remove.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
-	remove.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-	icon.className = 'graph-detached-root-action-icon';
-	icon.setAttribute('data-ui-icon', 'delete.svg');
+	button.className = `graph-detached-root-action task-node-action task-${
+		isAdd ? 'start' : 'work'
+	}-action`;
+	button.type = 'button';
+	button.title = label;
+	button.setAttribute('aria-label', label);
+	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, action);
+	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	icon.setAttribute('aria-hidden', 'true');
-	remove.append(icon);
-	actions.append(remove);
+	if (isAdd) {
+		icon.className = 'task-node-action-symbol';
+		icon.textContent = '+';
+	} else {
+		icon.className = 'graph-detached-root-action-icon';
+		icon.setAttribute('data-ui-icon', 'delete.svg');
+	}
+	button.append(icon);
+	actions.append(button);
 	return actions;
 }
 
-/** 접근성 이름은 화면에 표시하는 kind와 주요 제목만 포함한다. */
 function createTaskNodeAriaLabel(node: TaskLayoutNode): string {
 	if (node.kind === 'end') {
 		return 'Task End';
@@ -696,7 +1023,6 @@ function createTaskNodeAriaLabel(node: TaskLayoutNode): string {
 	return `Task ${node.kind === 'start' ? 'Start' : 'Work'}: ${node.title}`;
 }
 
-/** Task Edge의 소유권과 Layout이 계산한 Bézier geometry를 SVG path에 적용한다. */
 function syncTaskEdgeElement(
 	element: SVGPathElement,
 	edge: TaskLayoutEdge,
@@ -709,7 +1035,6 @@ function syncTaskEdgeElement(
 	element.setAttribute('d', createTaskEdgePath(edge.geometry));
 }
 
-/** Edge 중앙 Hover Target에 직렬/병렬 Action Button을 배치한다. */
 function syncTaskEdgeActionElement(
 	element: HTMLElement,
 	edge: TaskLayoutEdge,
@@ -717,6 +1042,8 @@ function syncTaskEdgeActionElement(
 ): void {
 	const actionList = ownerDocument.createElement('div');
 	const hoverTarget = ownerDocument.createElement('span');
+	const button = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
 
 	element.className = 'task-edge-actions';
 	element.setAttribute(TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE, edge.taskId);
@@ -728,47 +1055,21 @@ function syncTaskEdgeActionElement(
 	hoverTarget.className = 'task-edge-hover-target';
 	hoverTarget.setAttribute('aria-hidden', 'true');
 	actionList.className = 'task-edge-action-list';
-	actionList.append(createTaskEdgeActionButton(
-		ownerDocument,
-		'사이에 작업 추가',
-		'+',
-		'insert-work',
-	));
-	if (edge.canAddParallelWork) {
-		actionList.append(createTaskEdgeActionButton(
-			ownerDocument,
-			'병렬 작업 추가',
-			'⇉',
-			'add-parallel-work',
-		));
-	}
-	element.replaceChildren(hoverTarget, actionList);
-}
-
-function createTaskEdgeActionButton(
-	ownerDocument: Document,
-	label: string,
-	symbol: string,
-	action: 'insert-work' | 'add-parallel-work',
-): HTMLButtonElement {
-	const button = ownerDocument.createElement('button');
-	const icon = ownerDocument.createElement('span');
-
 	button.className = 'graph-detached-root-action task-edge-action';
 	button.type = 'button';
-	button.title = label;
-	button.setAttribute('aria-label', label);
-	button.setAttribute(TASK_EDGE_ACTION_ATTRIBUTE, action);
+	button.title = '연결 해제';
+	button.setAttribute('aria-label', '연결 해제');
+	button.setAttribute(TASK_EDGE_ACTION_ATTRIBUTE, 'disconnect-edge');
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	icon.className = 'task-edge-action-symbol';
-	icon.textContent = symbol;
+	icon.textContent = '×';
 	icon.setAttribute('aria-hidden', 'true');
 	button.append(icon);
-	return button;
+	actionList.append(button);
+	element.replaceChildren(hoverTarget, actionList);
 }
 
-/** Layout과 Action이 공유한 Right Center → Left Center geometry를 직렬화한다. */
 function createTaskEdgePath(
 	geometry: TaskLayoutEdge['geometry'],
 ): string {
