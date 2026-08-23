@@ -21,6 +21,11 @@ import {
 	type GraphNavigatorInteractions,
 } from '../../webview/graph/graphNavigator';
 import { createGraphState } from '../../webview/graph/graphState';
+import {
+	calculateGraphVisibleArea,
+	createFullGraphVisibleArea,
+	type GraphVisibleAreaProvider,
+} from '../../webview/graph/graphVisibleArea';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../../webview/panel/panelState';
 import {
 	restoreWebviewState,
@@ -67,6 +72,46 @@ suite('Graph Navigator', () => {
 			fixture.controls,
 		]);
 		assert.strictEqual(fixture.featureRow.children[1], fixture.actionRail);
+	});
+
+	test('Navigator를 최신 Visible Graph 영역의 우하단 안쪽으로 즉시 재배치한다', () => {
+		let visibleArea = calculateGraphVisibleArea(
+			{ width: 800, height: 600 },
+			{ left: 0, top: 0, width: 800, height: 600 },
+			{ left: 520, top: 12, right: 788, bottom: 588, width: 268, height: 576 },
+			'right',
+			false,
+		);
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+			undefined,
+			() => visibleArea,
+		);
+		const navigatorStyle = fixture.navigatorElement.style as unknown as Record<
+			string,
+			string
+		>;
+
+		assert.strictEqual(navigatorStyle.right, '296px');
+		assert.strictEqual(navigatorStyle.bottom, '16px');
+
+		visibleArea = calculateGraphVisibleArea(
+			{ width: 800, height: 600 },
+			{ left: 0, top: 0, width: 800, height: 600 },
+			{ left: 12, top: 300, right: 788, bottom: 588, width: 776, height: 288 },
+			'bottom',
+			false,
+		);
+		fixture.navigator.refreshVisibleGraphArea();
+		assert.strictEqual(navigatorStyle.right, '16px');
+		assert.strictEqual(navigatorStyle.bottom, '316px');
+
+		visibleArea = createFullGraphVisibleArea({ width: 800, height: 600 });
+		fixture.navigator.refreshVisibleGraphArea();
+		assert.strictEqual(navigatorStyle.right, '16px');
+		assert.strictEqual(navigatorStyle.bottom, '16px');
 	});
 
 	test('초기 Layout을 SVG Line과 Rect로 렌더링하고 Text를 생성하지 않는다', () => {
@@ -357,6 +402,36 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(focusTargets.length, 2);
 		assert.notDeepStrictEqual(focusTargets[1], focusTargets[0]);
 		assert.strictEqual(fixture.camera.getState().scale, 1.5);
+	});
+
+	test('Minimap Focus도 Camera와 공유한 Visible Graph 중앙에 Target을 배치한다', () => {
+		const visibleArea = calculateGraphVisibleArea(
+			{ width: 800, height: 600 },
+			{ left: 0, top: 0, width: 800, height: 600 },
+			{ left: 520, top: 12, right: 788, bottom: 588, width: 268, height: 576 },
+			'right',
+			false,
+		);
+		const fixture = createNavigatorFixture(
+			{ x: 0, y: 0, scale: 1.5 },
+			{},
+			createLargeMinimapLayout(),
+			undefined,
+			() => visibleArea,
+		);
+		const focusOn = fixture.camera.focusOn.bind(fixture.camera);
+
+		fixture.camera.focusOn = (point) => focusOn(point, { duration: 0 });
+		fixture.minimapSvg.dispatch('click', createClickEvent(
+			fixture.minimapSvg.asEventTarget(),
+			80,
+			48,
+		));
+
+		assertPointAlmostEqual(
+			fixture.camera.worldToViewport({ x: 1_050, y: 620 }),
+			visibleArea.center,
+		);
 	});
 
 	test('Empty Graph와 Minimap 바깥 또는 invalid Click은 Camera Navigation을 무시한다', () => {
@@ -797,6 +872,46 @@ suite('Graph Navigator', () => {
 		);
 	});
 
+	test('Detached ordinal은 Root 목록 이름과 접근성 이름에 괄호로 표시한다', () => {
+		const fixture = createNavigatorFixture();
+
+		fixture.navigator.setRoots([
+			{
+				rootId: 'folder:docs::detached:1',
+				nodeId: 'folder:docs',
+				name: 'docs',
+				kind: 'folder',
+				detachedOrdinal: 1,
+			},
+			{
+				rootId: 'file:webview.css::detached:3',
+				nodeId: 'file:webview.css',
+				name: 'webview.css',
+				kind: 'file',
+				detachedOrdinal: 3,
+			},
+		]);
+		const [folderItem, fileItem] = fixture.rootList.children;
+
+		assert.ok(folderItem && fileItem);
+		assert.strictEqual(
+			getChild(getRootContent(folderItem), 0).textContent,
+			'docs/ (1)',
+		);
+		assert.strictEqual(
+			getRootButton(folderItem).getAttribute('aria-label'),
+			'docs/ (1)',
+		);
+		assert.strictEqual(
+			getChild(getRootContent(fileItem), 0).textContent,
+			'webview.css (3)',
+		);
+		assert.strictEqual(
+			getRootIcon(fileItem).getAttribute('data-file-icon'),
+			resolveFileIcon('webview.css'),
+		);
+	});
+
 	test('Project, Folder와 File Root Button은 rootId 선택을 전달하고 Panel을 열린 채 유지한다', () => {
 		const selectedRootIds: string[] = [];
 		const fixture = createNavigatorFixture(
@@ -1188,6 +1303,11 @@ suite('Graph Navigator', () => {
 		const expandButton = getFilterToggle(initialFolderItem);
 		const expandEvent = createClickEvent(expandButton.asEventTarget(), 0, 0);
 
+		assert.strictEqual(
+			getFilterToggleIcon(expandButton).getAttribute('data-filter-icon'),
+			'filter-opened.svg',
+		);
+
 		fixture.filterTree.dispatch('click', expandEvent);
 		const expandedFolderItem = getFilterItem(
 			fixture.filterTree,
@@ -1198,6 +1318,12 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(
 			getFilterToggle(expandedFolderItem).getAttribute('aria-expanded'),
 			'true',
+		);
+		assert.strictEqual(
+			getFilterToggleIcon(getFilterToggle(expandedFolderItem)).getAttribute(
+				'data-filter-icon',
+			),
+			'filter-closed.svg',
 		);
 		assert.strictEqual(fixture.graphState.getState().openedFolders, openedFolders);
 		assert.strictEqual(expandEvent.propagationStopped, true);
@@ -1515,7 +1641,7 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(fixture.graphState.getState().hiddenNodeIds, {});
 	});
 
-	test('Camera Pan과 Wheel Zoom 상태 변경을 즉시 표시한다', () => {
+	test('Camera Pan과 Zoom Gesture 상태 변경을 즉시 표시한다', () => {
 		const fixture = createNavigatorFixture(
 			undefined,
 			{},
@@ -1544,7 +1670,7 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
 		const pannedWidth = Number(indicator.getAttribute('width'));
 
-		fixture.viewport.dispatch('wheel', createWheelEvent(400, 300, -120));
+		fixture.viewport.dispatch('wheel', createWheelEvent(400, 300, -120, null, true));
 		assert.strictEqual(
 			fixture.scale.textContent,
 			`${Math.round(fixture.camera.getState().scale * 100)}%`,
@@ -1738,6 +1864,7 @@ function createNavigatorFixture(
 	interactions: GraphNavigatorInteractions = {},
 	initialLayout: GraphLayout = createEmptyLayout(),
 	animationFrameScheduler?: GraphAnimationFrameScheduler,
+	getVisibleGraphArea?: GraphVisibleAreaProvider,
 ) {
 	const ownerDocument = new FakeDocument();
 	const viewport = ownerDocument.createSizedElement(800, 600);
@@ -1751,7 +1878,7 @@ function createNavigatorFixture(
 		viewport.asHtmlElement(),
 		world.asHtmlElement(),
 		graphState,
-		{ animationFrameScheduler },
+		{ animationFrameScheduler, getVisibleGraphArea },
 	);
 	const navigator = initializeGraphNavigator(
 		overlay.asHtmlElement(),
@@ -1760,6 +1887,7 @@ function createNavigatorFixture(
 		camera,
 		initialLayout,
 		interactions,
+		getVisibleGraphArea,
 	);
 	const navigatorElement = getChild(overlay, 0);
 	const bottomRow = getChild(navigatorElement, 0);
@@ -1872,6 +2000,16 @@ function getFilterToggle(item: FakeElement): FakeElement {
 
 	assert.ok(toggle);
 	return toggle;
+}
+
+function getFilterToggleIcon(toggle: FakeElement): FakeElement {
+	const icons = getDescendantsByClass(
+		toggle,
+		'graph-navigator-filter-chevron',
+	);
+
+	assert.strictEqual(icons.length, 1);
+	return icons[0] as FakeElement;
 }
 
 function getFilterCheckbox(root: FakeElement, nodeId: string): FakeElement {
@@ -2086,10 +2224,13 @@ function createWheelEvent(
 	clientY: number,
 	deltaY: number,
 	target: EventTarget | null = null,
+	ctrlKey = false,
 ): WheelEvent {
 	return {
 		clientX,
 		clientY,
+		ctrlKey,
+		deltaX: 0,
 		deltaY,
 		deltaMode: 0,
 		target,
@@ -2129,6 +2270,8 @@ function createEmptyLayout(): GraphLayout {
 		edges: [],
 		rootContexts: {},
 		rootNodeIds: new Set(),
+		arrangedNodeIds: new Set(),
+		unarrangedNodeIds: new Set(),
 	};
 }
 
@@ -2317,6 +2460,8 @@ function createMinimapLayout(
 		edges,
 		rootContexts: {},
 		rootNodeIds: new Set(),
+		arrangedNodeIds: new Set(nodes.map((node) => node.id)),
+		unarrangedNodeIds: new Set(),
 	};
 }
 

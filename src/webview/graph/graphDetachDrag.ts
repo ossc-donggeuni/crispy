@@ -1,6 +1,8 @@
 /** Detach Drag 완료 시 상위 Graph View에 전달하는 client 좌표 기반 요청이다. */
 export interface GraphDetachDropRequest {
 	readonly nodeId: string;
+	/** Detached subtree 안에서 시작한 경우 그 Visual Instance를 소유한 Root ID다. */
+	readonly instanceRootId?: string;
 	readonly clientX: number;
 	readonly clientY: number;
 }
@@ -39,6 +41,7 @@ export function initializeGraphDetachDrag(
 	handle: HTMLElement,
 	nodeId: string,
 	options: GraphDetachDragOptions = {},
+	instanceRootId?: string,
 ): GraphDetachDrag {
 	let session: DetachDragSession | undefined;
 	let disposed = false;
@@ -114,6 +117,7 @@ export function initializeGraphDetachDrag(
 		if (didDrag) {
 			options.onDetachDrop?.({
 				nodeId,
+				...(instanceRootId ? { instanceRootId } : {}),
 				clientX: event.clientX,
 				clientY: event.clientY,
 			});

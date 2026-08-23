@@ -53,7 +53,10 @@ src/webview/panel/
 
 > Agent Chat 영역의 접기와 Sticker 열기 동작을 관리합니다.
 
-- Chat Header 접기 버튼으로 Chat Panel과 Resize Handle을 함께 숨김
+- Chat Header 접기 버튼으로 Chat Panel 전체와 Resize Handle을 현재 Dock 바깥까지 Slide
+- 좌·우 Dock은 가로, 상·하 Dock은 세로 방향으로 접고 같은 경로로 다시 펼침
+- 초기 복원 상태는 즉시 반영하고 사용자 접기·열기 동작에만 Transition 적용
+- OS의 모션 감소 설정에서는 Transition 생략
 - 접힘 상태에서 현재 Dock 가장자리에 Sticker 열기 버튼 표시
 - Dock 방향에 맞는 Sticker 위치와 열림 방향 아이콘 적용
 - 접어도 저장된 Side / Vertical 크기를 그대로 두어 같은 크기로 복원

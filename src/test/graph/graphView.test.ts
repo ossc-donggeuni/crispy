@@ -3,10 +3,13 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
 	createFileGroupId,
+	createGraphLayoutNodeId,
 	createGraphLayout,
+	getGraphRootLayoutNodeId,
 	getFileGroupHeight,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
+	GRAPH_LAYOUT_ROOT_GAP,
 } from '../../webview/graph/graphLayout';
 import {
 	GRAPH_MOCK,
@@ -22,22 +25,60 @@ import {
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
+	type GraphStateSnapshot,
 } from '../../webview/graph/graphState';
 import {
 	addGraphRoot,
+	applyDetachedGraphRoots,
+	createDetachedRootId,
 	createFileBacklinkGroupId,
 	createFolderBacklinkId,
 	createPromotedGraphRootId,
+	getDetachedRootOriginId,
 } from '../../webview/graph/graphRootPromotion';
+import {
+	classifyGraphLayoutNodeArrangement,
+	rebaseNodePositions,
+} from '../../webview/graph/graphLayoutTransition';
 import {
 	applyGraphLayout,
 	focusGraphRoot,
 	initializeGraphLayoutReflow,
 	initializeGraphView,
-	promoteToGraphRoot,
 } from '../../webview/graph/graphView';
+import {
+	calculateGraphVisibleArea,
+	createFullGraphVisibleArea,
+} from '../../webview/graph/graphVisibleArea';
 
 suite('Graph View', () => {
+	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const hiddenRule = graphViewCss.match(
+			/\.graph-detached-root-actions\s*\{[^}]*\}/,
+		);
+		const hoverRule = graphViewCss.match(
+			/\.graph-node:hover\s*>\s*\.graph-detached-root-actions,[^{]*\{[^}]*\}/,
+		);
+
+		assert.ok(hiddenRule);
+		assert.match(hiddenRule[0], /position:\s*absolute;/);
+		assert.match(hiddenRule[0], /top:\s*100%;/);
+		assert.match(hiddenRule[0], /padding-top:\s*12px;/);
+		assert.match(hiddenRule[0], /pointer-events:\s*none;/);
+		assert.ok(hoverRule);
+		assert.match(hoverRule[0], /pointer-events:\s*auto;/);
+		assert.ok(graphViewCss.includes(
+			"url('./assets/ui-icons/duplicate.svg')",
+		));
+		assert.ok(graphViewCss.includes(
+			"url('./assets/ui-icons/delete.svg')",
+		));
+	});
+
 	test('Graph Node와 File Row의 hidden 속성은 flex layout보다 우선한다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
@@ -49,6 +90,23 @@ suite('Graph View', () => {
 
 		assert.ok(hiddenRule);
 		assert.match(hiddenRule[0], /display:\s*none;/);
+	});
+
+	test('정렬 대상 강조는 Drag Card보다 위에 표시된다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const draggingRule = graphViewCss.match(
+			/\.graph-node\.is-dragging\s*\{[^}]*z-index:\s*(\d+);[^}]*\}/,
+		);
+		const targetRule = graphViewCss.match(
+			/\.graph-node\.is-arrangement-target,\s*\.graph-arrangement-placeholder\.is-arrangement-target\s*\{[^}]*z-index:\s*(\d+);[^}]*\}/,
+		);
+
+		assert.ok(draggingRule?.[1]);
+		assert.ok(targetRule?.[1]);
+		assert.ok(Number(targetRule[1]) > Number(draggingRule[1]));
 	});
 
 	test('한 번 생성한 Layout reference를 Renderer와 Navigator에 함께 적용한다', () => {
@@ -147,6 +205,11 @@ suite('Graph View', () => {
 			children: [detachedFolder],
 		};
 		const graph = createSingleRootGraph(project, 'root:workspace');
+		const detachedRootId = createPromotedGraphRootId(detachedFolder.id);
+		const detachedRootNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			detachedFolder.id,
+		);
 		const savedPosition = { x: 840, y: 360 };
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -165,13 +228,13 @@ suite('Graph View', () => {
 
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace', 'src/']);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[detachedFolder.id]: true,
+			[detachedRootId]: true,
 			'folder:temporarily-missing': true,
 		});
 		const restoredRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			detachedFolder.id,
+			detachedRootNodeId,
 		);
 
 		assert.strictEqual(restoredRoot.style.transform, 'translate(840px, 360px)');
@@ -179,7 +242,10 @@ suite('Graph View', () => {
 		assert.ok(findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			detachedFolder.children[0].id,
+			createGraphLayoutNodeId(
+				detachedRootId,
+				detachedFolder.children[0].id,
+			),
 		));
 		const backlink = getDescendantByAttribute(
 			root,
@@ -300,7 +366,7 @@ suite('Graph View', () => {
 
 		assert.strictEqual(root.children[0], viewport);
 		assert.strictEqual(graphView.state, stateStore);
-		assert.strictEqual(graphView.state.getState(), initialState);
+		assert.notStrictEqual(graphView.state.getState(), initialState);
 		assert.deepStrictEqual(graphView.camera.getState(), initialCamera);
 		assert.strictEqual(getDescendantByAttribute(
 			root,
@@ -322,11 +388,16 @@ suite('Graph View', () => {
 		);
 
 		assert.strictEqual(addedNode.style.transform, 'translate(760px, 420px)');
-		assert.ok(findDescendantByAttribute(
+		const addedChildNode = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			addedFolder.children[0].id,
-		));
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(addedChildNode.style.transform),
+			readTranslate(addedNode.style.transform),
+		), { x: 302, y: 0 });
 		assert.ok(findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
@@ -372,7 +443,15 @@ suite('Graph View', () => {
 		graphView.updateGraph(secondaryOnlyGraph);
 
 		assert.strictEqual(root.children[0], viewport);
-		assert.strictEqual(graphView.state.getState(), initialState);
+		const secondaryState = graphView.state.getState();
+
+		assert.deepStrictEqual(secondaryState.nodePositions, {
+			[existingFolder.id]: { x: 320, y: 180 },
+			[addedFolder.id]: { x: 760, y: 420 },
+			'folder:stale': { x: -500, y: -300 },
+		});
+		assert.strictEqual(secondaryState.openedFolders, initialState.openedFolders);
+		assert.strictEqual(secondaryState.fileGroupPages, initialState.fileGroupPages);
 		assert.deepStrictEqual(graphView.camera.getState(), initialCamera);
 		assert.strictEqual(
 			findDescendantByAttribute(
@@ -410,6 +489,7 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['secondary']);
 		assert.deepStrictEqual(initialState.nodePositions, {
 			[existingFolder.id]: { x: 320, y: 180 },
+			[fileGroupId]: { x: 622, y: 72 },
 			[addedFolder.id]: { x: 760, y: 420 },
 			'folder:stale': { x: -500, y: -300 },
 		});
@@ -544,7 +624,7 @@ suite('Graph View', () => {
 		graphView.updateGraph(createGraph(fourAfterDelete));
 		assertGroupedFiles(fourAfterDelete, false);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(4, false)}px`);
-		assert.strictEqual(graphView.state.getState(), initialState);
+		assert.deepStrictEqual(graphView.state.getState(), initialState);
 
 		graphView.updateGraph(createGraph(files));
 		graphView.state.showMoreFiles(fileGroupId);
@@ -597,7 +677,10 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			files[5]?.id as string,
 		));
-		assert.strictEqual(graphView.state.getState(), expandedState);
+		assert.deepStrictEqual(graphView.state.getState(), {
+			...expandedState,
+			nodePositions: initialState.nodePositions,
+		});
 		assert.deepStrictEqual(graphView.camera.getState(), initialCamera);
 		graphView.dispose();
 	});
@@ -637,23 +720,37 @@ suite('Graph View', () => {
 			fileGroupPages: { [fileGroupId]: 2 },
 			detachedRootNodeIds: { [filteredFolder.id]: true },
 			hiddenNodeIds: { [filteredFolder.id]: true },
-		}, createFilteredGraph(true));
+			}, createFilteredGraph(true));
 		const initialState = graphView.state.getState();
+		const detachedRootId = createPromotedGraphRootId(filteredFolder.id);
+		const detachedRootNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			filteredFolder.id,
+		);
+		const detachedFileGroupId = createGraphLayoutNodeId(
+			detachedRootId,
+			fileGroupId,
+		);
+		const detachedFileNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			filteredFolder.children[0].id,
+		);
 
 		graphView.updateGraph(createFilteredGraph(false));
 
 		assert.strictEqual(graphView.state.getState(), initialState);
 		assert.deepStrictEqual(initialState.nodePositions, {
-			[filteredFolder.id]: { x: 320, y: 180 },
+			[detachedRootNodeId]: { x: 320, y: 180 },
+			[detachedFileNodeId]: { x: 622, y: 180 },
 		});
 		assert.deepStrictEqual(initialState.openedFolders, {
-			[filteredFolder.id]: true,
+			[detachedRootNodeId]: true,
 		});
 		assert.deepStrictEqual(initialState.fileGroupPages, {
-			[fileGroupId]: 2,
+			[detachedFileGroupId]: 2,
 		});
 		assert.deepStrictEqual(initialState.detachedRootNodeIds, {
-			[filteredFolder.id]: true,
+			[detachedRootId]: true,
 		});
 		assert.deepStrictEqual(initialState.hiddenNodeIds, {
 			[filteredFolder.id]: true,
@@ -701,6 +798,10 @@ suite('Graph View', () => {
 			},
 		}, createWorkspaceGraph(false));
 		const detachedRootId = createPromotedGraphRootId(detachedFolder.id);
+		const detachedRootNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			detachedFolder.id,
+		);
 		const backlinkId = createFolderBacklinkId(detachedRootId);
 
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace']);
@@ -711,7 +812,7 @@ suite('Graph View', () => {
 		const detachedRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			detachedFolder.id,
+			detachedRootNodeId,
 		);
 
 		assert.strictEqual(detachedRoot.style.transform, 'translate(900px, 500px)');
@@ -722,7 +823,7 @@ suite('Graph View', () => {
 		));
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace', 'detached/']);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[detachedFolder.id]: true,
+			[detachedRootId]: true,
 			'folder:refresh-missing': true,
 		});
 		assert.strictEqual(refreshedWorkspaceGraph.roots.length, 1);
@@ -738,7 +839,7 @@ suite('Graph View', () => {
 		assert.strictEqual(findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			detachedFolder.id,
+			detachedRootNodeId,
 		), undefined);
 		assert.strictEqual(findDescendantByAttribute(
 			root,
@@ -747,7 +848,7 @@ suite('Graph View', () => {
 		), undefined);
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['workspace']);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[detachedFolder.id]: true,
+			[detachedRootId]: true,
 			'folder:refresh-missing': true,
 		});
 		assert.strictEqual(workspaceGraphWithoutDetachedFolder.roots.length, 1);
@@ -946,7 +1047,9 @@ suite('Graph View', () => {
 			fileGroupId,
 		));
 		assert.strictEqual(graphView.state.getState().fileGroupPages, initialState.fileGroupPages);
-		assert.strictEqual(graphView.state.getState().nodePositions, initialState.nodePositions);
+		assert.deepStrictEqual(graphView.state.getState().nodePositions, {
+			[fileGroupId]: { x: 520, y: 240 },
+		});
 		assert.strictEqual(graphView.state.getState().openedFolders, initialState.openedFolders);
 		assert.strictEqual(
 			graphView.state.getState().detachedRootNodeIds,
@@ -978,6 +1081,10 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(5, true)}px`);
 		assert.deepStrictEqual(graphView.state.getState().hiddenNodeIds, {});
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions,
+			initialState.nodePositions,
+		);
 		assert.strictEqual(project.children.length, 6);
 		graphView.dispose();
 	});
@@ -1057,7 +1164,18 @@ suite('Graph View', () => {
 				'data-graph-node-id',
 				fileGroupId,
 			));
-			assert.strictEqual(graphView.state.getState(), initialState);
+			const currentState = graphView.state.getState();
+
+			assert.deepStrictEqual(currentState.nodePositions, {
+				[fileGroupId]: { x: 480, y: 220 },
+			});
+			assert.strictEqual(currentState.fileGroupPages, initialState.fileGroupPages);
+			assert.strictEqual(currentState.openedFolders, initialState.openedFolders);
+			assert.strictEqual(
+				currentState.detachedRootNodeIds,
+				initialState.detachedRootNodeIds,
+			);
+			assert.strictEqual(currentState.hiddenNodeIds, initialState.hiddenNodeIds);
 		};
 
 		assertProjection([a, b, d, e, f], 0);
@@ -1147,7 +1265,7 @@ suite('Graph View', () => {
 			'data-filter-checkbox-id',
 			k.id,
 		).checked, false);
-		assert.strictEqual(graphView.state.getState(), initialState);
+		assert.deepStrictEqual(graphView.state.getState(), initialState);
 		graphView.dispose();
 	});
 
@@ -1217,17 +1335,17 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			project.id,
 		);
-		const folderNode = getDescendantByAttribute(
+		const folderNode = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			hiddenFolder.id,
 		);
-		const fileGroup = getDescendantByAttribute(
+		const fileGroup = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			fileGroupId,
 		);
-		const descendantFolderNode = getDescendantByAttribute(
+		const descendantFolderNode = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			descendantFolder.id,
@@ -1237,24 +1355,17 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			siblingFile.id,
 		);
-		const fileRows = getDescendantsByClass(fileGroup, 'graph-file-item');
-		const explicitHiddenRow = fileRows.find(
-			(row) => row.getAttribute('data-file-id') === hiddenFile.id,
-		);
-		const inheritedHiddenRow = fileRows.find(
-			(row) => row.getAttribute('data-file-id') === visibleFile.id,
-		);
-		const projectToFolderEdge = getDescendantByAttribute(
+		const projectToFolderEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${project.id}->${hiddenFolder.id}`,
 		);
-		const folderToFilesEdge = getDescendantByAttribute(
+		const folderToFilesEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${hiddenFolder.id}->${fileGroupId}`,
 		);
-		const folderToDescendantEdge = getDescendantByAttribute(
+		const folderToDescendantEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${hiddenFolder.id}->${descendantFolder.id}`,
@@ -1264,20 +1375,14 @@ suite('Graph View', () => {
 			'graph-navigator-minimap-node-layer',
 		);
 
-		assert.strictEqual(explicitHiddenRow, undefined);
-		assert.ok(inheritedHiddenRow);
 		assert.strictEqual(projectNode.hidden, false);
-		assert.strictEqual(folderNode.hidden, true);
-		assert.strictEqual(descendantFolderNode.hidden, true);
-		assert.strictEqual(fileGroup.hidden, true);
+		assert.strictEqual(folderNode, undefined);
+		assert.strictEqual(descendantFolderNode, undefined);
+		assert.strictEqual(fileGroup, undefined);
 		assert.strictEqual(siblingNode.hidden, false);
-		assert.strictEqual(inheritedHiddenRow.hidden, true);
-		assert.strictEqual(projectToFolderEdge.getAttribute('visibility'), 'hidden');
-		assert.strictEqual(folderToFilesEdge.getAttribute('visibility'), 'hidden');
-		assert.strictEqual(
-			folderToDescendantEdge.getAttribute('visibility'),
-			'hidden',
-		);
+		assert.strictEqual(projectToFolderEdge, undefined);
+		assert.strictEqual(folderToFilesEdge, undefined);
+		assert.strictEqual(folderToDescendantEdge, undefined);
 		assert.strictEqual(findDescendantByAttribute(
 			minimapNodeLayer,
 			'data-graph-node-id',
@@ -1308,15 +1413,52 @@ suite('Graph View', () => {
 				[hiddenFile.id]: true,
 			},
 		});
+		const restoredFolderNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			hiddenFolder.id,
+		);
+		const restoredDescendantNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			descendantFolder.id,
+		);
+		const restoredFileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const visibleRows = getDescendantsByClass(
+			restoredFileGroup,
+			'graph-file-item',
+		);
+		const restoredProjectToFolderEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${hiddenFolder.id}`,
+		);
+		const restoredFolderToFilesEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${hiddenFolder.id}->${fileGroupId}`,
+		);
+		const restoredFolderToDescendantEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${hiddenFolder.id}->${descendantFolder.id}`,
+		);
 
 		assert.strictEqual(projectNode.hidden, false);
-		assert.strictEqual(folderNode.hidden, false);
-		assert.strictEqual(descendantFolderNode.hidden, false);
-		assert.strictEqual(fileGroup.hidden, false);
-		assert.strictEqual(inheritedHiddenRow.hidden, false);
-		assert.strictEqual(projectToFolderEdge.getAttribute('visibility'), null);
-		assert.strictEqual(folderToFilesEdge.getAttribute('visibility'), null);
-		assert.strictEqual(folderToDescendantEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderNode.hidden, false);
+		assert.strictEqual(restoredDescendantNode.hidden, false);
+		assert.strictEqual(restoredFileGroup.hidden, false);
+		assert.deepStrictEqual(
+			visibleRows.map((row) => row.getAttribute('data-file-id')),
+			[visibleFile.id],
+		);
+		assert.strictEqual(restoredProjectToFolderEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderToFilesEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderToDescendantEdge.getAttribute('visibility'), null);
 		assert.ok(findDescendantByAttribute(
 			minimapNodeLayer,
 			'data-graph-node-id',
@@ -1342,7 +1484,46 @@ suite('Graph View', () => {
 			[hiddenFile.id, visibleFile.id],
 		);
 		assert.ok(restoredRows.every((row) => row.hidden === false));
-		assert.strictEqual(graphView.state.getState().nodePositions, preservedState.nodePositions);
+		const finalState = graphView.state.getState();
+		const finalLayout = createGraphLayout(graph, {
+			fileGroupPages: finalState.fileGroupPages,
+			openedFolders: finalState.openedFolders,
+			hiddenNodeIds: finalState.hiddenNodeIds,
+			unarrangedNodeIds: new Set([hiddenFolder.id, siblingFile.id]),
+		});
+		const finalFolderLayout = finalLayout.nodes.find(
+			(node) => node.id === hiddenFolder.id,
+		);
+		const finalDescendantLayout = finalLayout.nodes.find(
+			(node) => node.id === descendantFolder.id,
+		);
+		const finalFileGroupLayout = finalLayout.nodes.find(
+			(node) => node.id === fileGroupId,
+		);
+		const finalFolderPosition = finalState.nodePositions[hiddenFolder.id];
+
+		assert.ok(
+			finalFolderLayout
+			&& finalDescendantLayout
+			&& finalFileGroupLayout
+			&& finalFolderPosition,
+		);
+		assert.deepStrictEqual(finalState.nodePositions[descendantFolder.id], {
+			x: finalFolderPosition.x
+				+ finalDescendantLayout.position.x - finalFolderLayout.position.x,
+			y: finalFolderPosition.y
+				+ finalDescendantLayout.position.y - finalFolderLayout.position.y,
+		});
+		assert.deepStrictEqual(finalState.nodePositions[fileGroupId], {
+			x: finalFolderPosition.x
+				+ finalFileGroupLayout.position.x - finalFolderLayout.position.x,
+			y: finalFolderPosition.y
+				+ finalFileGroupLayout.position.y - finalFolderLayout.position.y,
+		});
+		assert.deepStrictEqual(
+			finalState.nodePositions[siblingFile.id],
+			preservedState.nodePositions[siblingFile.id],
+		);
 		assert.strictEqual(graphView.state.getState().openedFolders, preservedState.openedFolders);
 		assert.strictEqual(graphView.state.getState().fileGroupPages, preservedState.fileGroupPages);
 		assert.strictEqual(
@@ -1516,6 +1697,14 @@ suite('Graph View', () => {
 		const graph = createSingleRootGraph(project);
 		const folderRootId = createPromotedGraphRootId(detachedFolder.id);
 		const fileRootId = createPromotedGraphRootId(detachedFile.id);
+		const folderRootNodeId = createGraphLayoutNodeId(
+			folderRootId,
+			detachedFolder.id,
+		);
+		const fileRootNodeId = createGraphLayoutNodeId(
+			fileRootId,
+			detachedFile.id,
+		);
 		const folderBacklinkId = createFolderBacklinkId(folderRootId);
 		const originalFileGroupId = createFileGroupId(project.id);
 		const ownerDocument = new FakeDocument();
@@ -1540,18 +1729,18 @@ suite('Graph View', () => {
 				[detachedFile.id]: true,
 			},
 		}, graph);
-		const folderRoot = getDescendantByAttribute(
+		const folderRoot = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			detachedFolder.id,
+			folderRootNodeId,
 		);
-		const folderBacklink = getDescendantByAttribute(
+		const folderBacklink = findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			folderBacklinkId,
 		);
 		const fileRoot = getDescendantsByClass(root, 'graph-file-group-node').find(
-			(node) => node.getAttribute('data-graph-node-id') === detachedFile.id,
+			(node) => node.getAttribute('data-graph-node-id') === fileRootNodeId,
 		);
 		const fileBacklink = getDescendantsByClass(root, 'graph-file-item').find(
 			(row) => row.getAttribute('data-file-id') === detachedFile.id,
@@ -1559,7 +1748,7 @@ suite('Graph View', () => {
 		const siblingRow = getDescendantsByClass(root, 'graph-file-item').find(
 			(row) => row.getAttribute('data-file-id') === siblingFile.id,
 		);
-		const folderBacklinkEdge = getDescendantByAttribute(
+		const folderBacklinkEdge = findDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
 			`${project.id}->${folderBacklinkId}`,
@@ -1570,13 +1759,14 @@ suite('Graph View', () => {
 		);
 		const initialState = graphView.state.getState();
 
-		assert.ok(fileRoot && siblingRow);
-		assert.strictEqual(folderRoot.hidden, true);
-		assert.strictEqual(folderBacklink.hidden, true);
-		assert.strictEqual(fileRoot.hidden, true);
+		assert.ok(siblingRow);
+		assert.strictEqual(folderRoot, undefined);
+		assert.strictEqual(folderBacklink, undefined);
+		assert.strictEqual(fileRoot, undefined);
 		assert.strictEqual(fileBacklink, undefined);
 		assert.strictEqual(siblingRow.hidden, false);
-		assert.strictEqual(folderBacklinkEdge.getAttribute('visibility'), 'hidden');
+		assert.strictEqual(folderBacklinkEdge, undefined);
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['filter-detached']);
 		for (const hiddenLayoutNodeId of [
 			detachedFolder.id,
 			folderBacklinkId,
@@ -1594,10 +1784,35 @@ suite('Graph View', () => {
 			nodePositions: initialState.nodePositions,
 			hiddenNodeIds: {},
 		});
+		const restoredFolderRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderRootNodeId,
+		);
+		const restoredFolderBacklink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderBacklinkId,
+		);
+		const restoredFileRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileRootNodeId,
+		);
+		const restoredFolderBacklinkEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${folderBacklinkId}`,
+		);
 
-		assert.strictEqual(folderRoot.hidden, false);
-		assert.strictEqual(folderBacklink.hidden, false);
-		assert.strictEqual(fileRoot.hidden, false);
+		assert.strictEqual(restoredFolderRoot.hidden, false);
+		assert.strictEqual(restoredFolderBacklink.hidden, false);
+		assert.strictEqual(restoredFileRoot.hidden, false);
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'filter-detached',
+			'filter-detached/',
+			'filter-detached.ts',
+		]);
 		const restoredFileBacklink = getDescendantsByClass(root, 'graph-file-item').find(
 			(row) => row.getAttribute('data-file-id') === detachedFile.id,
 		);
@@ -1608,11 +1823,11 @@ suite('Graph View', () => {
 			restoredFileBacklink.getAttribute('data-target-root-id'),
 			fileRootId,
 		);
-		assert.strictEqual(folderBacklinkEdge.getAttribute('visibility'), null);
+		assert.strictEqual(restoredFolderBacklinkEdge.getAttribute('visibility'), null);
 		for (const restoredLayoutNodeId of [
-			detachedFolder.id,
+			folderRootNodeId,
 			folderBacklinkId,
-			detachedFile.id,
+			fileRootNodeId,
 		]) {
 			assert.ok(findDescendantByAttribute(
 				minimapNodeLayer,
@@ -1620,7 +1835,34 @@ suite('Graph View', () => {
 				restoredLayoutNodeId,
 			));
 		}
-		assert.strictEqual(graphView.state.getState().nodePositions, initialState.nodePositions);
+		const detachedGraph = applyDetachedGraphRoots(
+			graph,
+			initialState.detachedRootNodeIds,
+		);
+		const expectedNodePositions = rebaseNodePositions(
+			createGraphLayout(detachedGraph, {
+				fileGroupPages: initialState.fileGroupPages,
+				openedFolders: initialState.openedFolders,
+				hiddenNodeIds: initialState.hiddenNodeIds,
+			}),
+			createGraphLayout(detachedGraph, {
+				fileGroupPages: initialState.fileGroupPages,
+				openedFolders: initialState.openedFolders,
+				hiddenNodeIds: {},
+			}),
+				initialState.nodePositions,
+				{
+					unarrangedNodeIds: new Set([
+						folderRootNodeId,
+					fileRootNodeId,
+				]),
+			},
+		);
+
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions,
+			expectedNodePositions,
+		);
 		assert.strictEqual(graphView.state.getState().openedFolders, initialState.openedFolders);
 		assert.strictEqual(graphView.state.getState().fileGroupPages, initialState.fileGroupPages);
 		assert.strictEqual(
@@ -1628,8 +1870,8 @@ suite('Graph View', () => {
 			initialState.detachedRootNodeIds,
 		);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[detachedFolder.id]: true,
-			[detachedFile.id]: true,
+			[folderRootId]: true,
+			[fileRootId]: true,
 		});
 		assert.strictEqual(graph.roots.length, 1);
 		assert.strictEqual(graph.rootNodes[detachedFolder.id], undefined);
@@ -1653,33 +1895,16 @@ suite('Graph View', () => {
 		assert.strictEqual(root.children.length, 0);
 	});
 
-	test('Root Promotion 실패는 Graph와 Detached Root 상태를 변경하지 않는다', () => {
-		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
-		const state = createGraphState({
-			camera: { x: 0, y: 0, scale: 1 },
-			nodePositions: {},
-			detachedRootNodeIds: { 'folder:existing': true },
-		});
-		const initialSnapshot = state.getState();
-
-		const result = promoteToGraphRoot(
-			graph,
-			{ nodeId: 'folder:missing', clientX: 100, clientY: 200 },
-			{} as HTMLElement,
-			{} as ReturnType<typeof initializeGraphView>['camera'],
-			state,
-		);
-
-		assert.strictEqual(result, undefined);
-		assert.strictEqual(state.getState(), initialSnapshot);
-		assert.deepStrictEqual(state.getState().detachedRootNodeIds, {
-			'folder:existing': true,
-		});
-	});
-
 	test('Navigator Root 선택은 저장 위치와 Layout fallback을 Focus하고 Camera scale을 유지한다', () => {
 		const savedFolderPosition = { x: 900, y: 520 };
 		const initialScale = 1.4;
+		let visibleArea = calculateGraphVisibleArea(
+			{ width: 1000, height: 800 },
+			{ left: 0, top: 0, width: 1000, height: 800 },
+			{ left: 528, top: 12, right: 988, bottom: 788, width: 460, height: 776 },
+			'right',
+			false,
+		);
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
@@ -1691,13 +1916,30 @@ suite('Graph View', () => {
 				},
 			},
 			GRAPH_MOCK,
+			{ resolveVisibleGraphArea: () => visibleArea },
 		);
 		const layout = createGraphLayout(GRAPH_MOCK);
+		const folderGraphRoot = GRAPH_MOCK.roots.find(
+			(root) => root.nodeId === GRAPH_MOCK_FOLDER_ROOT.id,
+		);
+		const fileGraphRoot = GRAPH_MOCK.roots.find(
+			(root) => root.nodeId === GRAPH_MOCK_FILE_ROOT.id,
+		);
+
+		assert.ok(folderGraphRoot);
+		assert.ok(fileGraphRoot);
+		const folderRootNodeId = getGraphRootLayoutNodeId(folderGraphRoot);
+		const fileRootNodeId = getGraphRootLayoutNodeId(fileGraphRoot);
 		const folderLayout = layout.nodes.find(
-			(node) => node.id === GRAPH_MOCK_FOLDER_ROOT.id,
+			(node) => node.id === folderRootNodeId,
 		);
 		const fileLayout = layout.nodes.find(
-			(node) => node.id === GRAPH_MOCK_FILE_ROOT.id,
+			(node) => node.id === fileRootNodeId,
+		);
+		const fileRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileRootNodeId,
 		);
 		const viewport = getDescendantByClass(root, 'graph-viewport');
 		const rootButtons = getDescendantsByClass(
@@ -1724,20 +1966,27 @@ suite('Graph View', () => {
 				x: savedFolderPosition.x + folderLayout.width / 2,
 				y: savedFolderPosition.y + folderLayout.height / 2,
 			}),
-			{ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 },
+			visibleArea.center,
 		);
+
+		visibleArea = createFullGraphVisibleArea({
+			width: viewport.clientWidth,
+			height: viewport.clientHeight,
+		});
+		graphView.refreshVisibleGraphArea();
 
 		const fileButton = rootButtons[2];
 
 		assert.ok(fileButton);
 		fileButton.dispatch('click', createClickEvent(fileButton));
 		assert.strictEqual(graphView.camera.getState().scale, initialScale);
+		const currentFilePosition = readTranslate(fileRoot.style.transform);
 		assertPointAlmostEqual(
 			graphView.camera.worldToViewport({
-				x: fileLayout.position.x + fileLayout.width / 2,
-				y: fileLayout.position.y + fileLayout.height / 2,
+				x: currentFilePosition.x + fileLayout.width / 2,
+				y: currentFilePosition.y + fileLayout.height / 2,
 			}),
-			{ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 },
+			visibleArea.center,
 		);
 		graphView.dispose();
 	});
@@ -1918,16 +2167,20 @@ suite('Graph View', () => {
 		const fileAddition = addGraphRoot(folderAddition.graph, file.id);
 
 		assert.ok(fileAddition);
+		const folderRootNodeId = getGraphRootLayoutNodeId(folderAddition.root);
+		const fileRootNodeId = getGraphRootLayoutNodeId(fileAddition.root);
 		const state = createGraphState({
 			camera: { x: 0, y: 0, scale: 1 },
-			nodePositions: { [folder.id]: { x: 700, y: 300 } },
+			nodePositions: { [folderRootNodeId]: { x: 700, y: 300 } },
 			openedFolders: { [project.id]: true },
 		});
 		const layout = createGraphLayout(fileAddition.graph, {
 			openedFolders: state.getState().openedFolders,
 		});
-		const folderLayout = layout.nodes.find((node) => node.id === folder.id);
-		const fileLayout = layout.nodes.find((node) => node.id === file.id);
+		const folderLayout = layout.nodes.find(
+			(node) => node.id === folderRootNodeId,
+		);
+		const fileLayout = layout.nodes.find((node) => node.id === fileRootNodeId);
 		const focusPoints: Array<{ x: number; y: number }> = [];
 		const camera = { focusOn: (point: { x: number; y: number }) => {
 			focusPoints.push(point);
@@ -2078,9 +2331,18 @@ suite('Graph View', () => {
 
 		graphView.camera.focusOn = (point) => focusPoints.push(point);
 		const roots = [
-			{ nodeId: folderTarget.id, backlink: folderBacklink },
-			{ nodeId: groupedTarget.id, backlink: groupedBacklink },
-			{ nodeId: singletonTarget.id, backlink: singletonBacklink },
+			{
+				nodeId: getGraphRootLayoutNodeId(folderAddition.root),
+				backlink: folderBacklink,
+			},
+			{
+				nodeId: getGraphRootLayoutNodeId(groupedAddition.root),
+				backlink: groupedBacklink,
+			},
+			{
+				nodeId: getGraphRootLayoutNodeId(singletonAddition.root),
+				backlink: singletonBacklink,
+			},
 		];
 
 		for (const entry of roots) {
@@ -2118,7 +2380,7 @@ suite('Graph View', () => {
 		const folderRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			folderTarget.id,
+			getGraphRootLayoutNodeId(folderAddition.root),
 		);
 		const folderLabel = getDescendantByClass(
 			folderRoot,
@@ -2207,9 +2469,16 @@ suite('Graph View', () => {
 		);
 
 		assert.ok(singletonAddition);
+		const folderRootNodeId = getGraphRootLayoutNodeId(folderAddition.root);
+		const groupedRootNodeId = getGraphRootLayoutNodeId(groupedAddition.root);
+		const singletonRootNodeId = getGraphRootLayoutNodeId(singletonAddition.root);
 		const fileGroupId = createFileGroupId(groupedFolder.id);
 		const siblingPosition = { x: 910, y: 440 };
 		const initialCamera = { x: 35, y: -15, scale: 1.5 };
+		const siblingPositionAfterProjectDrag = {
+			x: siblingPosition.x + 300 / initialCamera.scale,
+			y: siblingPosition.y + 121 / initialCamera.scale,
+		};
 		const initialOpenedFolders = {
 			[project.id]: true as const,
 			[folderTarget.id]: true as const,
@@ -2298,24 +2567,23 @@ suite('Graph View', () => {
 		const folderRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			folderTarget.id,
+			folderRootNodeId,
 		);
 		const groupedRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			groupedTarget.id,
+			groupedRootNodeId,
 		);
 		const singletonRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			singletonTarget.id,
+			singletonRootNodeId,
 		);
 		const projectRoot = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			project.id,
 		);
-
 		performNodeDrop(projectRoot, 300, 121);
 		assert.ok(graphView.state.getState().nodePositions[project.id]);
 		assert.strictEqual(backlinks.folder.hasClass('is-reattach-target'), false);
@@ -2326,9 +2594,9 @@ suite('Graph View', () => {
 
 		performNodeDrop(folderRoot, 550, 235);
 		assert.ok(findDescendantByClass(folderRoot, 'graph-root-context-label'));
-		assert.ok(graphView.state.getState().nodePositions[folderTarget.id]);
+		assert.ok(graphView.state.getState().nodePositions[folderRootNodeId]);
 		assert.strictEqual(
-			graphView.state.getState().detachedRootNodeIds[folderTarget.id],
+			graphView.state.getState().detachedRootNodeIds[folderAddition.root.id],
 			true,
 		);
 		assert.strictEqual(backlinks.grouped.hasClass('is-reattach-target'), false);
@@ -2343,7 +2611,7 @@ suite('Graph View', () => {
 			undefined,
 		);
 		performNodeDrop(folderRoot, 300, 121);
-		assert.ok(graphView.state.getState().nodePositions[folderTarget.id]);
+		assert.ok(graphView.state.getState().nodePositions[folderRootNodeId]);
 		assert.ok(findDescendantByClass(folderRoot, 'graph-root-context-label'));
 		assert.deepStrictEqual(
 			getNavigatorRootNames(root),
@@ -2352,6 +2620,10 @@ suite('Graph View', () => {
 
 		graphView.state.toggleFolder(project.id);
 		backlinks = setBacklinkBounds();
+		assert.strictEqual(
+			graphView.state.getState().nodePositions[folderTarget.id],
+			undefined,
+		);
 		beginNodeDrag(folderRoot, 300, 121);
 		assert.strictEqual(backlinks.folder.hasClass('is-reattach-target'), true);
 		folderRoot.dispatch('pointerup', createPointerEvent(folderRoot, 300, 121));
@@ -2380,11 +2652,15 @@ suite('Graph View', () => {
 			folderChild.id,
 		));
 		assert.strictEqual(
-			graphView.state.getState().nodePositions[folderTarget.id],
+			graphView.state.getState().nodePositions[folderRootNodeId],
 			undefined,
 		);
+		const restoredFolderPosition = graphView.state.getState()
+			.nodePositions[folderTarget.id];
+
+		assert.ok(restoredFolderPosition);
 		assert.strictEqual(
-			graphView.state.getState().detachedRootNodeIds[folderTarget.id],
+			graphView.state.getState().detachedRootNodeIds[folderAddition.root.id],
 			undefined,
 		);
 		assert.ok(findDescendantByClass(groupedRoot, 'graph-root-context-label'));
@@ -2414,11 +2690,11 @@ suite('Graph View', () => {
 			undefined,
 		);
 		assert.strictEqual(
-			graphView.state.getState().nodePositions[groupedTarget.id],
+			graphView.state.getState().nodePositions[groupedRootNodeId],
 			undefined,
 		);
 		assert.strictEqual(
-			graphView.state.getState().detachedRootNodeIds[groupedTarget.id],
+			graphView.state.getState().detachedRootNodeIds[groupedAddition.root.id],
 			undefined,
 		);
 		assert.ok(findDescendantByClass(singletonRoot, 'graph-root-context-label'));
@@ -2448,21 +2724,213 @@ suite('Graph View', () => {
 		);
 		const finalState = graphView.state.getState();
 
-		assert.strictEqual(finalState.nodePositions[folderTarget.id], undefined);
+		assert.deepStrictEqual(
+			finalState.nodePositions[folderTarget.id],
+			restoredFolderPosition,
+		);
 		assert.strictEqual(finalState.nodePositions[groupedTarget.id], undefined);
-		assert.strictEqual(finalState.nodePositions[singletonTarget.id], undefined);
+		const restoredSingletonParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			singletonFolder.id,
+		);
+		const finalLayout = createGraphLayout(createSingleRootGraph(
+			project,
+			'root:project',
+		), {
+			openedFolders: finalState.openedFolders,
+			fileGroupPages: finalState.fileGroupPages,
+		});
+		const finalSingletonParentLayout = finalLayout.nodes.find(
+			(node) => node.id === singletonFolder.id,
+		);
+		const finalSingletonLayout = finalLayout.nodes.find(
+			(node) => node.id === singletonTarget.id,
+		);
+
+		assert.ok(finalSingletonParentLayout && finalSingletonLayout);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(restoredSingleton.style.transform),
+			readTranslate(restoredSingletonParent.style.transform),
+		), subtractPositions(
+			finalSingletonLayout.position,
+			finalSingletonParentLayout.position,
+		));
 		assert.deepStrictEqual(finalState.detachedRootNodeIds, {});
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['reattach']);
 		assert.strictEqual(rootListPanel.hidden, false);
 		assert.strictEqual(rootListButton.getAttribute('aria-expanded'), 'true');
-		assert.deepStrictEqual(
-			finalState.nodePositions[positionedSibling.id],
-			siblingPosition,
+		const finalSiblingPosition = finalState.nodePositions[positionedSibling.id];
+
+		assert.ok(finalSiblingPosition);
+		assert.strictEqual(finalSiblingPosition.x, siblingPositionAfterProjectDrag.x);
+		assert.ok(
+			Math.abs(
+				finalSiblingPosition.y - siblingPositionAfterProjectDrag.y,
+			) < 1e-10,
 		);
 		assert.ok(finalState.nodePositions[project.id]);
 		assert.deepStrictEqual(finalState.openedFolders, initialOpenedFolders);
 		assert.deepStrictEqual(finalState.fileGroupPages, initialFileGroupPages);
 		assert.deepStrictEqual(finalState.camera, initialCamera);
+		graphView.dispose();
+	});
+
+	test('이동된 Parent에서 생성한 Folder/File Backlink는 항상 정렬 위치를 상속한다', () => {
+		const targetFolder = {
+			kind: 'folder' as const,
+			id: 'folder:backlink-arrangement/target',
+			name: 'target',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const siblingFolder = {
+			kind: 'folder' as const,
+			id: 'folder:backlink-arrangement/sibling',
+			name: 'sibling',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const targetFile = {
+			kind: 'file' as const,
+			id: 'file:backlink-arrangement/index.ts',
+			name: 'index.ts',
+		};
+		const movedParent = {
+			kind: 'folder' as const,
+			id: 'folder:backlink-arrangement',
+			name: 'backlink-arrangement',
+			status: 'loaded' as const,
+			children: [targetFolder, siblingFolder, targetFile],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:backlink-arrangement',
+			name: 'backlink-arrangement',
+			status: 'loaded',
+			children: [movedParent],
+		};
+		const graph = createSingleRootGraph(project);
+		const folderBacklinkId = createFolderBacklinkId(
+			createPromotedGraphRootId(targetFolder.id),
+		);
+		const fileBacklinkId = createFileBacklinkGroupId(
+			createPromotedGraphRootId(targetFile.id),
+		);
+		const openedFolders = {
+			[project.id]: true as const,
+			[movedParent.id]: true as const,
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			nodePositions: {
+				[folderBacklinkId]: { x: -900, y: -700 },
+				[fileBacklinkId]: { x: -800, y: -600 },
+			},
+			openedFolders,
+		}, graph);
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+		const parent = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			movedParent.id,
+		);
+
+		performNodeDrop(parent, 1_200, 900);
+		const parentPosition = readTranslate(parent.style.transform);
+		const folder = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			targetFolder.id,
+		);
+		const folderHandle = getDescendantByClass(folder, 'graph-detach-handle');
+
+		folderHandle.dispatch('pointerdown', createPointerEvent(folderHandle, 10, 10));
+		folderHandle.dispatch('pointermove', createPointerEvent(folderHandle, 30, 30));
+		folderHandle.dispatch('pointerup', createPointerEvent(folderHandle, 1_500, 1_000));
+
+		const folderAddition = addGraphRoot(graph, targetFolder.id);
+
+		assert.ok(folderAddition);
+		const folderLayout = createGraphLayout(folderAddition.graph, {
+			openedFolders,
+			unarrangedNodeIds: new Set([movedParent.id, targetFolder.id]),
+		});
+		const folderParentLayout = folderLayout.nodes.find(
+			(node) => node.id === movedParent.id,
+		);
+		const folderBacklinkLayout = folderLayout.nodes.find(
+			(node) => node.id === folderBacklinkId,
+		);
+		const folderBacklink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			folderBacklinkId,
+		);
+
+		assert.ok(folderParentLayout && folderBacklinkLayout);
+		assert.deepStrictEqual(readTranslate(folderBacklink.style.transform), {
+			x: folderBacklinkLayout.position.x
+				+ parentPosition.x
+				- folderParentLayout.position.x,
+			y: folderBacklinkLayout.position.y
+				+ parentPosition.y
+				- folderParentLayout.position.y,
+		});
+		assert.strictEqual(classifyGraphLayoutNodeArrangement(
+			folderLayout,
+			graphView.state.getState().nodePositions,
+		).unarrangedNodeIds.has(folderBacklinkId), false);
+
+		const file = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			targetFile.id,
+		);
+		const fileHandle = getDescendantByClass(file, 'graph-detach-handle');
+
+		fileHandle.dispatch('pointerdown', createPointerEvent(fileHandle, 10, 10));
+		fileHandle.dispatch('pointermove', createPointerEvent(fileHandle, 30, 30));
+		fileHandle.dispatch('pointerup', createPointerEvent(fileHandle, 1_800, 1_200));
+
+		const fileAddition = addGraphRoot(folderAddition.graph, targetFile.id);
+
+		assert.ok(fileAddition);
+		const fileLayout = createGraphLayout(fileAddition.graph, {
+			openedFolders,
+			unarrangedNodeIds: new Set([
+				movedParent.id,
+				targetFolder.id,
+				targetFile.id,
+			]),
+		});
+		const fileParentLayout = fileLayout.nodes.find(
+			(node) => node.id === movedParent.id,
+		);
+		const fileBacklinkLayout = fileLayout.nodes.find(
+			(node) => node.id === fileBacklinkId,
+		);
+		const fileBacklink = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileBacklinkId,
+		);
+
+		assert.ok(fileParentLayout && fileBacklinkLayout);
+		assert.deepStrictEqual(readTranslate(fileBacklink.style.transform), {
+			x: fileBacklinkLayout.position.x
+				+ parentPosition.x
+				- fileParentLayout.position.x,
+			y: fileBacklinkLayout.position.y
+				+ parentPosition.y
+				- fileParentLayout.position.y,
+		});
+		assert.strictEqual(classifyGraphLayoutNodeArrangement(
+			fileLayout,
+			graphView.state.getState().nodePositions,
+		).unarrangedNodeIds.has(fileBacklinkId), false);
 		graphView.dispose();
 	});
 
@@ -2579,6 +3047,11 @@ suite('Graph View', () => {
 		);
 
 		const handle = getDescendantByClass(childFileNode, 'graph-detach-handle');
+		const detachedFileRootId = createPromotedGraphRootId(childFile.id);
+		const detachedFileRootNodeId = createGraphLayoutNodeId(
+			detachedFileRootId,
+			childFile.id,
+		);
 
 		handle.dispatch('pointerdown', createPointerEvent(handle, 20, 30));
 		handle.dispatch('pointermove', createPointerEvent(handle, 1_000, 800));
@@ -2589,17 +3062,23 @@ suite('Graph View', () => {
 			clientY: 3_000,
 		}]);
 		assert.deepStrictEqual(graphView.state.getState().nodePositions, {
-			[childFile.id]: { x: 1_000, y: 750 },
+			[detachedFileRootNodeId]: { x: 1_000, y: 750 },
 		});
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[childFile.id]: true,
+			[detachedFileRootId]: true,
 		});
+		const detachedFileNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFileRootNodeId,
+		);
+
 		assert.strictEqual(
-			findDescendantByClass(childFileNode, 'graph-detach-handle'),
+			findDescendantByClass(detachedFileNode, 'graph-detach-handle'),
 			undefined,
 		);
 		assert.strictEqual(
-			childFileNode.style.transform,
+			detachedFileNode.style.transform,
 			'translate(1000px, 750px)',
 		);
 		const backlinkGroup = getDescendantByAttribute(
@@ -2614,8 +3093,8 @@ suite('Graph View', () => {
 			createPromotedGraphRootId(childFile.id),
 		);
 		assert.strictEqual(
-			findDescendantByClass(backlinkGroup, 'graph-detach-handle'),
-			undefined,
+			findDescendantByClass(backlinkGroup, 'graph-detach-handle') !== undefined,
+			true,
 		);
 		assert.deepStrictEqual(
 			getNavigatorRootNames(root),
@@ -2628,13 +3107,889 @@ suite('Graph View', () => {
 		assert.notStrictEqual(getDescendantByAttribute(
 			minimapNodeLayer,
 			'data-graph-node-id',
-			childFile.id,
+			detachedFileRootNodeId,
 		), initialMinimapFile);
 		assert.notDeepStrictEqual(
 			readMinimapViewportAttributes(minimapViewportIndicator),
 			initialIndicator,
 		);
 
+		graphView.dispose();
+	});
+
+	test('Backlink 반복 Detach, Instance 독립 이동, 중간 Reattach와 ordinal 재계산을 통합 처리한다', () => {
+		const child = {
+			kind: 'file' as const,
+			id: 'file:multiple-detach/child.ts',
+			name: 'child.ts',
+		};
+		const source = {
+			kind: 'folder' as const,
+			id: 'folder:multiple-detach',
+			name: 'multiple-detach',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:multiple-detach',
+			name: 'multiple-detach',
+			status: 'loaded',
+			children: [source],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true, [source.id]: true },
+		}, createSingleRootGraph(project));
+		const backlinkId = createFolderBacklinkId(source.id);
+		const detachFrom = (
+			node: FakeElement,
+			target: { readonly x: number; readonly y: number },
+		): void => {
+			const handle = getDescendantByClass(node, 'graph-detach-handle');
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, target.x, target.y),
+			);
+		};
+		const getBacklink = () => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			backlinkId,
+		);
+		const rootId = (ordinal: number) => createDetachedRootId(source.id, ordinal);
+		const rootNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			rootId(ordinal),
+			source.id,
+		);
+		const childNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			rootId(ordinal),
+			child.id,
+		);
+		const getDetachedRoot = (ordinal: number) => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			rootNodeId(ordinal),
+		);
+
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		), { x: 500, y: 300 });
+		detachFrom(getBacklink(), { x: 1_000, y: 500 });
+		detachFrom(getBacklink(), { x: 1_500, y: 700 });
+
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(2)]: true,
+			[rootId(3)]: true,
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (2)',
+			'multiple-detach/ (3)',
+		]);
+		for (const ordinal of [1, 2, 3]) {
+			assert.ok(getDetachedRoot(ordinal));
+			assert.ok(
+				findDescendantByAttribute(
+					root,
+					'data-graph-node-id',
+					childNodeId(ordinal),
+				),
+				`missing ${childNodeId(ordinal)} in ${getDescendantsByClass(
+					root,
+					'graph-node',
+				).map((node) => node.getAttribute('data-graph-node-id')).join(', ')}`,
+			);
+			assert.strictEqual(
+				getDescendantByClass(
+					getDetachedRoot(ordinal),
+					'graph-detached-root-badge',
+				).textContent,
+				String(ordinal),
+			);
+		}
+		const visibleState = graphView.state.getState();
+
+		graphView.state.setState({
+			camera: visibleState.camera,
+			nodePositions: visibleState.nodePositions,
+			hiddenNodeIds: { [source.id]: true },
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['multiple-detach']);
+		for (const ordinal of [1, 2, 3]) {
+			assert.strictEqual(findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				rootNodeId(ordinal),
+			), undefined);
+		}
+
+		const hiddenState = graphView.state.getState();
+
+		graphView.state.setState({
+			camera: hiddenState.camera,
+			nodePositions: hiddenState.nodePositions,
+			hiddenNodeIds: {},
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (2)',
+			'multiple-detach/ (3)',
+		]);
+		for (const ordinal of [1, 2, 3]) {
+			assert.ok(getDetachedRoot(ordinal));
+		}
+		const secondPositionBeforeMove = readTranslate(
+			getDetachedRoot(2).style.transform,
+		);
+		const thirdPositionBeforeMove = readTranslate(
+			getDetachedRoot(3).style.transform,
+		);
+		const firstChildPositionBeforeMove = readTranslate(
+			getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				childNodeId(1),
+			).style.transform,
+		);
+
+		setClientBounds(getBacklink(), -10_000, -10_000, 1, 1);
+		performNodeDrop(getDetachedRoot(1), 120, 80);
+		assert.deepStrictEqual(
+			readTranslate(getDetachedRoot(2).style.transform),
+			secondPositionBeforeMove,
+		);
+		assert.deepStrictEqual(
+			readTranslate(getDetachedRoot(3).style.transform),
+			thirdPositionBeforeMove,
+		);
+		assert.deepStrictEqual(
+			readTranslate(getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				childNodeId(1),
+			).style.transform),
+			{
+				x: firstChildPositionBeforeMove.x + 120,
+				y: firstChildPositionBeforeMove.y + 80,
+			},
+		);
+
+		const reattach = (ordinal: number): void => {
+			const backlink = getBacklink();
+
+			setClientBounds(backlink, 200, 100, 200, 42);
+			beginNodeDrag(getDetachedRoot(ordinal), 300, 121);
+			getDetachedRoot(ordinal).dispatch(
+				'pointerup',
+				createPointerEvent(getDetachedRoot(ordinal), 300, 121),
+			);
+		};
+
+		reattach(2);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(3)]: true,
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (3)',
+		]);
+		assert.ok(getBacklink());
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			rootNodeId(2),
+		), undefined);
+
+		detachFrom(getBacklink(), { x: 1_900, y: 900 });
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(3)]: true,
+			[rootId(4)]: true,
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/ (1)',
+			'multiple-detach/ (3)',
+			'multiple-detach/ (4)',
+		]);
+		assert.strictEqual(
+			getDescendantByClass(
+				getDetachedRoot(4),
+				'graph-detached-root-badge',
+			).textContent,
+			'4',
+		);
+
+		reattach(1);
+		reattach(3);
+		reattach(4);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.deepStrictEqual(getNavigatorRootNames(root), ['multiple-detach']);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			backlinkId,
+		), undefined);
+		const restoredSource = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		);
+
+		detachFrom(restoredSource, { x: 700, y: 400 });
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [
+			'multiple-detach',
+			'multiple-detach/',
+		]);
+		assert.strictEqual(
+			findDescendantByClass(
+				getDetachedRoot(1),
+				'graph-detached-root-badge',
+			),
+			undefined,
+		);
+		graphView.dispose();
+	});
+
+	test('Hover Duplicate/Delete는 Multiple Detach/Reattach 경로와 subtree 위치·ordinal을 공유한다', () => {
+		const child = {
+			kind: 'file' as const,
+			id: 'file:hover-action-flow/child.ts',
+			name: 'child.ts',
+		};
+		const source = {
+			kind: 'folder' as const,
+			id: 'folder:hover-action-flow',
+			name: 'hover-action-flow',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:hover-action-flow',
+			name: 'hover-action-flow',
+			status: 'loaded',
+			children: [source],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true, [source.id]: true },
+		}, createSingleRootGraph(project));
+		const rootId = (ordinal: number) => createDetachedRootId(source.id, ordinal);
+		const rootNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			rootId(ordinal),
+			source.id,
+		);
+		const childNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			rootId(ordinal),
+			child.id,
+		);
+		const getDetachedRoot = (ordinal: number) => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			rootNodeId(ordinal),
+		);
+		const clickAction = (
+			ordinal: number,
+			action: 'duplicate' | 'delete',
+		): void => {
+			const button = getDescendantByAttribute(
+				getDetachedRoot(ordinal),
+				'data-detached-root-action',
+				action,
+			);
+
+			button.dispatch('click', createClickEvent(button));
+		};
+		const detachFrom = (
+			node: FakeElement,
+			target: { readonly x: number; readonly y: number },
+		): void => {
+			const handle = getDescendantByClass(node, 'graph-detach-handle');
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, target.x, target.y),
+			);
+		};
+
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		), { x: 600, y: 320 });
+		const firstRootTransform = getDetachedRoot(1).style.transform;
+		const firstChildTransform = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childNodeId(1),
+		).style.transform;
+		const firstRootPosition = readTranslate(firstRootTransform);
+		const firstChildPosition = readTranslate(firstChildTransform);
+
+		clickAction(1, 'duplicate');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(2)]: true,
+		});
+		assert.strictEqual(getDetachedRoot(1).style.transform, firstRootTransform);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				childNodeId(1),
+			).style.transform,
+			firstChildTransform,
+		);
+		assert.deepStrictEqual(readTranslate(getDetachedRoot(2).style.transform), {
+			x: firstRootPosition.x,
+			y: Math.max(
+				firstRootPosition.y + GRAPH_FOLDER_NODE_HEIGHT,
+				firstChildPosition.y + GRAPH_FOLDER_NODE_HEIGHT,
+			) + GRAPH_LAYOUT_ROOT_GAP,
+		});
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childNodeId(2),
+		));
+		for (const ordinal of [1, 2]) {
+			assert.strictEqual(
+				getDescendantByClass(
+					getDetachedRoot(ordinal),
+					'graph-detached-root-badge',
+				).textContent,
+				String(ordinal),
+			);
+		}
+
+		clickAction(2, 'duplicate');
+		clickAction(2, 'delete');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(3)]: true,
+		});
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(source.id),
+		));
+		clickAction(1, 'duplicate');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+			[rootId(3)]: true,
+			[rootId(4)]: true,
+		});
+		for (const ordinal of [1, 3, 4]) {
+			assert.strictEqual(
+				getDescendantByClass(
+					getDetachedRoot(ordinal),
+					'graph-detached-root-badge',
+				).textContent,
+				String(ordinal),
+			);
+		}
+
+		clickAction(1, 'delete');
+		clickAction(3, 'delete');
+		assert.strictEqual(
+			findDescendantByClass(
+				getDetachedRoot(4),
+				'graph-detached-root-badge',
+			),
+			undefined,
+		);
+		clickAction(4, 'delete');
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(source.id),
+		), undefined);
+		const restoredSource = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		);
+
+		detachFrom(restoredSource, { x: 700, y: 400 });
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[rootId(1)]: true,
+		});
+		graphView.dispose();
+	});
+
+	test('standalone/grouped File Detached Root도 동일 Hover Duplicate/Delete를 사용한다', () => {
+		for (const presentation of ['standalone', 'grouped'] as const) {
+			const source = {
+				kind: 'file' as const,
+				id: `file:hover-file-action/${presentation}.ts`,
+				name: `${presentation}.ts`,
+			};
+			const sibling = {
+				kind: 'file' as const,
+				id: `file:hover-file-action/${presentation}-sibling.ts`,
+				name: `${presentation}-sibling.ts`,
+			};
+			const project: Project = {
+				kind: 'project',
+				id: `project:hover-file-action/${presentation}`,
+				name: `hover-file-action-${presentation}`,
+				status: 'loaded',
+				children: presentation === 'grouped'
+					? [source, sibling]
+					: [source],
+			};
+			const ownerDocument = new FakeDocument();
+			const root = ownerDocument.createElement('section');
+			const graphView = initializeGraphView(root.asHtmlElement(), {
+				camera: { x: 0, y: 0, scale: 1 },
+				nodePositions: {},
+				openedFolders: { [project.id]: true },
+			}, createSingleRootGraph(project));
+			const sourceElement = getDescendantByAttribute(
+				root,
+				'data-file-id',
+				source.id,
+			);
+			const detachHandle = getDescendantByClass(
+				sourceElement,
+				'graph-detach-handle',
+			);
+
+			detachHandle.dispatch(
+				'pointerdown',
+				createPointerEvent(detachHandle, 10, 10),
+			);
+			detachHandle.dispatch(
+				'pointermove',
+				createPointerEvent(detachHandle, 30, 30),
+			);
+			detachHandle.dispatch(
+				'pointerup',
+				createPointerEvent(detachHandle, 600, 320),
+			);
+			const rootId = (ordinal: number) => createDetachedRootId(
+				source.id,
+				ordinal,
+			);
+			const getDetachedFile = (ordinal: number) => getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				createGraphLayoutNodeId(rootId(ordinal), source.id),
+			);
+			const clickAction = (
+				ordinal: number,
+				action: 'duplicate' | 'delete',
+			): void => {
+				const button = getDescendantByAttribute(
+					getDetachedFile(ordinal),
+					'data-detached-root-action',
+					action,
+				);
+
+				button.dispatch('click', createClickEvent(button));
+			};
+
+			clickAction(1, 'duplicate');
+			assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+				[rootId(1)]: true,
+				[rootId(2)]: true,
+			});
+			assert.ok(getDetachedFile(1));
+			assert.ok(getDetachedFile(2));
+			clickAction(1, 'delete');
+			assert.strictEqual(
+				findDescendantByClass(
+					getDetachedFile(2),
+					'graph-detached-root-badge',
+				),
+				undefined,
+			);
+			clickAction(2, 'delete');
+			assert.deepStrictEqual(
+				graphView.state.getState().detachedRootNodeIds,
+				{},
+			);
+			assert.ok(getDescendantByAttribute(
+				root,
+				'data-file-id',
+				source.id,
+			));
+			graphView.dispose();
+		}
+	});
+
+	test('Folder open과 하위 File Detach/Reattach는 시작한 Root Instance에만 적용된다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:instance-owned/child.ts',
+			name: 'child.ts',
+		};
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:instance-owned',
+			name: 'instance-owned',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:instance-owned',
+			name: 'instance-owned',
+			status: 'loaded',
+			children: [folder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: { [project.id]: true, [folder.id]: true },
+		}, createSingleRootGraph(project));
+		const detachFrom = (
+			node: FakeElement,
+			target: { readonly x: number; readonly y: number },
+		): void => {
+			const handle = getDescendantByClass(node, 'graph-detach-handle');
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, target.x, target.y),
+			);
+		};
+		const parentRootId = (ordinal: number) => createDetachedRootId(
+			folder.id,
+			ordinal,
+		);
+		const parentNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			parentRootId(ordinal),
+			folder.id,
+		);
+		const fileNodeId = (ordinal: number) => createGraphLayoutNodeId(
+			parentRootId(ordinal),
+			file.id,
+		);
+		const getParent = (ordinal: number) => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parentNodeId(ordinal),
+		);
+		const getOriginalBacklink = () => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(folder.id),
+		);
+
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folder.id,
+		), { x: 500, y: 300 });
+		detachFrom(getOriginalBacklink(), { x: 900, y: 500 });
+		detachFrom(getOriginalBacklink(), { x: 1_300, y: 700 });
+
+		getParent(2).dispatch('click', createClickEvent(getParent(2)));
+		assert.ok(findDescendantByAttribute(root, 'data-graph-node-id', fileNodeId(1)));
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-node-id', fileNodeId(2)),
+			undefined,
+		);
+		assert.ok(findDescendantByAttribute(root, 'data-graph-node-id', fileNodeId(3)));
+		assert.strictEqual(graphView.state.isFolderOpened(parentNodeId(1)), true);
+		assert.strictEqual(graphView.state.isFolderOpened(parentNodeId(2)), false);
+		assert.strictEqual(graphView.state.isFolderOpened(parentNodeId(3)), true);
+
+		getParent(2).dispatch('click', createClickEvent(getParent(2)));
+		const secondFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileNodeId(2),
+		);
+
+		detachFrom(secondFile, { x: 1_700, y: 900 });
+		const detachedFileRootId = createDetachedRootId(
+			file.id,
+			1,
+			parentRootId(2),
+		);
+		const detachedFileNodeId = createGraphLayoutNodeId(
+			detachedFileRootId,
+			file.id,
+		);
+		const secondBacklinkId = createGraphLayoutNodeId(
+			parentRootId(2),
+			createFileBacklinkGroupId(file.id),
+		);
+		const firstFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileNodeId(1),
+		);
+		const thirdFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileNodeId(3),
+		);
+		const secondBacklink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondBacklinkId,
+		);
+
+		assert.strictEqual(getDetachedRootOriginId(detachedFileRootId), parentRootId(2));
+		assert.strictEqual(firstFile.hasClass('is-backlink'), false);
+		assert.strictEqual(thirdFile.hasClass('is-backlink'), false);
+		assert.strictEqual(secondBacklink.hasClass('is-backlink'), true);
+		assert.strictEqual(
+			getDescendantsByClass(secondBacklink, 'graph-detach-handle').length,
+			1,
+		);
+		assert.strictEqual(
+			findDescendantByClass(secondBacklink, 'graph-backlink-indicator'),
+			undefined,
+		);
+		const detachedFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFileNodeId,
+		);
+
+		setClientBounds(secondBacklink, 2_000, 2_000, 200, 42);
+		setClientBounds(firstFile, 200, 100, 200, 42);
+		beginNodeDrag(detachedFile, 300, 121);
+		detachedFile.dispatch(
+			'pointerup',
+			createPointerEvent(detachedFile, 300, 121),
+		);
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFileNodeId,
+		));
+
+		setClientBounds(secondBacklink, 200, 100, 200, 42);
+		beginNodeDrag(detachedFile, 300, 121);
+		detachedFile.dispatch(
+			'pointerup',
+			createPointerEvent(detachedFile, 300, 121),
+		);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFileNodeId,
+		), undefined);
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileNodeId(2),
+		).hasClass('is-backlink'), false);
+		assert.strictEqual(firstFile.hasClass('is-backlink'), false);
+		assert.strictEqual(thirdFile.hasClass('is-backlink'), false);
+		graphView.dispose();
+	});
+
+	test('하위 Detached Root가 있는 복구는 Drag를 즉시 취소하고 목록 확인 후 깊은 Root부터 함께 복구한다', async () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:reattach-warning/child/leaf.ts',
+			name: 'leaf.ts',
+		};
+		const childFolder = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-warning/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const parentFolder = {
+			kind: 'folder' as const,
+			id: 'folder:reattach-warning',
+			name: 'reattach-warning',
+			status: 'loaded' as const,
+			children: [childFolder],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:reattach-warning',
+			name: 'warning-workspace',
+			status: 'loaded',
+			children: [parentFolder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: {
+				[project.id]: true,
+				[parentFolder.id]: true,
+				[childFolder.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const detachFrom = (
+			node: FakeElement,
+			target: { readonly x: number; readonly y: number },
+		): void => {
+			const handle = getDescendantByClass(node, 'graph-detach-handle');
+
+			handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+			handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+			handle.dispatch(
+				'pointerup',
+				createPointerEvent(handle, target.x, target.y),
+			);
+		};
+		const parentRootId = createDetachedRootId(parentFolder.id, 1);
+		const childRootId = createDetachedRootId(
+			childFolder.id,
+			1,
+			parentRootId,
+		);
+		const fileRootId = createDetachedRootId(file.id, 1, childRootId);
+		const parentRootNodeId = createGraphLayoutNodeId(
+			parentRootId,
+			parentFolder.id,
+		);
+		const childNodeInParentId = createGraphLayoutNodeId(
+			parentRootId,
+			childFolder.id,
+		);
+		const fileNodeInChildId = createGraphLayoutNodeId(childRootId, file.id);
+
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parentFolder.id,
+		), { x: 600, y: 300 });
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childNodeInParentId,
+		), { x: 1_000, y: 500 });
+		detachFrom(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileNodeInChildId,
+		), { x: 1_400, y: 700 });
+
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[parentRootId]: true,
+			[childRootId]: true,
+			[fileRootId]: true,
+		});
+		const getParentRoot = () => getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parentRootNodeId,
+		);
+		const parentBacklink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(parentFolder.id),
+		);
+		const positionBeforeRestore = getParentRoot().style.transform;
+
+		setClientBounds(parentBacklink, 200, 100, 200, 42);
+		beginNodeDrag(getParentRoot(), 300, 121);
+		assert.notStrictEqual(getParentRoot().style.transform, positionBeforeRestore);
+		getParentRoot().dispatch(
+			'pointerup',
+			createPointerEvent(getParentRoot(), 300, 121),
+		);
+
+		assert.strictEqual(getParentRoot().style.transform, positionBeforeRestore);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[parentRootId]: true,
+			[childRootId]: true,
+			[fileRootId]: true,
+		});
+		const warning = getDescendantByClass(
+			root,
+			'graph-reattach-confirm-overlay',
+		);
+		const warningItems = getDescendantsByClass(
+			warning,
+			'graph-reattach-confirm-item',
+		);
+
+		assert.strictEqual(warning.hidden, false);
+		assert.strictEqual(
+			getDescendantByClass(warning, 'graph-reattach-confirm-title').textContent,
+			'하위 분리 노드가 있습니다',
+		);
+		assert.deepStrictEqual(
+			warningItems.map((item) => item.getAttribute('data-detached-root-id')),
+			[childRootId, fileRootId],
+		);
+		assert.ok(getText(warningItems[0]).includes(childFolder.name));
+		assert.ok(getText(warningItems[1]).includes(file.name));
+
+		getDescendantByClass(warning, 'graph-reattach-confirm-cancel').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				warning,
+				'graph-reattach-confirm-cancel',
+			)),
+		);
+		await Promise.resolve();
+		assert.strictEqual(warning.hidden, true);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[parentRootId]: true,
+			[childRootId]: true,
+			[fileRootId]: true,
+		});
+
+		beginNodeDrag(getParentRoot(), 300, 121);
+		getParentRoot().dispatch(
+			'pointerup',
+			createPointerEvent(getParentRoot(), 300, 121),
+		);
+		getDescendantByClass(warning, 'graph-reattach-confirm-accept').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				warning,
+				'graph-reattach-confirm-accept',
+			)),
+		);
+		await Promise.resolve();
+
+		assert.strictEqual(warning.hidden, true);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parentRootNodeId,
+		), undefined);
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parentFolder.id,
+		));
 		graphView.dispose();
 	});
 
@@ -2712,18 +4067,45 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			promotedFolder.id,
 		);
+		const folderChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			promotedFolder.children[0].id,
+		);
+		const initialFolderPosition = readTranslate(folder.style.transform);
+		const initialChildPosition = readTranslate(folderChild.style.transform);
 		const handle = getDescendantByClass(folder, 'graph-detach-handle');
+		const targetRootId = createPromotedGraphRootId(promotedFolder.id);
+		const detachedFolderNodeId = createGraphLayoutNodeId(
+			targetRootId,
+			promotedFolder.id,
+		);
+		const detachedChildNodeId = createGraphLayoutNodeId(
+			targetRootId,
+			promotedFolder.children[0].id,
+		);
+		const detachedFileGroupId = createGraphLayoutNodeId(
+			targetRootId,
+			`${promotedFolder.id}:files`,
+		);
 
 		handle.dispatch('pointerdown', createPointerEvent(handle, 380, 290));
 		handle.dispatch('pointermove', createPointerEvent(handle, 1_000, 800));
 		handle.dispatch('pointerup', createPointerEvent(handle, 4_120, 3_080));
 
 		assert.deepStrictEqual(
-			graphView.state.getState().nodePositions[promotedFolder.id],
+			graphView.state.getState().nodePositions[detachedFolderNodeId],
 			{ x: 2_000, y: 1_500 },
 		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[detachedChildNodeId],
+			{
+				x: 2_000 + initialChildPosition.x - initialFolderPosition.x,
+				y: 1_500 + initialChildPosition.y - initialFolderPosition.y,
+			},
+		);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[promotedFolder.id]: true,
+			[targetRootId]: true,
 		});
 		assert.deepStrictEqual(
 			graphView.state.getState().nodePositions[sibling.id],
@@ -2731,23 +4113,28 @@ suite('Graph View', () => {
 		);
 		assert.deepStrictEqual(graphView.state.getState().openedFolders, {
 			[project.id]: true,
-			[promotedFolder.id]: true,
+			[detachedFolderNodeId]: true,
 		});
 		assert.deepStrictEqual(graphView.state.getState().fileGroupPages, {
-			[`${promotedFolder.id}:files`]: 3,
+			[detachedFileGroupId]: 3,
 		});
-		assert.strictEqual(
-			findDescendantByClass(folder, 'graph-detach-handle'),
-			undefined,
-		);
-		assert.strictEqual(folder.style.transform, 'translate(2000px, 1500px)');
-		assert.ok(findDescendantByClass(folder, 'graph-root-context-label'));
-		assert.ok(findDescendantByAttribute(
+		const detachedFolder = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
-			promotedFolder.children[0].id,
-		));
-		const targetRootId = createPromotedGraphRootId(promotedFolder.id);
+			detachedFolderNodeId,
+		);
+
+		assert.strictEqual(
+			findDescendantByClass(detachedFolder, 'graph-detach-handle'),
+			undefined,
+		);
+		assert.strictEqual(detachedFolder.style.transform, 'translate(2000px, 1500px)');
+		assert.ok(findDescendantByClass(detachedFolder, 'graph-root-context-label'));
+		const detachedFolderChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedChildNodeId,
+		);
 		const backlink = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -2758,10 +4145,17 @@ suite('Graph View', () => {
 		assert.strictEqual(backlink.getAttribute('data-target-root-id'), targetRootId);
 		assert.strictEqual(backlink.getAttribute('data-target-node-id'), promotedFolder.id);
 		assert.ok(getText(backlink).includes('src/'));
-		assert.ok(getText(backlink).includes('↗'));
 		assert.strictEqual(
-			findDescendantByClass(backlink, 'graph-detach-handle'),
+			getDescendantsByClass(backlink, 'graph-detach-handle').length,
+			1,
+		);
+		assert.strictEqual(
+			findDescendantByClass(backlink, 'graph-backlink-indicator'),
 			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByClass(backlink, 'graph-detach-handle') !== undefined,
+			true,
 		);
 		const backlinkPosition = backlink.style.transform;
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy', 'src/']);
@@ -2790,15 +4184,42 @@ suite('Graph View', () => {
 		backlink.dispatch('click', createClickEvent(backlink));
 		assert.strictEqual(backlink.hasPointerCapture(1), false);
 		assert.strictEqual(backlink.style.transform, backlinkPosition);
-		assert.strictEqual(graphView.state.isFolderOpened(promotedFolder.id), true);
+		assert.strictEqual(graphView.state.isFolderOpened(detachedFolderNodeId), true);
+		assert.strictEqual(graphView.state.isFolderOpened(promotedFolder.id), false);
 		assert.strictEqual(graph.roots.length, 1);
 
 		setClientBounds(backlink, 200, 100, 200, 42);
-		beginNodeDrag(folder, 300, 121);
+		const rootPositionBeforeReattachDrag = readTranslate(
+			detachedFolder.style.transform,
+		);
+		const childPositionBeforeReattachDrag = readTranslate(
+			detachedFolderChild.style.transform,
+		);
+		beginNodeDrag(detachedFolder, 300, 121);
+		const rootPositionDuringReattachDrag = readTranslate(
+			detachedFolder.style.transform,
+		);
+		const childPositionDuringReattachDrag = readTranslate(
+			detachedFolderChild.style.transform,
+		);
+
+		assert.deepStrictEqual({
+			x: childPositionDuringReattachDrag.x - childPositionBeforeReattachDrag.x,
+			y: childPositionDuringReattachDrag.y - childPositionBeforeReattachDrag.y,
+		}, {
+			x: rootPositionDuringReattachDrag.x - rootPositionBeforeReattachDrag.x,
+			y: rootPositionDuringReattachDrag.y - rootPositionBeforeReattachDrag.y,
+		});
 		assert.strictEqual(backlink.hasClass('is-reattach-target'), true);
-		folder.dispatch('pointerup', createPointerEvent(folder, 300, 121));
+		detachedFolder.dispatch(
+			'pointerup',
+			createPointerEvent(detachedFolder, 300, 121),
+		);
 		assert.deepStrictEqual(getNavigatorRootNames(root), ['crispy']);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.deepStrictEqual(graphView.state.getState().nodePositions, {
+			[sibling.id]: siblingPosition,
+		});
 		assert.strictEqual(getDescendantByClass(root, 'graph-navigator-minimap'), minimap);
 		assert.strictEqual(minimapNodeLayer.children.length, initialMinimapNodeCount);
 		assert.deepStrictEqual(
@@ -2876,6 +4297,7 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			GRAPH_MOCK_PROJECT.id,
 		);
+		const projectTransform = project.style.transform;
 
 		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-closed.svg');
 		assert.strictEqual(project.getAttribute('aria-expanded'), 'false');
@@ -2899,12 +4321,14 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-open.svg');
 		assert.strictEqual(project.getAttribute('aria-expanded'), 'true');
+		assert.strictEqual(project.style.transform, projectTransform);
 		const folder = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			folderId,
 		);
 		const folderIcon = getDescendantByClass(folder, 'graph-folder-icon');
+		const folderTransform = folder.style.transform;
 
 		assert.strictEqual(folder.getAttribute('data-folder-icon'), 'folder-closed.svg');
 		assert.strictEqual(folder.getAttribute('aria-expanded'), 'false');
@@ -2929,6 +4353,7 @@ suite('Graph View', () => {
 			'folder-open.svg',
 		);
 		assert.strictEqual(folder.getAttribute('aria-expanded'), 'true');
+		assert.strictEqual(folder.style.transform, folderTransform);
 		assert.ok(findDescendantByAttribute(root, 'data-graph-node-id', childId));
 		assert.ok(findDescendantByAttribute(root, 'data-graph-edge-id', edgeId));
 
@@ -2943,6 +4368,7 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(folder.getAttribute('data-folder-icon'), 'folder-closed.svg');
 		assert.strictEqual(folder.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(folder.style.transform, folderTransform);
 		assert.strictEqual(
 			findDescendantByAttribute(root, 'data-graph-node-id', childId),
 			undefined,
@@ -2956,6 +4382,7 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(graphView.state.getState().openedFolders, {});
 		assert.strictEqual(project.getAttribute('data-folder-icon'), 'folder-closed.svg');
 		assert.strictEqual(project.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(project.style.transform, projectTransform);
 		assert.strictEqual(
 			findDescendantByAttribute(root, 'data-graph-node-id', folderId),
 			undefined,
@@ -2964,6 +4391,1011 @@ suite('Graph View', () => {
 			findDescendantByAttribute(root, 'data-graph-edge-id', rootEdgeId),
 			undefined,
 		);
+		graphView.dispose();
+	});
+
+	test('grouped File Row의 Open 요청을 원본 File ID로 상위에 전달한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const fileOpenRequests: string[] = [];
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK, {
+			onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
+		});
+		const fileRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			'file:app/src/graphView.ts',
+		);
+
+		fileRow.dispatch('dblclick', createClickEvent(fileRow));
+
+		assert.deepStrictEqual(fileOpenRequests, ['file:app/src/graphView.ts']);
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 이동한 뒤 열면 하위 Node도 같은 Offset으로 나타난다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const folderId = 'folder:app';
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
+		const collapsedLayout = createGraphLayout(GRAPH_MOCK);
+		const projectLayoutNode = collapsedLayout.nodes.find(
+			(node) => node.id === GRAPH_MOCK_PROJECT.id,
+		);
+		const project = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+
+		assert.ok(projectLayoutNode);
+		performNodeDrop(project, 120, 75);
+		const projectPosition = readTranslate(project.style.transform);
+		const projectOffset = {
+			x: projectPosition.x - projectLayoutNode.position.x,
+			y: projectPosition.y - projectLayoutNode.position.y,
+		};
+
+		graphView.state.toggleFolder(GRAPH_MOCK_PROJECT.id);
+
+		const folder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folderId,
+		);
+		const folderPosition = readTranslate(folder.style.transform);
+		const expandedFolderLayoutNode = createGraphLayout(GRAPH_MOCK, {
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		}).nodes.find((node) => node.id === folderId);
+
+		assert.ok(expandedFolderLayoutNode);
+		assert.deepStrictEqual(folderPosition, {
+			x: expandedFolderLayoutNode.position.x + projectOffset.x,
+			y: expandedFolderLayoutNode.position.y + projectOffset.y,
+		});
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[folderId],
+			folderPosition,
+		);
+
+		graphView.dispose();
+	});
+
+	test('따로 이동한 Folder를 열어도 정렬된 sibling 위치는 바뀌지 않는다', () => {
+		const targetFolder = {
+			kind: 'folder' as const,
+			id: 'folder:unarranged-target',
+			name: 'unarranged-target',
+			status: 'loaded' as const,
+			children: [
+				{
+					kind: 'folder' as const,
+					id: 'folder:unarranged-target/first',
+					name: 'first',
+					status: 'loaded' as const,
+					children: [],
+				},
+				{
+					kind: 'folder' as const,
+					id: 'folder:unarranged-target/second',
+					name: 'second',
+					status: 'loaded' as const,
+					children: [],
+				},
+			],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:unarranged-open',
+			name: 'unarranged-open',
+			status: 'loaded',
+			children: [
+				{
+					kind: 'folder',
+					id: 'folder:unarranged-above',
+					name: 'above',
+					status: 'loaded',
+					children: [],
+				},
+				targetFolder,
+				{
+					kind: 'folder',
+					id: 'folder:unarranged-below',
+					name: 'below',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+		}, createSingleRootGraph(project));
+		const above = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			'folder:unarranged-above',
+		);
+		const target = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetFolder.id,
+		);
+		const below = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			'folder:unarranged-below',
+		);
+		performNodeDrop(target, 300, 120);
+		const movedTargetPosition = readTranslate(target.style.transform);
+		const aboveTransform = above.style.transform;
+		const belowTransform = below.style.transform;
+
+		graphView.state.toggleFolder(targetFolder.id);
+
+		assert.strictEqual(above.style.transform, aboveTransform);
+		assert.strictEqual(below.style.transform, belowTransform);
+		assert.deepStrictEqual(
+			readTranslate(target.style.transform),
+			movedTargetPosition,
+		);
+		const firstChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			'folder:unarranged-target/first',
+		);
+		const secondChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			'folder:unarranged-target/second',
+		);
+
+		assert.ok(readTranslateY(firstChild.style.transform) < movedTargetPosition.y);
+		assert.ok(readTranslateY(secondChild.style.transform) > movedTargetPosition.y);
+
+		const abovePosition = readTranslate(above.style.transform);
+
+		performNodeDrop(
+			target,
+			abovePosition.x + 8,
+			abovePosition.y + 8,
+		);
+		const arrangedState = graphView.state.getState();
+
+		assert.strictEqual(arrangedState.nodePositions[targetFolder.id], undefined);
+		assert.strictEqual(
+			arrangedState.nodePositions['folder:unarranged-target/first'],
+			undefined,
+		);
+		assert.strictEqual(
+			arrangedState.nodePositions['folder:unarranged-target/second'],
+			undefined,
+		);
+		assert.ok(readTranslateY(above.style.transform) < readTranslateY(
+			target.style.transform,
+		));
+		assert.ok(readTranslateY(target.style.transform) < readTranslateY(
+			below.style.transform,
+		));
+		graphView.dispose();
+	});
+
+	test('열린 descendant가 있는 unarranged Folder를 닫았다 다시 열어도 sibling flow 높이는 유지한다', () => {
+		const nestedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:toggle-target/nested',
+			name: 'nested',
+			status: 'loaded' as const,
+			children: [
+				{
+					kind: 'folder' as const,
+					id: 'folder:toggle-target/nested/first',
+					name: 'first',
+					status: 'loaded' as const,
+					children: [],
+				},
+				{
+					kind: 'folder' as const,
+					id: 'folder:toggle-target/nested/second',
+					name: 'second',
+					status: 'loaded' as const,
+					children: [],
+				},
+			],
+		};
+		const targetFolder = {
+			kind: 'folder' as const,
+			id: 'folder:toggle-target',
+			name: 'toggle-target',
+			status: 'loaded' as const,
+			children: [nestedFolder],
+		};
+		const aboveId = 'folder:toggle-above';
+		const belowId = 'folder:toggle-below';
+		const project: Project = {
+			kind: 'project',
+			id: 'project:unarranged-toggle',
+			name: 'unarranged-toggle',
+			status: 'loaded',
+			children: [
+				{
+					kind: 'folder',
+					id: aboveId,
+					name: 'above',
+					status: 'loaded',
+					children: [],
+				},
+				targetFolder,
+				{
+					kind: 'folder',
+					id: belowId,
+					name: 'below',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[targetFolder.id]: true,
+				[nestedFolder.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const above = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			aboveId,
+		);
+		const target = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetFolder.id,
+		);
+		const below = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			belowId,
+		);
+		performNodeDrop(target, 520, 260);
+		const movedTargetPosition = readTranslate(target.style.transform);
+		const arrangedSiblingTransforms = {
+			above: above.style.transform,
+			below: below.style.transform,
+		};
+
+		for (let index = 0; index < 2; index += 1) {
+			graphView.state.toggleFolder(targetFolder.id);
+			assert.strictEqual(above.style.transform, arrangedSiblingTransforms.above);
+			assert.strictEqual(below.style.transform, arrangedSiblingTransforms.below);
+
+			graphView.state.toggleFolder(targetFolder.id);
+			assert.strictEqual(above.style.transform, arrangedSiblingTransforms.above);
+			assert.strictEqual(below.style.transform, arrangedSiblingTransforms.below);
+			assert.deepStrictEqual(
+				readTranslate(target.style.transform),
+				movedTargetPosition,
+			);
+			assert.ok(findDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				'folder:toggle-target/nested/second',
+			));
+		}
+
+		graphView.dispose();
+	});
+
+	test('arranged descendant는 초기 복원과 닫힌 Parent 이동 후에도 직계 Parent local을 유지한다', () => {
+		const grandchild = {
+			kind: 'folder' as const,
+			id: 'folder:arranged-relative/child/grandchild',
+			name: 'grandchild',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:arranged-relative/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [grandchild],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:arranged-relative',
+			name: 'arranged-relative',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:arranged-relative',
+			name: 'arranged-relative',
+			status: 'loaded',
+			children: [parent],
+		};
+		const graph = createSingleRootGraph(project);
+		const openedFolders = {
+			[project.id]: true as const,
+			[parent.id]: true as const,
+			[child.id]: true as const,
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			nodePositions: { [parent.id]: { x: 520, y: 280 } },
+			openedFolders,
+		}, graph);
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		let childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		let grandchildNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			grandchild.id,
+		);
+		const arrangedLayout = createGraphLayout(graph, {
+			openedFolders,
+			unarrangedNodeIds: new Set([parent.id]),
+		});
+		const parentLayout = arrangedLayout.nodes.find(
+			(node) => node.id === parent.id,
+		);
+		const childLayout = arrangedLayout.nodes.find(
+			(node) => node.id === child.id,
+		);
+		const grandchildLayout = arrangedLayout.nodes.find(
+			(node) => node.id === grandchild.id,
+		);
+
+		assert.ok(parentLayout && childLayout && grandchildLayout);
+		const expectedChildLocal = subtractPositions(
+			childLayout.position,
+			parentLayout.position,
+		);
+		const expectedGrandchildLocal = subtractPositions(
+			grandchildLayout.position,
+			childLayout.position,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		), expectedChildLocal);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(grandchildNode.style.transform),
+			readTranslate(childNode.style.transform),
+		), expectedGrandchildLocal);
+
+		graphView.state.toggleFolder(parent.id);
+		performNodeDrop(parentNode, 240, 180);
+		graphView.state.toggleFolder(parent.id);
+		childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		grandchildNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			grandchild.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		), expectedChildLocal);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(grandchildNode.style.transform),
+			readTranslate(childNode.style.transform),
+		), expectedGrandchildLocal);
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 이동한 뒤에도 unarranged Child는 Parent 상대 위치를 유지한다', () => {
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:relative-parent/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:relative-parent',
+			name: 'relative-parent',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:relative-parent',
+			name: 'relative-parent',
+			status: 'loaded',
+			children: [
+				parent,
+				{
+					kind: 'folder',
+					id: 'folder:relative-parent-sibling',
+					name: 'sibling',
+					status: 'loaded',
+					children: [],
+				},
+			],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[parent.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		let childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+
+		performNodeDrop(childNode, 520, 260);
+		const initialRelativePosition = subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+
+		graphView.state.toggleFolder(parent.id);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		), undefined);
+		performNodeDrop(parentNode, 180, 160);
+		graphView.state.toggleFolder(parent.id);
+		childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		), initialRelativePosition);
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 비정렬 이동 후 재정렬해도 내부 Node의 상대 위치를 유지한다', () => {
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:relative-rearrange/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:relative-rearrange',
+			name: 'relative-rearrange',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const sibling = {
+			kind: 'folder' as const,
+			id: 'folder:relative-rearrange-sibling',
+			name: 'sibling',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:relative-rearrange',
+			name: 'relative-rearrange',
+			status: 'loaded',
+			children: [parent, sibling],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[parent.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		let childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const siblingNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			sibling.id,
+		);
+
+		performNodeDrop(childNode, 520, 260);
+		const initialRelativePosition = subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+		graphView.state.toggleFolder(parent.id);
+		performNodeDrop(parentNode, 180, 160);
+		const siblingPosition = readTranslate(siblingNode.style.transform);
+
+		performNodeDrop(
+			parentNode,
+			siblingPosition.x + 8,
+			siblingPosition.y + 8,
+		);
+		graphView.state.toggleFolder(parent.id);
+		childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		), initialRelativePosition);
+		graphView.dispose();
+	});
+
+	test('접힌 Parent를 Detach해도 unarranged 내부 subtree의 상대 위치를 새 Instance에 유지한다', () => {
+		const grandchild = {
+			kind: 'folder' as const,
+			id: 'folder:relative-detach/child/grandchild',
+			name: 'grandchild',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:relative-detach/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [grandchild],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:relative-detach',
+			name: 'relative-detach',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:relative-detach',
+			name: 'relative-detach',
+			status: 'loaded',
+			children: [parent],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[parent.id]: true,
+				[child.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const parentNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		const childNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const grandchildNode = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			grandchild.id,
+		);
+
+		performNodeDrop(childNode, 520, 260);
+		const childRelativePosition = subtractPositions(
+			readTranslate(childNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+		const grandchildRelativePosition = subtractPositions(
+			readTranslate(grandchildNode.style.transform),
+			readTranslate(parentNode.style.transform),
+		);
+
+		graphView.state.toggleFolder(parent.id);
+		performNodeDrop(parentNode, 180, 160);
+		const handle = getDescendantByClass(parentNode, 'graph-detach-handle');
+
+		handle.dispatch('pointerdown', createPointerEvent(handle, 10, 10));
+		handle.dispatch('pointermove', createPointerEvent(handle, 30, 30));
+		handle.dispatch('pointerup', createPointerEvent(handle, 1_200, 800));
+
+		const detachedRootId = createDetachedRootId(parent.id, 1);
+		const detachedParentId = createGraphLayoutNodeId(
+			detachedRootId,
+			parent.id,
+		);
+		const detachedChildId = createGraphLayoutNodeId(
+			detachedRootId,
+			child.id,
+		);
+		const detachedGrandchildId = createGraphLayoutNodeId(
+			detachedRootId,
+			grandchild.id,
+		);
+
+		graphView.state.toggleFolder(detachedParentId);
+		const detachedParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedParentId,
+		);
+		const detachedChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedChildId,
+		);
+		const detachedGrandchild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedGrandchildId,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(detachedChild.style.transform),
+			readTranslate(detachedParent.style.transform),
+		), childRelativePosition);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(detachedGrandchild.style.transform),
+			readTranslate(detachedParent.style.transform),
+		), grandchildRelativePosition);
+
+		graphView.state.toggleFolder(detachedParentId);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(parent.id),
+		);
+		const backlinkHandle = getDescendantByClass(
+			backlink,
+			'graph-detach-handle',
+		);
+
+		backlinkHandle.dispatch(
+			'pointerdown',
+			createPointerEvent(backlinkHandle, 10, 10),
+		);
+		backlinkHandle.dispatch(
+			'pointermove',
+			createPointerEvent(backlinkHandle, 30, 30),
+		);
+		backlinkHandle.dispatch(
+			'pointerup',
+			createPointerEvent(backlinkHandle, 1_600, 900),
+		);
+		const secondRootId = createDetachedRootId(parent.id, 2);
+		const secondParentId = createGraphLayoutNodeId(secondRootId, parent.id);
+		const secondChildId = createGraphLayoutNodeId(secondRootId, child.id);
+		const secondGrandchildId = createGraphLayoutNodeId(
+			secondRootId,
+			grandchild.id,
+		);
+
+		graphView.state.toggleFolder(secondParentId);
+		const secondParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondParentId,
+		);
+		const secondChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondChildId,
+		);
+		const secondGrandchild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondGrandchildId,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(secondChild.style.transform),
+			readTranslate(secondParent.style.transform),
+		), childRelativePosition);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(secondGrandchild.style.transform),
+			readTranslate(secondParent.style.transform),
+		), grandchildRelativePosition);
+
+		setClientBounds(backlink, 200, 100, 200, 42);
+		beginNodeDrag(secondParent, 300, 121);
+		secondParent.dispatch(
+			'pointerup',
+			createPointerEvent(secondParent, 300, 121),
+		);
+		beginNodeDrag(detachedParent, 300, 121);
+		detachedParent.dispatch(
+			'pointerup',
+			createPointerEvent(detachedParent, 300, 121),
+		);
+		graphView.state.toggleFolder(parent.id);
+		const restoredParent = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		const restoredChild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const restoredGrandchild = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			grandchild.id,
+		);
+
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(restoredChild.style.transform),
+			readTranslate(restoredParent.style.transform),
+		), childRelativePosition);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(restoredGrandchild.style.transform),
+			readTranslate(restoredParent.style.transform),
+		), grandchildRelativePosition);
+		graphView.dispose();
+	});
+
+	test('grouped File은 Row Drag로 standalone이 되지 않고 Detach Handle로만 분리된다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:view-arrangement/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const project: Project = {
+			kind: 'project',
+			id: 'project:view-file-arrangement',
+			name: 'view-file-arrangement',
+			status: 'loaded',
+			children: files,
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+		}, createSingleRootGraph(project));
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+		const fileGroupId = createFileGroupId(project.id);
+		let fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const file = files[1];
+
+		assert.ok(file);
+		const row = getDescendantByAttribute(fileGroup, 'data-file-id', file.id);
+
+		row.dispatch('pointerdown', createPointerEvent(row, 10, 10));
+		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
+		row.dispatch('pointerup', createPointerEvent(row, -500, -500));
+
+		fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		assert.strictEqual(findDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			file.id,
+		), undefined);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item').map(
+				(item) => item.getAttribute('data-file-id'),
+			),
+			files.map((entry) => entry.id),
+		);
+		assert.strictEqual(graphView.state.getState().nodePositions[file.id], undefined);
+		const currentRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			file.id,
+		);
+		const detachHandle = getDescendantByClass(
+			currentRow,
+			'graph-detach-handle',
+		);
+
+		detachHandle.dispatch(
+			'pointerdown',
+			createPointerEvent(detachHandle, 10, 10),
+		);
+		detachHandle.dispatch(
+			'pointermove',
+			createPointerEvent(detachHandle, 30, 30),
+		);
+		detachHandle.dispatch(
+			'pointerup',
+			createPointerEvent(detachHandle, 900, 600),
+		);
+		const detachedRootId = createPromotedGraphRootId(file.id);
+		const detachedNodeId = createGraphLayoutNodeId(detachedRootId, file.id);
+		const detachedNode = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			detachedNodeId,
+		);
+
+		fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const backlinkRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			file.id,
+		);
+
+		assert.strictEqual(
+			detachedNode.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.strictEqual(
+			backlinkRow.getAttribute('data-target-root-id'),
+			detachedRootId,
+		);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item').map(
+				(item) => item.getAttribute('data-file-id'),
+			),
+			files.map((entry) => entry.id),
+		);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[detachedRootId]: true,
+		});
+		graphView.dispose();
+	});
+
+	test('이동된 Folder 아래 File Group을 재정렬해도 Parent Offset을 유지한다', () => {
+		const childFolder = {
+			kind: 'folder' as const,
+			id: 'folder:moved-parent/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const files = Array.from({ length: 6 }, (_, index) => ({
+			kind: 'file' as const,
+			id: `file:moved-parent/file-${index + 1}.ts`,
+			name: `file-${index + 1}.ts`,
+		}));
+		const movedParent = {
+			kind: 'folder' as const,
+			id: 'folder:moved-parent',
+			name: 'moved-parent',
+			status: 'loaded' as const,
+			children: [childFolder, ...files],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:moved-parent-arrangement',
+			name: 'moved-parent-arrangement',
+			status: 'loaded',
+			children: [movedParent],
+		};
+		const graph = createSingleRootGraph(project);
+		const openedFolders = {
+			[project.id]: true as const,
+			[movedParent.id]: true as const,
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders,
+		}, graph);
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+		const fileGroupId = createFileGroupId(movedParent.id);
+		const parent = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			movedParent.id,
+		);
+		const child = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			childFolder.id,
+		);
+		const fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+
+		performNodeDrop(parent, 1_200, 900);
+		performNodeDrop(fileGroup, -500, -500);
+		const childPosition = readTranslate(child.style.transform);
+
+		performNodeDrop(
+			fileGroup,
+			childPosition.x + 8,
+			childPosition.y + 8,
+		);
+
+		const finalParentPosition = readTranslate(parent.style.transform);
+		const finalFileGroupPosition = readTranslate(fileGroup.style.transform);
+		const arrangedLayout = createGraphLayout(graph, {
+			openedFolders,
+			unarrangedNodeIds: new Set([movedParent.id]),
+		});
+		const parentLayout = arrangedLayout.nodes.find(
+			(node) => node.id === movedParent.id,
+		);
+		const fileGroupLayout = arrangedLayout.nodes.find(
+			(node) => node.id === fileGroupId,
+		);
+
+		assert.ok(parentLayout && fileGroupLayout);
+		assert.deepStrictEqual(finalFileGroupPosition, {
+			x: fileGroupLayout.position.x
+				+ finalParentPosition.x
+				- parentLayout.position.x,
+			y: fileGroupLayout.position.y
+				+ finalParentPosition.y
+				- parentLayout.position.y,
+		});
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[fileGroupId],
+			finalFileGroupPosition,
+		);
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${movedParent.id}->${fileGroupId}`,
+		));
 		graphView.dispose();
 	});
 
@@ -3032,6 +5464,7 @@ suite('Graph View', () => {
 			edgeId,
 		);
 		const initialSiblingY = readTranslateY(sibling.style.transform);
+		const initialFileGroupY = readTranslateY(fileGroup.style.transform);
 		const initialEdgePath = edge.getAttribute('d');
 		const more = getDescendantByClass(fileGroup, 'graph-file-more');
 		const minimap = getDescendantByClass(root, 'graph-navigator-minimap');
@@ -3057,9 +5490,13 @@ suite('Graph View', () => {
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 10);
 		assert.strictEqual(
 			readTranslateY(sibling.style.transform),
-			initialSiblingY + 150,
+			initialSiblingY + 75,
 		);
-		assert.notStrictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.strictEqual(
+			readTranslateY(fileGroup.style.transform),
+			initialFileGroupY - 75,
+		);
+		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
 		assert.notStrictEqual(
 			getDescendantByAttribute(
 				getDescendantByClass(minimap, 'graph-navigator-minimap-node-layer'),
@@ -3081,7 +5518,11 @@ suite('Graph View', () => {
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 15);
 		assert.strictEqual(
 			readTranslateY(sibling.style.transform),
-			initialSiblingY + 300,
+			initialSiblingY + 150,
+		);
+		assert.strictEqual(
+			readTranslateY(fileGroup.style.transform),
+			initialFileGroupY - 150,
 		);
 
 		const collapse = getDescendantByClass(fileGroup, 'graph-file-collapse');
@@ -3091,6 +5532,7 @@ suite('Graph View', () => {
 		assert.strictEqual(fileGroup.style.height, '198px');
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 5);
 		assert.strictEqual(readTranslateY(sibling.style.transform), initialSiblingY);
+		assert.strictEqual(readTranslateY(fileGroup.style.transform), initialFileGroupY);
 		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
 		assert.ok(getText(fileGroup).includes('+ 12개 더보기'));
 		assert.deepStrictEqual(
@@ -3109,6 +5551,10 @@ suite('Graph View', () => {
 		let createLayoutCalls = 0;
 		const rendererLayouts: ReturnType<typeof createGraphLayout>[] = [];
 		const navigatorLayouts: ReturnType<typeof createGraphLayout>[] = [];
+		const navigatorRootProjectionStates: GraphStateSnapshot[] = [];
+		let currentLayout = createGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+		);
 		const unsubscribe = initializeGraphLayoutReflow(
 			state,
 			{
@@ -3117,13 +5563,19 @@ suite('Graph View', () => {
 			{
 				setLayout: (layout) => navigatorLayouts.push(layout),
 			},
+			() => currentLayout,
 			(snapshot) => {
 				createLayoutCalls += 1;
-				return createGraphLayout(createSingleRootGraph(GRAPH_MOCK_PROJECT), {
+				currentLayout = createGraphLayout(
+					createSingleRootGraph(GRAPH_MOCK_PROJECT), {
 					fileGroupPages: snapshot.fileGroupPages,
 					openedFolders: snapshot.openedFolders,
 				});
+
+				return currentLayout;
 			},
+			() => new Map(),
+			(snapshot) => navigatorRootProjectionStates.push(snapshot),
 		);
 
 		state.setState({
@@ -3137,18 +5589,21 @@ suite('Graph View', () => {
 		assert.strictEqual(createLayoutCalls, 0);
 		assert.strictEqual(rendererLayouts.length, 0);
 		assert.strictEqual(navigatorLayouts.length, 0);
+		assert.strictEqual(navigatorRootProjectionStates.length, 0);
 
 		state.toggleFolder('folder:app');
 		assert.strictEqual(createLayoutCalls, 1);
 		assert.strictEqual(rendererLayouts.length, 1);
 		assert.strictEqual(navigatorLayouts.length, 1);
 		assert.strictEqual(rendererLayouts[0], navigatorLayouts[0]);
+		assert.strictEqual(navigatorRootProjectionStates.length, 0);
 
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
 		assert.strictEqual(createLayoutCalls, 2);
 		assert.strictEqual(rendererLayouts.length, 2);
 		assert.strictEqual(navigatorLayouts.length, 2);
 		assert.strictEqual(rendererLayouts[1], navigatorLayouts[1]);
+		assert.strictEqual(navigatorRootProjectionStates.length, 0);
 
 		const snapshot = state.getState();
 
@@ -3161,6 +5616,11 @@ suite('Graph View', () => {
 		assert.strictEqual(rendererLayouts.length, 3);
 		assert.strictEqual(navigatorLayouts.length, 3);
 		assert.strictEqual(rendererLayouts[2], navigatorLayouts[2]);
+		assert.strictEqual(navigatorRootProjectionStates.length, 1);
+		assert.strictEqual(
+			navigatorRootProjectionStates[0].hiddenNodeIds['folder:app/src'],
+			true,
+		);
 
 		unsubscribe();
 		state.showMoreFiles(createFileGroupId('folder:app/src'));
@@ -3168,6 +5628,7 @@ suite('Graph View', () => {
 		assert.strictEqual(createLayoutCalls, 3);
 		assert.strictEqual(rendererLayouts.length, 3);
 		assert.strictEqual(navigatorLayouts.length, 3);
+		assert.strictEqual(navigatorRootProjectionStates.length, 1);
 	});
 });
 
@@ -3541,10 +6002,26 @@ function performNodeDrop(
 }
 
 function readTranslateY(transform: string): number {
-	const match = /translate\([^,]+, ([^)]+)px\)/.exec(transform);
+	return readTranslate(transform).y;
+}
 
-	assert.ok(match?.[1]);
-	return Number(match[1]);
+function readTranslate(transform: string): { x: number; y: number } {
+	const match = /^translate\((-?\d+(?:\.\d+)?)px, (-?\d+(?:\.\d+)?)px\)$/.exec(
+		transform,
+	);
+
+	assert.ok(match?.[1] && match[2]);
+	return { x: Number(match[1]), y: Number(match[2]) };
+}
+
+function subtractPositions(
+	left: { readonly x: number; readonly y: number },
+	right: { readonly x: number; readonly y: number },
+): { x: number; y: number } {
+	return {
+		x: left.x - right.x,
+		y: left.y - right.y,
+	};
 }
 
 function getText(element: FakeElement): string {

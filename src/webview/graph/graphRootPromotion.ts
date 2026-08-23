@@ -20,19 +20,136 @@ export interface GraphRootAddition {
 	readonly root: GraphRoot;
 }
 
-/** Promotion Root ID를 Node ID에서 결정적으로 생성한다. */
+const DETACHED_ROOT_ID_DELIMITER = '::detached:';
+const DETACHED_ROOT_ORIGIN_DELIMITER = '::detached-from:';
+
+/** Source Node ID와 순번으로 Detached Root의 Visual Instance ID를 만든다. */
+export function createDetachedRootId(
+	nodeId: string,
+	ordinal: number,
+	originRootId?: string,
+): string {
+	if (!Number.isSafeInteger(ordinal) || ordinal < 1) {
+		throw new Error(`Detached Root 순번은 1 이상의 정수여야 합니다: ${ordinal}`);
+	}
+
+	const originScope = originRootId
+		? `${DETACHED_ROOT_ORIGIN_DELIMITER}${encodeURIComponent(originRootId)}`
+		: '';
+
+	return `${nodeId}${originScope}${DETACHED_ROOT_ID_DELIMITER}${ordinal}`;
+}
+
+/** Detached Root ID suffix의 양의 정수 순번을 반환한다. */
+export function getDetachedRootOrdinal(rootId: string): number | undefined {
+	const delimiterIndex = rootId.lastIndexOf(DETACHED_ROOT_ID_DELIMITER);
+
+	if (delimiterIndex < 0) {
+		return undefined;
+	}
+
+	const ordinalText = rootId.slice(
+		delimiterIndex + DETACHED_ROOT_ID_DELIMITER.length,
+	);
+
+	if (!/^[1-9]\d*$/.test(ordinalText)) {
+		return undefined;
+	}
+
+	const ordinal = Number(ordinalText);
+
+	return Number.isSafeInteger(ordinal) ? ordinal : undefined;
+}
+
+/** ID가 순번 suffix를 가진 Detached Root ID인지 판별한다. */
+export function isDetachedRootId(rootId: string): boolean {
+	return getDetachedRootOrdinal(rootId) !== undefined;
+}
+
+/** Detached Root ID에서 원본 Workspace Node ID를 복원한다. */
+export function getDetachedRootNodeId(rootId: string): string | undefined {
+	if (!isDetachedRootId(rootId)) {
+		return undefined;
+	}
+
+	const instancePrefix = rootId.slice(
+		0,
+		rootId.lastIndexOf(DETACHED_ROOT_ID_DELIMITER),
+	);
+	const originIndex = instancePrefix.lastIndexOf(
+		DETACHED_ROOT_ORIGIN_DELIMITER,
+	);
+
+	return originIndex < 0
+		? instancePrefix
+		: instancePrefix.slice(0, originIndex);
+}
+
+/** Detached Root가 분리된 원래 Graph Root Instance를 ID suffix에서 복원한다. */
+export function getDetachedRootOriginId(rootId: string): string | undefined {
+	if (!isDetachedRootId(rootId)) {
+		return undefined;
+	}
+
+	const instancePrefix = rootId.slice(
+		0,
+		rootId.lastIndexOf(DETACHED_ROOT_ID_DELIMITER),
+	);
+	const originIndex = instancePrefix.lastIndexOf(
+		DETACHED_ROOT_ORIGIN_DELIMITER,
+	);
+
+	if (originIndex < 0) {
+		return undefined;
+	}
+
+	try {
+		return decodeURIComponent(instancePrefix.slice(
+			originIndex + DETACHED_ROOT_ORIGIN_DELIMITER.length,
+		));
+	} catch {
+		return undefined;
+	}
+}
+
+/** 현재 같은 Source Node를 참조하는 Root의 최고 순번 다음 값을 계산한다. */
+export function getNextDetachedRootOrdinal(
+	graph: Graph,
+	nodeId: string,
+): number {
+	let highestOrdinal = 0;
+
+	for (const root of graph.roots) {
+		if (root.nodeId !== nodeId) {
+			continue;
+		}
+
+		highestOrdinal = Math.max(
+			highestOrdinal,
+			getDetachedRootOrdinal(root.id) ?? 0,
+		);
+	}
+
+	return highestOrdinal + 1;
+}
+
+/** @deprecated 새 Detached ID 규약에서는 첫 번째 순번 ID를 반환한다. */
 export function createPromotedGraphRootId(nodeId: string): string {
-	return `root:promoted:${encodeURIComponent(nodeId)}`;
+	return createDetachedRootId(nodeId, 1);
 }
 
-/** Folder Backlink Layout ID를 실제 Node/Root ID와 충돌하지 않게 생성한다. */
-export function createFolderBacklinkId(targetRootId: string): string {
-	return `folder-backlink:${encodeURIComponent(targetRootId)}`;
+/** Folder Backlink Layout ID를 Source Node ID에서 안정적으로 생성한다. */
+export function createFolderBacklinkId(nodeId: string): string {
+	const sourceNodeId = getDetachedRootNodeId(nodeId) ?? nodeId;
+
+	return `folder-backlink:${encodeURIComponent(sourceNodeId)}`;
 }
 
-/** Singleton File Backlink Group ID를 실제 File Root ID와 충돌하지 않게 생성한다. */
-export function createFileBacklinkGroupId(targetRootId: string): string {
-	return `file-backlink-group:${encodeURIComponent(targetRootId)}`;
+/** Singleton File Backlink Group ID를 Source Node ID에서 안정적으로 생성한다. */
+export function createFileBacklinkGroupId(nodeId: string): string {
+	const sourceNodeId = getDetachedRootNodeId(nodeId) ?? nodeId;
+
+	return `file-backlink-group:${encodeURIComponent(sourceNodeId)}`;
 }
 
 /**
@@ -78,32 +195,56 @@ export function findGraphNode(
 export function addGraphRoot(
 	graph: Graph,
 	nodeId: string,
+	originRootId?: string,
 ): GraphRootAddition | undefined {
-	if (graph.roots.some((root) => root.nodeId === nodeId)) {
-		return undefined;
-	}
-
-	const location = findGraphNode(graph, nodeId);
-
-	if (!location || location.node.kind === 'project') {
-		return undefined;
-	}
-	const sourceRootNode = graph.rootNodes[location.root.nodeId];
-
-	if (!sourceRootNode) {
-		return undefined;
-	}
-
-	const root: GraphRoot = {
-		id: createPromotedGraphRootId(nodeId),
+	return addGraphRootWithOrdinal(
+		graph,
 		nodeId,
-		context: {
+		getNextDetachedRootOrdinal(graph, nodeId),
+		originRootId,
+	);
+}
+
+/** 지정 순번으로 Root를 추가하며 persistence 복원에서도 같은 검증을 공유한다. */
+function addGraphRootWithOrdinal(
+	graph: Graph,
+	nodeId: string,
+	ordinal: number,
+	originRootId?: string,
+): GraphRootAddition | undefined {
+	const existingSourceRoot = graph.roots.find(
+		(root) => root.nodeId === nodeId && isDetachedRootId(root.id),
+	);
+	const location = existingSourceRoot
+		? undefined
+		: findGraphNode(graph, nodeId);
+	const node = existingSourceRoot
+		? graph.rootNodes[nodeId]
+		: location?.node;
+
+	if (!node || node.kind === 'project') {
+		return undefined;
+	}
+	const sourceRootNode = location
+		? graph.rootNodes[location.root.nodeId]
+		: undefined;
+
+	if (!existingSourceRoot && (!location || !sourceRootNode)) {
+		return undefined;
+	}
+	const context = existingSourceRoot?.context
+		?? (location && sourceRootNode ? {
 			relativePath: createRootContextRelativePath(
 				location.root,
 				sourceRootNode,
 				location.parentPathSegments,
 			),
-		},
+		} : undefined);
+
+	const root: GraphRoot = {
+		id: createDetachedRootId(nodeId, ordinal, originRootId),
+		nodeId,
+		...(context ? { context } : {}),
 	};
 
 	if (graph.roots.some((candidate) => candidate.id === root.id)) {
@@ -116,7 +257,7 @@ export function addGraphRoot(
 			roots: [...graph.roots, root],
 			rootNodes: {
 				...graph.rootNodes,
-				[nodeId]: location.node,
+				[nodeId]: node,
 			},
 		},
 	};
@@ -132,8 +273,26 @@ export function applyDetachedGraphRoots(
 ): Graph {
 	let currentGraph = graph;
 
-	for (const nodeId of Object.keys(detachedRootNodeIds)) {
-		const addition = addGraphRoot(currentGraph, nodeId);
+	for (const persistedId of Object.keys(detachedRootNodeIds)) {
+		const nodeId = getDetachedRootNodeId(persistedId) ?? persistedId;
+		const alreadyApplied = isDetachedRootId(persistedId)
+			? currentGraph.roots.some((root) => root.id === persistedId)
+			: currentGraph.roots.some((root) => (
+				root.nodeId === nodeId && isDetachedRootId(root.id)
+			));
+
+		if (alreadyApplied) {
+			continue;
+		}
+
+		const ordinal = getDetachedRootOrdinal(persistedId)
+			?? getNextDetachedRootOrdinal(currentGraph, nodeId);
+		const addition = addGraphRootWithOrdinal(
+			currentGraph,
+			nodeId,
+			ordinal,
+			getDetachedRootOriginId(persistedId),
+		);
 
 		if (addition) {
 			currentGraph = addition.graph;

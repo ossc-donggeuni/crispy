@@ -1,9 +1,8 @@
 import {
-	createCenteredGraphCameraState,
+	createVisibleGraphCameraState,
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	type GraphCamera,
 	type GraphCameraState,
-	type GraphViewportSize,
 } from './graphCamera';
 import { resolveFileIcon } from './fileIconResolver';
 import type { GraphLayout } from './graphLayout';
@@ -25,12 +24,19 @@ import {
 	type MinimapViewportGeometry,
 } from './graphNavigatorMinimap';
 import type { GraphNavigatorRoot } from './graphNavigatorRoots';
+import {
+	createFullGraphVisibleArea,
+	type GraphVisibleArea,
+	type GraphVisibleAreaProvider,
+} from './graphVisibleArea';
 import type {
 	GraphStateSnapshot,
 	GraphStateStore,
 } from './graphState';
 
 export interface GraphNavigator {
+	/** Floating Panel 또는 Viewport 변화 뒤 Navigator와 Minimap 표시 기준을 갱신한다. */
+	refreshVisibleGraphArea(): void;
 	/** Minimap이 사용할 최신 Renderer Layout reference를 교체한다. */
 	setLayout(layout: GraphLayout): void;
 	/** 전달받은 표시 데이터 순서대로 Root List Panel 내용을 교체한다. */
@@ -55,10 +61,13 @@ const FILTER_LABEL = 'Workspace Filter';
 const FILTER_PANEL_ID = 'graph-navigator-filter-panel';
 const FILTER_PANEL_TITLE_ID = 'graph-navigator-filter-title';
 const FILTER_ICON_ASSET = 'navigator-filter.svg';
+const FILTER_OPENED_ICON_ASSET = 'filter-opened.svg';
+const FILTER_CLOSED_ICON_ASSET = 'filter-closed.svg';
 const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
 const FOLDER_ROOT_ICON_ASSET = 'folder-closed.svg';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const MINIMAP_NODE_MIN_SIZE = 2;
+const NAVIGATOR_VIEWPORT_MARGIN = 16;
 
 /** Action Rail에 추가할 Navigator Action의 공통 DOM 계약이다. */
 interface NavigatorActionDefinition {
@@ -130,7 +139,7 @@ interface MinimapViewportDragSession {
 	readonly startMinimapPoint: MinimapPoint;
 	readonly startWorldCenter: MinimapPoint;
 	readonly startCamera: GraphCameraState;
-	readonly viewportSize: GraphViewportSize;
+	readonly visibleArea: GraphVisibleArea;
 	didDrag: boolean;
 }
 
@@ -178,7 +187,10 @@ function createRootListItem(
 	const icon = ownerDocument.createElement('span');
 	const content = ownerDocument.createElement('div');
 	const name = ownerDocument.createElement('span');
-	const displayName = root.kind === 'folder' ? `${root.name}/` : root.name;
+	const baseDisplayName = root.kind === 'folder' ? `${root.name}/` : root.name;
+	const displayName = root.detachedOrdinal === undefined
+		? baseDisplayName
+		: `${baseDisplayName} (${root.detachedOrdinal})`;
 	const rootId = root.rootId;
 	const handleSelect = (): void => {
 		onRootSelect?.(rootId);
@@ -246,6 +258,12 @@ export function initializeGraphNavigator(
 	camera: GraphCamera,
 	initialLayout: GraphLayout,
 	interactions: GraphNavigatorInteractions = {},
+	getVisibleGraphArea: GraphVisibleAreaProvider = () => (
+		createFullGraphVisibleArea({
+			width: viewport.clientWidth,
+			height: viewport.clientHeight,
+		})
+	),
 ): GraphNavigator {
 	const ownerDocument = overlayLayer.ownerDocument;
 	const navigator = ownerDocument.createElement('div');
@@ -462,7 +480,10 @@ export function initializeGraphNavigator(
 		button.setAttribute('data-filter-toggle-id', directory.id);
 		chevron.className = 'graph-navigator-filter-chevron';
 		chevron.setAttribute('aria-hidden', 'true');
-		chevron.textContent = expanded ? '▾' : '▸';
+		chevron.setAttribute(
+			'data-filter-icon',
+			expanded ? FILTER_CLOSED_ICON_ASSET : FILTER_OPENED_ICON_ASSET,
+		);
 		button.append(chevron);
 		return button;
 	};
@@ -680,10 +701,11 @@ export function initializeGraphNavigator(
 			return;
 		}
 
+		const visibleArea = getVisibleGraphArea();
 		const worldBounds = calculateCameraWorldBounds(camera, {
 			width: viewport.clientWidth,
 			height: viewport.clientHeight,
-		});
+		}, visibleArea);
 		const geometry = worldBounds
 			? createMinimapViewportGeometry(
 				worldBounds,
@@ -704,6 +726,21 @@ export function initializeGraphNavigator(
 		minimapViewportIndicator.setAttribute('width', String(geometry.width));
 		minimapViewportIndicator.setAttribute('height', String(geometry.height));
 		minimapViewportIndicator.removeAttribute('visibility');
+	};
+
+	/** Visible Graph의 우하단 안쪽으로 Navigator를 옮기고 Minimap 표시 영역도 맞춘다. */
+	const refreshVisibleGraphArea = (): void => {
+		if (disposed) {
+			return;
+		}
+
+		const visibleArea = getVisibleGraphArea();
+		const rightInset = Math.max(0, viewport.clientWidth - visibleArea.right);
+		const bottomInset = Math.max(0, viewport.clientHeight - visibleArea.bottom);
+
+		navigator.style.right = `${rightInset + NAVIGATOR_VIEWPORT_MARGIN}px`;
+		navigator.style.bottom = `${bottomInset + NAVIGATOR_VIEWPORT_MARGIN}px`;
+		renderMinimapViewportIndicator();
 	};
 
 	/** 최신 Layout/저장 위치로 Graph Projection과 Graphic을 교체한 뒤 Indicator도 맞춘다. */
@@ -869,6 +906,8 @@ export function initializeGraphNavigator(
 
 	/** 유효한 기본 Pointer로 현재 Indicator와 Camera 중심을 고정해 Drag를 시작한다. */
 	const handleViewportPointerDown = (event: PointerEvent): void => {
+		const visibleArea = getVisibleGraphArea();
+
 		if (
 			disposed
 			|| viewportDrag
@@ -881,6 +920,8 @@ export function initializeGraphNavigator(
 			|| currentMinimapViewportGeometry.height <= 0
 			|| viewport.clientWidth <= 0
 			|| viewport.clientHeight <= 0
+			|| visibleArea.width <= 0
+			|| visibleArea.height <= 0
 		) {
 			return;
 		}
@@ -896,8 +937,8 @@ export function initializeGraphNavigator(
 		}
 
 		const startWorldCenter = camera.viewportToWorld({
-			x: viewport.clientWidth / 2,
-			y: viewport.clientHeight / 2,
+			x: visibleArea.center.x,
+			y: visibleArea.center.y,
 		});
 
 		if (
@@ -918,10 +959,7 @@ export function initializeGraphNavigator(
 			startMinimapPoint,
 			startWorldCenter,
 			startCamera,
-			viewportSize: {
-				width: viewport.clientWidth,
-				height: viewport.clientHeight,
-			},
+			visibleArea,
 			didDrag: false,
 		};
 		suppressNextMinimapClick = false;
@@ -957,12 +995,12 @@ export function initializeGraphNavigator(
 			return;
 		}
 
-		const nextState = createCenteredGraphCameraState(
+		const nextState = createVisibleGraphCameraState(
 			{
 				x: drag.startWorldCenter.x + delta.x,
 				y: drag.startWorldCenter.y + delta.y,
 			},
-			drag.viewportSize,
+			drag.visibleArea,
 			drag.startCamera.scale,
 		);
 
@@ -1040,10 +1078,11 @@ export function initializeGraphNavigator(
 
 	const zoomBy = (scaleDelta: number): void => {
 		const currentScale = graphState.getState().camera.scale;
+		const visibleArea = getVisibleGraphArea();
 
 		camera.setScaleAt(currentScale + scaleDelta, {
-			x: viewport.clientWidth / 2,
-			y: viewport.clientHeight / 2,
+			x: visibleArea.center.x,
+			y: visibleArea.center.y,
 		});
 	};
 
@@ -1083,7 +1122,7 @@ export function initializeGraphNavigator(
 	const resizeObserver = typeof ResizeObserver === 'function'
 		? new ResizeObserver(() => {
 			if (!disposed) {
-				renderMinimapViewportIndicator();
+				refreshVisibleGraphArea();
 			}
 		})
 		: undefined;
@@ -1092,8 +1131,10 @@ export function initializeGraphNavigator(
 	renderPanelState();
 	render();
 	renderMinimapGraph(initialGraphState);
+	refreshVisibleGraphArea();
 
 	return {
+		refreshVisibleGraphArea,
 		setLayout(layout): void {
 			if (disposed) {
 				return;

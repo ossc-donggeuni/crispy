@@ -19,11 +19,18 @@ export interface WorkspaceStateChangedMessage {
 	state: WorkspacePersistentState;
 }
 
+/** Graph File ID로 Workspace 파일 열기를 Extension Host에 요청한다. */
+export interface WorkspaceOpenFileMessage {
+	type: 'workspace.openFile';
+	fileId: string;
+}
+
 /** Webview에서 Extension Host로 전송하는 Agent wire 및 상태 경계 메시지다. */
 export type WebviewToExtensionMessage =
 	| WebviewToHostWireMessage
 	| WebviewStateChangedMessage
-	| WorkspaceStateChangedMessage;
+	| WorkspaceStateChangedMessage
+	| WorkspaceOpenFileMessage;
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {

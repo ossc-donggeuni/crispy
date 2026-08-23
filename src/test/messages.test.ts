@@ -3,6 +3,7 @@ import {
 	parseWorkspaceToWebviewMessage,
 	type ExtensionToWebviewMessage,
 	type WebviewToExtensionMessage,
+	type WorkspaceOpenFileMessage,
 	type WorkspaceStateChangedMessage,
 	type WorkspaceToWebviewMessage,
 } from '../messages';
@@ -25,6 +26,16 @@ suite('Extension to Webview Workspace messages', () => {
 
 		assert.strictEqual(webviewMessage.type, 'workspace.stateChanged');
 		assert.deepStrictEqual(webviewMessage.state, workspaceMessage.state);
+	});
+
+	test('File Open 요청은 File ID만 포함해 Host union에 연결된다', () => {
+		const workspaceMessage = {
+			type: 'workspace.openFile',
+			fileId: 'file:file:///workspace/app/src/index.ts',
+		} satisfies WorkspaceOpenFileMessage;
+		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
+
+		assert.deepStrictEqual(webviewMessage, workspaceMessage);
 	});
 
 	test('Workspace 도메인 메시지가 기존 Graph 모델로 최상위 Host union에 연결된다', () => {

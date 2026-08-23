@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import {
 	CrispyExtensionApi,
 	TerminalMessageHost,
+	WorkspaceFileHost,
 	createCanvasRuntime,
 	createInitialWebviewState,
 	handleWebviewMessage as handleHostWebviewMessage,
@@ -867,6 +868,139 @@ suite('Crispy Extension Host', () => {
 
 		assert.strictEqual(result, undefined);
 		assert.deepStrictEqual(postedMessages, []);
+	});
+
+	test('workspace.openFile은 File ID URI를 복원해 Active 일반 Editor Tab으로 연다', () => {
+		const expectedUri = vscode.Uri.parse(
+			'vscode-remote://ssh-remote+crispy/workspace/src/index.ts',
+			true,
+		);
+		const opened: Array<{
+			readonly uri: vscode.Uri;
+			readonly options: vscode.TextDocumentShowOptions;
+		}> = [];
+		const workspaceFileHost: WorkspaceFileHost = {
+			getWorkspaceFolder: (uri) => {
+				assert.strictEqual(uri.toString(), expectedUri.toString());
+
+				return {
+					uri: vscode.Uri.parse(
+						'vscode-remote://ssh-remote+crispy/workspace',
+						true,
+					),
+					name: 'workspace',
+					index: 0,
+				};
+			},
+			showTextDocument: (uri, options) => {
+				opened.push({ uri, options });
+				return Promise.resolve(undefined);
+			},
+		};
+
+		const result = handleHostWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'workspace.openFile',
+				fileId: `file:${expectedUri.toString()}`,
+			},
+			undefined,
+			undefined,
+			workspaceFileHost,
+		);
+
+		assert.strictEqual(result, undefined);
+		assert.strictEqual(opened.length, 1);
+		assert.strictEqual(opened[0]?.uri.toString(), expectedUri.toString());
+		assert.deepStrictEqual(opened[0]?.options, {
+			viewColumn: vscode.ViewColumn.Active,
+			preview: false,
+			preserveFocus: false,
+		});
+	});
+
+	test('잘못된 File ID, malformed payload와 Workspace 밖 URI는 열지 않는다', () => {
+		let workspaceChecks = 0;
+		let openCalls = 0;
+		const workspaceFileHost: WorkspaceFileHost = {
+			getWorkspaceFolder: () => {
+				workspaceChecks += 1;
+				return undefined;
+			},
+			showTextDocument: () => {
+				openCalls += 1;
+				return Promise.resolve(undefined);
+			},
+		};
+		const messages: unknown[] = [{
+			type: 'workspace.openFile',
+			fileId: 'folder:file:///workspace/src/index.ts',
+		}, {
+			type: 'workspace.openFile',
+			fileId: 'file:not-a-uri',
+		}, {
+			type: 'workspace.openFile',
+		}, {
+			type: 'workspace.openFile',
+			fileId: 42,
+		}, {
+			type: 'workspace.openFile',
+			fileId: 'file:file:///workspace/src/index.ts',
+			unexpected: true,
+		}, {
+			type: 'workspace.openFile',
+			fileId: 'file:file:///outside/index.ts',
+		}];
+
+		for (const message of messages) {
+			assert.strictEqual(handleHostWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				message,
+				undefined,
+				undefined,
+				workspaceFileHost,
+			), undefined);
+		}
+
+		assert.strictEqual(workspaceChecks, 1);
+		assert.strictEqual(openCalls, 0);
+	});
+
+	test('File open 실패를 격리해 다음 Webview 메시지를 계속 처리한다', async () => {
+		const postedMessages: ExtensionToWebviewMessage[] = [];
+		let readyNotifications = 0;
+		const workspaceFileHost: WorkspaceFileHost = {
+			getWorkspaceFolder: (uri) => ({ uri, name: 'workspace', index: 0 }),
+			showTextDocument: () => Promise.reject(new Error('file was deleted')),
+		};
+
+		handleHostWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'workspace.openFile',
+				fileId: 'file:file:///workspace/deleted.ts',
+			},
+			undefined,
+			undefined,
+			workspaceFileHost,
+		);
+		const readyResult = handleHostWebviewMessage(
+			{
+				postMessage: (message: ExtensionToWebviewMessage) => {
+					postedMessages.push(message);
+					return Promise.resolve(true);
+				},
+			},
+			{ type: 'webview.ready' },
+			undefined,
+			() => readyNotifications += 1,
+			workspaceFileHost,
+		);
+
+		assert.ok(readyResult);
+		assert.strictEqual(await readyResult, true);
+		assert.strictEqual(readyNotifications, 1);
+		assert.deepStrictEqual(postedMessages, [{ type: 'extension.ready' }]);
 	});
 
 	test('검증된 input과 resize를 input log 없이 TerminalHost로 전달한다', () => {

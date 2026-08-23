@@ -6,9 +6,15 @@ import {
 import {
 	addGraphRoot,
 	applyDetachedGraphRoots,
+	createDetachedRootId,
 	createPromotedGraphRootId,
 	createRootContextRelativePath,
 	findGraphNode,
+	getDetachedRootOrdinal,
+	getDetachedRootOriginId,
+	getDetachedRootNodeId,
+	getNextDetachedRootOrdinal,
+	isDetachedRootId,
 	removeGraphRoot,
 } from '../../webview/graph/graphRootPromotion';
 
@@ -257,7 +263,7 @@ suite('Graph Root Promotion', () => {
 		assert.strictEqual(addition.root.context?.relativePath, 'crispy/');
 	});
 
-	test('Project, 기존 Root와 잘못된 Node ID는 안전하게 거부한다', () => {
+	test('Project와 잘못된 Node ID는 거부하고 기존 Source는 새 Instance로 추가한다', () => {
 		const graph = createSingleRootGraph(PROJECT, 'root:workspace');
 
 		assert.strictEqual(addGraphRoot(graph, PROJECT.id), undefined);
@@ -266,10 +272,70 @@ suite('Graph Root Promotion', () => {
 		const addition = addGraphRoot(graph, 'folder:src');
 
 		assert.ok(addition);
-		assert.strictEqual(
-			addGraphRoot(addition.graph, 'folder:src'),
-			undefined,
+		const second = addGraphRoot(addition.graph, 'folder:src');
+
+		assert.ok(second);
+		assert.strictEqual(second.root.id, createDetachedRootId('folder:src', 2));
+		assert.strictEqual(second.root.nodeId, addition.root.nodeId);
+		assert.strictEqual(second.graph.rootNodes['folder:src'], PROJECT.children[0]);
+	});
+
+	test('Detached ID helper와 Source별 최고 ordinal + 1 계산을 metadata 없이 수행한다', () => {
+		const sourceId = 'folder:/src/components::detached:name';
+		const firstId = createDetachedRootId(sourceId, 1);
+		const thirdId = createDetachedRootId(sourceId, 3);
+		const graph = {
+			roots: [
+				{ id: 'root:workspace', nodeId: PROJECT.id },
+				{ id: firstId, nodeId: sourceId },
+				{ id: thirdId, nodeId: sourceId },
+			],
+			rootNodes: { [PROJECT.id]: PROJECT },
+		};
+
+		assert.strictEqual(firstId, `${sourceId}::detached:1`);
+		assert.strictEqual(getDetachedRootOrdinal(thirdId), 3);
+		assert.strictEqual(isDetachedRootId(thirdId), true);
+		assert.strictEqual(isDetachedRootId(`${sourceId}::detached:0`), false);
+		assert.strictEqual(getNextDetachedRootOrdinal(graph, sourceId), 4);
+		assert.strictEqual(getNextDetachedRootOrdinal(graph, 'folder:other'), 1);
+	});
+
+	test('중첩 Detach ID는 원본 Node와 분리 시작 Root Instance를 함께 복원한다', () => {
+		const originRootId = createDetachedRootId('folder:parent', 2);
+		const nestedId = createDetachedRootId('file:parent/child.ts', 4, originRootId);
+
+		assert.strictEqual(getDetachedRootNodeId(nestedId), 'file:parent/child.ts');
+		assert.strictEqual(getDetachedRootOriginId(nestedId), originRootId);
+		assert.strictEqual(getDetachedRootOrdinal(nestedId), 4);
+	});
+
+	test('중간 Instance 제거 후 최고 순번 다음을 쓰고 전체 제거 후 1부터 재시작한다', () => {
+		const graph = createSingleRootGraph(PROJECT, 'root:workspace');
+		const first = addGraphRoot(graph, 'folder:src');
+
+		assert.ok(first);
+		const second = addGraphRoot(first.graph, 'folder:src');
+		assert.ok(second);
+		const third = addGraphRoot(second.graph, 'folder:src');
+		assert.ok(third);
+		const withoutSecond = removeGraphRoot(third.graph, second.root.id);
+		const fourth = addGraphRoot(withoutSecond, 'folder:src');
+
+		assert.ok(fourth);
+		assert.deepStrictEqual(
+			fourth.graph.roots.filter((root) => root.nodeId === 'folder:src')
+				.map((root) => getDetachedRootOrdinal(root.id)),
+			[1, 3, 4],
 		);
+		const withoutAll = [first.root.id, third.root.id, fourth.root.id].reduce(
+			(current, rootId) => removeGraphRoot(current, rootId),
+			fourth.graph,
+		);
+		const restarted = addGraphRoot(withoutAll, 'folder:src');
+
+		assert.ok(restarted);
+		assert.strictEqual(getDetachedRootOrdinal(restarted.root.id), 1);
 	});
 
 	test('저장된 Detached Root를 순서대로 적용하고 존재하지 않는 Node는 유지한 채 무시한다', () => {
@@ -290,6 +356,51 @@ suite('Graph Root Promotion', () => {
 		assert.strictEqual(
 			applyDetachedGraphRoots(graph, { 'folder:missing': true }),
 			graph,
+		);
+	});
+
+	test('저장된 sparse ordinal을 ID에서 복원하고 다음 Detach는 최고 순번 다음을 사용한다', () => {
+		const graph = createSingleRootGraph(PROJECT, 'root:workspace');
+		const firstId = createDetachedRootId('folder:src', 1);
+		const thirdId = createDetachedRootId('folder:src', 3);
+		const restored = applyDetachedGraphRoots(graph, {
+			[firstId]: true,
+			[thirdId]: true,
+		});
+
+		assert.deepStrictEqual(
+			restored.roots
+				.filter((root) => root.nodeId === 'folder:src')
+				.map((root) => root.id),
+			[firstId, thirdId],
+		);
+		const addition = addGraphRoot(restored, 'folder:src');
+
+		assert.ok(addition);
+		assert.strictEqual(
+			addition.root.id,
+			createDetachedRootId('folder:src', 4),
+		);
+	});
+
+	test('중첩 Detach의 origin-scoped ID를 별도 metadata 없이 그대로 복원한다', () => {
+		const graph = createSingleRootGraph(PROJECT, 'root:workspace');
+		const parentId = createDetachedRootId('folder:graph', 1);
+		const childId = createDetachedRootId('file:graphView', 1, parentId);
+		const restored = applyDetachedGraphRoots(graph, {
+			[parentId]: true,
+			[childId]: true,
+		});
+
+		assert.ok(restored.roots.some((root) => root.id === parentId));
+		assert.ok(restored.roots.some((root) => root.id === childId));
+		assert.strictEqual(
+			getDetachedRootOriginId(childId),
+			parentId,
+		);
+		assert.strictEqual(
+			restored.roots.find((root) => root.id === childId)?.nodeId,
+			'file:graphView',
 		);
 	});
 

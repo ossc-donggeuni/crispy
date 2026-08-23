@@ -19,6 +19,7 @@ import {
 } from './agent/host/terminal/terminalRuntimeCleanup';
 import type {
 	ExtensionToWebviewMessage,
+	WorkspaceOpenFileMessage,
 	WorkspaceToWebviewMessage,
 } from './messages';
 import {
@@ -101,6 +102,20 @@ export interface TerminalMessageHost {
 	): void;
 }
 
+/** Workspace 소속 확인과 Editor 열기를 제공하는 VS Code Host 경계다. */
+export interface WorkspaceFileHost {
+	getWorkspaceFolder(uri: vscode.Uri): vscode.WorkspaceFolder | undefined;
+	showTextDocument(
+		uri: vscode.Uri,
+		options: vscode.TextDocumentShowOptions,
+	): Thenable<unknown>;
+}
+
+const defaultWorkspaceFileHost: WorkspaceFileHost = {
+	getWorkspaceFolder: (uri) => vscode.workspace.getWorkspaceFolder(uri),
+	showTextDocument: (uri, options) => vscode.window.showTextDocument(uri, options),
+};
+
 /** VS Code가 실제 활성화한 extension module instance에서 제공하는 공개 API다. */
 export interface CrispyExtensionApi {
 	deactivate(): Promise<void>;
@@ -109,6 +124,8 @@ export interface CrispyExtensionApi {
 		webview: Pick<vscode.Webview, 'postMessage'>,
 		message: unknown,
 		terminalHost?: TerminalMessageHost,
+		onWebviewReady?: () => void,
+		workspaceFileHost?: WorkspaceFileHost,
 	): Thenable<boolean> | undefined;
 }
 
@@ -360,6 +377,7 @@ function releaseCanvasRuntime(runtime: CanvasRuntime): void {
  * @param message Webview에서 수신한 메시지
  * @param terminalHost 검증된 Terminal 메시지를 전달할 Host 경계
  * @param onWebviewReady 검증된 ready 뒤 Canvas 초기화 대기를 해제할 callback
+ * @param workspaceFileHost Workspace 검증 및 Editor 열기를 수행할 Host 경계
  * @returns 메시지를 Webview에 전달한 결과 또는 처리 대상이 아닐 때 `undefined`
  */
 export function handleWebviewMessage(
@@ -367,9 +385,20 @@ export function handleWebviewMessage(
 	message: unknown,
 	terminalHost?: TerminalMessageHost,
 	onWebviewReady?: () => void,
+	workspaceFileHost: WorkspaceFileHost = defaultWorkspaceFileHost,
 ): Thenable<boolean> | undefined {
 	if (message && typeof message === 'object') {
 		const candidate = message as Record<string, unknown>;
+
+		if (candidate.type === 'workspace.openFile') {
+			const openFileMessage = parseWorkspaceOpenFileMessage(candidate);
+
+			if (openFileMessage) {
+				openWorkspaceFile(openFileMessage, workspaceFileHost);
+			}
+
+			return undefined;
+		}
 
 		if (candidate.type === 'webview.stateChanged') {
 			const state = parseWebviewSessionState(candidate.state);
@@ -445,6 +474,47 @@ export function handleWebviewMessage(
 			} satisfies ExtensionToWebviewMessage);
 		default:
 			return handleTerminalMessage(parseResult.value, terminalHost);
+	}
+}
+
+/** Workspace File Open payload의 type, exact field 및 Crispy File ID를 검증한다. */
+function parseWorkspaceOpenFileMessage(
+	value: Record<string, unknown>,
+): WorkspaceOpenFileMessage | undefined {
+	if (
+		value.type !== 'workspace.openFile'
+		|| Object.keys(value).length !== 2
+		|| typeof value.fileId !== 'string'
+		|| !value.fileId.startsWith('file:')
+	) {
+		return undefined;
+	}
+
+	return {
+		type: 'workspace.openFile',
+		fileId: value.fileId,
+	};
+}
+
+/** Crispy File ID의 URI를 복원해 현재 Workspace의 활성 Editor Group에 연다. */
+function openWorkspaceFile(
+	message: WorkspaceOpenFileMessage,
+	workspaceFileHost: WorkspaceFileHost,
+): void {
+	try {
+		const uri = vscode.Uri.parse(message.fileId.slice('file:'.length), true);
+
+		if (!workspaceFileHost.getWorkspaceFolder(uri)) {
+			return;
+		}
+
+		void Promise.resolve(workspaceFileHost.showTextDocument(uri, {
+			viewColumn: vscode.ViewColumn.Active,
+			preview: false,
+			preserveFocus: false,
+		})).catch(() => undefined);
+	} catch {
+		/** 잘못되었거나 사라진 File은 다른 Webview 메시지 처리에 영향을 주지 않는다. */
 	}
 }
 
@@ -677,15 +747,15 @@ function getWebviewHtml(
 						<div id="agent-panel-header">
 							<div id="agent-tab-strip"></div>
 							<div id="agent-top-bar"></div>
-							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat">⠿</button>
-							<button id="chat-collapse-toggle" type="button" aria-label="Hide Agent Chat" title="Hide Agent Chat">›</button>
+							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat"></button>
+							<button id="chat-collapse-toggle" type="button" aria-label="Hide Agent Chat" title="Hide Agent Chat" data-panel-icon="panel-right.svg"></button>
 						</div>
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
 						<div id="agent-dialog-host" hidden></div>
 					</section>
-					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" hidden>‹</button>
+					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
 				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}"></script>
