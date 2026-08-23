@@ -213,6 +213,59 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Effect owner가 같은 Target의 외부 Effect와 독립적으로 조합·정리된다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK);
+		const target = { nodeId: 'folder:app/src' };
+		const effectOwner = graphView.createNodeEffectOwner();
+
+		graphView.setNodeEffect(target, { kind: 'outline', color: '#22cc88' });
+		effectOwner.setNodeEffect(target, { kind: 'outline', color: '#ff3355' });
+		effectOwner.setNodeEffect(target, { kind: 'pulse', color: '#ff3355' });
+		const region = getEffectRegion(root, target.nodeId);
+
+		assert.deepStrictEqual(
+			getNodeEffects(region, 'outline')
+				.map((effect) => effect.style.getPropertyValue(
+					'--graph-node-effect-color',
+				))
+				.sort(),
+			['#22cc88', '#ff3355'],
+		);
+		assert.strictEqual(getNodeEffects(region, 'pulse').length, 1);
+
+		effectOwner.clearNodeEffect(target);
+
+		assert.strictEqual(getNodeEffects(region, 'outline').length, 1);
+		assert.strictEqual(
+			getNodeEffect(region, 'outline').style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#22cc88',
+		);
+		assert.strictEqual(findNodeEffect(region, 'pulse'), undefined);
+
+		effectOwner.setNodeEffect(target, { kind: 'shimmer', color: '#ff3355' });
+		effectOwner.dispose();
+		assert.strictEqual(findNodeEffect(region, 'shimmer'), undefined);
+		assert.ok(getNodeEffect(region, 'outline'));
+
+		effectOwner.setNodeEffect(target, { kind: 'pulse', color: '#ff3355' });
+		assert.strictEqual(findNodeEffect(region, 'pulse'), undefined);
+
+		graphView.clearNodeEffect(target);
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
+		graphView.dispose();
+	});
+
 	test('Parent Effect는 열린 visible subtree를 하나의 Region으로 재귀 확장·수축한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');

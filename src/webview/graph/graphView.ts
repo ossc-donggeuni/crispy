@@ -57,7 +57,10 @@ import type {
 	GraphNodeEffectKind,
 	GraphNodeEffectTarget,
 } from '../../messages';
-import { createGraphNodeEffects } from './graphNodeEffects';
+import {
+	createGraphNodeEffects,
+	type GraphNodeEffectOwner,
+} from './graphNodeEffects';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
@@ -73,6 +76,8 @@ export interface GraphView {
 	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
 	/** 특정 target의 한 kind 또는 모든 transient 시각 효과를 제거한다. */
 	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
+	/** 한 기능이 소유한 Effect만 독립적으로 정리할 수 있는 범위를 만든다. */
+	createNodeEffectOwner(): GraphNodeEffectOwner;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
 }
@@ -1697,6 +1702,9 @@ export function initializeGraphView(
 			if (!disposed) {
 				nodeEffects.clearNodeEffect(target, kind);
 			}
+		},
+		createNodeEffectOwner(): GraphNodeEffectOwner {
+			return nodeEffects.createOwner();
 		},
 		dispose(): void {
 			if (disposed) {

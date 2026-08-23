@@ -483,6 +483,14 @@ suite('Webview State Wiring', () => {
 			readonly target: GraphNodeEffectTarget;
 			readonly kind?: GraphNodeEffectKind;
 		}> = [];
+		const agentEffectSets: Array<{
+			readonly target: GraphNodeEffectTarget;
+			readonly effect: GraphNodeEffect;
+		}> = [];
+		const agentEffectClears: Array<{
+			readonly target: GraphNodeEffectTarget;
+			readonly kind?: GraphNodeEffectKind;
+		}> = [];
 		const agentActivitySets: Array<{
 			readonly sessionId: string;
 			readonly target: GraphNodeEffectTarget;
@@ -519,6 +527,7 @@ suite('Webview State Wiring', () => {
 		let graphVisibleRefreshCount = 0;
 		let graphUnsubscribed = false;
 		let graphDisposed = false;
+		let agentEffectOwnerDisposed = false;
 		let agentPanelUiInitialized = false;
 		let agentPanelUiDisposed = false;
 		let terminalPoolDisposed = false;
@@ -641,6 +650,20 @@ suite('Webview State Wiring', () => {
 				clearNodeEffect: (target, kind) => {
 					graphEffectClears.push({ target, ...(kind ? { kind } : {}) });
 				},
+				createNodeEffectOwner: () => ({
+					setNodeEffect(target, effect): void {
+						agentEffectSets.push({ target, effect });
+					},
+					clearNodeEffect(target, kind): void {
+						agentEffectClears.push({
+							target,
+							...(kind ? { kind } : {}),
+						});
+					},
+					dispose(): void {
+						agentEffectOwnerDisposed = true;
+					},
+				}),
 				dispose: () => {
 					graphDisposed = true;
 				},
@@ -719,20 +742,27 @@ suite('Webview State Wiring', () => {
 			},
 		})) as typeof agentTerminalPoolModule.createDefaultAgentTerminalPool;
 
-		agentActivityStoreModule.createAgentActivityStore = (() => ({
-			getActivities: () => [],
-			getSnapshot: () => [],
-			setAgentActivity(sessionId, target, activity): void {
-				agentActivitySets.push({ sessionId, target, activity });
-			},
-			clearAgentActivity(sessionId, target): void {
-				agentActivityClears.push({ sessionId, target });
-			},
-			clearAgentActivitiesBySession(sessionId): void {
-				agentActivitySessionClears.push(sessionId);
-			},
-			subscribe: () => () => undefined,
-		})) as typeof agentActivityStoreModule.createAgentActivityStore;
+		agentActivityStoreModule.createAgentActivityStore = (() => {
+			const store = originalCreateAgentActivityStore();
+
+			return {
+				getActivities: store.getActivities,
+				getSnapshot: store.getSnapshot,
+				setAgentActivity(sessionId, target, activity): void {
+					agentActivitySets.push({ sessionId, target, activity });
+					store.setAgentActivity(sessionId, target, activity);
+				},
+				clearAgentActivity(sessionId, target): void {
+					agentActivityClears.push({ sessionId, target });
+					store.clearAgentActivity(sessionId, target);
+				},
+				clearAgentActivitiesBySession(sessionId): void {
+					agentActivitySessionClears.push(sessionId);
+					store.clearAgentActivitiesBySession(sessionId);
+				},
+				subscribe: store.subscribe,
+			};
+		}) as typeof agentActivityStoreModule.createAgentActivityStore;
 
 		/**
 		 * 실제 Agent DOM 대신 초기화 여부와 Webview로 전달되는 콜백만 노출한다.
@@ -923,6 +953,16 @@ suite('Webview State Wiring', () => {
 				agentActivitySessionClears,
 				['session-activity-b'],
 			);
+			assert.deepStrictEqual(agentEffectSets, [{
+				target: activityTarget,
+				effect: {
+					kind: 'pulse',
+					color: 'var(--graph-viewport-accent-color, #007acc)',
+				},
+			}]);
+			assert.deepStrictEqual(agentEffectClears, [{
+				target: activityTarget,
+			}]);
 
 			const terminalStartingMessage = {
 				type: 'terminal.starting',
@@ -1213,6 +1253,7 @@ suite('Webview State Wiring', () => {
 
 			assert.strictEqual(graphUnsubscribed, true);
 			assert.strictEqual(graphDisposed, true);
+			assert.strictEqual(agentEffectOwnerDisposed, true);
 			assert.strictEqual(terminalPoolDisposed, true);
 			assert.strictEqual(agentPanelUiDisposed, true);
 		} finally {

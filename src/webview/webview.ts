@@ -16,6 +16,7 @@ import {
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
 import { initializeGraphView } from './graph/graphView';
+import { createAgentActivityEffectReconciler } from './graph/agentActivityEffects';
 import { deserializeGraphFromWebview } from './graph/graphTransport';
 import type { GraphStateSnapshot } from './graph/graphState';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
@@ -93,6 +94,10 @@ const graphView = initializeGraphView(
 
 /** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
 const agentActivityStore = createAgentActivityStore();
+const agentActivityEffects = createAgentActivityEffectReconciler(
+	agentActivityStore,
+	graphView.createNodeEffectOwner(),
+);
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
@@ -295,6 +300,7 @@ const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
 
 window.addEventListener('unload', () => {
 	unsubscribeGraphState();
+	agentActivityEffects.dispose();
 	graphView.dispose();
 	terminalPool.dispose();
 	agentPanelUi?.dispose();
