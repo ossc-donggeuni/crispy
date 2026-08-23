@@ -93,6 +93,31 @@ suite('Graph View', () => {
 		assert.match(hiddenRule[0], /display:\s*none;/);
 	});
 
+	test('Effect Region은 World layer에서 interaction 없이 기존 reflow easing을 사용한다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const layerRule = graphViewCss.match(
+			/\.graph-node-effect-region-layer\s*\{\s*z-index:[^}]*\}/,
+		);
+		const transitionRule = graphViewCss.match(
+			/\.graph-node-effect-region\.is-layout-transitioning\s*\{[\s\S]*?\n\}/,
+		);
+
+		assert.ok(layerRule);
+		assert.match(layerRule[0], /pointer-events:\s*none;/);
+		assert.ok(transitionRule);
+		assert.match(
+			transitionRule[0],
+			/--graph-node-effect-region-transition-duration/,
+		);
+		assert.match(
+			transitionRule[0],
+			/cubic-bezier\(0\.333333, 1, 0\.666667, 1\)/,
+		);
+	});
+
 	test('Node Effect를 kind별로 조합·교체하고 color/icon을 중복 DOM 없이 갱신한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -118,17 +143,18 @@ suite('Graph View', () => {
 			color: '#40a9ff',
 			icon: 'check',
 		});
+		const region = getEffectRegion(root, target.nodeId);
 
-		const shimmer = getNodeEffect(folder, 'shimmer');
-		const outline = getNodeEffect(folder, 'outline');
+		const shimmer = getNodeEffect(region, 'shimmer');
+		const outline = getNodeEffect(region, 'outline');
 		const icon = getNodeEffect(folder, 'icon');
 
 		assert.strictEqual(
 			shimmer.style.getPropertyValue('--graph-node-effect-color'),
 			'#ff0088',
 		);
-		assert.strictEqual(getNodeEffects(folder, 'shimmer').length, 1);
-		assert.strictEqual(getNodeEffects(folder, 'outline').length, 1);
+		assert.strictEqual(getNodeEffects(region, 'shimmer').length, 1);
+		assert.strictEqual(getNodeEffects(region, 'outline').length, 1);
 		assert.strictEqual(getNodeEffects(folder, 'icon').length, 1);
 		assert.strictEqual(icon.getAttribute('data-graph-node-effect-icon'), 'check');
 
@@ -139,9 +165,9 @@ suite('Graph View', () => {
 			icon: 'cancel',
 		});
 
-		assert.strictEqual(getNodeEffect(folder, 'outline'), outline);
+		assert.strictEqual(getNodeEffect(region, 'outline'), outline);
 		assert.strictEqual(getNodeEffect(folder, 'icon'), icon);
-		assert.strictEqual(getNodeEffects(folder, 'outline').length, 1);
+		assert.strictEqual(getNodeEffects(region, 'outline').length, 1);
 		assert.strictEqual(getNodeEffects(folder, 'icon').length, 1);
 		assert.strictEqual(
 			outline.style.getPropertyValue('--graph-node-effect-color'),
@@ -154,14 +180,232 @@ suite('Graph View', () => {
 		assert.strictEqual(icon.getAttribute('data-graph-node-effect-icon'), 'cancel');
 
 		graphView.clearNodeEffect(target, 'outline');
-		assert.strictEqual(findNodeEffect(folder, 'outline'), undefined);
-		assert.strictEqual(getNodeEffect(folder, 'shimmer'), shimmer);
+		assert.strictEqual(findNodeEffect(region, 'outline'), undefined);
+		assert.strictEqual(getNodeEffect(region, 'shimmer'), shimmer);
 		assert.strictEqual(getNodeEffect(folder, 'icon'), icon);
 
 		graphView.clearNodeEffect(target);
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
 		assert.deepStrictEqual(getNodeEffects(folder), []);
 		assert.strictEqual(folder.hasClass('graph-node-effect-host'), false);
 		graphView.dispose();
+	});
+
+	test('Parent Effect는 열린 visible subtree를 하나의 Region으로 재귀 확장·수축한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		}, GRAPH_MOCK);
+		const target = { nodeId: 'folder:app' };
+		const folder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		graphView.setNodeEffect(target, { kind: 'shimmer', color: '#ff66bb' });
+		graphView.setNodeEffect(target, {
+			kind: 'icon',
+			color: '#44cc88',
+			icon: 'check',
+		});
+		const region = getEffectRegion(root, target.nodeId);
+		const closedBounds = readEffectRegionBounds(region);
+
+		assert.strictEqual(closedBounds.width, 252);
+		assert.strictEqual(closedBounds.height, 54);
+		assert.strictEqual(getNodeEffects(region, 'shimmer').length, 1);
+		assert.strictEqual(getNodeEffects(folder, 'shimmer').length, 0);
+		assert.strictEqual(getNodeEffects(folder, 'icon').length, 1);
+		assert.strictEqual(getDescendantsByClass(
+			root,
+			'graph-node-effect-region',
+		).filter((candidate) => (
+			candidate.getAttribute('data-graph-node-effect-region') === target.nodeId
+		)).length, 1);
+
+		graphView.state.toggleFolder(target.nodeId);
+		const openedBounds = readEffectRegionBounds(region);
+		const childFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			'folder:app/src',
+		);
+
+		assert.strictEqual(getEffectRegion(root, target.nodeId), region);
+		assert.ok(openedBounds.width > closedBounds.width);
+		assert.ok(openedBounds.height > closedBounds.height);
+		assert.deepStrictEqual(getNodeEffects(childFolder), []);
+
+		graphView.state.toggleFolder('folder:app/src');
+		const nestedOpenedBounds = readEffectRegionBounds(region);
+
+		assert.ok(nestedOpenedBounds.width > openedBounds.width);
+		assert.ok(nestedOpenedBounds.height > openedBounds.height);
+		assert.strictEqual(getEffectRegion(root, target.nodeId), region);
+
+		graphView.state.toggleFolder('folder:app/src');
+		assert.deepStrictEqual(readEffectRegionBounds(region), openedBounds);
+		graphView.state.toggleFolder(target.nodeId);
+		assert.deepStrictEqual(readEffectRegionBounds(region), closedBounds);
+
+		const snapshot = graphView.state.getState();
+
+		graphView.state.setState({
+			...snapshot,
+			nodePositions: {
+				...snapshot.nodePositions,
+				[target.nodeId]: {
+					x: closedBounds.x + 106,
+					y: closedBounds.y + 56,
+				},
+			},
+		});
+		const movedBounds = readEffectRegionBounds(region);
+
+		assert.deepStrictEqual(movedBounds, {
+			x: closedBounds.x + 100,
+			y: closedBounds.y + 50,
+			width: closedBounds.width,
+			height: closedBounds.height,
+		});
+
+		graphView.clearNodeEffect(target, 'shimmer');
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
+		assert.ok(getNodeEffect(folder, 'icon'));
+		graphView.dispose();
+	});
+
+	test('Nested Parent Effect Region은 서로의 state와 DOM을 공유하지 않는다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK);
+		const outerTarget = { nodeId: 'folder:app' };
+		const innerTarget = { nodeId: 'folder:app/src' };
+
+		graphView.setNodeEffect(outerTarget, {
+			kind: 'shimmer',
+			color: '#ff66bb',
+		});
+		graphView.setNodeEffect(innerTarget, {
+			kind: 'outline',
+			color: '#66aaff',
+		});
+		const outerRegion = getEffectRegion(root, outerTarget.nodeId);
+		const innerRegion = getEffectRegion(root, innerTarget.nodeId);
+
+		assert.notStrictEqual(outerRegion, innerRegion);
+		assert.ok(readEffectRegionBounds(outerRegion).width >= (
+			readEffectRegionBounds(innerRegion).width
+		));
+		assert.strictEqual(getDescendantsByClass(
+			root,
+			'graph-node-effect-region',
+		).length, 2);
+
+		graphView.clearNodeEffect(outerTarget);
+		assert.strictEqual(findEffectRegion(root, outerTarget.nodeId), undefined);
+		assert.strictEqual(getEffectRegion(root, innerTarget.nodeId), innerRegion);
+		assert.ok(getNodeEffect(innerRegion, 'outline'));
+		graphView.dispose();
+	});
+
+	test('File Group pagination은 같은 Parent Region DOM의 실제 height만 갱신한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const folderId = 'folder:pagination-samples/seventeen-files';
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:pagination-samples': true,
+				[folderId]: true,
+			},
+		}, GRAPH_MOCK);
+
+		graphView.setNodeEffect(
+			{ nodeId: folderId },
+			{ kind: 'outline-strong', color: '#55aaff' },
+		);
+		const region = getEffectRegion(root, folderId);
+		const firstPageBounds = readEffectRegionBounds(region);
+
+		graphView.state.showMoreFiles(createFileGroupId(folderId));
+		const secondPageBounds = readEffectRegionBounds(region);
+
+		assert.strictEqual(getEffectRegion(root, folderId), region);
+		assert.ok(secondPageBounds.height > firstPageBounds.height);
+		assert.strictEqual(secondPageBounds.width, firstPageBounds.width);
+
+		graphView.state.collapseFileGroup(createFileGroupId(folderId));
+		assert.deepStrictEqual(readEffectRegionBounds(region), firstPageBounds);
+		assert.strictEqual(getNodeEffects(region, 'outline-strong').length, 1);
+		graphView.dispose();
+	});
+
+	test('Region resize는 Effect DOM을 유지하고 전달된 Layout duration으로 전환한다', () => {
+		const ownerDocument = new FakeDocument();
+		const regionLayer = ownerDocument.createElement('div');
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+			() => 0,
+			regionLayer.asHtmlElement(),
+		);
+		const target = { nodeId: 'folder:app' };
+		const card = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(target, card.asHtmlElement(), {
+			layoutNodeId: target.nodeId,
+		});
+		nodeEffects.setNodeEffect(target, {
+			kind: 'marching-dash',
+			color: '#55ccff',
+		});
+		const collapsedLayout = createGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+			{ openedFolders: { [GRAPH_MOCK_PROJECT.id]: true } },
+		);
+
+		nodeEffects.syncLayout(
+			collapsedLayout,
+			createLayoutPositionMap(collapsedLayout),
+		);
+		const region = getEffectRegion(regionLayer, target.nodeId);
+		const dash = getNodeEffect(region, 'marching-dash');
+		const expandedLayout = createGraphLayout(
+			createSingleRootGraph(GRAPH_MOCK_PROJECT),
+			{
+				openedFolders: {
+					[GRAPH_MOCK_PROJECT.id]: true,
+					[target.nodeId]: true,
+				},
+			},
+		);
+
+		assert.strictEqual(nodeEffects.syncLayout(
+			expandedLayout,
+			createLayoutPositionMap(expandedLayout),
+			220,
+		), true);
+		assert.strictEqual(getEffectRegion(regionLayer, target.nodeId), region);
+		assert.strictEqual(getNodeEffect(region, 'marching-dash'), dash);
+		assert.strictEqual(region.hasClass('is-layout-transitioning'), true);
+		assert.strictEqual(region.style.getPropertyValue(
+			'--graph-node-effect-region-transition-duration',
+		), '220ms');
+
+		nodeEffects.clearNodeEffect(target);
+		assert.strictEqual(findEffectRegion(regionLayer, target.nodeId), undefined);
+		nodeEffects.dispose();
 	});
 
 	test('나중에 생성된 같은 Node occurrence를 기존 Effect animation 위상에 동기화한다', () => {
@@ -303,10 +547,13 @@ suite('Graph View', () => {
 		);
 
 		graphView.setNodeEffect(target, { kind: 'pulse', color: '#55ddff' });
-		assert.ok(getNodeEffect(firstFolder, 'pulse'));
+		const firstRegion = getEffectRegion(root, target.nodeId);
+		const firstBounds = readEffectRegionBounds(firstRegion);
+
+		assert.ok(getNodeEffect(firstRegion, 'pulse'));
 
 		graphView.state.toggleFolder('folder:app');
-		assert.strictEqual(findNodeEffect(firstFolder, 'pulse'), undefined);
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
 		assert.strictEqual(findDescendantByAttribute(
 			root,
 			'data-graph-node-id',
@@ -319,28 +566,33 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			target.nodeId,
 		);
+		const reopenedRegion = getEffectRegion(root, target.nodeId);
 
 		assert.notStrictEqual(reopenedFolder, firstFolder);
+		assert.notStrictEqual(reopenedRegion, firstRegion);
+		assert.deepStrictEqual(readEffectRegionBounds(reopenedRegion), firstBounds);
 		assert.strictEqual(
-			getNodeEffect(reopenedFolder, 'pulse').style.getPropertyValue(
+			getNodeEffect(reopenedRegion, 'pulse').style.getPropertyValue(
 				'--graph-node-effect-color',
 			),
 			'#55ddff',
 		);
 
 		graphView.updateGraph({ roots: [], rootNodes: {} });
-		assert.strictEqual(findNodeEffect(reopenedFolder, 'pulse'), undefined);
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
 		graphView.updateGraph(GRAPH_MOCK);
 		const refreshedFolder = getDescendantByAttribute(
 			root,
 			'data-graph-node-id',
 			target.nodeId,
 		);
+		const refreshedRegion = getEffectRegion(root, target.nodeId);
 
 		assert.notStrictEqual(refreshedFolder, reopenedFolder);
-		assert.ok(getNodeEffect(refreshedFolder, 'pulse'));
+		assert.ok(getNodeEffect(refreshedRegion, 'pulse'));
+		assert.deepStrictEqual(readEffectRegionBounds(refreshedRegion), firstBounds);
 		graphView.dispose();
-		assert.strictEqual(findNodeEffect(refreshedFolder, 'pulse'), undefined);
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
 	});
 
 	test('Grouped File Row pagination 재생성과 standalone File에 Effect를 적용한다', () => {
@@ -425,7 +677,10 @@ suite('Graph View', () => {
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(root.asHtmlElement(), {
 			...INITIAL_GRAPH_STATE,
-			openedFolders: { [project.id]: true },
+			openedFolders: {
+				[project.id]: true,
+				[createGraphLayoutNodeId(detachedRootId, folder.id)]: true,
+			},
 			detachedRootNodeIds: { [folder.id]: true },
 		}, createSingleRootGraph(project, 'root:effect-detached'));
 		const detachedCard = getDescendantByAttribute(
@@ -443,14 +698,24 @@ suite('Graph View', () => {
 			{ nodeId: folder.id, rootId: detachedRootId },
 			{ kind: 'outline', color: '#44dd88' },
 		);
+		const detachedRegion = getEffectRegion(
+			root,
+			createGraphLayoutNodeId(detachedRootId, folder.id),
+		);
 		const detachedRootButton = getNavigatorRootButtons(root)[1];
 
-		assert.ok(getNodeEffect(detachedCard, 'outline'));
+		assert.ok(getNodeEffect(detachedRegion, 'outline'));
+		assert.ok(readEffectRegionBounds(detachedRegion).width > 252);
+		assert.strictEqual(readEffectRegionBounds(detachedRegion).height, 54);
+		assert.strictEqual(findNodeEffect(detachedCard, 'outline'), undefined);
 		assert.ok(detachedRootButton);
 		assert.ok(getNodeEffect(detachedRootButton, 'outline'));
 		assert.strictEqual(findNodeEffect(backlink, 'outline'), undefined);
 		graphView.clearNodeEffect({ nodeId: folder.id, rootId: detachedRootId });
-		assert.strictEqual(findNodeEffect(detachedCard, 'outline'), undefined);
+		assert.strictEqual(findEffectRegion(
+			root,
+			createGraphLayoutNodeId(detachedRootId, folder.id),
+		), undefined);
 		assert.strictEqual(findNodeEffect(detachedRootButton, 'outline'), undefined);
 		graphView.dispose();
 	});
@@ -477,6 +742,10 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			getGraphRootLayoutNodeId(folderRoot),
 		);
+		const firstRootRegion = getEffectRegion(
+			root,
+			getGraphRootLayoutNodeId(folderRoot),
+		);
 
 		assert.ok(firstRootButton);
 		assert.strictEqual(
@@ -486,11 +755,12 @@ suite('Graph View', () => {
 			'#36d9c4',
 		);
 		assert.strictEqual(
-			getNodeEffect(firstRootCard, 'pulse').style.getPropertyValue(
+			getNodeEffect(firstRootRegion, 'pulse').style.getPropertyValue(
 				'--graph-node-effect-color',
 			),
 			'#36d9c4',
 		);
+		assert.strictEqual(findNodeEffect(firstRootCard, 'pulse'), undefined);
 
 		graphView.updateGraph({ roots: [], rootNodes: {} });
 		assert.strictEqual(findNodeEffect(firstRootButton, 'pulse'), undefined);
@@ -6455,6 +6725,27 @@ function readTranslate(transform: string): { x: number; y: number } {
 	return { x: Number(match[1]), y: Number(match[2]) };
 }
 
+function readEffectRegionBounds(region: FakeElement): {
+	readonly x: number;
+	readonly y: number;
+	readonly width: number;
+	readonly height: number;
+} {
+	const position = readTranslate(region.style.transform);
+
+	return {
+		...position,
+		width: Number.parseFloat(region.style.width),
+		height: Number.parseFloat(region.style.height),
+	};
+}
+
+function createLayoutPositionMap(
+	layout: ReturnType<typeof createGraphLayout>,
+): ReadonlyMap<string, { readonly x: number; readonly y: number }> {
+	return new Map(layout.nodes.map((node) => [node.id, node.position]));
+}
+
 function getNodeEffects(
 	element: FakeElement,
 	kind?: string,
@@ -6463,6 +6754,24 @@ function getNodeEffects(
 		(effect) => kind === undefined
 			|| effect.getAttribute('data-graph-node-effect') === kind,
 	);
+}
+
+function findEffectRegion(
+	root: FakeElement,
+	layoutNodeId: string,
+): FakeElement | undefined {
+	return findDescendantByAttribute(
+		root,
+		'data-graph-node-effect-region',
+		layoutNodeId,
+	);
+}
+
+function getEffectRegion(root: FakeElement, layoutNodeId: string): FakeElement {
+	const region = findEffectRegion(root, layoutNodeId);
+
+	assert.ok(region, `${layoutNodeId} Graph Node Effect Region이 있어야 한다.`);
+	return region;
 }
 
 function findNodeEffect(

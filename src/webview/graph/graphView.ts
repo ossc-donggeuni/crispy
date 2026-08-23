@@ -859,6 +859,7 @@ export function initializeGraphView(
 	const viewport = ownerDocument.createElement('div');
 	const world = ownerDocument.createElement('div');
 	const edgeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
+	const effectRegionLayer = ownerDocument.createElement('div');
 	const nodeLayer = ownerDocument.createElement('div');
 	const overlayLayer = ownerDocument.createElement('div');
 
@@ -866,14 +867,20 @@ export function initializeGraphView(
 	world.className = 'graph-world';
 	edgeLayer.classList.add('graph-edge-layer');
 	edgeLayer.setAttribute('aria-hidden', 'true');
+	effectRegionLayer.className = 'graph-node-effect-region-layer';
+	effectRegionLayer.setAttribute('aria-hidden', 'true');
 	nodeLayer.className = 'graph-node-layer';
 	overlayLayer.className = 'graph-overlay-layer';
 
-	world.append(edgeLayer, nodeLayer);
+	world.append(edgeLayer, nodeLayer, effectRegionLayer);
 	viewport.append(world, overlayLayer);
 	root.append(viewport);
 	const reattachConfirmDialog = createGraphReattachConfirmDialog(overlayLayer);
-	const nodeEffects = createGraphNodeEffects(ownerDocument);
+	const nodeEffects = createGraphNodeEffects(
+		ownerDocument,
+		undefined,
+		effectRegionLayer,
+	);
 	const state = createGraphState(initialState);
 	let disposed = false;
 	let initialGraphState = state.getState();
