@@ -34,9 +34,9 @@ export function formatSessionRestartConfirmMessage(tabLabel: string): string {
 	return `Restart ${tabLabel}? The current CLI session will be terminated and you'll return to agent selection.`;
 }
 
-/** 현재 Codex 대화 종료와 fresh MCP/CLI session 생성을 명확히 알리는 고정 문구다. */
+/** 현재 Agent 대화 종료와 fresh MCP/CLI session 생성을 명확히 알리는 고정 문구다. */
 export function formatMcpRestartConfirmMessage(): string {
-	return 'MCP와 Agent를 다시 시작하면 이 탭에서 실행 중인 Codex와 현재 CLI 대화가 종료됩니다. 새 MCP 연결과 새 Codex 세션으로 다시 시작하시겠습니까?';
+	return 'MCP와 Agent를 다시 시작하면 이 탭에서 실행 중인 Agent와 현재 CLI 대화가 종료됩니다. 새 MCP 연결과 새 Agent 세션으로 다시 시작하시겠습니까?';
 }
 
 /** 탭 닫기처럼 되돌릴 수 없는 동작 전에 사용자 확인을 받는 경계다. */
