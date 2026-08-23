@@ -59,6 +59,12 @@ import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
 } from '../../webview/graph/graphVisibleArea';
+import {
+	TASK_EDGE_ACTION_ATTRIBUTE,
+	TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
+	TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE,
+	TASK_NODE_ACTION_ATTRIBUTE,
+} from '../../webview/task/taskRenderer';
 
 suite('Graph View', () => {
 	test('Workspace Graph와 Task Start/Work/End 및 Edge를 같은 World Layer에 렌더링한다', () => {
@@ -302,30 +308,30 @@ suite('Graph View', () => {
 			taskANodes.map((node) => node.style.transform),
 			[
 				'translate(100px, 50px)',
-				'translate(100px, 202px)',
-				'translate(170px, 382px)',
+				'translate(444px, 36px)',
+				'translate(788px, 78px)',
 			],
 		);
 		assert.deepStrictEqual(
 			taskBNodes.map((node) => node.style.transform),
 			[
 				'translate(-300px, 400px)',
-				'translate(-300px, 552px)',
-				'translate(-230px, 732px)',
+				'translate(44px, 386px)',
+				'translate(388px, 428px)',
 			],
 		);
 		assert.deepStrictEqual(
 			taskAEdges.map((edge) => edge.getAttribute('d')),
 			[
-				'M 240 154 C 240 178 240 178 240 202',
-				'M 240 334 C 240 358 240 358 240 382',
+				'M 380 102 C 412 102 412 102 444 102',
+				'M 724 102 C 756 102 756 102 788 102',
 			],
 		);
 		assert.deepStrictEqual(
 			taskBEdges.map((edge) => edge.getAttribute('d')),
 			[
-				'M -160 504 C -160 528 -160 528 -160 552',
-				'M -160 684 C -160 708 -160 708 -160 732',
+				'M -20 452 C 12 452 12 452 44 452',
+				'M 324 452 C 356 452 356 452 388 452',
 			],
 		);
 
@@ -409,7 +415,7 @@ suite('Graph View', () => {
 			{ source: firstTask.nodes[0]?.id, target: firstTask.nodes[1]?.id },
 			{ source: firstTask.nodes[1]?.id, target: firstTask.nodes[2]?.id },
 		]);
-		assert.deepStrictEqual(firstTask.origin, { x: 360, y: 210 });
+		assert.deepStrictEqual(firstTask.origin, { x: 86, y: 348 });
 		assert.strictEqual(getTaskElements(root, 'data-task-id', firstTask.id).length, 5);
 
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
@@ -417,7 +423,7 @@ suite('Graph View', () => {
 
 		assert.strictEqual(tasks.length, 2);
 		assert.notStrictEqual(tasks[0]?.id, tasks[1]?.id);
-		assert.deepStrictEqual(tasks[1]?.origin, { x: 392, y: 242 });
+		assert.deepStrictEqual(tasks[1]?.origin, { x: 118, y: 380 });
 		assert.strictEqual(getDescendantsByClass(root, 'task-node').length, 6);
 		assert.strictEqual(getTaskElements(root, 'data-task-id', tasks[0]?.id ?? '').length, 5);
 		assert.strictEqual(getTaskElements(root, 'data-task-id', tasks[1]?.id ?? '').length, 5);
@@ -547,15 +553,15 @@ suite('Graph View', () => {
 			taskANodes.map((node) => node.style.transform),
 			[
 				'translate(120px, 60px)',
-				'translate(120px, 212px)',
-				'translate(190px, 392px)',
+				'translate(464px, 46px)',
+				'translate(808px, 88px)',
 			],
 		);
 		assert.deepStrictEqual(
 			taskAEdges.map((edge) => edge.getAttribute('d')),
 			[
-				'M 260 164 C 260 188 260 188 260 212',
-				'M 260 344 C 260 368 260 368 260 392',
+				'M 400 112 C 432 112 432 112 464 112',
+				'M 744 112 C 776 112 776 112 808 112',
 			],
 		);
 		assert.deepStrictEqual(
@@ -682,11 +688,285 @@ suite('Graph View', () => {
 
 		assert.deepStrictEqual(focusPoints, [
 			{ x: 240, y: 102 },
-			{ x: 240, y: 268 },
+			{ x: 584, y: 102 },
 			{ x: -160, y: 452 },
 		]);
 
 		graphView.dispose();
+	});
+
+	test('Edge Action은 동일 내부 Edge ID를 taskId와 조합해 정확한 Task만 직렬 편집한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const taskA = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000001',
+			'Task A',
+			{ x: 100, y: 50 },
+		);
+		const taskB = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000002',
+			'Task B',
+			{ x: -300, y: 400 },
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[taskA, taskB],
+		);
+		const edgeId = taskA.edges[0]?.id;
+
+		assert.ok(edgeId && edgeId === taskB.edges[0]?.id);
+		const taskAAction = getTaskEdgeAction(root, taskA.id, edgeId);
+		const taskBAction = getTaskEdgeAction(root, taskB.id, edgeId);
+		const taskAEndEdgeId = taskA.edges[1]?.id;
+
+		assert.ok(taskAEndEdgeId);
+		const taskAEndAction = getTaskEdgeAction(
+			root,
+			taskA.id,
+			taskAEndEdgeId,
+		);
+		const insert = getDescendantByAttribute(
+			taskAAction,
+			TASK_EDGE_ACTION_ATTRIBUTE,
+			'insert-work',
+		);
+
+		assert.notStrictEqual(taskAAction, taskBAction);
+		assert.strictEqual(taskAAction.style.left, '412px');
+		assert.strictEqual(taskAAction.style.top, '102px');
+		assert.strictEqual(
+			getDescendantsByClass(taskAAction, 'task-edge-action').length,
+			2,
+		);
+		assert.notStrictEqual(taskAAction, taskAEndAction);
+		assert.strictEqual(
+			getDescendantsByClass(taskAEndAction, 'task-edge-action').length,
+			1,
+		);
+		insert.dispatch('click', createClickEvent(insert));
+
+		const updatedA = graphView.taskState.getTask(taskA.id);
+		const unchangedB = graphView.taskState.getTask(taskB.id);
+
+		assert.ok(updatedA && unchangedB);
+		assert.strictEqual(updatedA.nodes.length, 4);
+		assert.strictEqual(updatedA.edges.length, 3);
+		assert.strictEqual(updatedA.edges.some((edge) => edge.id === edgeId), false);
+		assert.deepStrictEqual(unchangedB.nodes, taskB.nodes);
+		assert.deepStrictEqual(unchangedB.edges, taskB.edges);
+		assert.strictEqual(
+			getTaskEdgeAction(root, taskB.id, edgeId),
+			taskBAction,
+		);
+		assert.strictEqual(
+			findTaskEdgeAction(root, taskA.id, edgeId),
+			undefined,
+		);
+
+		graphView.dispose();
+	});
+
+	test('병렬 Edge Action으로 추가된 Work는 Selection, Focus와 Start 전체 Drag를 유지한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const incoming = task.edges[0];
+
+		assert.ok(incoming);
+		const edgeAction = getTaskEdgeAction(root, task.id, incoming.id);
+		const parallelButton = getDescendantByAttribute(
+			edgeAction,
+			TASK_EDGE_ACTION_ATTRIBUTE,
+			'add-parallel-work',
+		);
+
+		parallelButton.dispatch('click', createClickEvent(parallelButton));
+		const updated = graphView.taskState.getTask(task.id);
+		const originalWork = task.nodes.find((node) => node.kind === 'work');
+		const parallelWork = updated?.nodes.find((node) => (
+			node.kind === 'work' && node.id !== originalWork?.id
+		));
+
+		assert.ok(updated && originalWork && parallelWork);
+		assert.strictEqual(updated.edges.length, 4);
+		const originalElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			originalWork.id,
+			task.id,
+		);
+		const parallelElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			parallelWork.id,
+			task.id,
+		);
+		const originalPosition = readTranslate(originalElement.style.transform);
+		const parallelPosition = readTranslate(parallelElement.style.transform);
+
+		assert.strictEqual(originalPosition.x, parallelPosition.x);
+		assert.notStrictEqual(originalPosition.y, parallelPosition.y);
+		parallelElement.dispatch('click', createClickEvent(parallelElement));
+		assert.strictEqual(parallelElement.hasClass('is-selected'), true);
+		assert.strictEqual(originalElement.hasClass('is-selected'), false);
+
+		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		parallelElement.dispatch('dblclick', createClickEvent(parallelElement));
+		assert.deepStrictEqual(focusPoints, [{
+			x: parallelPosition.x + 140,
+			y: parallelPosition.y + 66,
+		}]);
+
+		const start = getTaskElement(
+			root,
+			'data-task-node-id',
+			task.nodes[0]?.id ?? '',
+			task.id,
+		);
+		const beforePositions = updated.nodes.map((node) => readTranslate(
+			getTaskElement(root, 'data-task-node-id', node.id, task.id).style.transform,
+		));
+		const edgeElements = updated.edges.map((edge) => getTaskElement(
+			root,
+			'data-task-edge-id',
+			edge.id,
+			task.id,
+		));
+		const beforePaths = edgeElements.map((edge) => edge.getAttribute('d'));
+		const movedAction = getTaskEdgeAction(root, task.id, incoming.id);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				movedAction,
+				TASK_EDGE_ACTION_ATTRIBUTE,
+				'add-parallel-work',
+			),
+			undefined,
+		);
+		const beforeActionPosition = {
+			x: Number.parseFloat(movedAction.style.left),
+			y: Number.parseFloat(movedAction.style.top),
+		};
+
+		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
+		start.dispatch('pointermove', createPointerEvent(start, 30, 25));
+		start.dispatch('pointerup', createPointerEvent(start, 30, 25));
+		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, {
+			x: 120,
+			y: 65,
+		});
+		for (let index = 0; index < updated.nodes.length; index += 1) {
+			const node = updated.nodes[index];
+			const before = beforePositions[index];
+
+			assert.ok(node && before);
+			const after = readTranslate(getTaskElement(
+				root,
+				'data-task-node-id',
+				node.id,
+				task.id,
+			).style.transform);
+
+			assert.deepStrictEqual({ x: after.x - before.x, y: after.y - before.y }, {
+				x: 20,
+				y: 15,
+			});
+		}
+		assert.ok(edgeElements.every((edge, index) => (
+			edge.getAttribute('d') !== beforePaths[index]
+		)));
+		assert.deepStrictEqual({
+			x: Number.parseFloat(movedAction.style.left) - beforeActionPosition.x,
+			y: Number.parseFloat(movedAction.style.top) - beforeActionPosition.y,
+		}, { x: 20, y: 15 });
+
+		graphView.dispose();
+	});
+
+	test('Work Hover 삭제 Action은 Node를 제거하고 predecessor와 successor를 연결한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && work && end);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		);
+		const remove = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'remove-work',
+		);
+
+		workElement.dispatch('click', createClickEvent(workElement));
+		assert.strictEqual(workElement.hasClass('is-selected'), true);
+		remove.dispatch('click', createClickEvent(remove));
+
+		const updated = graphView.taskState.getTask(task.id);
+
+		assert.ok(updated);
+		assert.deepStrictEqual(updated.nodes.map((node) => node.id), [start.id, end.id]);
+		assert.deepStrictEqual(updated.edges.map((edge) => ({
+			source: edge.source,
+			target: edge.target,
+		})), [{ source: start.id, target: end.id }]);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-task-node-id', work.id),
+			undefined,
+		);
+		assert.strictEqual(getDescendantsByClass(root, 'is-selected').length, 0);
+		assert.strictEqual(
+			getTaskElements(
+				root,
+				'data-task-edge-id',
+				updated.edges[0]?.id ?? '',
+			).length,
+			1,
+		);
+
+		graphView.dispose();
+	});
+
+	test('Task Edge/Work Hover Action CSS는 Pointer bridge와 기존 Action 스타일을 유지한다', () => {
+		const taskViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/task/taskView.css',
+		), 'utf8');
+
+		assert.match(taskViewCss, /\.task-edge-actions\s*\{[^}]*pointer-events:\s*auto;/s);
+		assert.match(taskViewCss, /\.task-edge-action-list\s*\{[^}]*visibility:\s*hidden;/s);
+		assert.match(
+			taskViewCss,
+			/\.task-edge-actions:hover\s*>\s*\.task-edge-action-list,[^{]*\{[^}]*pointer-events:\s*auto;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-work-node:hover\s*>\s*\.task-work-actions,[^{]*\{[^}]*pointer-events:\s*auto;/s,
+		);
 	});
 
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
@@ -7580,6 +7860,31 @@ function getTaskElement(
 
 	assert.ok(taskElement, `${taskId}의 ${entityAttributeName}="${entityId}" 요소가 있어야 한다.`);
 	return taskElement;
+}
+
+function findTaskEdgeAction(
+	element: FakeElement,
+	taskId: string,
+	edgeId: string,
+): FakeElement | undefined {
+	return getTaskElements(
+		element,
+		TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
+		edgeId,
+	).find((candidate) => (
+		candidate.getAttribute(TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE) === taskId
+	));
+}
+
+function getTaskEdgeAction(
+	element: FakeElement,
+	taskId: string,
+	edgeId: string,
+): FakeElement {
+	const action = findTaskEdgeAction(element, taskId, edgeId);
+
+	assert.ok(action, `${taskId}의 Edge ${edgeId} Action이 있어야 한다.`);
+	return action;
 }
 
 function getDescendantsByClass(

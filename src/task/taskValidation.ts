@@ -6,6 +6,7 @@ export type TaskValidationIssueCode =
 	| 'end_node_count'
 	| 'duplicate_node_id'
 	| 'duplicate_edge_id'
+	| 'duplicate_edge'
 	| 'edge_source_missing'
 	| 'edge_target_missing'
 	| 'self_edge'
@@ -60,6 +61,7 @@ export function validateTaskBlueprint(
 	}
 
 	const edgeIds = new Set<string>();
+	const edgeConnections = new Set<string>();
 	for (const edge of blueprint.edges) {
 		if (edgeIds.has(edge.id)) {
 			issues.push({
@@ -69,6 +71,16 @@ export function validateTaskBlueprint(
 			});
 		}
 		edgeIds.add(edge.id);
+		const connectionKey = createEdgeConnectionKey(edge.source, edge.target);
+
+		if (edgeConnections.has(connectionKey)) {
+			issues.push({
+				code: 'duplicate_edge',
+				message: `Task edge connection must be unique: ${edge.source} -> ${edge.target}.`,
+				edgeId: edge.id,
+			});
+		}
+		edgeConnections.add(connectionKey);
 
 		if (!nodeIds.has(edge.source)) {
 			issues.push({
@@ -106,6 +118,11 @@ export function validateTaskBlueprint(
 	}
 
 	return issues;
+}
+
+/** Source와 target 문자열 경계를 보존하는 Edge 연결 identity다. */
+function createEdgeConnectionKey(sourceId: string, targetId: string): string {
+	return JSON.stringify([sourceId, targetId]);
 }
 
 /** 유효하지 않은 Task Blueprint를 상태에 넣기 전에 예외로 거부한다. */

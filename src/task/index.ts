@@ -22,6 +22,7 @@ export {
 	type TaskValidationIssueCode,
 } from './taskValidation';
 export {
+	canAddParallelWorkAtEdge,
 	createTaskState,
 	type TaskBlueprintUpdater,
 	type TaskStateSnapshot,

@@ -66,11 +66,10 @@ import {
 } from '../../task';
 import {
 	createTaskGraphLayout,
-	TASK_END_NODE_HEIGHT,
-	TASK_NODE_VERTICAL_GAP,
+	TASK_END_NODE_WIDTH,
+	TASK_NODE_HORIZONTAL_GAP,
 	TASK_NODE_WIDTH,
 	TASK_START_NODE_HEIGHT,
-	TASK_WORK_NODE_HEIGHT,
 	type TaskLayoutNode,
 } from '../task/taskLayout';
 import { initializeTaskRenderer } from '../task/taskRenderer';
@@ -98,10 +97,9 @@ export interface GraphView {
 }
 
 const TASK_CREATION_OFFSET = 32;
-const DEFAULT_TASK_LAYOUT_HEIGHT = TASK_START_NODE_HEIGHT
-	+ TASK_WORK_NODE_HEIGHT
-	+ TASK_END_NODE_HEIGHT
-	+ TASK_NODE_VERTICAL_GAP * 2;
+const DEFAULT_TASK_LAYOUT_WIDTH = TASK_NODE_WIDTH * 2
+	+ TASK_END_NODE_WIDTH
+	+ TASK_NODE_HORIZONTAL_GAP * 2;
 
 /** 현재 Visible Graph 중심을 기본 Task 전체 중심으로 사용하고 겹친 origin은 비켜 놓는다. */
 function createTaskOriginInVisibleArea(
@@ -111,8 +109,8 @@ function createTaskOriginInVisibleArea(
 ): TaskOrigin {
 	const center = camera.viewportToWorld(visibleArea.center);
 	const baseOrigin = {
-		x: center.x - TASK_NODE_WIDTH / 2,
-		y: center.y - DEFAULT_TASK_LAYOUT_HEIGHT / 2,
+		x: center.x - DEFAULT_TASK_LAYOUT_WIDTH / 2,
+		y: center.y - TASK_START_NODE_HEIGHT / 2,
 	};
 
 	for (let slot = 0; slot <= tasks.length; slot += 1) {
@@ -1621,6 +1619,21 @@ export function initializeGraphView(
 			y: node.position.y + node.height / 2,
 		});
 	};
+	const handleInsertWorkAtEdge = (taskId: string, edgeId: string): void => {
+		if (taskState.insertWorkBetween(taskId, edgeId)) {
+			applyTaskState();
+		}
+	};
+	const handleAddParallelWorkAtEdge = (taskId: string, edgeId: string): void => {
+		if (taskState.addParallelWork(taskId, edgeId)) {
+			applyTaskState();
+		}
+	};
+	const handleTaskWorkRemove = (taskId: string, nodeId: string): void => {
+		if (taskState.removeWork(taskId, nodeId)) {
+			applyTaskState();
+		}
+	};
 	const handleTaskCreate = (): void => {
 		const tasks = taskState.getSnapshot().tasks;
 
@@ -1643,6 +1656,9 @@ export function initializeGraphView(
 			getCameraScale: () => camera.getState().scale,
 			onTaskOriginChange: handleTaskOriginChange,
 			onNodeFocus: handleTaskNodeFocus,
+			onInsertWorkAtEdge: handleInsertWorkAtEdge,
+			onAddParallelWorkAtEdge: handleAddParallelWorkAtEdge,
+			onWorkRemove: handleTaskWorkRemove,
 		},
 	);
 	navigator = initializeGraphNavigator(

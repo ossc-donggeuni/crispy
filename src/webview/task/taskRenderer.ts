@@ -14,6 +14,14 @@ export const TASK_NODE_ID_ATTRIBUTE = 'data-task-node-id';
 export const TASK_NODE_KIND_ATTRIBUTE = 'data-task-node-kind';
 /** Task Edge를 식별하는 DOM attribute다. */
 export const TASK_EDGE_ID_ATTRIBUTE = 'data-task-edge-id';
+/** Edge Action Button의 편집 종류를 식별하는 attribute다. */
+export const TASK_EDGE_ACTION_ATTRIBUTE = 'data-task-edge-action';
+/** Edge Action Overlay가 소유한 Task를 식별하는 Renderer 전용 attribute다. */
+export const TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE = 'data-task-edge-action-task-id';
+/** Edge Action Overlay가 가리키는 Edge를 식별하는 Renderer 전용 attribute다. */
+export const TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE = 'data-task-edge-action-edge-id';
+/** Work Node의 최소 삭제 Action을 식별하는 attribute다. */
+export const TASK_NODE_ACTION_ATTRIBUTE = 'data-task-node-action';
 
 /** Task Node/Edge DOM을 ID 기반으로 갱신하고 정리하는 lifecycle 경계다. */
 export interface TaskRenderer {
@@ -31,6 +39,12 @@ export interface TaskRendererInteractions {
 	onTaskOriginChange?: (taskId: string, origin: TaskOrigin) => void;
 	/** Start/Work Double Click 대상을 Camera Focus 경계에 전달한다. */
 	onNodeFocus?: (node: TaskLayoutNode) => void;
+	/** 선택 Edge 사이에 직렬 Work를 삽입한다. */
+	onInsertWorkAtEdge?: (taskId: string, edgeId: string) => void;
+	/** 선택 Edge target Work와 같은 실행 단계에 병렬 Work를 추가한다. */
+	onAddParallelWorkAtEdge?: (taskId: string, edgeId: string) => void;
+	/** Work Node를 제거하고 Domain에서 연결을 복구한다. */
+	onWorkRemove?: (taskId: string, nodeId: string) => void;
 }
 
 /** Start Node Pointer Capture 동안 고정하는 Task 이동 기준이다. */
@@ -66,6 +80,7 @@ export function initializeTaskRenderer(
 	const ownerDocument = nodeLayer.ownerDocument;
 	const nodeElements = new Map<string, HTMLElement>();
 	const edgeElements = new Map<string, SVGPathElement>();
+	const edgeActionElements = new Map<string, HTMLElement>();
 	let nodesByRenderKey = new Map<string, TaskLayoutNode>();
 	let selectedNodeKey: string | undefined;
 	let dragSession: TaskDragSession | undefined;
@@ -83,6 +98,26 @@ export function initializeTaskRenderer(
 			`[${TASK_NODE_ID_ATTRIBUTE}]`,
 		) ?? undefined;
 	};
+
+	/** Event target 또는 조상에서 지정한 Task Action attribute 요소를 찾는다. */
+	const resolveTaskActionElement = (
+		target: EventTarget | null,
+		attribute: string,
+	): HTMLElement | undefined => {
+		if (target === null || typeof (target as Element).closest !== 'function') {
+			return undefined;
+		}
+
+		return (target as Element).closest<HTMLElement>(`[${attribute}]`) ?? undefined;
+	};
+
+	const isTaskActionTarget = (target: EventTarget | null): boolean => (
+		resolveTaskActionElement(target, TASK_NODE_ACTION_ATTRIBUTE) !== undefined
+		|| resolveTaskActionElement(
+			target,
+			TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
+		) !== undefined
+	);
 
 	/** Task dataset을 Renderer 내부 복합 identity로 변환한다. */
 	const getTaskNodeRenderKey = (element: HTMLElement): string | undefined => {
@@ -127,6 +162,12 @@ export function initializeTaskRenderer(
 
 	/** Task Node Pointer 입력을 선택 후보로 만들고 Start에서만 Drag를 시작한다. */
 	const handlePointerDown = (event: PointerEvent): void => {
+		if (isTaskActionTarget(event.target)) {
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+
 		const element = resolveTaskNodeElement(event.target);
 		const renderKey = element ? getTaskNodeRenderKey(element) : undefined;
 		const node = renderKey ? nodesByRenderKey.get(renderKey) : undefined;
@@ -248,6 +289,52 @@ export function initializeTaskRenderer(
 
 	/** Drag로 소비되지 않은 Task Node Click만 복합 identity 기준으로 선택한다. */
 	const handleClick = (event: MouseEvent): void => {
+		const edgeAction = resolveTaskActionElement(
+			event.target,
+			TASK_EDGE_ACTION_ATTRIBUTE,
+		);
+		if (edgeAction) {
+			const action = edgeAction.getAttribute(TASK_EDGE_ACTION_ATTRIBUTE);
+			const taskId = resolveTaskActionElement(
+				edgeAction,
+				TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE,
+			)?.getAttribute(TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE);
+			const edgeId = resolveTaskActionElement(
+				edgeAction,
+				TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
+			)?.getAttribute(TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE);
+
+			event.preventDefault();
+			event.stopPropagation();
+			if (taskId && edgeId && action === 'insert-work') {
+				interactions.onInsertWorkAtEdge?.(taskId, edgeId);
+			} else if (taskId && edgeId && action === 'add-parallel-work') {
+				interactions.onAddParallelWorkAtEdge?.(taskId, edgeId);
+			}
+			return;
+		}
+
+		const nodeAction = resolveTaskActionElement(
+			event.target,
+			TASK_NODE_ACTION_ATTRIBUTE,
+		);
+		if (nodeAction) {
+			const nodeElement = resolveTaskNodeElement(nodeAction);
+			const taskId = nodeElement?.getAttribute(TASK_ID_ATTRIBUTE);
+			const nodeId = nodeElement?.getAttribute(TASK_NODE_ID_ATTRIBUTE);
+
+			event.preventDefault();
+			event.stopPropagation();
+			if (
+				taskId
+				&& nodeId
+				&& nodeAction.getAttribute(TASK_NODE_ACTION_ATTRIBUTE) === 'remove-work'
+			) {
+				interactions.onWorkRemove?.(taskId, nodeId);
+			}
+			return;
+		}
+
 		const element = resolveTaskNodeElement(event.target);
 		const renderKey = element ? getTaskNodeRenderKey(element) : undefined;
 
@@ -267,6 +354,12 @@ export function initializeTaskRenderer(
 
 	/** Start/Work Double Click을 최신 Layout Node 식별 및 Focus 경계로 전달한다. */
 	const handleDoubleClick = (event: MouseEvent): void => {
+		if (isTaskActionTarget(event.target)) {
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+
 		const element = resolveTaskNodeElement(event.target);
 		const renderKey = element ? getTaskNodeRenderKey(element) : undefined;
 		const node = renderKey ? nodesByRenderKey.get(renderKey) : undefined;
@@ -318,6 +411,12 @@ export function initializeTaskRenderer(
 			if (!nextEdgeKeys.has(renderKey)) {
 				element.remove();
 				edgeElements.delete(renderKey);
+			}
+		}
+		for (const [renderKey, element] of edgeActionElements) {
+			if (!nextEdgeKeys.has(renderKey)) {
+				element.remove();
+				edgeActionElements.delete(renderKey);
 			}
 		}
 
@@ -372,7 +471,15 @@ export function initializeTaskRenderer(
 				edgeElements.set(renderKey, element);
 			}
 
-			syncTaskEdgeElement(element, edge, source, target);
+			syncTaskEdgeElement(element, edge);
+			let actionElement = edgeActionElements.get(renderKey);
+
+			if (!actionElement) {
+				actionElement = ownerDocument.createElement('div');
+				nodeLayer.append(actionElement);
+				edgeActionElements.set(renderKey, actionElement);
+			}
+			syncTaskEdgeActionElement(actionElement, edge, ownerDocument);
 		}
 	};
 
@@ -412,8 +519,12 @@ export function initializeTaskRenderer(
 			for (const element of edgeElements.values()) {
 				element.remove();
 			}
+			for (const element of edgeActionElements.values()) {
+				element.remove();
+			}
 			nodeElements.clear();
 			edgeElements.clear();
+			edgeActionElements.clear();
 		},
 	};
 }
@@ -471,15 +582,43 @@ function createTaskNodeContents(
 	description.className = 'task-node-description';
 	description.textContent = node.description;
 
-	if (node.kind === 'start' || node.prompt.length === 0) {
+	if (node.kind === 'start') {
 		return [kind, title, description];
 	}
 
-	const prompt = ownerDocument.createElement('span');
+	const contents = [kind, title, description];
 
-	prompt.className = 'task-node-prompt';
-	prompt.textContent = node.prompt;
-	return [kind, title, description, prompt];
+	if (node.prompt.length > 0) {
+		const prompt = ownerDocument.createElement('span');
+
+		prompt.className = 'task-node-prompt';
+		prompt.textContent = node.prompt;
+		contents.push(prompt);
+	}
+	contents.push(createTaskWorkActions(ownerDocument));
+	return contents;
+}
+
+/** Work 카드에 Inspector와 무관한 최소 삭제 Action을 추가한다. */
+function createTaskWorkActions(ownerDocument: Document): HTMLElement {
+	const actions = ownerDocument.createElement('div');
+	const remove = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
+
+	actions.className = 'task-work-actions';
+	actions.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	remove.className = 'graph-detached-root-action task-work-action';
+	remove.type = 'button';
+	remove.title = 'Work 삭제';
+	remove.setAttribute('aria-label', 'Work 삭제');
+	remove.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'remove-work');
+	remove.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	icon.className = 'graph-detached-root-action-icon';
+	icon.setAttribute('data-ui-icon', 'delete.svg');
+	icon.setAttribute('aria-hidden', 'true');
+	remove.append(icon);
+	actions.append(remove);
+	return actions;
 }
 
 /** 접근성 이름은 화면에 표시하는 kind와 주요 제목만 포함한다. */
@@ -491,37 +630,84 @@ function createTaskNodeAriaLabel(node: TaskLayoutNode): string {
 	return `Task ${node.kind === 'start' ? 'Start' : 'Work'}: ${node.title}`;
 }
 
-/** Task Edge의 소유권과 세로 Bezier geometry를 SVG path에 적용한다. */
+/** Task Edge의 소유권과 Layout이 계산한 Bézier geometry를 SVG path에 적용한다. */
 function syncTaskEdgeElement(
 	element: SVGPathElement,
 	edge: TaskLayoutEdge,
-	source: TaskLayoutNode,
-	target: TaskLayoutNode,
 ): void {
 	element.setAttribute('class', 'graph-edge task-edge');
 	element.setAttribute(TASK_ID_ATTRIBUTE, edge.taskId);
 	element.setAttribute(TASK_EDGE_ID_ATTRIBUTE, edge.id);
 	element.setAttribute('data-task-edge-source', edge.sourceId);
 	element.setAttribute('data-task-edge-target', edge.targetId);
-	element.setAttribute('d', createTaskEdgePath(source, target));
+	element.setAttribute('d', createTaskEdgePath(edge.geometry));
 }
 
-/** Source 하단 중앙에서 Target 상단 중앙을 잇는 세로 Cubic Bezier path를 만든다. */
-function createTaskEdgePath(
-	source: TaskLayoutNode,
-	target: TaskLayoutNode,
-): string {
-	const sourceX = source.position.x + source.width / 2;
-	const sourceY = source.position.y + source.height;
-	const targetX = target.position.x + target.width / 2;
-	const targetY = target.position.y;
-	const direction = targetY >= sourceY ? 1 : -1;
-	const controlOffset = Math.max(24, Math.abs(targetY - sourceY) / 2);
+/** Edge 중앙 Hover Target에 직렬/병렬 Action Button을 배치한다. */
+function syncTaskEdgeActionElement(
+	element: HTMLElement,
+	edge: TaskLayoutEdge,
+	ownerDocument: Document,
+): void {
+	const actionList = ownerDocument.createElement('div');
+	const hoverTarget = ownerDocument.createElement('span');
 
+	element.className = 'task-edge-actions';
+	element.setAttribute(TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE, edge.taskId);
+	element.setAttribute(TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE, edge.id);
+	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	element.style.left = `${edge.geometry.midpoint.x}px`;
+	element.style.top = `${edge.geometry.midpoint.y}px`;
+	hoverTarget.className = 'task-edge-hover-target';
+	hoverTarget.setAttribute('aria-hidden', 'true');
+	actionList.className = 'task-edge-action-list';
+	actionList.append(createTaskEdgeActionButton(
+		ownerDocument,
+		'사이에 작업 추가',
+		'+',
+		'insert-work',
+	));
+	if (edge.canAddParallelWork) {
+		actionList.append(createTaskEdgeActionButton(
+			ownerDocument,
+			'병렬 작업 추가',
+			'⇉',
+			'add-parallel-work',
+		));
+	}
+	element.replaceChildren(hoverTarget, actionList);
+}
+
+function createTaskEdgeActionButton(
+	ownerDocument: Document,
+	label: string,
+	symbol: string,
+	action: 'insert-work' | 'add-parallel-work',
+): HTMLButtonElement {
+	const button = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
+
+	button.className = 'graph-detached-root-action task-edge-action';
+	button.type = 'button';
+	button.title = label;
+	button.setAttribute('aria-label', label);
+	button.setAttribute(TASK_EDGE_ACTION_ATTRIBUTE, action);
+	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	icon.className = 'task-edge-action-symbol';
+	icon.textContent = symbol;
+	icon.setAttribute('aria-hidden', 'true');
+	button.append(icon);
+	return button;
+}
+
+/** Layout과 Action이 공유한 Right Center → Left Center geometry를 직렬화한다. */
+function createTaskEdgePath(
+	geometry: TaskLayoutEdge['geometry'],
+): string {
 	return [
-		`M ${sourceX} ${sourceY}`,
-		`C ${sourceX} ${sourceY + controlOffset * direction}`,
-		`${targetX} ${targetY - controlOffset * direction}`,
-		`${targetX} ${targetY}`,
+		`M ${geometry.start.x} ${geometry.start.y}`,
+		`C ${geometry.control1.x} ${geometry.control1.y}`,
+		`${geometry.control2.x} ${geometry.control2.y}`,
+		`${geometry.end.x} ${geometry.end.y}`,
 	].join(' ');
 }

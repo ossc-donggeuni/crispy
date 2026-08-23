@@ -92,6 +92,162 @@ suite('Task Domain', () => {
 		assert.strictEqual(state.getTask(replacement.id), replacementSnapshot.tasks[0]);
 	});
 
+	test('직렬 Work 추가는 선택 Edge를 A → N → B로 치환한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Serial Task' });
+		const [start, work, end] = task.nodes;
+		const selectedEdge = task.edges[0];
+
+		assert.ok(start && work && end && selectedEdge);
+		const updated = state.insertWorkBetween(task.id, selectedEdge.id);
+		const inserted = updated?.nodes.find((node) => (
+			node.kind === 'work' && node.id !== work.id
+		));
+
+		assert.ok(updated && inserted?.kind === 'work');
+		assert.strictEqual(inserted.title, 'New Work');
+		assert.strictEqual(updated.nodes.length, task.nodes.length + 1);
+		assert.strictEqual(updated.edges.length, task.edges.length + 1);
+		assert.strictEqual(
+			updated.edges.some((edge) => edge.id === selectedEdge.id),
+			false,
+		);
+		assert.deepStrictEqual(readConnections(updated), [
+			`${work.id}->${end.id}`,
+			`${start.id}->${inserted.id}`,
+			`${inserted.id}->${work.id}`,
+		].sort());
+		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
+		assert.strictEqual(state.insertWorkBetween(task.id, 'task-edge:missing'), undefined);
+	});
+
+	test('병렬 Work 추가는 단순 A → B → C에서 A → N → C sibling을 만든다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Parallel Task' });
+		const [start, work, end] = task.nodes;
+		const incoming = task.edges[0];
+
+		assert.ok(start && work && end && incoming);
+		const updated = state.addParallelWork(task.id, incoming.id, {
+			title: 'Parallel Work',
+		});
+		const parallel = updated?.nodes.find((node) => (
+			node.kind === 'work' && node.id !== work.id
+		));
+
+		assert.ok(updated && parallel?.kind === 'work');
+		assert.strictEqual(parallel.title, 'Parallel Work');
+		assert.deepStrictEqual(readConnections(updated), [
+			`${start.id}->${work.id}`,
+			`${start.id}->${parallel.id}`,
+			`${work.id}->${end.id}`,
+			`${parallel.id}->${end.id}`,
+		].sort());
+		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
+		assert.strictEqual(
+			state.addParallelWork(task.id, incoming.id),
+			undefined,
+		);
+		assert.strictEqual(
+			state.addParallelWork(task.id, task.edges[1]?.id ?? ''),
+			undefined,
+		);
+	});
+
+	test('복수 successor가 있는 Work의 모호한 병렬 추가를 거부한다', () => {
+		const task = createTask();
+		const [start, work, end] = task.nodes;
+
+		assert.ok(start && work && end);
+		const successorWork = {
+			id: 'task-node:successor',
+			kind: 'work' as const,
+			title: 'Successor',
+			description: '',
+			prompt: '',
+		};
+		const branchedTask: TaskBlueprint = {
+			...task,
+			nodes: [...task.nodes, successorWork],
+			edges: [...task.edges, {
+				id: 'task-edge:work-successor',
+				source: work.id,
+				target: successorWork.id,
+			}, {
+				id: 'task-edge:successor-end',
+				source: successorWork.id,
+				target: end.id,
+			}],
+		};
+		const state = createTaskState([branchedTask], createSequentialIdSource());
+		const updated = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
+
+		assert.strictEqual(updated, undefined);
+		assert.deepStrictEqual(state.getTask(task.id), branchedTask);
+		assert.deepStrictEqual(validateTaskBlueprint(branchedTask), []);
+	});
+
+	test('Work 삭제는 predecessor×successor 연결을 중복 없이 복구한다', () => {
+		const task = createTask();
+		const [start, work, end] = task.nodes;
+		const state = createTaskState([task], createSequentialIdSource());
+
+		assert.ok(start && work && end);
+		const updated = state.removeWork(task.id, work.id);
+
+		assert.ok(updated);
+		assert.deepStrictEqual(updated.nodes, [start, end]);
+		assert.deepStrictEqual(readConnections(updated), [`${start.id}->${end.id}`]);
+		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
+		assert.strictEqual(state.removeWork(task.id, start.id), undefined);
+		assert.strictEqual(state.removeWork(task.id, end.id), undefined);
+	});
+
+	test('기존 direct Edge가 있는 Work 삭제는 같은 연결을 중복하지 않는다', () => {
+		const task = createTask();
+		const [start, work, end] = task.nodes;
+
+		assert.ok(start && work && end);
+		const taskWithDirectEdge: TaskBlueprint = {
+			...task,
+			edges: [...task.edges, {
+				id: 'task-edge:direct',
+				source: start.id,
+				target: end.id,
+			}],
+		};
+		const state = createTaskState([taskWithDirectEdge], createSequentialIdSource());
+		const updated = state.removeWork(task.id, work.id);
+
+		assert.ok(updated);
+		assert.deepStrictEqual(readConnections(updated), [`${start.id}->${end.id}`]);
+		assert.strictEqual(updated.edges[0]?.id, 'task-edge:direct');
+		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
+	});
+
+	test('병렬 Branch Work 삭제는 sibling을 보존하고 유효한 Join 연결을 복구한다', () => {
+		const task = createTask();
+		const [start, work, end] = task.nodes;
+		const state = createTaskState([task], createSequentialIdSource());
+
+		assert.ok(start && work && end);
+		const branched = state.addParallelWork(task.id, task.edges[0]?.id ?? '');
+		const parallel = branched?.nodes.find((node) => (
+			node.kind === 'work' && node.id !== work.id
+		));
+
+		assert.ok(branched && parallel);
+		const updated = state.removeWork(task.id, work.id);
+
+		assert.ok(updated);
+		assert.deepStrictEqual(readConnections(updated), [
+			`${start.id}->${end.id}`,
+			`${start.id}->${parallel.id}`,
+			`${parallel.id}->${end.id}`,
+		].sort());
+		assert.deepStrictEqual(validateTaskBlueprint(updated), []);
+	});
+
 	test('Start Node 누락과 중복을 거부한다', () => {
 		const task = createTask();
 		const startNode = task.nodes.find((node) => node.kind === 'start');
@@ -201,7 +357,25 @@ suite('Task Domain', () => {
 		})), /exactly one start node/);
 		assert.strictEqual(state.getTask(task.id)?.nodes.length, 3);
 	});
+
+	test('서로 다른 ID로 같은 source와 target을 잇는 중복 Edge를 거부한다', () => {
+		const task = createTask();
+		const edge = task.edges[0];
+
+		assert.ok(edge);
+		assertIssueCodes({
+			...task,
+			edges: [...task.edges, {
+				...edge,
+				id: 'task-edge:duplicate-connection',
+			}],
+		}, ['duplicate_edge']);
+	});
 });
+
+function readConnections(task: TaskBlueprint): string[] {
+	return task.edges.map((edge) => `${edge.source}->${edge.target}`).sort();
+}
 
 /** 결정적인 ID를 사용하는 정상 기본 Task를 만든다. */
 function createTask(): TaskBlueprint {

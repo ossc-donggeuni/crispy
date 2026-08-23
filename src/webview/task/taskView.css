@@ -38,6 +38,74 @@
 	--graph-node-border-color: var(--graph-node-outline-color);
 }
 
+.task-work-actions {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	z-index: 2;
+	display: flex;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition: opacity 100ms ease;
+}
+
+.task-work-node:hover > .task-work-actions,
+.task-work-node:focus-within > .task-work-actions {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.task-edge-actions {
+	position: absolute;
+	z-index: 3;
+	width: 48px;
+	height: 28px;
+	transform: translate(-50%, -50%);
+	pointer-events: auto;
+	touch-action: none;
+}
+
+.task-edge-hover-target {
+	position: absolute;
+	top: 9px;
+	left: 0;
+	display: block;
+	width: 48px;
+	height: 10px;
+	border-radius: 5px;
+}
+
+.task-edge-action-list {
+	position: absolute;
+	bottom: 18px;
+	left: 50%;
+	display: flex;
+	gap: 4px;
+	padding-bottom: 6px;
+	transform: translateX(-50%);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition: opacity 100ms ease;
+}
+
+.task-edge-actions:hover > .task-edge-action-list,
+.task-edge-actions:focus-within > .task-edge-action-list {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.task-edge-action-symbol {
+	display: block;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1;
+	pointer-events: none;
+}
+
 .task-end-node {
 	--graph-node-outline-color: color-mix(
 		in srgb,
@@ -100,4 +168,6 @@
 		var(--graph-edge-color)
 	);
 	stroke-width: 1.25;
+	pointer-events: stroke;
+	cursor: pointer;
 }
