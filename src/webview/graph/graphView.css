@@ -121,6 +121,22 @@
 	--graph-node-effect-badge-left: -10px;
 }
 
+.graph-navigator-root-button.graph-node-effect-host {
+	--graph-node-effect-ring-inset: 1px;
+	--graph-node-effect-ring-radius: 5px;
+	--graph-node-effect-surface-inset: 1px;
+	--graph-node-effect-surface-radius: 4px;
+	--graph-node-effect-dash-width: 1.5px;
+	--graph-node-effect-outline-width: 1px;
+	--graph-node-effect-outline-strong-width: 2px;
+	--graph-node-effect-pulse-width: 1.5px;
+	--graph-node-effect-badge-size: 16px;
+	--graph-node-effect-badge-top: 2px;
+	--graph-node-effect-badge-left: -5px;
+
+	position: relative;
+}
+
 .graph-node-effect-layer {
 	position: absolute;
 	inset: 0;
@@ -154,6 +170,11 @@
 .graph-node.graph-node-effect-host .graph-node-effect-marching-dash {
 	width: calc(100% + 8px);
 	height: calc(100% + 8px);
+}
+
+.graph-navigator-root-button.graph-node-effect-host .graph-node-effect-marching-dash {
+	width: calc(100% - 2px);
+	height: calc(100% - 2px);
 }
 
 .graph-node-effect-marching-dash-rect {
@@ -193,6 +214,13 @@
 .graph-node-effect-host:has(
 	> .graph-node-effect-layer > .graph-node-effect-pulse
 ) > .graph-file-name {
+	will-change: opacity;
+	animation: graph-node-effect-pulse-name 2.25s ease-in-out infinite;
+}
+
+.graph-navigator-root-button.graph-node-effect-host:has(
+	> .graph-node-effect-layer > .graph-node-effect-pulse
+) .graph-navigator-root-name {
 	will-change: opacity;
 	animation: graph-node-effect-pulse-name 2.25s ease-in-out infinite;
 }
@@ -834,7 +862,10 @@
 	) > .graph-folder-name,
 	.graph-node-effect-host:has(
 		> .graph-node-effect-layer > .graph-node-effect-pulse
-	) > .graph-file-name {
+	) > .graph-file-name,
+	.graph-navigator-root-button.graph-node-effect-host:has(
+		> .graph-node-effect-layer > .graph-node-effect-pulse
+	) .graph-navigator-root-name {
 		animation: none;
 	}
 
@@ -847,7 +878,10 @@
 	) > .graph-folder-name,
 	.graph-node-effect-host:has(
 		> .graph-node-effect-layer > .graph-node-effect-pulse
-	) > .graph-file-name {
+	) > .graph-file-name,
+	.graph-navigator-root-button.graph-node-effect-host:has(
+		> .graph-node-effect-layer > .graph-node-effect-pulse
+	) .graph-navigator-root-name {
 		opacity: 0.8;
 	}
 

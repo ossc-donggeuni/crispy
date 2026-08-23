@@ -326,11 +326,68 @@ suite('Graph View', () => {
 			{ nodeId: folder.id, rootId: detachedRootId },
 			{ kind: 'outline', color: '#44dd88' },
 		);
+		const detachedRootButton = getNavigatorRootButtons(root)[1];
 
 		assert.ok(getNodeEffect(detachedCard, 'outline'));
+		assert.ok(detachedRootButton);
+		assert.ok(getNodeEffect(detachedRootButton, 'outline'));
 		assert.strictEqual(findNodeEffect(backlink, 'outline'), undefined);
 		graphView.clearNodeEffect({ nodeId: folder.id, rootId: detachedRootId });
 		assert.strictEqual(findNodeEffect(detachedCard, 'outline'), undefined);
+		assert.strictEqual(findNodeEffect(detachedRootButton, 'outline'), undefined);
+		graphView.dispose();
+	});
+
+	test('활성화된 Root 목록에 occurrence Effect를 동일하게 적용하고 목록 재생성 뒤 복원한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
+		const folderRoot = GRAPH_MOCK.roots.find(
+			(candidate) => candidate.nodeId === GRAPH_MOCK_FOLDER_ROOT.id,
+		);
+
+		assert.ok(folderRoot);
+		const target = { nodeId: GRAPH_MOCK_FOLDER_ROOT.id };
+
+		graphView.setNodeEffect(target, { kind: 'pulse', color: '#36d9c4' });
+		const firstRootButton = getNavigatorRootButtons(root)[1];
+		const firstRootCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			getGraphRootLayoutNodeId(folderRoot),
+		);
+
+		assert.ok(firstRootButton);
+		assert.strictEqual(
+			getNodeEffect(firstRootButton, 'pulse').style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#36d9c4',
+		);
+		assert.strictEqual(
+			getNodeEffect(firstRootCard, 'pulse').style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#36d9c4',
+		);
+
+		graphView.updateGraph({ roots: [], rootNodes: {} });
+		assert.strictEqual(findNodeEffect(firstRootButton, 'pulse'), undefined);
+		assert.deepStrictEqual(getNavigatorRootButtons(root), []);
+
+		graphView.updateGraph(GRAPH_MOCK);
+		const restoredRootButton = getNavigatorRootButtons(root)[1];
+
+		assert.ok(restoredRootButton);
+		assert.notStrictEqual(restoredRootButton, firstRootButton);
+		assert.ok(getNodeEffect(restoredRootButton, 'pulse'));
+
+		graphView.clearNodeEffect(target);
+		assert.strictEqual(findNodeEffect(restoredRootButton, 'pulse'), undefined);
 		graphView.dispose();
 	});
 

@@ -1436,6 +1436,7 @@ export function initializeGraphView(
 		initialLayout,
 		{ onRootSelect: handleNavigatorRootSelect },
 		getVisibleGraphArea,
+		nodeEffects,
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);

@@ -24,6 +24,7 @@ import {
 	type MinimapViewportGeometry,
 } from './graphNavigatorMinimap';
 import type { GraphNavigatorRoot } from './graphNavigatorRoots';
+import { isDetachedRootId } from './graphRootPromotion';
 import {
 	createFullGraphVisibleArea,
 	type GraphVisibleArea,
@@ -33,6 +34,7 @@ import type {
 	GraphStateSnapshot,
 	GraphStateStore,
 } from './graphState';
+import type { GraphNodeEffects } from './graphNodeEffects';
 
 export interface GraphNavigator {
 	/** Floating Panel 또는 Viewport 변화 뒤 Navigator와 Minimap 표시 기준을 갱신한다. */
@@ -181,6 +183,7 @@ function createRootListItem(
 	ownerDocument: Document,
 	root: GraphNavigatorRoot,
 	onRootSelect: GraphNavigatorInteractions['onRootSelect'],
+	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 ): NavigatorRootListItem {
 	const item = ownerDocument.createElement('li');
 	const button = ownerDocument.createElement('button');
@@ -231,10 +234,15 @@ function createRootListItem(
 	button.append(icon, content);
 	item.append(button);
 	button.addEventListener('click', handleSelect);
+	const disposeNodeEffect = nodeEffects?.registerNode({
+		nodeId: root.nodeId,
+		...(isDetachedRootId(root.rootId) ? { rootId: root.rootId } : {}),
+	}, button);
 
 	return {
 		element: item,
 		dispose: () => {
+			disposeNodeEffect?.();
 			button.removeEventListener('click', handleSelect);
 		},
 	};
@@ -249,6 +257,8 @@ function createRootListItem(
  * @param camera 중앙 기준 Zoom을 수행할 기존 Graph Camera
  * @param initialLayout Minimap에 전달할 Renderer와 동일한 초기 Layout
  * @param interactions Root 선택을 상위 계층에 전달할 callback
+ * @param getVisibleGraphArea Floating Panel을 제외한 Navigator 표시 영역
+ * @param nodeEffects Root 목록 occurrence를 기존 transient Effect에 연결하는 등록 경계
  * @returns Listener, State 구독 및 DOM을 정리할 lifecycle 핸들
  */
 export function initializeGraphNavigator(
@@ -264,6 +274,7 @@ export function initializeGraphNavigator(
 			height: viewport.clientHeight,
 		})
 	),
+	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 ): GraphNavigator {
 	const ownerDocument = overlayLayer.ownerDocument;
 	const navigator = ownerDocument.createElement('div');
@@ -1150,7 +1161,12 @@ export function initializeGraphNavigator(
 
 			disposeRootItems();
 			renderedRootItems = roots.map((root) => (
-				createRootListItem(ownerDocument, root, interactions.onRootSelect)
+				createRootListItem(
+					ownerDocument,
+					root,
+					interactions.onRootSelect,
+					nodeEffects,
+				)
 			));
 			rootList.append(...renderedRootItems.map((item) => item.element));
 			rootList.hidden = renderedRootItems.length === 0;
