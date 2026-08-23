@@ -1,7 +1,9 @@
 import type {
 	HostToWebviewWireMessage,
+	SessionId,
 	WebviewToHostWireMessage,
 } from './agent/protocol';
+import { ID_MAX_LENGTH, ID_PATTERN } from './agent/protocol/limits';
 import type { Graph } from './webview/graph/graphModel';
 import { parseGraph } from './webview/graph/graphTransport';
 import type { WebviewSessionState } from './webview/webviewState';
@@ -53,6 +55,122 @@ export interface GraphNodeEffectTarget {
 	readonly rootId?: string;
 }
 
+/** Agent가 Graph Target에 전달할 수 있는 의미 기반 Activity allowlist다. */
+export const AGENT_ACTIVITY_KINDS = [
+	'planned',
+	'active',
+	'editing',
+	'completed',
+	'mentioned',
+	'rejected',
+] as const;
+
+/** Agent가 Graph Target에 대해 발생시킨 의미 기반 Activity다. */
+export type AgentActivityKind = typeof AGENT_ACTIVITY_KINDS[number];
+
+/** 어떤 Session이 어떤 Graph Target에 Activity를 발생시켰는지 표현한다. */
+export interface AgentActivityEvent {
+	readonly sessionId: SessionId;
+	readonly target: GraphNodeEffectTarget;
+	readonly activity: AgentActivityKind;
+}
+
+/** Session과 Target 쌍의 현재 Activity를 설정한다. */
+export interface AgentActivitySetMessage extends AgentActivityEvent {
+	readonly type: 'agent.activity.set';
+}
+
+/** Session과 Target 쌍의 Activity를 제거한다. */
+export interface AgentActivityClearMessage {
+	readonly type: 'agent.activity.clear';
+	readonly sessionId: SessionId;
+	readonly target: GraphNodeEffectTarget;
+}
+
+/** 한 Session이 발생시킨 모든 Target Activity를 제거한다. */
+export interface AgentActivityClearSessionMessage {
+	readonly type: 'agent.activity.clearSession';
+	readonly sessionId: SessionId;
+}
+
+/** Extension Host에서 Webview로 전달하는 Agent Activity 변경 계약이다. */
+export type AgentActivityToWebviewMessage =
+	| AgentActivitySetMessage
+	| AgentActivityClearMessage
+	| AgentActivityClearSessionMessage;
+
+/** Session과 Target 쌍의 Activity set 메시지를 만드는 공통 진입점이다. */
+export function setAgentActivity(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+	activity: AgentActivityKind,
+): AgentActivitySetMessage {
+	return { type: 'agent.activity.set', sessionId, target, activity };
+}
+
+/** Session과 Target 쌍의 Activity clear 메시지를 만든다. */
+export function clearAgentActivity(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivityClearMessage {
+	return { type: 'agent.activity.clear', sessionId, target };
+}
+
+/** 한 Session의 전체 Activity clear 메시지를 만든다. */
+export function clearAgentActivitiesBySession(
+	sessionId: SessionId,
+): AgentActivityClearSessionMessage {
+	return { type: 'agent.activity.clearSession', sessionId };
+}
+
+/** planned Activity를 공통 set 진입점으로 전달한다. */
+export function planned(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivitySetMessage {
+	return setAgentActivity(sessionId, target, 'planned');
+}
+
+/** active Activity를 공통 set 진입점으로 전달한다. */
+export function active(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivitySetMessage {
+	return setAgentActivity(sessionId, target, 'active');
+}
+
+/** editing Activity를 공통 set 진입점으로 전달한다. */
+export function editing(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivitySetMessage {
+	return setAgentActivity(sessionId, target, 'editing');
+}
+
+/** completed Activity를 공통 set 진입점으로 전달한다. */
+export function completed(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivitySetMessage {
+	return setAgentActivity(sessionId, target, 'completed');
+}
+
+/** mentioned Activity를 공통 set 진입점으로 전달한다. */
+export function mentioned(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivitySetMessage {
+	return setAgentActivity(sessionId, target, 'mentioned');
+}
+
+/** rejected Activity를 공통 set 진입점으로 전달한다. */
+export function rejected(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivitySetMessage {
+	return setAgentActivity(sessionId, target, 'rejected');
+}
+
 /** Webview가 의미 상태를 해석하지 않고 그대로 표현하는 시각 효과 계약이다. */
 export type GraphNodeEffect =
 	| {
@@ -89,7 +207,62 @@ export type GraphNodeEffectToWebviewMessage =
 export type ExtensionToWebviewMessage =
 	| HostToWebviewWireMessage
 	| WorkspaceToWebviewMessage
+	| AgentActivityToWebviewMessage
 	| GraphNodeEffectToWebviewMessage;
+
+/** unknown 값에서 순수 Agent Activity Event 계약을 strict하게 검증한다. */
+export function parseAgentActivityEvent(
+	value: unknown,
+): AgentActivityEvent | undefined {
+	return isRecord(value)
+		? parseAgentActivityEventRecord(
+			value,
+			['sessionId', 'target', 'activity'],
+		)
+		: undefined;
+}
+
+/** unknown Host 메시지에서 Agent Activity 변경 계약을 strict하게 검증한다. */
+export function parseAgentActivityToWebviewMessage(
+	value: unknown,
+): AgentActivityToWebviewMessage | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+
+	if (value.type === 'agent.activity.set') {
+		const event = parseAgentActivityEventRecord(
+			value,
+			['type', 'sessionId', 'target', 'activity'],
+		);
+
+		return event ? { type: 'agent.activity.set', ...event } : undefined;
+	}
+
+	if (value.type === 'agent.activity.clear') {
+		if (
+			!hasExactKeys(value, ['type', 'sessionId', 'target'])
+			|| !isSessionId(value.sessionId)
+		) {
+			return undefined;
+		}
+		const target = parseGraphNodeEffectTarget(value.target);
+
+		return target
+			? { type: 'agent.activity.clear', sessionId: value.sessionId, target }
+			: undefined;
+	}
+
+	if (
+		value.type === 'agent.activity.clearSession'
+		&& hasExactKeys(value, ['type', 'sessionId'])
+		&& isSessionId(value.sessionId)
+	) {
+		return { type: 'agent.activity.clearSession', sessionId: value.sessionId };
+	}
+
+	return undefined;
+}
 
 /** unknown Host 메시지에서 transient Graph 효과 계약을 구조적으로 검증한다. */
 export function parseGraphNodeEffectToWebviewMessage(
@@ -155,6 +328,35 @@ function parseGraphNodeEffectTarget(
 		nodeId: value.nodeId,
 		...(typeof value.rootId === 'string' ? { rootId: value.rootId } : {}),
 	};
+}
+
+function parseAgentActivityEventRecord(
+	value: Readonly<Record<string, unknown>>,
+	keys: readonly string[],
+): AgentActivityEvent | undefined {
+	if (
+		!hasExactKeys(value, keys)
+		|| !isSessionId(value.sessionId)
+		|| !isAgentActivityKind(value.activity)
+	) {
+		return undefined;
+	}
+	const target = parseGraphNodeEffectTarget(value.target);
+
+	return target
+		? { sessionId: value.sessionId, target, activity: value.activity }
+		: undefined;
+}
+
+function isSessionId(value: unknown): value is SessionId {
+	return typeof value === 'string'
+		&& value.length <= ID_MAX_LENGTH
+		&& ID_PATTERN.test(value);
+}
+
+function isAgentActivityKind(value: unknown): value is AgentActivityKind {
+	return typeof value === 'string'
+		&& (AGENT_ACTIVITY_KINDS as readonly string[]).includes(value);
 }
 
 function parseGraphNodeEffect(value: unknown): GraphNodeEffect | undefined {

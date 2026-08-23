@@ -5,6 +5,7 @@ import {
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
+	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
 	type WebviewToExtensionMessage,
@@ -316,6 +317,11 @@ function handleHostMessage(message: unknown): void {
 				graphEffectMessage.kind,
 			);
 		}
+		return;
+	}
+
+	if (parseAgentActivityToWebviewMessage(message)) {
+		/** G-12.1은 수신 계약만 열며 Activity 상태와 Graph Effect는 후속 단계가 소유한다. */
 		return;
 	}
 
