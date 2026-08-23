@@ -11,6 +11,10 @@ import {
 	buildCodexMcpLaunchPlan,
 } from '../../../mcp/codexLaunchPlan';
 import {
+	buildClaudeBareLaunchPlan,
+	buildClaudeMcpLaunchPlan,
+} from '../../../mcp/claudeLaunchPlan';
+import {
 	createAgentProcessSpawnRequest,
 	type AgentLaunchPlan,
 	type AgentProcessSpawnRequest,
@@ -19,6 +23,10 @@ import type {
 	BuildCodexBareLaunchPlanOptions,
 	BuildCodexMcpLaunchPlanOptions,
 } from '../../../mcp/codexLaunchPlan';
+import type {
+	BuildClaudeBareLaunchPlanOptions,
+	BuildClaudeMcpLaunchPlanOptions,
+} from '../../../mcp/claudeLaunchPlan';
 import { spawnAgentPty } from '../../../mcp/agentPtyLaunch';
 import type {
 	McpPrepareResult,
@@ -26,6 +34,14 @@ import type {
 	McpSessionRuntimeEvent,
 } from '../../../mcp/sessionRuntime';
 import type { PrepareCodexTerminalLaunch } from '../../../mcp/codexTerminalLaunch';
+import type {
+	PreparedClaudeTerminalLaunch,
+	PrepareClaudeTerminalLaunch,
+} from '../../../mcp/claudeTerminalLaunch';
+import {
+	CLAUDE_STARTUP_DIAGNOSTIC_MAX_BYTES,
+	classifyClaudeStartupDiagnostic,
+} from '../../../mcp/claudeDiagnostic';
 import {
 	createMcpFailure,
 	retryabilityByFailureReason,
@@ -46,7 +62,10 @@ import {
 	prepareTerminalLaunch,
 	type PrepareTerminalLaunch,
 } from './prepareTerminalLaunch';
-import { TerminalSession } from './terminalSession';
+import {
+	TerminalProcessExitedBeforeReadyError,
+	TerminalSession,
+} from './terminalSession';
 import type { ProcessTreeController } from './processTreeController';
 import { createHostProcessTreeController } from './processTreeControllerFactory';
 
@@ -60,7 +79,7 @@ export type TerminalHostMessageEmitter = (
 ) => void;
 
 /** TerminalHost가 session별 MCP ownership에 사용하는 Panel-owned supervisor 계약이다. */
-export interface CodexMcpSupervisor {
+export interface McpSupervisor {
 	prepareSession(sessionId: string): Promise<McpPrepareResult>;
 	stopSession(sessionId: string): Promise<void>;
 	getSessionRuntime(sessionId: string): Pick<
@@ -70,12 +89,23 @@ export interface CodexMcpSupervisor {
 	dispose(): Promise<void>;
 }
 
+/** Backward-compatible test/public type name retained while orchestration becomes provider-neutral. */
+export type CodexMcpSupervisor = McpSupervisor;
+
 export type CodexMcpLaunchPlanBuilder = (
 	options: BuildCodexMcpLaunchPlanOptions,
 ) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
 
 export type CodexBareLaunchPlanBuilder = (
 	options: BuildCodexBareLaunchPlanOptions,
+) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
+
+export type ClaudeMcpLaunchPlanBuilder = (
+	options: BuildClaudeMcpLaunchPlanOptions,
+) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
+
+export type ClaudeBareLaunchPlanBuilder = (
+	options: BuildClaudeBareLaunchPlanOptions,
 ) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
 
 export type AgentProcessSpawnRequestBuilder = (
@@ -92,6 +122,47 @@ export type AgentPtySpawner = (
 	cols: number,
 	rows: number,
 ) => Promise<void>;
+
+type McpProviderId = Extract<ProviderId, 'codex' | 'claude'>;
+
+interface PreparedStructuredProviderLaunch {
+	readonly executable: BuildCodexBareLaunchPlanOptions['executable'];
+	readonly cwd: string;
+	readonly environment: NodeJS.ProcessEnv;
+	readonly platform: NodeJS.Platform;
+}
+
+type StructuredProviderPreparation<TPreparation> =
+	| { readonly ok: true; readonly preparation: TPreparation }
+	| {
+		readonly ok: false;
+		readonly error: Extract<HostToWebviewMessage, { readonly type: 'terminal.error' }>;
+	};
+
+interface StructuredMcpProviderStartOptions<
+	TPreparation extends PreparedStructuredProviderLaunch,
+> {
+	readonly providerId: McpProviderId;
+	readonly prepare: (
+		tabId: TabId,
+		sessionId: SessionId,
+	) => Promise<StructuredProviderPreparation<TPreparation>>;
+	readonly canUseMcp: (preparation: TPreparation) => boolean;
+	readonly buildMcpPlan: (
+		preparation: TPreparation,
+		connection: Extract<McpPrepareResult, { readonly ok: true }>['connection'],
+	) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
+	readonly buildBarePlan: (
+		preparation: TPreparation,
+	) => AgentLaunchPlan | Promise<AgentLaunchPlan>;
+	readonly publishStartupFailures: boolean;
+	readonly onAuthenticatedRequestReady?: (
+		session: TerminalSession,
+		preparation: TPreparation,
+		plan: AgentLaunchPlan,
+		generation: string,
+	) => void;
+}
 
 /**
  * UUID에 Host 전용 접두사를 붙여 프로토콜 규칙을 만족하는 `sessionId`를 생성한다.
@@ -121,12 +192,17 @@ export interface TerminalHostOptions {
 	/** Codex direct-root launch를 Shell 정책과 분리해 준비하는 경계다. */
 	readonly prepareCodexLaunch?: PrepareCodexTerminalLaunch;
 
-	/** Panel이 소유하며 Codex session별 adapter runtime을 격리하는 supervisor다. */
-	readonly mcpSupervisor?: CodexMcpSupervisor;
+	/** Claude direct-root launch와 credential-free version gate를 준비하는 경계다. */
+	readonly prepareClaudeLaunch?: PrepareClaudeTerminalLaunch;
+
+	/** Panel이 소유하며 provider session별 adapter runtime을 격리하는 supervisor다. */
+	readonly mcpSupervisor?: McpSupervisor;
 
 	/** 결정적인 transaction/race test를 위한 structured plan builder 경계다. */
 	readonly buildCodexMcpLaunchPlan?: CodexMcpLaunchPlanBuilder;
 	readonly buildCodexBareLaunchPlan?: CodexBareLaunchPlanBuilder;
+	readonly buildClaudeMcpLaunchPlan?: ClaudeMcpLaunchPlanBuilder;
+	readonly buildClaudeBareLaunchPlan?: ClaudeBareLaunchPlanBuilder;
 	readonly createAgentProcessSpawnRequest?: AgentProcessSpawnRequestBuilder;
 	readonly spawnAgentPty?: AgentPtySpawner;
 
@@ -214,19 +290,37 @@ export class TerminalHost {
 	/** Codex만 interactive Shell 없이 준비하는 production/injected 경계다. */
 	private readonly prepareCodexLaunch: PrepareCodexTerminalLaunch | undefined;
 
+	/** Claude를 interactive Shell 없이 준비하고 version compatibility를 판정하는 경계다. */
+	private readonly prepareClaudeLaunch: PrepareClaudeTerminalLaunch | undefined;
+
 	/** Panel 소유 MCP runtime registry이며 미주입 시 기존 provider 동작만 유지한다. */
-	private readonly mcpSupervisor: CodexMcpSupervisor | undefined;
+	private readonly mcpSupervisor: McpSupervisor | undefined;
 
 	private readonly buildCodexMcpPlan: CodexMcpLaunchPlanBuilder;
 	private readonly buildCodexBarePlan: CodexBareLaunchPlanBuilder;
+	private readonly buildClaudeMcpPlan: ClaudeMcpLaunchPlanBuilder;
+	private readonly buildClaudeBarePlan: ClaudeBareLaunchPlanBuilder;
 	private readonly createAgentSpawnRequest: AgentProcessSpawnRequestBuilder;
 	private readonly spawnProviderPty: AgentPtySpawner;
 
-	/** 실제 MCP plan을 spawn하는 current session과 runtime generation의 결합이다. */
-	private readonly codexGenerationBySession = new Map<SessionId, string>();
+	/** 실제 MCP plan을 spawn하는 current provider session과 runtime generation의 결합이다. */
+	private readonly mcpRuntimeBySession = new Map<SessionId, Readonly<{
+		readonly providerId: Extract<ProviderId, 'codex' | 'claude'>;
+		readonly generation: string;
+	}>>();
 
-	/** PTY spawn 경계에 진입한 Codex session만 provider-started 표시를 허용한다. */
-	private readonly codexPtySpawnStarted = new Set<SessionId>();
+	/** PTY spawn 경계에 진입한 MCP provider session만 provider-started 표시를 허용한다. */
+	private readonly mcpPtySpawnStarted = new Set<SessionId>();
+
+	/** Authenticated Claude의 exact startup rejection만 credential-free bare fallback에 연결한다. */
+	private readonly claudeStartupBySession = new Map<SessionId, {
+		readonly generation: string;
+		readonly serverName: string;
+		readonly preparation: PreparedClaudeTerminalLaunch;
+		output: string;
+		interactiveInputObserved: boolean;
+		activityObserved: boolean;
+	}>();
 
 	/** session별 숨은 준비/대기와 visible connected/failed 상태의 Host source of truth다. */
 	private readonly mcpStatusBySession = new Map<
@@ -277,11 +371,16 @@ export class TerminalHost {
 		this.resolveProviderAutoRunInput = options.resolveAgentAutoRunInput
 			?? resolveDetectedAgentAutoRunInput;
 		this.prepareCodexLaunch = options.prepareCodexLaunch;
+		this.prepareClaudeLaunch = options.prepareClaudeLaunch;
 		this.mcpSupervisor = options.mcpSupervisor;
 		this.buildCodexMcpPlan = options.buildCodexMcpLaunchPlan
 			?? buildCodexMcpLaunchPlan;
 		this.buildCodexBarePlan = options.buildCodexBareLaunchPlan
 			?? buildCodexBareLaunchPlan;
+		this.buildClaudeMcpPlan = options.buildClaudeMcpLaunchPlan
+			?? buildClaudeMcpLaunchPlan;
+		this.buildClaudeBarePlan = options.buildClaudeBareLaunchPlan
+			?? buildClaudeBareLaunchPlan;
 		this.createAgentSpawnRequest = options.createAgentProcessSpawnRequest
 			?? createAgentProcessSpawnRequest;
 		this.spawnProviderPty = options.spawnAgentPty ?? spawnAgentPty;
@@ -623,6 +722,14 @@ export class TerminalHost {
 			await this.startCodexSession(session, cols, rows);
 			return;
 		}
+		if (
+			providerId === 'claude'
+			&& this.prepareClaudeLaunch !== undefined
+			&& this.mcpSupervisor !== undefined
+		) {
+			await this.startClaudeSession(session, cols, rows);
+			return;
+		}
 
 		let preparation: Awaited<ReturnType<PrepareTerminalLaunch>>;
 		try {
@@ -689,26 +796,108 @@ export class TerminalHost {
 		}
 	}
 
-	/** ready→registered 뒤에만 authenticated plan을 만들고 모든 startup MCP 실패는 bare로 연다. */
-	private async startCodexSession(
+	/** Codex의 검증된 config style을 공통 direct-PTY transaction에 연결한다. */
+	private startCodexSession(
 		session: TerminalSession,
 		cols: number,
 		rows: number,
 	): Promise<void> {
-		const prepareCodexLaunch = this.prepareCodexLaunch;
+		const prepare = this.prepareCodexLaunch;
+		if (prepare === undefined) {
+			return Promise.resolve();
+		}
+		return this.startStructuredMcpProviderSession(session, cols, rows, {
+			providerId: 'codex',
+			prepare,
+			canUseMcp: (preparation) =>
+				preparation.shellEnvironmentPolicyStyle !== undefined,
+			buildMcpPlan: (preparation, connection) => this.buildCodexMcpPlan({
+				executable: preparation.executable,
+				cwd: preparation.cwd,
+				connection,
+				shellEnvironmentPolicyStyle:
+					preparation.shellEnvironmentPolicyStyle!,
+			}),
+			buildBarePlan: (preparation) => this.buildCodexBarePlan({
+				executable: preparation.executable,
+				cwd: preparation.cwd,
+			}),
+			publishStartupFailures: true,
+		});
+	}
+
+	/** Claude compatibility gate 통과 뒤에만 session MCP를 준비하고 그 외에는 bare로 연다. */
+	private startClaudeSession(
+		session: TerminalSession,
+		cols: number,
+		rows: number,
+	): Promise<void> {
+		const prepare = this.prepareClaudeLaunch;
+		if (prepare === undefined) {
+			return Promise.resolve();
+		}
+		return this.startStructuredMcpProviderSession(session, cols, rows, {
+			providerId: 'claude',
+			prepare,
+			canUseMcp: (preparation) => preparation.mcpCompatible,
+			buildMcpPlan: (preparation, connection) => this.buildClaudeMcpPlan({
+				executable: preparation.executable,
+				cwd: preparation.cwd,
+				connection,
+			}),
+			buildBarePlan: (preparation) => this.buildClaudeBarePlan({
+				executable: preparation.executable,
+				cwd: preparation.cwd,
+			}),
+			publishStartupFailures: false,
+			onAuthenticatedRequestReady: (
+				currentSession,
+				preparation,
+				plan,
+				generation,
+			) => {
+				if (plan.mcpServerName === undefined) {
+					throw new Error('Authenticated Claude plan has no server name.');
+				}
+				this.claudeStartupBySession.set(currentSession.sessionId, {
+					generation,
+					serverName: plan.mcpServerName,
+					preparation,
+					output: '',
+					interactiveInputObserved: false,
+					activityObserved: false,
+				});
+			},
+		});
+	}
+
+	/** ready→registered 뒤에만 authenticated plan을 만들고 startup MCP 실패는 bare로 연다. */
+	private async startStructuredMcpProviderSession<
+		TPreparation extends PreparedStructuredProviderLaunch,
+	>(
+		session: TerminalSession,
+		cols: number,
+		rows: number,
+		options: StructuredMcpProviderStartOptions<TPreparation>,
+	): Promise<void> {
 		const supervisor = this.mcpSupervisor;
-		if (prepareCodexLaunch === undefined || supervisor === undefined) {
+		if (supervisor === undefined) {
 			return;
 		}
+		const recordStartupFailure = (reason: McpFailureReason): void => {
+			if (options.publishStartupFailures) {
+				this.recordMcpFailure(session, reason);
+			}
+		};
 
-		let preparationResult: Awaited<ReturnType<PrepareCodexTerminalLaunch>>;
+		let preparationResult: StructuredProviderPreparation<TPreparation>;
 		try {
-			preparationResult = await prepareCodexLaunch(
+			preparationResult = await options.prepare(
 				session.tabId,
 				session.sessionId,
 			);
 		} catch {
-			if (this.isCurrentProviderSession(session, 'codex')) {
+			if (this.isCurrentProviderSession(session, options.providerId)) {
 				this.failSession(
 					session,
 					'internal_error',
@@ -719,7 +908,7 @@ export class TerminalHost {
 			return;
 		}
 
-		if (!this.isCurrentProviderSession(session, 'codex')) {
+		if (!this.isCurrentProviderSession(session, options.providerId)) {
 			return;
 		}
 		if (!preparationResult.ok) {
@@ -729,31 +918,29 @@ export class TerminalHost {
 		}
 
 		const preparation = preparationResult.preparation;
+		const canUseMcp = options.canUseMcp(preparation);
 		let prepared: McpPrepareResult | undefined;
-		if (preparation.shellEnvironmentPolicyStyle !== undefined) {
+		if (canUseMcp) {
 			try {
 				prepared = await supervisor.prepareSession(session.sessionId);
 			} catch {
-				this.recordMcpFailure(session, 'adapter_start_failed');
+				recordStartupFailure('adapter_start_failed');
 			}
-		} else {
-			this.recordMcpFailure(session, 'safe_session_injection_unavailable');
+		} else if (options.providerId === 'codex') {
+			recordStartupFailure('safe_session_injection_unavailable');
 		}
 		if (prepared !== undefined && !prepared.ok) {
-			this.recordMcpFailure(session, prepared.failure.reason);
+			recordStartupFailure(prepared.failure.reason);
 		}
 
-		if (!this.isCurrentProviderSession(session, 'codex')) {
+		if (!this.isCurrentProviderSession(session, options.providerId)) {
 			await this.cleanupMcpSession(session.sessionId);
 			return;
 		}
 
 		let plan: AgentLaunchPlan | undefined;
 		let generation: string | undefined;
-		if (
-			prepared?.ok
-			&& preparation.shellEnvironmentPolicyStyle !== undefined
-		) {
+		if (prepared?.ok && canUseMcp) {
 			generation = prepared.connection.generation;
 			const runtime = supervisor.getSessionRuntime(session.sessionId);
 			if (
@@ -761,63 +948,64 @@ export class TerminalHost {
 				&& runtime.generation === generation
 				&& runtime.lifecycle === 'running'
 			) {
-				this.codexGenerationBySession.set(session.sessionId, generation);
+				this.mcpRuntimeBySession.set(session.sessionId, {
+					providerId: options.providerId,
+					generation,
+				});
 				try {
-					plan = await this.buildCodexMcpPlan({
-						executable: preparation.executable,
-						cwd: preparation.cwd,
-						connection: prepared.connection,
-						shellEnvironmentPolicyStyle:
-							preparation.shellEnvironmentPolicyStyle,
-					});
+					plan = await options.buildMcpPlan(
+						preparation,
+						prepared.connection,
+					);
 				} catch {
-					this.recordMcpFailure(session, 'provider_config_rejected');
+					recordStartupFailure('provider_config_rejected');
 				}
 			}
 		}
 
-		if (!this.isCurrentProviderSession(session, 'codex')) {
+		if (!this.isCurrentProviderSession(session, options.providerId)) {
 			await this.cleanupMcpSession(session.sessionId);
 			return;
 		}
 		if (
 			plan === undefined
 			|| generation === undefined
-			|| plan.providerId !== 'codex'
+			|| plan.providerId !== options.providerId
 			|| !plan.expectsMcp
-			|| !this.isCurrentCodexRuntime(session, generation)
+			|| plan.mcpServerName === undefined
+			|| !this.isCurrentMcpRuntime(
+				session,
+				options.providerId,
+				generation,
+			)
 		) {
 			if (
 				generation !== undefined
 				&& this.mcpStatusBySession.get(session.sessionId)?.status !== 'failed'
 			) {
 				const runtime = supervisor.getSessionRuntime(session.sessionId);
-				this.recordMcpFailure(
-					session,
+				recordStartupFailure(
 					runtime === undefined || runtime.lifecycle !== 'running'
 						? 'adapter_exited'
 						: 'provider_config_rejected',
 				);
 			}
 			await this.cleanupMcpSession(session.sessionId);
-			if (!this.isCurrentProviderSession(session, 'codex')) {
+			if (!this.isCurrentProviderSession(session, options.providerId)) {
 				return;
 			}
 			generation = undefined;
 			try {
-				plan = await this.buildCodexBarePlan({
-					executable: preparation.executable,
-					cwd: preparation.cwd,
-				});
+				plan = await options.buildBarePlan(preparation);
 			} catch {
 				plan = undefined;
 			}
 		}
 
 		if (
-			!this.isCurrentProviderSession(session, 'codex')
+			!this.isCurrentProviderSession(session, options.providerId)
 			|| plan === undefined
-			|| plan.providerId !== 'codex'
+			|| plan.providerId !== options.providerId
 			|| plan.expectsMcp !== (generation !== undefined)
 		) {
 			if (generation !== undefined) {
@@ -825,7 +1013,7 @@ export class TerminalHost {
 			}
 			if (
 				plan === undefined
-				&& this.isCurrentProviderSession(session, 'codex')
+				&& this.isCurrentProviderSession(session, options.providerId)
 			) {
 				this.failSession(
 					session,
@@ -843,13 +1031,22 @@ export class TerminalHost {
 				platform: preparation.platform,
 				environment: preparation.environment,
 			});
-		} catch {
 			if (generation !== undefined) {
-				this.recordMcpFailure(session, 'safe_session_injection_unavailable');
+				options.onAuthenticatedRequestReady?.(
+					session,
+					preparation,
+					plan,
+					generation,
+				);
+			}
+		} catch {
+			request = undefined;
+			if (generation !== undefined) {
+				recordStartupFailure('safe_session_injection_unavailable');
 			}
 		}
 
-		if (!this.isCurrentProviderSession(session, 'codex')) {
+		if (!this.isCurrentProviderSession(session, options.providerId)) {
 			await this.cleanupMcpSession(session.sessionId);
 			return;
 		}
@@ -857,22 +1054,29 @@ export class TerminalHost {
 			generation !== undefined
 			&& (
 				request === undefined
-				|| !this.isCurrentCodexRuntime(session, generation)
+				|| !this.isCurrentMcpRuntime(
+					session,
+					options.providerId,
+					generation,
+				)
 			)
 		) {
 			if (this.mcpStatusBySession.get(session.sessionId)?.status !== 'failed') {
-				this.recordMcpFailure(session, 'adapter_exited');
+				recordStartupFailure('adapter_exited');
 			}
 			await this.cleanupMcpSession(session.sessionId);
-			if (!this.isCurrentProviderSession(session, 'codex')) {
+			if (!this.isCurrentProviderSession(session, options.providerId)) {
 				return;
 			}
 			generation = undefined;
 			try {
-				plan = await this.buildCodexBarePlan({
-					executable: preparation.executable,
-					cwd: preparation.cwd,
-				});
+				plan = await options.buildBarePlan(preparation);
+				if (
+					plan.providerId !== options.providerId
+					|| plan.expectsMcp
+				) {
+					throw new Error('Invalid bare provider launch plan.');
+				}
 				request = await this.createAgentSpawnRequest(plan, {
 					platform: preparation.platform,
 					environment: preparation.environment,
@@ -883,10 +1087,11 @@ export class TerminalHost {
 		}
 
 		if (
-			!this.isCurrentProviderSession(session, 'codex')
+			!this.isCurrentProviderSession(session, options.providerId)
 			|| request === undefined
-			|| (generation !== undefined && !this.isCurrentCodexRuntime(
+			|| (generation !== undefined && !this.isCurrentMcpRuntime(
 				session,
+				options.providerId,
 				generation,
 			))
 		) {
@@ -895,7 +1100,7 @@ export class TerminalHost {
 			}
 			if (
 				request === undefined
-				&& this.isCurrentProviderSession(session, 'codex')
+				&& this.isCurrentProviderSession(session, options.providerId)
 			) {
 				this.failSession(
 					session,
@@ -909,34 +1114,47 @@ export class TerminalHost {
 
 		this.lastDimensionsByTab.set(session.tabId, { cols, rows });
 		if (generation === undefined) {
-			this.codexGenerationBySession.delete(session.sessionId);
+			this.mcpRuntimeBySession.delete(session.sessionId);
 		} else {
-			this.codexGenerationBySession.set(session.sessionId, generation);
-			this.setMcpAwaitingActivity(session);
+			this.mcpRuntimeBySession.set(session.sessionId, {
+				providerId: options.providerId,
+				generation,
+			});
+			if (options.publishStartupFailures) {
+				this.setMcpAwaitingActivity(session);
+			}
 		}
-		this.codexPtySpawnStarted.add(session.sessionId);
+		this.mcpPtySpawnStarted.add(session.sessionId);
 		try {
 			await this.spawnProviderPty(session, request, cols, rows);
-		} catch {
+		} catch (error: unknown) {
+			if (error instanceof TerminalProcessExitedBeforeReadyError) {
+				if (!this.isCurrentProviderSession(session, options.providerId)) {
+					await this.cleanupMcpSession(session.sessionId);
+					return;
+				}
+				this.handleProviderExitBeforeReady(session, error);
+				return;
+			}
 			const authenticatedSpawnFailed = generation !== undefined;
 			if (authenticatedSpawnFailed) {
-				this.recordMcpFailure(session, 'safe_session_injection_unavailable');
+				recordStartupFailure('safe_session_injection_unavailable');
 			}
-			this.codexPtySpawnStarted.delete(session.sessionId);
+			this.mcpPtySpawnStarted.delete(session.sessionId);
 			await this.cleanupMcpSession(session.sessionId);
-			if (!this.isCurrentProviderSession(session, 'codex')) {
+			if (!this.isCurrentProviderSession(session, options.providerId)) {
 				return;
 			}
 
 			if (authenticatedSpawnFailed) {
 				let bareRequest: AgentProcessSpawnRequest | undefined;
 				try {
-					const barePlan = await this.buildCodexBarePlan({
-						executable: preparation.executable,
-						cwd: preparation.cwd,
-					});
-					if (barePlan.providerId !== 'codex' || barePlan.expectsMcp) {
-						throw new Error('Invalid bare Codex launch plan.');
+					const barePlan = await options.buildBarePlan(preparation);
+					if (
+						barePlan.providerId !== options.providerId
+						|| barePlan.expectsMcp
+					) {
+						throw new Error('Invalid bare provider launch plan.');
 					}
 					bareRequest = await this.createAgentSpawnRequest(barePlan, {
 						platform: preparation.platform,
@@ -946,11 +1164,11 @@ export class TerminalHost {
 					/** Authenticated native spawn failure receives at most one bare retry. */
 				}
 
-				if (!this.isCurrentProviderSession(session, 'codex')) {
+				if (!this.isCurrentProviderSession(session, options.providerId)) {
 					return;
 				}
 				if (bareRequest !== undefined) {
-					this.codexPtySpawnStarted.add(session.sessionId);
+					this.mcpPtySpawnStarted.add(session.sessionId);
 					try {
 						await this.spawnProviderPty(
 							session,
@@ -960,7 +1178,7 @@ export class TerminalHost {
 						);
 						return;
 					} catch {
-						this.codexPtySpawnStarted.delete(session.sessionId);
+						this.mcpPtySpawnStarted.delete(session.sessionId);
 					}
 				}
 			}
@@ -974,7 +1192,7 @@ export class TerminalHost {
 			return;
 		}
 
-		if (!this.isCurrentProviderSession(session, 'codex')) {
+		if (!this.isCurrentProviderSession(session, options.providerId)) {
 			await this.cleanupMcpSession(session.sessionId);
 		}
 	}
@@ -989,15 +1207,15 @@ export class TerminalHost {
 			return;
 		}
 
-		const generation = this.codexGenerationBySession.get(session.sessionId);
+		const mcpRuntime = this.mcpRuntimeBySession.get(session.sessionId);
 		if (
-			generation !== undefined
-			&& this.codexPtySpawnStarted.has(session.sessionId)
+			mcpRuntime !== undefined
+			&& this.mcpPtySpawnStarted.has(session.sessionId)
 		) {
 			const runtime = this.mcpSupervisor?.getSessionRuntime(session.sessionId);
 			if (
 				runtime !== undefined
-				&& runtime.generation === generation
+				&& runtime.generation === mcpRuntime.generation
 				&& runtime.lifecycle === 'running'
 			) {
 				runtime.markProviderStarted();
@@ -1051,6 +1269,10 @@ export class TerminalHost {
 		);
 		if (session === undefined) {
 			return;
+		}
+		const claudeStartup = this.claudeStartupBySession.get(session.sessionId);
+		if (claudeStartup !== undefined) {
+			claudeStartup.interactiveInputObserved = true;
 		}
 
 		this.performPtyOperation(
@@ -1308,8 +1530,9 @@ export class TerminalHost {
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.providerAutoRunInputBySession.clear();
-		this.codexGenerationBySession.clear();
-		this.codexPtySpawnStarted.clear();
+		this.mcpRuntimeBySession.clear();
+		this.mcpPtySpawnStarted.clear();
+		this.claudeStartupBySession.clear();
 		this.mcpStatusBySession.clear();
 		this.mcpRestartByTab.clear();
 		this.lastDimensionsByTab.clear();
@@ -1462,8 +1685,9 @@ export class TerminalHost {
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.providerAutoRunInputBySession.clear();
-		this.codexGenerationBySession.clear();
-		this.codexPtySpawnStarted.clear();
+		this.mcpRuntimeBySession.clear();
+		this.mcpPtySpawnStarted.clear();
+		this.claudeStartupBySession.clear();
 		this.mcpStatusBySession.clear();
 		this.mcpRestartByTab.clear();
 		this.lastDimensionsByTab.clear();
@@ -1483,6 +1707,7 @@ export class TerminalHost {
 		) {
 			return;
 		}
+		this.appendClaudeStartupOutput(session.sessionId, data);
 
 		this.publish({
 			type: 'terminal.output',
@@ -1505,7 +1730,18 @@ export class TerminalHost {
 		}
 
 		const signal = event.signal ?? null;
+		const claudeFallbackPreparation = this.getClaudeFallbackPreparation(
+			session,
+			event,
+		);
 		session.markExited(event.exitCode, signal);
+		if (claudeFallbackPreparation !== undefined) {
+			void this.relaunchClaudeBareAfterStartupRejection(
+				session,
+				claudeFallbackPreparation,
+			);
+			return;
+		}
 		this.clearMcpStatus(session);
 		void this.cleanupMcpSession(session.sessionId);
 		this.publish({
@@ -1515,6 +1751,184 @@ export class TerminalHost {
 			exitCode: event.exitCode,
 			...(event.signal === undefined ? {} : { signal: event.signal }),
 		});
+	}
+
+	/**
+	 * A process that exited after native spawn but before PID readiness is not a spawn failure.
+	 * Only an exact authenticated Claude startup rejection may relaunch; every other provider exit
+	 * becomes a visible start failure without a bare retry.
+	 */
+	private handleProviderExitBeforeReady(
+		session: TerminalSession,
+		error: TerminalProcessExitedBeforeReadyError,
+	): void {
+		error.withBufferedOutput((output) => {
+			this.appendClaudeStartupOutput(session.sessionId, output);
+		});
+		const claudeFallbackPreparation = this.getClaudeFallbackPreparation(
+			session,
+			error.event,
+		);
+		if (claudeFallbackPreparation !== undefined) {
+			void this.relaunchClaudeBareAfterStartupRejection(
+				session,
+				claudeFallbackPreparation,
+			);
+			return;
+		}
+
+		this.failSession(
+			session,
+			'start_failed',
+			START_ERROR_MESSAGES.spawn,
+			true,
+		);
+	}
+
+	/** Exact pre-interactive Claude diagnostics are the sole post-spawn bare fallback signal. */
+	private getClaudeFallbackPreparation(
+		session: TerminalSession,
+		event: PtyExitEvent,
+	): PreparedClaudeTerminalLaunch | undefined {
+		const startup = this.claudeStartupBySession.get(session.sessionId);
+		if (startup === undefined) {
+			return undefined;
+		}
+		const rejection = classifyClaudeStartupDiagnostic({
+			exitCode: event.exitCode,
+			signal: event.signal ?? null,
+			reachedInteractivePrompt:
+				startup.interactiveInputObserved || startup.activityObserved,
+			stderr: startup.output,
+			expectedMcpServerName: startup.serverName,
+		});
+		return rejection === undefined ? undefined : startup.preparation;
+	}
+
+	/** Keeps only a small in-memory startup window used by the exact diagnostic classifier. */
+	private appendClaudeStartupOutput(sessionId: SessionId, data: string): void {
+		const startup = this.claudeStartupBySession.get(sessionId);
+		if (startup === undefined) {
+			return;
+		}
+		if (Buffer.byteLength(startup.output, 'utf8') > CLAUDE_STARTUP_DIAGNOSTIC_MAX_BYTES) {
+			return;
+		}
+		const next = `${startup.output}${data}`;
+		startup.output = Buffer.byteLength(next, 'utf8')
+			> CLAUDE_STARTUP_DIAGNOSTIC_MAX_BYTES
+			? '\0'.repeat(CLAUDE_STARTUP_DIAGNOSTIC_MAX_BYTES + 1)
+			: next;
+	}
+
+	/**
+	 * An exact, pre-interactive Claude config/policy rejection gets one fresh bare session.
+	 * This path reuses the already resolved executable and never probes or authenticates again,
+	 * preventing a fallback loop.
+	 */
+	private async relaunchClaudeBareAfterStartupRejection(
+		oldSession: TerminalSession,
+		preparation: PreparedClaudeTerminalLaunch,
+	): Promise<void> {
+		if (!this.isCurrentProviderSession(oldSession, 'claude')) {
+			return;
+		}
+		const tabId = oldSession.tabId;
+		const dimensions = this.lastDimensionsByTab.get(tabId)
+			?? RESTART_FALLBACK_DIMENSIONS;
+		const mcpCleanup = this.cleanupMcpSession(oldSession.sessionId);
+		try {
+			oldSession.disposeProcess();
+			oldSession.markDisposed();
+		} catch {
+			/** The exited PTY has no remaining input ownership; MCP cleanup still continues. */
+		}
+		this.removeSession(oldSession.sessionId);
+		await mcpCleanup;
+
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| this.providerByTab.get(tabId) !== 'claude'
+			|| this.getActiveSession(tabId) !== undefined
+		) {
+			return;
+		}
+
+		const session = this.createSession(tabId);
+		if (session === undefined) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'internal_error',
+				START_ERROR_MESSAGES.registration,
+				true,
+			);
+			return;
+		}
+		try {
+			session.markStarting();
+		} catch {
+			this.failSession(
+				session,
+				'internal_error',
+				START_ERROR_MESSAGES.registration,
+				true,
+			);
+			return;
+		}
+		this.publish({ type: 'terminal.starting', tabId });
+
+		let request: AgentProcessSpawnRequest | undefined;
+		try {
+			const plan = await this.buildClaudeBarePlan({
+				executable: preparation.executable,
+				cwd: preparation.cwd,
+			});
+			if (plan.providerId !== 'claude' || plan.expectsMcp) {
+				throw new Error('Invalid bare Claude launch plan.');
+			}
+			request = await this.createAgentSpawnRequest(plan, {
+				platform: preparation.platform,
+				environment: preparation.environment,
+			});
+		} catch {
+			/** The one bare attempt reports start_failed below without another fallback. */
+		}
+
+		if (!this.isCurrentProviderSession(session, 'claude')) {
+			return;
+		}
+		if (request === undefined) {
+			this.failSession(
+				session,
+				'start_failed',
+				START_ERROR_MESSAGES.spawn,
+				true,
+			);
+			return;
+		}
+
+		this.lastDimensionsByTab.set(tabId, dimensions);
+		this.mcpPtySpawnStarted.add(session.sessionId);
+		try {
+			await this.spawnProviderPty(
+				session,
+				request,
+				dimensions.cols,
+				dimensions.rows,
+			);
+		} catch {
+			this.mcpPtySpawnStarted.delete(session.sessionId);
+			if (this.isCurrentProviderSession(session, 'claude')) {
+				this.failSession(
+					session,
+					'start_failed',
+					START_ERROR_MESSAGES.spawn,
+					true,
+				);
+			}
+		}
 	}
 
 	/** 전달받은 객체가 현재 tab/session 양방향 소유 관계와 동일한지 확인한다. */
@@ -1533,41 +1947,63 @@ export class TerminalHost {
 			&& this.providerByTab.get(session.tabId) === providerId;
 	}
 
-	/** Current Codex attempt와 supervisor runtime generation을 함께 검사한다. */
-	private isCurrentCodexRuntime(
+	/** Current provider attempt와 supervisor runtime generation을 함께 검사한다. */
+	private isCurrentMcpRuntime(
 		session: TerminalSession,
+		providerId: McpProviderId,
 		generation: string,
 	): boolean {
 		const runtime = this.mcpSupervisor?.getSessionRuntime(session.sessionId);
-		return this.isCurrentProviderSession(session, 'codex')
+		const ownership = this.mcpRuntimeBySession.get(session.sessionId);
+		return this.isCurrentProviderSession(session, providerId)
 			&& session.state.kind === 'starting'
-			&& this.codexGenerationBySession.get(session.sessionId) === generation
+			&& ownership?.providerId === providerId
+			&& ownership.generation === generation
 			&& runtime?.generation === generation
 			&& runtime.lifecycle === 'running';
 	}
 
-	/** Supervisor event를 current tab/session/generation과 대조해 표시 상태만 갱신한다. */
+	/** Supervisor event를 current tab/session/provider/generation과 대조해 처리한다. */
 	handleMcpRuntimeEvent(event: McpSessionRuntimeEvent): void {
 		const session = this.sessionsById.get(event.sessionId);
+		const ownership = this.mcpRuntimeBySession.get(event.sessionId);
 		if (
 			!this.lifecycleActive
 			|| session === undefined
+			|| ownership === undefined
 			|| !this.isCurrentSession(session)
-			|| this.providerByTab.get(session.tabId) !== 'codex'
-			|| this.codexGenerationBySession.get(session.sessionId) !== event.generation
+			|| this.providerByTab.get(session.tabId) !== ownership.providerId
+			|| ownership.generation !== event.generation
 		) {
 			return;
 		}
 
 		switch (event.type) {
 			case 'session.mcpActivityObserved':
-				this.setMcpConnected(session);
+				if (ownership.providerId === 'codex') {
+					this.setMcpConnected(session);
+				} else {
+					const startup = this.claudeStartupBySession.get(session.sessionId);
+					if (startup?.generation === event.generation) {
+						startup.activityObserved = true;
+					}
+				}
 				break;
 			case 'runtime.failure':
-				this.recordMcpFailure(session, event.failure.reason);
+				if (ownership.providerId === 'codex') {
+					this.recordMcpFailure(session, event.failure.reason);
+				} else {
+					this.claudeStartupBySession.delete(session.sessionId);
+					void this.cleanupMcpSession(session.sessionId);
+				}
 				break;
 			case 'session.crispyPingObserved':
-				/** crispy_ping 관찰은 일반 authenticated activity 이후의 진단 event다. */
+				if (ownership.providerId === 'claude') {
+					const startup = this.claudeStartupBySession.get(session.sessionId);
+					if (startup?.generation === event.generation) {
+						startup.activityObserved = true;
+					}
+				}
 				break;
 		}
 	}
@@ -1780,8 +2216,9 @@ export class TerminalHost {
 
 	/** Session credential을 먼저 무효화하고 adapter 정리를 멱등 supervisor 경계에 위임한다. */
 	private cleanupMcpSession(sessionId: SessionId): Promise<void> {
-		this.codexGenerationBySession.delete(sessionId);
-		this.codexPtySpawnStarted.delete(sessionId);
+		this.mcpRuntimeBySession.delete(sessionId);
+		this.mcpPtySpawnStarted.delete(sessionId);
+		this.claudeStartupBySession.delete(sessionId);
 		const supervisor = this.mcpSupervisor;
 		if (supervisor === undefined) {
 			return Promise.resolve();
@@ -1860,15 +2297,15 @@ export class TerminalHost {
 		message: string,
 		canRestart: boolean,
 	): void {
-		const ownsDirectCodexPty = this.codexPtySpawnStarted.has(session.sessionId);
+		const ownsDirectProviderPty = this.mcpPtySpawnStarted.has(session.sessionId);
 		this.clearMcpStatus(session);
 		session.markError(code);
-		if (ownsDirectCodexPty) {
+		if (ownsDirectProviderPty) {
 			void this.cleanupMcpSession(session.sessionId);
 			try {
 				session.disposeProcess();
 			} catch {
-				/** Codex terminal operation failure still converges on listener cleanup. */
+				/** Direct provider failure still converges on listener cleanup. */
 			}
 		}
 		this.failWithoutTransition(
