@@ -30,6 +30,12 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(snapshot.tabs[0].providerId, undefined);
 		assert.strictEqual(snapshot.tabs[0].sequence, undefined);
 		assert.strictEqual(snapshot.tabs[0].label, UNSELECTED_TAB_LABEL);
+		assert.strictEqual(snapshot.tabs[0].displayName, UNSELECTED_TAB_LABEL);
+		assert.strictEqual(snapshot.tabs[0].baseLabel, undefined);
+		assert.strictEqual(snapshot.tabs[0].titleSource, 'default');
+		assert.strictEqual(snapshot.tabs[0].autoTitleAttempted, false);
+		assert.strictEqual(snapshot.tabs[0].hasStartedSession, false);
+		assert.strictEqual(snapshot.tabs[0].isPinned, false);
 		assert.deepStrictEqual(snapshot.tabs[0].mcpStatus, { kind: 'none' });
 		assert.strictEqual(snapshot.tabs[0].mcpRestartPending, false);
 	});
@@ -96,6 +102,211 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(tab.providerId, 'claude');
 		assert.strictEqual(tab.sequence, 1);
 		assert.strictEqual(tab.label, 'Claude Code #1');
+		assert.strictEqual(tab.baseLabel, 'Claude Code #1');
+		assert.strictEqual(tab.displayName, 'Claude Code #1');
+	});
+
+	test('첫 session 전 수동 이름은 유지하고 두 번째 fresh session에서 baseLabel로 초기화한다', () => {
+		const model = createModel();
+		const tabId = model.createTab();
+		assert.deepStrictEqual(model.renameTab(tabId, '  사전 조사  '), {
+			ok: true,
+			value: '사전 조사',
+		});
+		model.assignProvider(tabId, 'codex');
+
+		model.setSession(tabId, 'session-first');
+		let tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.displayName, '사전 조사');
+		assert.strictEqual(tab.titleSource, 'manual');
+		assert.strictEqual(tab.hasStartedSession, true);
+		assert.strictEqual(
+			model.canAttemptAutomaticTitle(tabId, 'session-first'),
+			false,
+		);
+
+		model.setSession(tabId, 'session-second');
+		tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.displayName, 'Codex #1');
+		assert.strictEqual(tab.titleSource, 'default');
+		assert.strictEqual(tab.autoTitleAttempted, false);
+	});
+
+	test('자동 제목과 종료 상태는 유지하고 다른 fresh session에서 다시 초기화한다', () => {
+		const model = createModel();
+		const tabId = model.createTab();
+		model.assignProvider(tabId, 'claude');
+		model.setSession(tabId, 'session-first');
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			tabId,
+			'session-first',
+			['fix-auth-timeout'],
+		), true);
+		model.clearSession(tabId, 'session-first');
+
+		let tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.displayName, 'fix-auth-timeout');
+		assert.strictEqual(tab.titleSource, 'automatic');
+		assert.strictEqual(tab.sessionId, undefined);
+
+		model.setSession(tabId, 'session-first');
+		assert.strictEqual(
+			model.getSnapshot().tabs[0].displayName,
+			'fix-auth-timeout',
+			'이미 처리한 stale started는 fresh session이 아니다.',
+		);
+		model.setSession(tabId, 'session-second');
+		tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.displayName, 'Claude Code #1');
+		assert.strictEqual(tab.titleSource, 'default');
+		assert.strictEqual(tab.autoTitleAttempted, false);
+	});
+
+	test('자동 제목은 current Codex/Claude session에서 한 번만 시도하고 Antigravity에는 적용하지 않는다', () => {
+		const model = createModel();
+		const codex = model.createTab();
+		model.assignProvider(codex, 'codex');
+		model.setSession(codex, 'session-codex');
+
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			codex,
+			'session-stale',
+			['stale-title'],
+		), false);
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			codex,
+			'session-codex',
+			[],
+		), false);
+		assert.strictEqual(model.getSnapshot().tabs[0].autoTitleAttempted, true);
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			codex,
+			'session-codex',
+			['later-title'],
+		), false);
+
+		const antigravity = model.createTab();
+		model.assignProvider(antigravity, 'antigravity');
+		model.setSession(antigravity, 'session-antigravity');
+		assert.strictEqual(
+			model.canAttemptAutomaticTitle(antigravity, 'session-antigravity'),
+			false,
+		);
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			antigravity,
+			'session-antigravity',
+			['ignored-title'],
+		), false);
+	});
+
+	test('수동 이름은 공백, 대소문자, NFC 및 숨겨진 baseLabel 중복을 거부한다', () => {
+		const model = createModel();
+		const first = model.createTab();
+		const second = model.createTab();
+		model.assignProvider(first, 'codex');
+		assert.deepStrictEqual(model.renameTab(first, 'Cafe\u0301  Build'), {
+			ok: true,
+			value: 'Café Build',
+		});
+
+		assert.deepStrictEqual(model.renameTab(second, ' café   build '), {
+			ok: false,
+			error: 'duplicate',
+		});
+		assert.deepStrictEqual(model.renameTab(second, 'CODEX #1'), {
+			ok: false,
+			error: 'duplicate',
+		});
+		assert.deepStrictEqual(model.renameTab(first, 'codex #1'), {
+			ok: true,
+			value: 'codex #1',
+		});
+	});
+
+	test('미리 사용한 표시 이름과 충돌하는 provider 번호를 건너뛴다', () => {
+		const model = createModel();
+		const reservedByDisplay = model.createTab();
+		model.renameTab(reservedByDisplay, 'Codex #3');
+
+		const first = model.createTab();
+		const second = model.createTab();
+		const third = model.createTab();
+		model.assignProvider(first, 'codex');
+		model.assignProvider(second, 'codex');
+		model.assignProvider(third, 'codex');
+
+		assert.deepStrictEqual(
+			model.getSnapshot().tabs.slice(1).map((tab) => tab.baseLabel),
+			['Codex #1', 'Codex #2', 'Codex #4'],
+		);
+	});
+
+	test('자동 제목 충돌 또는 잘못된 후보에서는 baseLabel을 유지한다', () => {
+		const model = createModel();
+		const first = model.createTab();
+		model.renameTab(first, 'fix-auth-timeout');
+		const second = model.createTab();
+		model.assignProvider(second, 'codex');
+		model.setSession(second, 'session');
+
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			second,
+			'session',
+			['fix-auth-timeout', 'fix-auth-task'],
+		), false);
+		assert.strictEqual(model.getSnapshot().tabs[1].displayName, 'Codex #1');
+		assert.strictEqual(model.getSnapshot().tabs[1].autoTitleAttempted, true);
+
+		model.setSession(second, 'session-fresh');
+		model.renameTab(first, 'only-valid-title');
+		assert.strictEqual(model.applyAutomaticTitleCandidates(
+			second,
+			'session-fresh',
+			['only-valid-title', 'a'.repeat(41)],
+		), false);
+		assert.strictEqual(model.getSnapshot().tabs[1].displayName, 'Codex #1');
+		assert.strictEqual(model.getSnapshot().tabs[1].autoTitleAttempted, true);
+	});
+
+	test('고정과 해제는 그룹 끝으로 이동하고 활성 탭을 바꾸지 않는다', () => {
+		const model = createModel();
+		const first = model.createTab();
+		const second = model.createTab();
+		const third = model.createTab();
+		model.selectTab(second);
+
+		model.setPinned(third, true);
+		model.setPinned(first, true);
+		assert.deepStrictEqual(
+			model.getSnapshot().tabs.map((tab) => tab.id),
+			[third, first, second],
+		);
+		assert.strictEqual(model.getSnapshot().activeTabId, second);
+
+		model.setPinned(third, false);
+		assert.deepStrictEqual(
+			model.getSnapshot().tabs.map((tab) => tab.id),
+			[first, second, third],
+		);
+		assert.strictEqual(model.getSnapshot().activeTabId, second);
+	});
+
+	test('provider 초기화와 fresh session에서도 고정 상태를 유지한다', () => {
+		const model = createModel();
+		const tabId = model.createTab();
+		model.assignProvider(tabId, 'codex');
+		model.setPinned(tabId, true);
+		model.setSession(tabId, 'session');
+		model.clearProvider(tabId);
+
+		let tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.displayName, UNSELECTED_TAB_LABEL);
+		assert.strictEqual(tab.hasStartedSession, false);
+		assert.strictEqual(tab.isPinned, true);
+		model.assignProvider(tabId, 'codex');
+		tab = model.getSnapshot().tabs[0];
+		assert.strictEqual(tab.baseLabel, 'Codex #2');
+		assert.strictEqual(tab.isPinned, true);
 	});
 
 	test('번호는 같은 provider 안에서만 순차 증가한다', () => {

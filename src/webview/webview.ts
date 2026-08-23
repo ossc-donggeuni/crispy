@@ -69,10 +69,23 @@ const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
 const graphView = initializeGraphView(graphArea, initialState.graph, workspaceGraph);
 
+let agentPanelUi: AgentPanelUiController | undefined;
+
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
 	terminalArea,
 	(message) => vscodeApi.postMessage(message),
+	{
+		isEligible: (tabId, sessionId) =>
+			agentPanelUi?.model.canAttemptAutomaticTitle(tabId, sessionId) ?? false,
+		onCandidate: ({ tabId, sessionId, candidates }) => {
+			agentPanelUi?.model.applyAutomaticTitleCandidates(
+				tabId,
+				sessionId,
+				candidates,
+			);
+		},
+	},
 );
 
 /** 현재 Panel과 Camera를 Webview Session snapshot으로 복사한다. */
@@ -138,16 +151,19 @@ const activateTab = (tabId: string): void => {
 	terminalPool.setActiveTab(tabId);
 };
 
-let agentPanelUi: AgentPanelUiController | undefined;
 try {
 	agentPanelUi = initializeAgentPanelUi(
 		{
 			topBar: getRequiredElement<HTMLElement>('#agent-top-bar'),
 			tabStrip: getRequiredElement<HTMLElement>('#agent-tab-strip'),
+			tabMenuHost: getRequiredElement<HTMLElement>('#agent-tab-menu-host'),
 			providerPicker: getRequiredElement<HTMLElement>(
 				'#agent-provider-picker-host',
 			),
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
+			renameDialogHost: getRequiredElement<HTMLElement>(
+				'#agent-rename-dialog-host',
+			),
 		},
 		{
 			onTabCreated(tabId): void {

@@ -236,7 +236,13 @@
 	flex: 1 1 auto;
 	min-width: 0;
 	overflow-x: auto;
+	/* macOS overlay scrollbar가 탭 라벨 위를 덮지 않게 표시만 숨긴다. */
+	scrollbar-width: none;
 	gap: 2px;
+}
+
+#agent-tab-strip::-webkit-scrollbar {
+	display: none;
 }
 
 #agent-tab-strip:empty {
@@ -244,34 +250,62 @@
 }
 
 .agent-tab {
+	--agent-tab-provider-color: transparent;
+
+	position: relative;
 	display: flex;
 	flex: 0 0 auto;
 	align-items: center;
+	max-width: 240px;
+	padding: 6px 11px;
 	border: 1px solid transparent;
-	border-radius: 3px 3px 0 0;
+	border-radius: 2px 2px 0 0;
 	background-color: var(--vscode-tab-inactiveBackground, transparent);
 }
 
+/* provider 색상은 내용과 MCP 점 opacity에 영향을 주지 않는 별도 pseudo bar다. */
+.agent-tab::before {
+	position: absolute;
+	top: -1px;
+	right: -1px;
+	left: -1px;
+	height: 2px;
+	background-color: var(--agent-tab-provider-color);
+	border-radius: 2px 2px 0 0;
+	content: '';
+	opacity: 0.55;
+}
+
+.agent-tab[data-active='true']::before {
+	opacity: 1;
+}
+
+/* 핀 아이콘 없이 두 시각적 그룹 사이에 추가 gap을 둔다. */
+.agent-tab[data-pinned-boundary='true'] {
+	margin-left: 6px;
+}
+
 .agent-tab[data-active='true'] {
-	border-color: var(--vscode-panel-border);
-	background-color: var(--vscode-tab-activeBackground, transparent);
+	border-color: var(--vscode-panel-border, transparent);
+	background-color: var(--vscode-tab-activeBackground, #232323);
 }
 
 .agent-tab-select {
-	max-width: 160px;
-	padding: 3px 6px;
+	min-width: 0;
+	padding: 0;
 	overflow: hidden;
 	color: var(--vscode-tab-inactiveForeground, var(--vscode-foreground));
 	background: transparent;
 	border: 0;
-	font: inherit;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 12px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	cursor: pointer;
 }
 
 .agent-tab[data-active='true'] .agent-tab-select {
-	color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+	color: var(--vscode-tab-activeForeground, #e8e8e8);
 }
 
 /* 각 탭이 자기 MCP 상태를 소유하므로 여러 탭의 연결 상태를 동시에 볼 수 있다. */
@@ -291,13 +325,24 @@
 }
 
 .agent-tab-close {
-	padding: 0 6px 0 0;
+	flex: 0 0 16px;
+	width: 16px;
+	padding: 0;
 	color: inherit;
 	background: transparent;
 	border: 0;
 	font: inherit;
 	line-height: 1;
 	cursor: pointer;
+}
+
+.agent-tab:not([data-active='true']) .agent-tab-close {
+	visibility: hidden;
+}
+
+.agent-tab:not([data-active='true']):hover .agent-tab-close,
+.agent-tab:not([data-active='true']):focus-within .agent-tab-close {
+	visibility: visible;
 }
 
 .agent-tab-select:focus-visible,
@@ -307,9 +352,61 @@
 }
 
 @media (forced-colors: active) {
+	.agent-tab::before {
+		background-color: CanvasText;
+	}
+
+	.agent-tab[data-active='true'] {
+		border-color: CanvasText;
+		outline: 1px solid CanvasText;
+		outline-offset: -2px;
+	}
+
 	.agent-tab-mcp-indicator {
 		background-color: CanvasText;
 	}
+}
+
+#agent-tab-menu-host {
+	position: absolute;
+	inset: 0;
+	z-index: 7;
+	pointer-events: none;
+}
+
+#agent-tab-menu-host[hidden] {
+	display: none;
+}
+
+.agent-tab-context-menu {
+	position: fixed;
+	display: grid;
+	min-width: 140px;
+	padding: 3px;
+	color: var(--vscode-menu-foreground, var(--vscode-foreground));
+	background-color: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+	border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
+	border-radius: 3px;
+	box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+	pointer-events: auto;
+}
+
+.agent-tab-context-menu-item {
+	padding: 5px 10px;
+	color: inherit;
+	background: transparent;
+	border: 0;
+	border-radius: 2px;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.agent-tab-context-menu-item:hover,
+.agent-tab-context-menu-item:focus-visible {
+	color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground));
+	background-color: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground));
+	outline: none;
 }
 
 #agent-dialog-host {
@@ -322,8 +419,86 @@
 	background-color: rgba(0, 0, 0, 0.35);
 }
 
-#agent-dialog-host[hidden] {
+#agent-dialog-host[hidden],
+#agent-rename-dialog-host[hidden] {
 	display: none;
+}
+
+#agent-rename-dialog-host {
+	position: absolute;
+	inset: 0;
+	z-index: 8;
+	display: grid;
+	padding: 24px;
+	place-items: center;
+	background-color: rgba(0, 0, 0, 0.35);
+}
+
+.agent-tab-rename-panel {
+	display: grid;
+	width: min(320px, 100%);
+	gap: 8px;
+	padding: 14px;
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.32));
+}
+
+.agent-tab-rename-title,
+.agent-tab-rename-error {
+	margin: 0;
+}
+
+.agent-tab-rename-title {
+	font-weight: 600;
+}
+
+.agent-tab-rename-input {
+	min-width: 0;
+	padding: 5px 7px;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	background-color: var(--vscode-input-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	font: inherit;
+}
+
+.agent-tab-rename-input:focus-visible {
+	border-color: var(--vscode-focusBorder);
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.agent-tab-rename-error {
+	min-height: 1.2em;
+	color: var(--vscode-errorForeground);
+	font-size: 11px;
+}
+
+.agent-tab-rename-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.agent-tab-rename-save,
+.agent-tab-rename-cancel {
+	padding: 4px 12px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	font: inherit;
+	cursor: pointer;
+}
+
+.agent-tab-rename-save {
+	color: var(--vscode-button-foreground);
+	background-color: var(--vscode-button-background);
+}
+
+.agent-tab-rename-cancel {
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background-color: var(--vscode-button-secondaryBackground, transparent);
 }
 
 .agent-confirm-panel {

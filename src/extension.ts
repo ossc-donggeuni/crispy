@@ -683,7 +683,9 @@ function getWebviewHtml(
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
+						<div id="agent-tab-menu-host" hidden></div>
 						<div id="agent-dialog-host" hidden></div>
+						<div id="agent-rename-dialog-host" hidden></div>
 					</section>
 					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" hidden>‹</button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>

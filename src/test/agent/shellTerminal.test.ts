@@ -10,6 +10,10 @@ import {
 	type TerminalOverlayState,
 	type TerminalOverlayView,
 } from '../../agent/webview/shellTerminal';
+import {
+	BRACKETED_PASTE_END,
+	BRACKETED_PASTE_START,
+} from '../../agent/webview/terminalInputCollector';
 
 const TAB_ID = 'tab-webview-terminal';
 const SESSION_ID = 'session-current';
@@ -134,6 +138,7 @@ suite('Shell Terminal Webview', () => {
 			'createFitAddon',
 			'loadAddon',
 			'open',
+			'onKey',
 			'onData',
 			'requestAnimationFrame',
 		]);
@@ -490,6 +495,150 @@ suite('Shell Terminal Webview', () => {
 			data: unchangedInput,
 		}]);
 		assert.strictEqual(terminal.focusCalls, 1);
+	});
+
+	test('자동 제목 복원은 terminal.input을 먼저 원형 전달한 뒤 파생 후보만 callback한다', () => {
+		const terminal = new FakeTerminal();
+		const events: string[] = [];
+		const messages: unknown[] = [];
+		const dependencies: ShellTerminalDependencies = {
+			...createDependencies(terminal),
+			autoTitle: {
+				isEligible: (tabId, sessionId) =>
+					tabId === TAB_ID && sessionId === SESSION_ID,
+				onCandidate: (event) => {
+					events.push('title');
+					assert.strictEqual(event.candidates[0], 'Fix the aut…');
+					assert.deepStrictEqual(Object.keys(event).sort(), [
+						'candidates', 'sessionId', 'tabId',
+					]);
+				},
+			},
+		};
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => {
+				events.push('input');
+				messages.push(message);
+			},
+			dependencies,
+		);
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+
+		terminal.emitData('Fix the auth timeout\r');
+
+		assert.deepStrictEqual(events, ['input', 'title']);
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.input',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: 'Fix the auth timeout\r',
+		}]);
+	});
+
+	test('Codex 시작 중 xterm protocol 응답 뒤에도 첫 prompt로 자동 제목을 만든다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		let title = '';
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			{
+				...createDependencies(terminal),
+				autoTitle: {
+					isEligible: () => true,
+					onCandidate: (event) => title = event.candidates[0] ?? '',
+				},
+			},
+		);
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+
+		const xtermResponses = [
+			'\u001b[?1;2c',
+			'\u001b[>0;276;0c',
+			'\u001b[?2004;1$y',
+			'\u001b[8;24;80t',
+			'\u001b[I',
+			'\u001b[?9999;0z',
+		];
+		for (const response of xtermResponses) {
+			terminal.emitData(response);
+		}
+		terminal.emitData(
+			`${BRACKETED_PASTE_START}터미널 탭 자동 세션명 변경을 테스트해줘${BRACKETED_PASTE_END}`,
+		);
+		terminal.emitKeyData('\r');
+
+		assert.strictEqual(title, '터미널 탭 자동 세션…');
+		assert.deepStrictEqual(
+			messages.map((message) => (message as { data: string }).data),
+			[
+				...xtermResponses,
+				`${BRACKETED_PASTE_START}터미널 탭 자동 세션명 변경을 테스트해줘${BRACKETED_PASTE_END}`,
+				'\r',
+			],
+		);
+	});
+
+	test('실제 keyboard 방향키는 protocol 응답과 구분해 session을 fail-closed 처리한다', () => {
+		const terminal = new FakeTerminal();
+		let title = '';
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			{
+				...createDependencies(terminal),
+				autoTitle: {
+					isEligible: () => true,
+					onCandidate: (event) => title = event.candidates[0] ?? '',
+				},
+			},
+		);
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+
+		terminal.emitData('partial input');
+		terminal.emitKeyData('\u001b[A');
+		terminal.emitData('safe prompt later\r');
+
+		assert.strictEqual(title, '');
+	});
+
+	test('terminal.input 전송 실패도 자동 제목 복원을 막지 않는다', () => {
+		const terminal = new FakeTerminal();
+		let title = '';
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => {
+				throw new Error('post failed');
+			},
+			{
+				...createDependencies(terminal),
+				autoTitle: {
+					isEligible: () => true,
+					onCandidate: (event) => title = event.candidates[0] ?? '',
+				},
+			},
+		);
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+
+		assert.doesNotThrow(() => terminal.emitData('대\r'));
+		assert.strictEqual(title, '대');
 	});
 
 	test('다른 tab의 started는 focus하지 않고 현재 tab의 started만 입력 focus한다', () => {
@@ -879,6 +1028,7 @@ class FakeTerminal {
 	disposeCalls = 0;
 	focusCalls = 0;
 	resetCalls = 0;
+	private keyListener: ((event: { readonly key: string }) => void) | undefined;
 	private dataListener: ((data: string) => void) | undefined;
 
 	constructor(private readonly events: string[] = []) {}
@@ -904,6 +1054,12 @@ class FakeTerminal {
 		this.resetCalls += 1;
 	}
 
+	onKey(listener: (event: { readonly key: string }) => void): unknown {
+		this.events.push('onKey');
+		this.keyListener = listener;
+		return undefined;
+	}
+
 	onData(listener: (data: string) => void): unknown {
 		this.events.push('onData');
 		this.dataListener = listener;
@@ -915,6 +1071,11 @@ class FakeTerminal {
 	}
 
 	emitData(data: string): void {
+		this.dataListener?.(data);
+	}
+
+	emitKeyData(data: string): void {
+		this.keyListener?.({ key: data });
 		this.dataListener?.(data);
 	}
 }

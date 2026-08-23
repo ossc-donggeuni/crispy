@@ -7,6 +7,12 @@ import type {
 	TabId,
 	WebviewToHostMessage,
 } from '../protocol';
+import {
+	BRACKETED_PASTE_START,
+	createTerminalInputCollector,
+	isXtermProtocolResponse,
+	type TerminalTitleCandidateEvent,
+} from './terminalInputCollector';
 
 /** xterm 초기화 실패 시 원본 예외 대신 터미널 영역에 표시하는 고정 문구다. */
 export const TERMINAL_INITIALIZATION_ERROR_MESSAGE =
@@ -57,6 +63,7 @@ interface XtermTerminal {
 	focus(): void;
 	write(data: string): void;
 	reset(): void;
+	onKey(listener: (event: { readonly key: string }) => void): unknown;
 	onData(listener: (data: string) => void): unknown;
 	dispose(): void;
 }
@@ -100,6 +107,12 @@ export interface ShellTerminalDependencies {
 	addWindowResizeListener(listener: () => void): () => void;
 	addVisibilityChangeListener(listener: () => void): () => void;
 	isDocumentHidden(): boolean;
+
+	/** 설정된 경우에만 current Codex/Claude session의 제목 입력을 복원한다. */
+	readonly autoTitle?: {
+		isEligible(tabId: TabId, sessionId: SessionId): boolean;
+		onCandidate(event: TerminalTitleCandidateEvent): void;
+	};
 }
 
 /** 터미널 준비, 입력, 크기 변경과 재시작을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
@@ -307,6 +320,14 @@ export function initializeShellTerminal(
 	let readySent = false;
 	let attemptedFrames = 0;
 	let lastSentDimensions: { cols: number; rows: number } | undefined;
+	let pendingKeyboardData: string | undefined;
+	const seenSessionIds = new Set<SessionId>();
+	const titleCollector = dependencies.autoTitle === undefined
+		? undefined
+		: createTerminalInputCollector(
+			tabId,
+			(event) => dependencies.autoTitle?.onCandidate(event),
+		);
 
 	/**
 	 * 모든 layout 및 visibility 이벤트를 한 animation frame으로 병합해 xterm을 맞춘다.
@@ -494,6 +515,7 @@ export function initializeShellTerminal(
 			() => removeWindowResizeListener?.(),
 			() => removeVisibilityChangeListener?.(),
 			() => terminal?.dispose(),
+			() => titleCollector?.dispose(),
 		];
 		for (const cleanup of cleanupActions) {
 			try {
@@ -514,9 +536,15 @@ export function initializeShellTerminal(
 		handleHostMessage(message): void {
 			switch (message.type) {
 				case 'terminal.started':
-					if (message.tabId === tabId) {
+					if (
+						message.tabId === tabId
+						&& activeSessionId !== message.sessionId
+						&& !seenSessionIds.has(message.sessionId)
+					) {
 						const replacedSessionId = activeSessionId;
 						activeSessionId = message.sessionId;
+						seenSessionIds.add(message.sessionId);
+						titleCollector?.startSession(message.sessionId);
 						restartSessionId = undefined;
 						restartRequested = false;
 						/**
@@ -568,6 +596,7 @@ export function initializeShellTerminal(
 						message.tabId === tabId
 						&& message.sessionId === activeSessionId
 					) {
+						titleCollector?.endSession(message.sessionId);
 						activeSessionId = undefined;
 						restartSessionId = message.sessionId;
 						restartRequested = false;
@@ -595,6 +624,9 @@ export function initializeShellTerminal(
 					}
 
 					activeSessionId = undefined;
+					if (message.sessionId !== undefined && message.sessionId !== null) {
+						titleCollector?.endSession(message.sessionId);
+					}
 					restartSessionId = message.sessionId ?? undefined;
 					restartRequested = false;
 					showOverlay({
@@ -613,8 +645,19 @@ export function initializeShellTerminal(
 		fitAddon = dependencies.createFitAddon();
 		terminal.loadAddon(fitAddon);
 		terminal.open(mount);
+		/**
+		 * xterm은 keyboard event에서 `onKey`를 `onData`보다 먼저 동기적으로 발생시킨다.
+		 * 공개 `onData`만으로는 keyboard 편집키와 TUI protocol 응답을 구분할 수 없으므로
+		 * 다음 data event 하나의 출처만 원문을 보관하지 않는 방식으로 표시한다.
+		 */
+		terminal.onKey(({ key }) => {
+			pendingKeyboardData = key;
+		});
 		terminal.onData((data) => {
-			if (activeSessionId === undefined) {
+			const isKeyboardData = pendingKeyboardData === data;
+			pendingKeyboardData = undefined;
+			const sessionId = activeSessionId;
+			if (sessionId === undefined) {
 				return;
 			}
 
@@ -622,11 +665,33 @@ export function initializeShellTerminal(
 				postMessage({
 					type: 'terminal.input',
 					tabId,
-					sessionId: activeSessionId,
+					sessionId,
 					data,
 				});
 			} catch {
 				/** Webview 전송 실패가 xterm 입력 처리나 Graph 기능으로 전파되지 않게 한다. */
+			}
+
+			try {
+				if (
+					isXtermProtocolResponse(data)
+					|| (
+						!isKeyboardData
+						&& data.startsWith('\u001b')
+						&& !data.startsWith(BRACKETED_PASTE_START)
+					)
+				) {
+					return;
+				}
+
+				if (dependencies.autoTitle?.isEligible(tabId, sessionId) === true) {
+					titleCollector?.handleData(sessionId, data);
+				} else {
+					titleCollector?.clearInput();
+				}
+			} catch {
+				/** 제목 복원 실패는 기존 terminal.input 전달을 변경하거나 차단하지 않는다. */
+				titleCollector?.clearInput();
 			}
 		});
 
