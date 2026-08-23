@@ -5,6 +5,7 @@ import {
 import {
 	createFileGroupId,
 	createGraphLayoutNodeId,
+	GRAPH_FILE_GROUP_ROW_HEIGHT,
 	getGraphLayoutRootId,
 	getGraphLayoutSourceId,
 	resolveGraphLayoutNodePosition,
@@ -43,7 +44,11 @@ import {
 } from './graphState';
 import { fitRelativePath } from './graphRootContext';
 import type { GraphNodeEffects } from './graphNodeEffects';
-import type { AgentActivityBindings } from './agentActivityBindings';
+import {
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	getAgentActivityBindingBlockHeight,
+	type AgentActivityBindings,
+} from './agentActivityBindings';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
@@ -392,7 +397,7 @@ export function initializeGraphRenderer(
 				placeholder.className = 'graph-arrangement-placeholder';
 				placeholder.setAttribute('data-graph-arrangement-placeholder-id', nodeId);
 				placeholder.style.width = `${sourceNode.width}px`;
-				placeholder.style.height = `${sourceNode.height}px`;
+				placeholder.style.height = `${getRenderedNodeHeight(sourceNode)}px`;
 				placeholder.style.transform = `translate(${sourcePosition.x}px, ${sourcePosition.y}px)`;
 				nodeLayer.append(placeholder);
 				const sourceBounds = getNodeClientRect(nodeId);
@@ -964,6 +969,8 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 		const presentationTarget = getLayoutNodePresentationTarget(layoutNode);
+
+		syncAgentActivityBindingLayout(element, layoutNode);
 
 		if (presentationTarget && options.nodeEffects) {
 			nodeEffectCleanups.set(
@@ -1593,12 +1600,17 @@ export function initializeGraphRenderer(
 
 				if (
 					element
-					&& (!previousNode || previousNode.height !== nextNode.height)
+					&& (
+						!previousNode
+						|| getRenderedNodeHeight(previousNode)
+							!== getRenderedNodeHeight(nextNode)
+					)
 				) {
-					element.style.height = `${nextNode.height}px`;
+					element.style.height = `${getRenderedNodeHeight(nextNode)}px`;
 				}
 
 				if (element) {
+					syncAgentActivityBindingLayout(element, nextNode);
 					syncDetachedRootActions(nextNode, element);
 					syncRootContextLabel(
 						nextNode,
@@ -2152,7 +2164,7 @@ function createNodeElement(
 	updateContainerStatusState(element, node);
 	element.setAttribute('data-graph-node-id', node.id);
 	element.style.width = `${node.width}px`;
-	element.style.height = `${node.height}px`;
+	element.style.height = `${getRenderedNodeHeight(node)}px`;
 
 	if (node.kind === 'file-group') {
 		element.setAttribute('data-file-group-presentation', node.presentation);
@@ -2196,6 +2208,27 @@ function createNodeElement(
 	}
 
 	return element;
+}
+
+/** Edge/Effect용 visual height와 별개인 실제 Renderer DOM 높이를 반환한다. */
+function getRenderedNodeHeight(node: GraphLayoutNode): number {
+	return node.renderedHeight ?? node.height;
+}
+
+/** Layout이 결정한 Target/subtree 아래 Binding Container 위치만 DOM에 전달한다. */
+function syncAgentActivityBindingLayout(
+	element: HTMLElement,
+	node: GraphLayoutNode,
+): void {
+	if (node.agentActivityBindingTop === undefined) {
+		element.style.removeProperty('--graph-agent-activity-binding-top');
+		return;
+	}
+
+	element.style.setProperty(
+		'--graph-agent-activity-binding-top',
+		`${node.agentActivityBindingTop}px`,
+	);
 }
 
 /** Backlink과 grouped File Group Card를 제외한 실제 Source 표현의 exact Target이다. */
@@ -2445,6 +2478,8 @@ function initializeFileGroupContent(
 					return nextFile?.id !== file.id
 						|| nextFile.name !== file.name
 						|| nextFile.presentation !== file.presentation
+						|| nextFile.agentActivityBindingCount
+							!== file.agentActivityBindingCount
 						|| nextFile.targetRootId !== file.targetRootId
 						|| !hasSameStringList(
 							nextFile.targetRootIds,
@@ -2494,6 +2529,17 @@ function createFileRow(
 	const item = ownerDocument.createElement('li');
 
 	item.className = 'graph-file-item';
+	const bindingBlockHeight = getAgentActivityBindingBlockHeight(
+		file.agentActivityBindingCount ?? 0,
+	);
+
+	if (bindingBlockHeight > 0) {
+		item.style.marginBottom = `${bindingBlockHeight}px`;
+		item.style.setProperty(
+			'--graph-agent-activity-binding-top',
+			`${GRAPH_FILE_GROUP_ROW_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP}px`,
+		);
+	}
 	item.hidden = file.hidden === true;
 	item.setAttribute('data-file-id', getGraphLayoutSourceId(file.id));
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');

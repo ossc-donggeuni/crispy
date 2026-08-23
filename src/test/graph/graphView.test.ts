@@ -49,6 +49,10 @@ import {
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
 import {
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	getAgentActivityBindingBlockHeight,
+} from '../../webview/graph/agentActivityBindings';
+import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
 } from '../../webview/graph/graphVisibleArea';
@@ -94,7 +98,7 @@ suite('Graph View', () => {
 		assert.match(hiddenRule[0], /display:\s*none;/);
 	});
 
-	test('Agent Binding은 Layout에 참여하지 않고 긴 Session Id를 자른다', () => {
+	test('Agent Binding은 absolute paint와 Layout 위치 변수를 사용하고 긴 Session Id를 자른다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
 			'../../../src/webview/graph/graphView.css',
@@ -108,6 +112,10 @@ suite('Graph View', () => {
 
 		assert.ok(containerRule);
 		assert.match(containerRule[0], /position:\s*absolute;/);
+		assert.match(
+			containerRule[0],
+			/top:\s*var\(\s*--graph-agent-activity-binding-top/,
+		);
 		assert.match(containerRule[0], /pointer-events:\s*none;/);
 		assert.ok(sessionRule);
 		assert.match(sessionRule[0], /overflow:\s*hidden;/);
@@ -777,6 +785,40 @@ suite('Graph View', () => {
 			['session-C', 'active'],
 			['session-A', 'planned'],
 		]);
+		const closedBindingTop = Number.parseFloat(
+			firstFolder.style.getPropertyValue(
+				'--graph-agent-activity-binding-top',
+			),
+		);
+
+		assert.strictEqual(
+			closedBindingTop,
+			GRAPH_FOLDER_NODE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP,
+		);
+		graphView.setNodeEffect(target, { kind: 'outline', color: '#55aaee' });
+		let effectBounds = readEffectRegionBounds(getEffectRegion(root, target.nodeId));
+		let folderPosition = readTranslate(firstFolder.style.transform);
+
+		assert.ok(
+			effectBounds.y + effectBounds.height
+				<= folderPosition.y + closedBindingTop,
+		);
+
+		graphView.state.toggleFolder(target.nodeId);
+		const openBindingTop = Number.parseFloat(
+			firstFolder.style.getPropertyValue(
+				'--graph-agent-activity-binding-top',
+			),
+		);
+
+		assert.ok(openBindingTop > closedBindingTop);
+		effectBounds = readEffectRegionBounds(getEffectRegion(root, target.nodeId));
+		folderPosition = readTranslate(firstFolder.style.transform);
+		assert.ok(
+			effectBounds.y + effectBounds.height
+				<= folderPosition.y + openBindingTop,
+		);
+		graphView.state.toggleFolder(target.nodeId);
 
 		store.setAgentActivity('session-A', target, 'rejected');
 
@@ -822,6 +864,179 @@ suite('Graph View', () => {
 		assert.strictEqual(findAgentBindingContainer(refreshedFolder), undefined);
 		store.setAgentActivity('session-D', target, 'mentioned');
 		assert.strictEqual(findAgentBindingContainer(refreshedFolder), undefined);
+	});
+
+	test('Standalone Binding count 변화만 기존 Graph reflow 경로의 footprint를 갱신한다', () => {
+		const first = { kind: 'file' as const, id: 'file:layout-a', name: 'a.ts' };
+		const second = { kind: 'file' as const, id: 'file:layout-b', name: 'b.ts' };
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:layout-a', nodeId: first.id },
+				{ id: 'root:layout-b', nodeId: second.id },
+			],
+			rootNodes: { [first.id]: first, [second.id]: second },
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			graph,
+			{},
+			store,
+		);
+		const firstCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			first.id,
+		);
+		const secondCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			second.id,
+		);
+		const initialFirst = readTranslate(firstCard.style.transform);
+		const initialSecond = readTranslate(secondCard.style.transform);
+
+		store.setAgentActivity('session-A', { nodeId: first.id }, 'planned');
+		assert.deepStrictEqual(readTranslate(firstCard.style.transform), initialFirst);
+		assert.strictEqual(
+			readTranslate(secondCard.style.transform).y,
+			initialSecond.y + getAgentActivityBindingBlockHeight(1),
+		);
+		assert.strictEqual(
+			firstCard.style.getPropertyValue(
+				'--graph-agent-activity-binding-top',
+			),
+			`${GRAPH_FOLDER_NODE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP}px`,
+		);
+		const oneBindingPosition = secondCard.style.transform;
+
+		store.setAgentActivity('session-A', { nodeId: first.id }, 'editing');
+		assert.strictEqual(secondCard.style.transform, oneBindingPosition);
+
+		store.setAgentActivity('session-B', { nodeId: first.id }, 'active');
+		assert.strictEqual(
+			readTranslate(secondCard.style.transform).y,
+			initialSecond.y + getAgentActivityBindingBlockHeight(2),
+		);
+
+		store.clearAgentActivity('session-A', { nodeId: first.id });
+		assert.strictEqual(secondCard.style.transform, oneBindingPosition);
+		store.clearAgentActivity('session-B', { nodeId: first.id });
+		assert.deepStrictEqual(readTranslate(secondCard.style.transform), initialSecond);
+
+		graphView.dispose();
+		store.setAgentActivity('session-C', { nodeId: first.id }, 'mentioned');
+		assert.deepStrictEqual(readTranslate(secondCard.style.transform), initialSecond);
+	});
+
+	test('Binding footprint는 Target Card, Edge anchor와 G-11 Effect bounds를 확장하지 않는다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:binding-geometry/index.ts',
+			name: 'index.ts',
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:binding-geometry',
+			name: 'binding-geometry',
+			status: 'loaded',
+			children: [file],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+		}, createSingleRootGraph(project), {}, store);
+		const fileCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			file.id,
+		);
+		const edge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${file.id}`,
+		);
+		const initialTransform = fileCard.style.transform;
+		const initialEdgePath = edge.getAttribute('d');
+
+		graphView.setNodeEffect(
+			{ nodeId: file.id },
+			{ kind: 'shimmer', color: '#55aaee' },
+		);
+		const shimmer = getNodeEffect(fileCard, 'shimmer');
+
+		store.setAgentActivity('session-A', { nodeId: file.id }, 'editing');
+
+		assert.strictEqual(fileCard.style.height, `${GRAPH_FOLDER_NODE_HEIGHT}px`);
+		assert.strictEqual(fileCard.style.transform, initialTransform);
+		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.strictEqual(getNodeEffect(fileCard, 'shimmer'), shimmer);
+		assert.ok(findAgentBindingContainer(fileCard));
+		graphView.dispose();
+	});
+
+	test('clearSession은 여러 Target의 effective footprint를 한 최신 Layout으로 수렴시킨다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:clear-session-${name}`,
+			name: `${name}.ts`,
+		}));
+		const graph: Graph = {
+			roots: files.map((file) => ({
+				id: `root:${file.id}`,
+				nodeId: file.id,
+			})),
+			rootNodes: Object.fromEntries(files.map((file) => [file.id, file])),
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			graph,
+			{},
+			store,
+		);
+		const thirdCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			files[2]?.id ?? '',
+		);
+		const initialThird = readTranslate(thirdCard.style.transform);
+
+		store.setAgentActivity('session-A', { nodeId: files[0]?.id ?? '' }, 'editing');
+		store.setAgentActivity('session-B', { nodeId: files[0]?.id ?? '' }, 'planned');
+		store.setAgentActivity('session-A', { nodeId: files[1]?.id ?? '' }, 'active');
+		assert.strictEqual(
+			readTranslate(thirdCard.style.transform).y,
+			initialThird.y
+				+ getAgentActivityBindingBlockHeight(2)
+				+ getAgentActivityBindingBlockHeight(1),
+		);
+
+		store.clearAgentActivitiesBySession('session-A');
+		assert.strictEqual(
+			readTranslate(thirdCard.style.transform).y,
+			initialThird.y + getAgentActivityBindingBlockHeight(1),
+		);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: files[0]?.id ?? '' }).map(
+				(entry) => entry.sessionId,
+			),
+			['session-B'],
+		);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: files[1]?.id ?? '' }),
+			[],
+		);
+		graphView.dispose();
 	});
 
 	test('clearSession은 여러 Target Binding에서 해당 Session만 한 번에 제거한다', () => {
@@ -891,6 +1106,12 @@ suite('Graph View', () => {
 			'data-graph-node-id',
 			GRAPH_MOCK_FILE_ROOT.id,
 		);
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const collapsedHeight = fileGroup.style.height;
 
 		assert.deepStrictEqual(getAgentBindingState(standaloneFile), [
 			['session-standalone', 'active'],
@@ -907,8 +1128,18 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getAgentBindingState(firstRow), [
 			['session-row', 'editing'],
 		]);
+		assert.strictEqual(
+			fileGroup.style.height,
+			`${getFileGroupHeight(7, true)
+				+ getAgentActivityBindingBlockHeight(1)}px`,
+		);
+		assert.strictEqual(
+			firstRow.style.marginBottom,
+			`${getAgentActivityBindingBlockHeight(1)}px`,
+		);
 		graphView.state.collapseFileGroup(fileGroupId);
 		assert.strictEqual(findAgentBindingContainer(firstRow), undefined);
+		assert.strictEqual(fileGroup.style.height, collapsedHeight);
 		graphView.state.showMoreFiles(fileGroupId);
 		const restoredRow = getDescendantByAttribute(root, 'data-file-id', pagedFileId);
 
@@ -7018,6 +7249,7 @@ class FakeStyle {
 	top = '';
 	bottom = '';
 	maxWidth = '';
+	marginBottom = '';
 	opacity = '';
 	scale = '';
 	private readonly customProperties = new Map<string, string>();

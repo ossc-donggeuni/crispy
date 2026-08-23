@@ -19,6 +19,11 @@ import {
 	getRemainingFileCount,
 	getVisibleFileCount,
 } from './graphState';
+import type { GraphNodeEffectTarget } from '../../messages';
+import {
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	getAgentActivityBindingBlockHeight,
+} from './agentActivityBindings';
 
 /** Graph World 좌표계에서 Node의 좌상단 위치를 나타낸다. */
 export interface GraphLayoutPosition {
@@ -35,7 +40,14 @@ interface GraphLayoutNodeBase {
 	readonly depth: number;
 	readonly position: GraphLayoutPosition;
 	readonly width: number;
+	/** Edge/Effect geometry에서 사용하는 실제 Graph Card 높이다. */
 	readonly height: number;
+	/** Card geometry와 별개로 Renderer DOM이 확보해야 하는 높이다. */
+	readonly renderedHeight?: number;
+	/** Card 좌상단 기준 Agent Binding Container의 Layout 결정 위치다. */
+	readonly agentActivityBindingTop?: number;
+	/** 이 Target에서 실제 표시되는 effective Session Binding 개수다. */
+	readonly agentActivityBindingCount?: number;
 }
 
 /** Project Root를 나타내는 Layout Node다. */
@@ -71,6 +83,8 @@ export interface GraphFileNode {
 	readonly presentation: GraphFilePresentation;
 	readonly targetRootId?: string;
 	readonly targetRootIds?: readonly string[];
+	/** grouped Row에서 실제 표시되는 effective Session Binding 개수다. */
+	readonly agentActivityBindingCount?: number;
 }
 
 /** File Group Card의 표시 방식을 나타낸다. */
@@ -121,6 +135,10 @@ export interface GraphLayoutOptions {
 	readonly hiddenNodeIds?: Readonly<Record<string, true>>;
 	/** 수동으로 꺼내 일반 sibling flow의 subtree 높이 계산에서 제외할 Node다. */
 	readonly unarrangedNodeIds?: ReadonlySet<string>;
+	/** G-12.5와 동일한 effective source/occurrence Binding 개수 resolver다. */
+	readonly getAgentActivityBindingCount?: (
+		target: GraphNodeEffectTarget,
+	) => number;
 }
 
 /** 저장 위치가 있으면 우선하고 없으면 Layout의 결정적 기본 위치를 반환한다. */
@@ -214,6 +232,8 @@ interface LayoutTreeNode {
 	readonly depth: number;
 	readonly width: number;
 	readonly height: number;
+	readonly renderedHeight?: number;
+	readonly agentActivityBindingCount?: number;
 	readonly parentId?: string;
 	readonly fileChildren?: readonly GraphFileNode[];
 	readonly fileGroupPresentation?: GraphFileGroupPresentation;
@@ -269,6 +289,7 @@ export function createGraphLayout(
 				undefined,
 				options.unarrangedNodeIds ?? new Set(),
 				root,
+				options.getAgentActivityBindingCount,
 			)
 			: createContainerTree(
 				rootNode,
@@ -279,13 +300,20 @@ export function createGraphLayout(
 				options.hiddenNodeIds ?? {},
 				options.unarrangedNodeIds ?? new Set(),
 				root,
+				options.getAgentActivityBindingCount,
 			);
 		rootNodeIds.add(tree.id);
 
 		if (root.context) {
 			rootContexts[tree.id] = root.context;
 		}
-		const subtreeHeight = placeTree(tree, rootTop, nodes, edges);
+		const subtreeHeight = placeTree(
+			tree,
+			rootTop,
+			nodes,
+			edges,
+			new Map(),
+		);
 
 		rootTop += subtreeHeight + GRAPH_LAYOUT_ROOT_GAP;
 	}
@@ -346,6 +374,7 @@ function createContainerTree(
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	unarrangedNodeIds: ReadonlySet<string>,
 	layoutRoot: GraphRoot,
+	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): LayoutTreeNode {
 	const id = createGraphLayoutNodeId(layoutRoot.id, container.id);
 	const isOpened = openedFolders[id] === true
@@ -376,6 +405,7 @@ function createContainerTree(
 					hiddenNodeIds,
 					unarrangedNodeIds,
 					layoutRoot,
+					getAgentActivityBindingCount,
 				);
 		});
 	const files = visibleChildren.filter(isFile);
@@ -389,6 +419,7 @@ function createContainerTree(
 			hiddenNodeIds,
 			unarrangedNodeIds,
 			layoutRoot,
+			getAgentActivityBindingCount,
 		)
 		: [];
 
@@ -403,6 +434,11 @@ function createContainerTree(
 		depth,
 		width: GRAPH_FOLDER_NODE_WIDTH,
 		height: GRAPH_FOLDER_NODE_HEIGHT,
+		...toAgentActivityBindingCount(
+			container.id,
+			layoutRoot,
+			getAgentActivityBindingCount,
+		),
 		children: [...folderChildren, ...fileNodes],
 	};
 }
@@ -447,6 +483,7 @@ function createFileLayoutTrees(
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	unarrangedNodeIds: ReadonlySet<string>,
 	layoutRoot: GraphRoot,
+	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): readonly LayoutTreeNode[] {
 	return createArrangedFileLayoutTrees(
 		parent,
@@ -457,6 +494,7 @@ function createFileLayoutTrees(
 		hiddenNodeIds,
 		unarrangedNodeIds,
 		layoutRoot,
+		getAgentActivityBindingCount,
 	);
 }
 
@@ -470,6 +508,7 @@ function createArrangedFileLayoutTrees(
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	unarrangedNodeIds: ReadonlySet<string>,
 	layoutRoot: GraphRoot,
+	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): readonly LayoutTreeNode[] {
 	const singleton = files[0];
 
@@ -488,6 +527,7 @@ function createArrangedFileLayoutTrees(
 			),
 			unarrangedNodeIds,
 			layoutRoot,
+			getAgentActivityBindingCount,
 		)];
 	}
 
@@ -509,22 +549,34 @@ function createArrangedFileLayoutTrees(
 	const hasPaginationControls = remainingFileCount > 0
 		|| (visibleFiles.length > FILE_GROUP_PAGE_SIZE && page > 1);
 
+	const fileChildren = visibleFiles.map((file) => toGraphFileNode(
+		file,
+		getDetachedRootsForOccurrence(
+			rootsByNodeId.get(file.id),
+			layoutRoot,
+		),
+		layoutRoot,
+		getAgentActivityBindingCount,
+	));
+	const height = getFileGroupHeight(visibleFileCount, hasPaginationControls);
+	const renderedHeight = height + fileChildren
+		.slice(0, visibleFileCount)
+		.reduce((sum, file) => (
+			sum + getAgentActivityBindingBlockHeight(
+				file.agentActivityBindingCount ?? 0,
+			)
+		), 0);
+
 	return [{
 		id,
 		name: `${parent.name} files`,
 		kind: 'file-group',
 		depth,
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
-		height: getFileGroupHeight(visibleFileCount, hasPaginationControls),
+		height,
+		...(renderedHeight === height ? {} : { renderedHeight }),
 		parentId: createGraphLayoutNodeId(layoutRoot.id, parent.id),
-		fileChildren: visibleFiles.map((file) => toGraphFileNode(
-			file,
-			getDetachedRootsForOccurrence(
-				rootsByNodeId.get(file.id),
-				layoutRoot,
-			),
-			layoutRoot,
-		)),
+		fileChildren,
 		fileGroupPresentation: 'grouped',
 		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
@@ -539,12 +591,20 @@ function createStandaloneFileGroupTree(
 	targetRoots?: readonly GraphRoot[],
 	unarrangedNodeIds: ReadonlySet<string> = new Set(),
 	layoutRoot?: GraphRoot,
+	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): LayoutTreeNode {
 	const targetRoot = targetRoots?.[0];
 	const sourceId = targetRoot ? createFileBacklinkGroupId(file.id) : file.id;
 	const id = layoutRoot
 		? createGraphLayoutNodeId(layoutRoot.id, sourceId)
 		: sourceId;
+
+	const fileNode = toGraphFileNode(
+		file,
+		targetRoots,
+		layoutRoot,
+		getAgentActivityBindingCount,
+	);
 
 	return {
 		id,
@@ -556,8 +616,15 @@ function createStandaloneFileGroupTree(
 		parentId: parentId && layoutRoot
 			? createGraphLayoutNodeId(layoutRoot.id, parentId)
 			: parentId,
-		fileChildren: [toGraphFileNode(file, targetRoots, layoutRoot)],
+		fileChildren: [fileNode],
 		fileGroupPresentation: 'standalone',
+		...(fileNode.presentation === 'normal'
+			? toAgentActivityBindingCount(
+				file.id,
+				layoutRoot,
+				getAgentActivityBindingCount,
+			)
+			: {}),
 		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
 	};
@@ -568,6 +635,7 @@ function toGraphFileNode(
 	file: File,
 	targetRoots: readonly GraphRoot[] | undefined,
 	layoutRoot?: GraphRoot,
+	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): GraphFileNode {
 	const targetRoot = targetRoots?.[0];
 
@@ -578,11 +646,39 @@ function toGraphFileNode(
 			: file.id,
 		name: file.name,
 		presentation: targetRoot ? 'backlink' : 'normal',
+		...(targetRoot
+			? {}
+			: toAgentActivityBindingCount(
+				file.id,
+				layoutRoot,
+				getAgentActivityBindingCount,
+			)),
 		...(targetRoot === undefined ? {} : {
 			targetRootId: targetRoot.id,
 			targetRootIds: targetRoots?.map((root) => root.id),
 		}),
 	};
+}
+
+/** Layout Root occurrence 의미를 보존한 effective Binding 개수를 optional metadata로 만든다. */
+function toAgentActivityBindingCount(
+	nodeId: string,
+	layoutRoot: GraphRoot | undefined,
+	getBindingCount: GraphLayoutOptions['getAgentActivityBindingCount'],
+): { readonly agentActivityBindingCount?: number } {
+	if (!getBindingCount) {
+		return {};
+	}
+
+	const rootId = layoutRoot && isDetachedRootId(layoutRoot.id)
+		? layoutRoot.id
+		: undefined;
+	const bindingCount = getBindingCount({
+		nodeId,
+		...(rootId ? { rootId } : {}),
+	});
+
+	return bindingCount > 0 ? { agentActivityBindingCount: bindingCount } : {};
 }
 
 /** 표시 Row와 선택적 단일 control 영역을 포함한 File Group 높이를 계산한다. */
@@ -596,20 +692,28 @@ export function getFileGroupHeight(
 		+ (hasPaginationControls ? GRAPH_FILE_GROUP_CONTROL_HEIGHT : 0);
 }
 
-/** Subtree 높이를 기준으로 Node를 배치하고 직접 Child Edge를 순서대로 생성한다. */
+/** Card 좌상단을 기준으로 실제 Layout flow가 차지하는 비대칭 Subtree 범위다. */
+interface LayoutTreeMetrics {
+	readonly top: number;
+	readonly bottom: number;
+	readonly height: number;
+	readonly baselineHeight: number;
+	readonly childrenTop: number;
+	readonly agentActivityBindingTop?: number;
+}
+
+/** Subtree footprint를 기준으로 Node를 배치하고 직접 Child Edge를 생성한다. */
 function placeTree(
 	tree: LayoutTreeNode,
 	nodeTop: number,
 	nodes: GraphLayoutNode[],
 	edges: GraphLayoutEdge[],
+	metricsByTree: Map<LayoutTreeNode, LayoutTreeMetrics>,
 ): number {
-	const childHeights = tree.children.map(getSubtreeHeight);
-	const arrangedChildHeights = childHeights.filter((height) => height > 0);
-	const childrenHeight = arrangedChildHeights.reduce(
-		(sum, height) => sum + height,
-		0,
-	) + Math.max(0, arrangedChildHeights.length - 1) * GRAPH_LAYOUT_ROW_GAP;
-	const subtreeHeight = Math.max(tree.height, childrenHeight);
+	const childMetrics = tree.children.map((child) => (
+		getSubtreeMetrics(child, metricsByTree)
+	));
+	const metrics = getSubtreeMetrics(tree, metricsByTree);
 	const position = {
 		x: GRAPH_LAYOUT_START_X
 			+ tree.depth * (GRAPH_LAYOUT_COLUMN_WIDTH + GRAPH_LAYOUT_COLUMN_GAP),
@@ -617,15 +721,19 @@ function placeTree(
 		y: nodeTop,
 	};
 
-	nodes.push(toGraphLayoutNode(tree, position));
+	nodes.push(toGraphLayoutNode(
+		tree,
+		position,
+		metrics.agentActivityBindingTop,
+	));
 
-	let childSubtreeTop = nodeTop + (tree.height - childrenHeight) / 2;
+	let childSubtreeTop = nodeTop + metrics.childrenTop;
 
 	for (let index = 0; index < tree.children.length; index += 1) {
 		const child = tree.children[index];
-		const childHeight = childHeights[index];
+		const childMetric = childMetrics[index];
 
-		if (!child || childHeight === undefined) {
+		if (!child || !childMetric) {
 			continue;
 		}
 
@@ -635,20 +743,21 @@ function placeTree(
 			targetId: child.id,
 		});
 		if (child.unarranged) {
-			placeTree(child, nodeTop, nodes, edges);
+			placeTree(child, nodeTop, nodes, edges, metricsByTree);
 			continue;
 		}
 
 		placeTree(
 			child,
-			childSubtreeTop + (childHeight - child.height) / 2,
+			childSubtreeTop - childMetric.top,
 			nodes,
 			edges,
+			metricsByTree,
 		);
-		childSubtreeTop += childHeight + GRAPH_LAYOUT_ROW_GAP;
+		childSubtreeTop += childMetric.height + GRAPH_LAYOUT_ROW_GAP;
 	}
 
-	return tree.unarranged ? 0 : subtreeHeight;
+	return tree.unarranged ? 0 : metrics.height;
 }
 
 /** Detached child Root는 자신이 분리된 Graph Root Instance에만 Backlink로 표시한다. */
@@ -670,31 +779,66 @@ function getDetachedRootsForOccurrence(
 	return matchingRoots.length > 0 ? matchingRoots : undefined;
 }
 
-/** 자신과 모든 Child를 충돌 없이 세로 배치하는 데 필요한 Subtree 높이를 계산한다. */
-function getSubtreeHeight(tree: LayoutTreeNode): number {
-	if (tree.unarranged) {
-		return 0;
+/** Card geometry와 Binding footprint를 분리한 Subtree 범위를 계산해 재사용한다. */
+function getSubtreeMetrics(
+	tree: LayoutTreeNode,
+	metricsByTree: Map<LayoutTreeNode, LayoutTreeMetrics>,
+): LayoutTreeMetrics {
+	const existing = metricsByTree.get(tree);
+
+	if (existing) {
+		return existing;
 	}
 
-	if (tree.children.length === 0) {
-		return tree.height;
-	}
-
-	const arrangedChildHeights = tree.children
-		.map(getSubtreeHeight)
-		.filter((height) => height > 0);
-	const childrenHeight = arrangedChildHeights.reduce(
-		(sum, height) => sum + height,
+	const arrangedChildMetrics = tree.children.flatMap((child) => (
+		child.unarranged
+			? []
+			: [getSubtreeMetrics(child, metricsByTree)]
+	));
+	const childrenHeight = arrangedChildMetrics.reduce(
+		(sum, childMetrics) => sum + childMetrics.height,
 		0,
-	) + Math.max(0, arrangedChildHeights.length - 1) * GRAPH_LAYOUT_ROW_GAP;
+	) + Math.max(0, arrangedChildMetrics.length - 1) * GRAPH_LAYOUT_ROW_GAP;
+	const baselineChildrenHeight = arrangedChildMetrics.reduce(
+		(sum, childMetrics) => sum + childMetrics.baselineHeight,
+		0,
+	) + Math.max(0, arrangedChildMetrics.length - 1) * GRAPH_LAYOUT_ROW_GAP;
+	const childrenTop = (tree.height - baselineChildrenHeight) / 2;
+	const contentTop = Math.min(0, childrenTop);
+	const contentBottom = Math.max(
+		tree.renderedHeight ?? tree.height,
+		childrenTop + childrenHeight,
+	);
+	const bindingCount = tree.agentActivityBindingCount ?? 0;
+	const bindingBlockHeight = getAgentActivityBindingBlockHeight(bindingCount);
+	const bottom = contentBottom + bindingBlockHeight;
+	const baselineBottom = Math.max(
+		tree.height,
+		childrenTop + baselineChildrenHeight,
+	);
+	const metrics: LayoutTreeMetrics = {
+		top: contentTop,
+		bottom,
+		height: bottom - contentTop,
+		baselineHeight: baselineBottom - contentTop,
+		childrenTop,
+		...(bindingCount > 0
+			? {
+				agentActivityBindingTop: contentBottom
+					+ AGENT_ACTIVITY_BINDING_TOP_GAP,
+			}
+			: {}),
+	};
 
-	return Math.max(tree.height, childrenHeight);
+	metricsByTree.set(tree, metrics);
+	return metrics;
 }
 
 /** 내부 Layout Tree Node를 Renderer가 사용하는 판별 가능한 Layout Node로 변환한다. */
 function toGraphLayoutNode(
 	tree: LayoutTreeNode,
 	position: GraphLayoutPosition,
+	agentActivityBindingTop?: number,
 ): GraphLayoutNode {
 	const base = {
 		id: tree.id,
@@ -703,6 +847,15 @@ function toGraphLayoutNode(
 		position,
 		width: tree.width,
 		height: tree.height,
+		...(tree.renderedHeight === undefined
+			? {}
+			: { renderedHeight: tree.renderedHeight }),
+		...(tree.agentActivityBindingCount === undefined
+			? {}
+			: { agentActivityBindingCount: tree.agentActivityBindingCount }),
+		...(agentActivityBindingTop === undefined
+			? {}
+			: { agentActivityBindingTop }),
 	};
 
 	if (tree.kind === 'file-group') {

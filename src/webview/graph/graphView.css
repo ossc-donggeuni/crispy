@@ -344,14 +344,17 @@ body.vscode-high-contrast-light .graph-viewport {
 		box-shadow 180ms ease;
 }
 
-/* G-12.6 전에는 Target 아래에 겹쳐 그리되 기존 Graph geometry에는 참여하지 않는다. */
+/* Binding은 absolute paint를 유지하고 결정적인 footprint/위치는 Layout이 예약한다. */
 .graph-file-item.graph-agent-activity-binding-host {
 	position: relative;
 }
 
 .graph-agent-activity-bindings {
 	position: absolute;
-	top: calc(100% + 6px);
+	top: var(
+		--graph-agent-activity-binding-top,
+		calc(100% + var(--graph-agent-activity-binding-top-gap))
+	);
 	left: 0;
 	z-index: 4;
 	display: flex;
@@ -359,12 +362,13 @@ body.vscode-high-contrast-light .graph-viewport {
 	min-width: 0;
 	box-sizing: border-box;
 	flex-direction: column;
-	gap: 4px;
+	gap: var(--graph-agent-activity-binding-row-gap);
 	pointer-events: none;
 }
 
 .graph-agent-activity-binding {
 	display: flex;
+	height: var(--graph-agent-activity-binding-row-height);
 	width: 100%;
 	min-width: 0;
 	box-sizing: border-box;

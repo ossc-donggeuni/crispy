@@ -3813,11 +3813,21 @@ class FakeDocument {
 
 class FakeElement {
 	readonly children: FakeElement[] = [];
-	readonly style: Record<string, string> = {
+	readonly style = {
 		transform: '',
 		backgroundPosition: '',
 		backgroundSize: '',
-	};
+		setProperty(name: string, value: string): void {
+			(this as Record<string, unknown>)[name] = value;
+		},
+		removeProperty(name: string): string {
+			const previous = (this as Record<string, unknown>)[name];
+
+			delete (this as Record<string, unknown>)[name];
+			return typeof previous === 'string' ? previous : '';
+		},
+	} as unknown as Record<string, string>
+		& Pick<CSSStyleDeclaration, 'setProperty' | 'removeProperty'>;
 	readonly classList = {
 		add: (...tokens: string[]) => {
 			for (const token of tokens) {

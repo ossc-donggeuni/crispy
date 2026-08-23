@@ -1002,6 +1002,7 @@ export function initializeGraphView(
 		openedFolders: snapshot.openedFolders,
 		hiddenNodeIds: snapshot.hiddenNodeIds,
 		unarrangedNodeIds,
+		getAgentActivityBindingCount: agentActivityBindings?.getBindingCount,
 	});
 	const normalizedInitialSnapshot = {
 		...initialGraphState,
@@ -1579,6 +1580,40 @@ export function initializeGraphView(
 		syncNavigatorRoots,
 		() => skipGraphLayoutReflow,
 	);
+	const unsubscribeAgentActivityLayout = agentActivityBindings
+		?.subscribeBindingCountChanges(() => {
+			if (disposed) {
+				return;
+			}
+
+			const snapshot = state.getState();
+			const previousLayout = currentLayout;
+			const nextLayout = createLayout(
+				currentGraph,
+				snapshot,
+				currentUnarrangedNodeIds,
+			);
+			const nodePositions = normalizeGraphNodePositions(
+				nextLayout,
+				rebaseNodePositions(
+					previousLayout,
+					nextLayout,
+					snapshot.nodePositions,
+					{ logicalParentByChild: currentLogicalParentByChild },
+				),
+			);
+
+			currentLayout = nextLayout;
+			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
+			state.setState({
+				camera: snapshot.camera,
+				nodePositions,
+				fileGroupPages: snapshot.fileGroupPages,
+				openedFolders: snapshot.openedFolders,
+				detachedRootNodeIds: snapshot.detachedRootNodeIds,
+				hiddenNodeIds: snapshot.hiddenNodeIds,
+			});
+		}) ?? (() => {});
 
 	return {
 		state,
@@ -1722,6 +1757,7 @@ export function initializeGraphView(
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
 			unsubscribeLayout();
+			unsubscribeAgentActivityLayout();
 			navigator.dispose();
 			renderer.dispose();
 			agentActivityBindings?.dispose();

@@ -4,7 +4,13 @@ import {
 	createAgentActivityStore,
 	type AgentActivityStore,
 } from '../../agent/webview/agentActivityStore';
-import { createAgentActivityBindings } from '../../webview/graph/agentActivityBindings';
+import {
+	AGENT_ACTIVITY_BINDING_ROW_GAP,
+	AGENT_ACTIVITY_BINDING_ROW_HEIGHT,
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	createAgentActivityBindings,
+	getAgentActivityBindingBlockHeight,
+} from '../../webview/graph/agentActivityBindings';
 
 const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
 const TARGET_Y: GraphNodeEffectTarget = { nodeId: 'folder:workspace/src/y' };
@@ -232,6 +238,54 @@ suite('Agent Activity Bindings', () => {
 		bindings.registerTarget(TARGET_X, afterDisposeElement.asHtmlElement());
 		assert.strictEqual(findBindingContainer(afterDisposeElement), undefined);
 	});
+
+	test('effective Binding 개수 변경만 Layout subscriber에 한 번 통지한다', () => {
+		const occurrenceTarget: GraphNodeEffectTarget = {
+			nodeId: TARGET_X.nodeId,
+			rootId: 'detached:root:layout',
+		};
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(store);
+		const occurrenceElement = createTargetElement();
+		let notifications = 0;
+
+		bindings.registerTarget(
+			occurrenceTarget,
+			occurrenceElement.asHtmlElement(),
+		);
+		const unsubscribe = bindings.subscribeBindingCountChanges(() => {
+			notifications += 1;
+		});
+
+		store.setAgentActivity('session-A', TARGET_X, 'planned');
+		assert.strictEqual(bindings.getBindingCount(occurrenceTarget), 1);
+		assert.strictEqual(notifications, 1);
+
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+		store.setAgentActivity('session-A', occurrenceTarget, 'rejected');
+		assert.strictEqual(bindings.getBindingCount(occurrenceTarget), 1);
+		assert.strictEqual(notifications, 1);
+
+		store.setAgentActivity('session-B', occurrenceTarget, 'active');
+		assert.strictEqual(bindings.getBindingCount(occurrenceTarget), 2);
+		assert.strictEqual(notifications, 2);
+
+		store.clearAgentActivitiesBySession('session-A');
+		assert.strictEqual(bindings.getBindingCount(occurrenceTarget), 1);
+		assert.strictEqual(notifications, 3);
+
+		unsubscribe();
+		store.clearAgentActivitiesBySession('session-B');
+		assert.strictEqual(notifications, 3);
+		bindings.dispose();
+	});
+
+	test('Binding CSS와 Layout이 공유하는 고정 Row footprint 규약을 노출한다', () => {
+		assert.strictEqual(AGENT_ACTIVITY_BINDING_TOP_GAP, 6);
+		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_HEIGHT, 26);
+		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_GAP, 4);
+		assert.strictEqual(getAgentActivityBindingBlockHeight(2), 62);
+	});
 });
 
 class FakeDocument {
@@ -242,6 +296,11 @@ class FakeDocument {
 
 class FakeElement {
 	readonly children: FakeElement[] = [];
+	readonly style = {
+		setProperty: (name: string, value: string) => {
+			this.styleProperties.set(name, value);
+		},
+	};
 	readonly classList = {
 		add: (...tokens: string[]) => {
 			for (const token of tokens) {
@@ -258,6 +317,7 @@ class FakeElement {
 	textContent = '';
 	private readonly classNames = new Set<string>();
 	private readonly attributes = new Map<string, string>();
+	private readonly styleProperties = new Map<string, string>();
 	private parent: FakeElement | undefined;
 
 	constructor(readonly ownerDocument: FakeDocument) {}

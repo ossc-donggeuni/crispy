@@ -10,8 +10,30 @@ import {
 export interface AgentActivityBindings {
 	/** 현재 마운트된 정확한 Target DOM에 Store snapshot을 연결한다. */
 	registerTarget(target: GraphNodeEffectTarget, element: HTMLElement): () => void;
+	/** G-12.5 source/occurrence merge가 실제 표시하는 Binding 개수를 반환한다. */
+	getBindingCount(target: GraphNodeEffectTarget): number;
+	/** 마운트된 Target의 effective Binding 개수가 바뀔 때만 구독자를 호출한다. */
+	subscribeBindingCountChanges(subscriber: () => void): () => void;
 	/** Store 구독과 G-12.5가 만든 모든 Binding DOM을 정리한다. */
 	dispose(): void;
+}
+
+/** Binding Container가 Target 표시 범위 아래에 두는 고정 간격이다. */
+export const AGENT_ACTIVITY_BINDING_TOP_GAP = 6;
+/** 현재 한 줄 Agent Binding Box의 border-box 높이다. */
+export const AGENT_ACTIVITY_BINDING_ROW_HEIGHT = 26;
+/** 같은 Target의 Agent Binding Box 사이 고정 간격이다. */
+export const AGENT_ACTIVITY_BINDING_ROW_GAP = 4;
+
+/** 한 Target의 Agent Binding들이 차지하는 결정적인 추가 Layout 높이다. */
+export function getAgentActivityBindingBlockHeight(bindingCount: number): number {
+	const normalizedCount = Math.max(0, Math.floor(bindingCount));
+
+	return normalizedCount === 0
+		? 0
+		: AGENT_ACTIVITY_BINDING_TOP_GAP
+			+ normalizedCount * AGENT_ACTIVITY_BINDING_ROW_HEIGHT
+			+ (normalizedCount - 1) * AGENT_ACTIVITY_BINDING_ROW_GAP;
 }
 
 interface TargetRegistration {
@@ -29,6 +51,7 @@ export function createAgentActivityBindings(
 	store: AgentActivityStore,
 ): AgentActivityBindings {
 	const registrationsByTarget = new Map<string, Set<TargetRegistration>>();
+	const bindingCountSubscribers = new Set<() => void>();
 	let snapshotsByTarget = new Map<string, readonly AgentSessionActivitySnapshot[]>();
 	let disposed = false;
 
@@ -48,7 +71,24 @@ export function createAgentActivityBindings(
 			nextSnapshotsByTarget.set(key, targetSnapshot.activities);
 		}
 
+		let bindingCountChanged = false;
+
 		for (const registrations of registrationsByTarget.values()) {
+			const registration = registrations.values().next().value;
+
+			if (
+				registration
+				&& getEffectiveActivities(
+					registration.target,
+					snapshotsByTarget,
+				).length !== getEffectiveActivities(
+					registration.target,
+					nextSnapshotsByTarget,
+				).length
+			) {
+				bindingCountChanged = true;
+			}
+
 			for (const registration of registrations) {
 				reconcileTarget(
 					registration,
@@ -61,6 +101,15 @@ export function createAgentActivityBindings(
 		}
 
 		snapshotsByTarget = nextSnapshotsByTarget;
+		if (bindingCountChanged) {
+			for (const subscriber of [...bindingCountSubscribers]) {
+				try {
+					subscriber();
+				} catch {
+					/** 후속 Layout subscriber가 다른 Binding DOM reconcile을 막지 않는다. */
+				}
+			}
+		}
 	};
 
 	reconcile(store.getSnapshot());
@@ -103,6 +152,23 @@ export function createAgentActivityBindings(
 			};
 		},
 
+		getBindingCount(target): number {
+			return disposed
+				? 0
+				: getEffectiveActivities(target, snapshotsByTarget).length;
+		},
+
+		subscribeBindingCountChanges(subscriber): () => void {
+			if (disposed) {
+				return () => {};
+			}
+
+			bindingCountSubscribers.add(subscriber);
+			return () => {
+				bindingCountSubscribers.delete(subscriber);
+			};
+		},
+
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -116,6 +182,7 @@ export function createAgentActivityBindings(
 				}
 			}
 			registrationsByTarget.clear();
+			bindingCountSubscribers.clear();
 			snapshotsByTarget.clear();
 		},
 	};
@@ -236,6 +303,18 @@ function createBindingContainer(registration: TargetRegistration): HTMLElement {
 	const container = registration.element.ownerDocument.createElement('div');
 
 	container.className = 'graph-agent-activity-bindings';
+	container.style.setProperty(
+		'--graph-agent-activity-binding-top-gap',
+		`${AGENT_ACTIVITY_BINDING_TOP_GAP}px`,
+	);
+	container.style.setProperty(
+		'--graph-agent-activity-binding-row-height',
+		`${AGENT_ACTIVITY_BINDING_ROW_HEIGHT}px`,
+	);
+	container.style.setProperty(
+		'--graph-agent-activity-binding-row-gap',
+		`${AGENT_ACTIVITY_BINDING_ROW_GAP}px`,
+	);
 	container.setAttribute('role', 'list');
 	container.setAttribute('data-graph-node-id', registration.target.nodeId);
 	if (registration.target.rootId !== undefined) {
