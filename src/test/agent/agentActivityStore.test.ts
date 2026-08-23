@@ -23,6 +23,7 @@ suite('Agent Activity Store', () => {
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [{
 			sessionId: SESSION_A,
 			activity: 'planned',
+			sequence: 1,
 		}]);
 	});
 
@@ -36,7 +37,58 @@ suite('Agent Activity Store', () => {
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [{
 			sessionId: SESSION_A,
 			activity: 'editing',
+			sequence: 3,
 		}]);
+	});
+
+	test('Activity priority 규칙으로 Target의 현재 Activity를 정렬한다', () => {
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity('session-mentioned', TARGET_X, 'mentioned');
+		store.setAgentActivity('session-editing', TARGET_X, 'editing');
+		store.setAgentActivity('session-planned', TARGET_X, 'planned');
+		store.setAgentActivity('session-rejected', TARGET_X, 'rejected');
+		store.setAgentActivity('session-completed', TARGET_X, 'completed');
+		store.setAgentActivity('session-active', TARGET_X, 'active');
+
+		const expected = [
+			{ sessionId: 'session-rejected', activity: 'rejected', sequence: 4 },
+			{ sessionId: 'session-editing', activity: 'editing', sequence: 2 },
+			{ sessionId: 'session-active', activity: 'active', sequence: 6 },
+			{ sessionId: 'session-planned', activity: 'planned', sequence: 3 },
+			{ sessionId: 'session-completed', activity: 'completed', sequence: 5 },
+			{ sessionId: 'session-mentioned', activity: 'mentioned', sequence: 1 },
+		];
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), expected);
+		assert.deepStrictEqual(store.getSnapshot()[0].activities, expected);
+	});
+
+	test('동일 Priority에서는 Store 수신 sequence 순서로 정렬한다', () => {
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_B, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_C, TARGET_X, 'editing');
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), [
+			{ sessionId: SESSION_A, activity: 'editing', sequence: 1 },
+			{ sessionId: SESSION_B, activity: 'editing', sequence: 2 },
+			{ sessionId: SESSION_C, activity: 'editing', sequence: 3 },
+		]);
+	});
+
+	test('Activity 변경을 새 Event sequence로 갱신해 동일 Priority 뒤에 배치한다', () => {
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'planned');
+		store.setAgentActivity(SESSION_B, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), [
+			{ sessionId: SESSION_B, activity: 'editing', sequence: 2 },
+			{ sessionId: SESSION_A, activity: 'editing', sequence: 3 },
+		]);
 	});
 
 	test('동일 Target의 여러 Session을 독립적으로 유지하고 한 Session만 갱신한다', () => {
@@ -47,8 +99,8 @@ suite('Agent Activity Store', () => {
 		store.setAgentActivity(SESSION_A, TARGET_X, 'completed');
 
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [
-			{ sessionId: SESSION_A, activity: 'completed' },
-			{ sessionId: SESSION_B, activity: 'planned' },
+			{ sessionId: SESSION_B, activity: 'planned', sequence: 2 },
+			{ sessionId: SESSION_A, activity: 'completed', sequence: 3 },
 		]);
 	});
 
@@ -66,14 +118,17 @@ suite('Agent Activity Store', () => {
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [{
 			sessionId: SESSION_A,
 			activity: 'editing',
+			sequence: 1,
 		}]);
 		assert.deepStrictEqual(store.getActivities(TARGET_Y), [{
 			sessionId: SESSION_A,
 			activity: 'active',
+			sequence: 2,
 		}]);
 		assert.deepStrictEqual(store.getActivities(occurrenceTarget), [{
 			sessionId: SESSION_A,
 			activity: 'mentioned',
+			sequence: 3,
 		}]);
 		assert.strictEqual(store.getSnapshot().length, 3);
 	});
@@ -90,10 +145,12 @@ suite('Agent Activity Store', () => {
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [{
 			sessionId: SESSION_B,
 			activity: 'planned',
+			sequence: 2,
 		}]);
 		assert.deepStrictEqual(store.getActivities(TARGET_Y), [{
 			sessionId: SESSION_A,
 			activity: 'active',
+			sequence: 3,
 		}]);
 	});
 
@@ -112,10 +169,12 @@ suite('Agent Activity Store', () => {
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [{
 			sessionId: SESSION_B,
 			activity: 'active',
+			sequence: 2,
 		}]);
 		assert.deepStrictEqual(store.getActivities(TARGET_Y), [{
 			sessionId: SESSION_C,
 			activity: 'mentioned',
+			sequence: 4,
 		}]);
 		assert.deepStrictEqual(store.getActivities(targetZ), []);
 		assert.strictEqual(store.getSnapshot().length, 2);
@@ -151,17 +210,36 @@ suite('Agent Activity Store', () => {
 		assert.strictEqual(Object.isFrozen(snapshots[0][0].target), true);
 		assert.strictEqual(Object.isFrozen(snapshots[0][0].activities), true);
 		assert.strictEqual(Object.isFrozen(snapshots[0][0].activities[0]), true);
+		assert.deepStrictEqual(snapshots[0][0].activities, [{
+			sessionId: SESSION_A,
+			activity: 'planned',
+			sequence: 1,
+		}]);
 
 		const activities = store.getActivities(TARGET_X);
 		assert.throws(() => {
 			(activities as Array<{
 				sessionId: string;
 				activity: AgentActivityKind;
-			}>).push({ sessionId: SESSION_B, activity: 'active' });
+				sequence: number;
+			}>).push({ sessionId: SESSION_B, activity: 'active', sequence: 99 });
+		});
+		assert.throws(() => {
+			(activities[0] as {
+				activity: AgentActivityKind;
+				sequence: number;
+			}).activity = 'rejected';
+		});
+		assert.throws(() => {
+			(activities[0] as {
+				activity: AgentActivityKind;
+				sequence: number;
+			}).sequence = 99;
 		});
 		assert.deepStrictEqual(store.getActivities(TARGET_X), [{
 			sessionId: SESSION_A,
 			activity: 'planned',
+			sequence: 1,
 		}]);
 
 		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
@@ -170,5 +248,72 @@ suite('Agent Activity Store', () => {
 		unsubscribe();
 		store.clearAgentActivity(SESSION_A, TARGET_X);
 		assert.strictEqual(snapshots.length, 2);
+	});
+
+	test('동일 Activity 중복 set은 sequence, 정렬 위치와 notify를 유지한다', () => {
+		const store = createAgentActivityStore();
+		let notificationCount = 0;
+		store.subscribe(() => {
+			notificationCount += 1;
+		});
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_B, TARGET_X, 'editing');
+		const beforeDuplicate = store.getActivities(TARGET_X);
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), beforeDuplicate);
+		assert.deepStrictEqual(store.getActivities(TARGET_X), [
+			{ sessionId: SESSION_A, activity: 'editing', sequence: 1 },
+			{ sessionId: SESSION_B, activity: 'editing', sequence: 2 },
+		]);
+		assert.strictEqual(notificationCount, 2);
+	});
+
+	test('한 Target의 ordering 변경이 다른 Target의 상태와 순서를 바꾸지 않는다', () => {
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'planned');
+		store.setAgentActivity(SESSION_B, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_C, TARGET_Y, 'editing');
+		store.setAgentActivity('session-D', TARGET_Y, 'editing');
+		const targetYBefore = store.getActivities(TARGET_Y);
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), [
+			{ sessionId: SESSION_B, activity: 'editing', sequence: 2 },
+			{ sessionId: SESSION_A, activity: 'editing', sequence: 5 },
+		]);
+		assert.deepStrictEqual(store.getActivities(TARGET_Y), targetYBefore);
+		assert.deepStrictEqual(store.getActivities(TARGET_Y), [
+			{ sessionId: SESSION_C, activity: 'editing', sequence: 3 },
+			{ sessionId: 'session-D', activity: 'editing', sequence: 4 },
+		]);
+	});
+
+	test('clear는 남은 sequence를 유지하고 재추가는 새 sequence를 부여한다', () => {
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_B, TARGET_X, 'editing');
+		store.setAgentActivity(SESSION_C, TARGET_X, 'editing');
+		store.clearAgentActivity(SESSION_B, TARGET_X);
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), [
+			{ sessionId: SESSION_A, activity: 'editing', sequence: 1 },
+			{ sessionId: SESSION_C, activity: 'editing', sequence: 3 },
+		]);
+
+		store.setAgentActivity('session-D', TARGET_X, 'editing');
+		store.clearAgentActivity(SESSION_A, TARGET_X);
+		store.setAgentActivity(SESSION_A, TARGET_X, 'editing');
+
+		assert.deepStrictEqual(store.getActivities(TARGET_X), [
+			{ sessionId: SESSION_C, activity: 'editing', sequence: 3 },
+			{ sessionId: 'session-D', activity: 'editing', sequence: 4 },
+			{ sessionId: SESSION_A, activity: 'editing', sequence: 5 },
+		]);
 	});
 });

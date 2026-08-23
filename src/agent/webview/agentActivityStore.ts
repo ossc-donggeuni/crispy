@@ -8,6 +8,7 @@ import type { SessionId } from '../protocol';
 export interface AgentSessionActivitySnapshot {
 	readonly sessionId: SessionId;
 	readonly activity: AgentActivityKind;
+	readonly sequence: number;
 }
 
 /** Target과 그 Target에 연결된 모든 Session Activity snapshot이다. */
@@ -16,7 +17,7 @@ export interface AgentTargetActivitySnapshot {
 	readonly activities: readonly AgentSessionActivitySnapshot[];
 }
 
-/** Store 전체의 immutable snapshot이며 배열 순서는 의미 계약에 포함되지 않는다. */
+/** Store 전체의 immutable snapshot이며 최상위 Target 배열 순서는 계약하지 않는다. */
 export type AgentActivityStoreSnapshot = readonly AgentTargetActivitySnapshot[];
 
 /** Activity Store가 실제로 변경된 뒤 호출되는 구독 callback이다. */
@@ -26,7 +27,7 @@ export type AgentActivityStoreSubscriber = (
 
 /** Target × Session 현재 Activity의 조회, 변경 및 구독 경계다. */
 export interface AgentActivityStore {
-	/** 특정 Target에 연결된 Session별 현재 Activity를 immutable하게 반환한다. */
+	/** 특정 Target의 현재 Activity를 priority와 수신 순서로 정렬해 반환한다. */
 	getActivities(
 		target: GraphNodeEffectTarget,
 	): readonly AgentSessionActivitySnapshot[];
@@ -53,8 +54,24 @@ export interface AgentActivityStore {
 
 interface MutableTargetActivities {
 	readonly target: Readonly<GraphNodeEffectTarget>;
-	readonly activitiesBySession: Map<SessionId, AgentActivityKind>;
+	readonly activitiesBySession: Map<SessionId, StoredAgentActivity>;
 }
+
+interface StoredAgentActivity {
+	readonly activity: AgentActivityKind;
+	readonly sequence: number;
+}
+
+/** G-12 Presentation에서 사용하는 높은 순서부터의 Activity priority다. */
+const AGENT_ACTIVITY_PRIORITY: Readonly<Record<AgentActivityKind, number>> =
+	Object.freeze({
+		rejected: 0,
+		editing: 1,
+		active: 2,
+		planned: 3,
+		completed: 4,
+		mentioned: 5,
+	});
 
 const EMPTY_ACTIVITIES: readonly AgentSessionActivitySnapshot[] = Object.freeze([]);
 
@@ -62,6 +79,7 @@ const EMPTY_ACTIVITIES: readonly AgentSessionActivitySnapshot[] = Object.freeze(
 export function createAgentActivityStore(): AgentActivityStore {
 	const activitiesByTarget = new Map<string, MutableTargetActivities>();
 	const subscribers = new Set<AgentActivityStoreSubscriber>();
+	let nextSequence = 1;
 
 	const getActivities = (
 		target: GraphNodeEffectTarget,
@@ -111,11 +129,17 @@ export function createAgentActivityStore(): AgentActivityStore {
 				activitiesByTarget.set(key, targetActivities);
 			}
 
-			if (targetActivities.activitiesBySession.get(sessionId) === activity) {
+			const currentActivity = targetActivities.activitiesBySession.get(sessionId);
+
+			if (currentActivity?.activity === activity) {
 				return;
 			}
 
-			targetActivities.activitiesBySession.set(sessionId, activity);
+			targetActivities.activitiesBySession.set(sessionId, {
+				activity,
+				sequence: nextSequence,
+			});
+			nextSequence += 1;
 			notify();
 		},
 
@@ -176,12 +200,39 @@ function createTargetSnapshot(
 }
 
 function createActivitiesSnapshot(
-	activitiesBySession: ReadonlyMap<SessionId, AgentActivityKind>,
+	activitiesBySession: ReadonlyMap<SessionId, StoredAgentActivity>,
 ): readonly AgentSessionActivitySnapshot[] {
 	return Object.freeze(
-		[...activitiesBySession].map(([sessionId, activity]) => Object.freeze({
-			sessionId,
-			activity,
-		})),
+		[...activitiesBySession]
+			.map(([sessionId, storedActivity]) => Object.freeze({
+				sessionId,
+				activity: storedActivity.activity,
+				sequence: storedActivity.sequence,
+			}))
+			.sort(compareAgentActivities),
 	);
+}
+
+/** Priority, Store sequence, sessionId 순으로 유일한 ordered 조회 규칙을 적용한다. */
+function compareAgentActivities(
+	left: AgentSessionActivitySnapshot,
+	right: AgentSessionActivitySnapshot,
+): number {
+	const priorityDifference = AGENT_ACTIVITY_PRIORITY[left.activity]
+		- AGENT_ACTIVITY_PRIORITY[right.activity];
+
+	if (priorityDifference !== 0) {
+		return priorityDifference;
+	}
+
+	const sequenceDifference = left.sequence - right.sequence;
+	if (sequenceDifference !== 0) {
+		return sequenceDifference;
+	}
+
+	if (left.sessionId === right.sessionId) {
+		return 0;
+	}
+
+	return left.sessionId < right.sessionId ? -1 : 1;
 }
