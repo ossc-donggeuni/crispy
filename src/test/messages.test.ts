@@ -1,7 +1,10 @@
 import * as assert from 'assert';
 import {
+	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
 	type ExtensionToWebviewMessage,
+	type GraphNodeEffectClearMessage,
+	type GraphNodeEffectSetMessage,
 	type WebviewToExtensionMessage,
 	type WorkspaceOpenFileMessage,
 	type WorkspaceStateChangedMessage,
@@ -74,6 +77,73 @@ suite('Extension to Webview Workspace messages', () => {
 			type: 'terminal.started',
 			graph,
 		}), undefined);
+	});
+
+	test('Graph Node Effect set/clear를 최상위 Host union과 수신 경계에 연결한다', () => {
+		const setMessage = {
+			type: 'graph.nodeEffect.set',
+			target: {
+				nodeId: 'file:file:///workspace/app/src/index.ts',
+				rootId: 'detached:root:1',
+			},
+			effect: { kind: 'icon', color: '#43d17a', icon: 'check' },
+		} satisfies GraphNodeEffectSetMessage;
+		const clearMessage = {
+			type: 'graph.nodeEffect.clear',
+			target: { nodeId: 'file:file:///workspace/app/src/index.ts' },
+			kind: 'icon',
+		} satisfies GraphNodeEffectClearMessage;
+		const extensionMessages: ExtensionToWebviewMessage[] = [
+			setMessage,
+			clearMessage,
+		];
+
+		assert.deepStrictEqual(
+			parseGraphNodeEffectToWebviewMessage(extensionMessages[0]),
+			setMessage,
+		);
+		assert.deepStrictEqual(
+			parseGraphNodeEffectToWebviewMessage(extensionMessages[1]),
+			clearMessage,
+		);
+		assert.deepStrictEqual(parseGraphNodeEffectToWebviewMessage({
+			type: 'graph.nodeEffect.clear',
+			target: { nodeId: 'folder:src' },
+		}), {
+			type: 'graph.nodeEffect.clear',
+			target: { nodeId: 'folder:src' },
+		});
+	});
+
+	test('잘못된 Effect kind, icon, target 및 부가 필드를 조용히 거부한다', () => {
+		for (const message of [
+			{
+				type: 'graph.nodeEffect.set',
+				target: { nodeId: 'folder:src' },
+				effect: { kind: 'editing', color: '#fff' },
+			},
+			{
+				type: 'graph.nodeEffect.set',
+				target: { nodeId: 'folder:src' },
+				effect: { kind: 'icon', color: '#fff', icon: 'unknown' },
+			},
+			{
+				type: 'graph.nodeEffect.set',
+				target: { nodeId: '', rootId: 1 },
+				effect: { kind: 'pulse', color: '#fff' },
+			},
+			{
+				type: 'graph.nodeEffect.clear',
+				target: { nodeId: 'folder:src' },
+				kind: 'pulse',
+				unexpected: true,
+			},
+		]) {
+			assert.strictEqual(
+				parseGraphNodeEffectToWebviewMessage(message),
+				undefined,
+			);
+		}
 	});
 });
 

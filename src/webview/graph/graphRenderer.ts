@@ -42,6 +42,7 @@ import {
 	type GraphStateStore,
 } from './graphState';
 import { fitRelativePath } from './graphRootContext';
+import type { GraphNodeEffects } from './graphNodeEffects';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
@@ -155,6 +156,8 @@ export interface GraphRendererOptions {
 	animationFrameScheduler?: GraphAnimationFrameScheduler;
 	transitionDuration?: number;
 	prefersReducedMotion?: boolean;
+	/** Renderer DOM의 생성/제거를 transient Node Effect registration과 연결한다. */
+	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>;
 }
 
 /** 특정 Layout 전환에서 새 Detached subtree가 출발할 기존 Instance를 지정한다. */
@@ -248,6 +251,7 @@ export function initializeGraphRenderer(
 	const nodeDrags = new Map<string, GraphNodeDrag>();
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
 	const nodeFileOpenRequestCleanups = new Map<string, () => void>();
+	const nodeEffectCleanups = new Map<string, () => void>();
 	const backlinkClickCleanups = new Map<string, () => void>();
 	const backlinkElements = new Map<string, HTMLElement>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
@@ -943,6 +947,14 @@ export function initializeGraphRenderer(
 			layoutNode,
 			ownerDocument,
 		);
+		const effectTarget = getLayoutNodeEffectTarget(layoutNode);
+
+		if (effectTarget && options.nodeEffects) {
+			nodeEffectCleanups.set(
+				layoutNode.id,
+				options.nodeEffects.registerNode(effectTarget, element),
+			);
+		}
 		element.hidden = layoutNode.hidden === true;
 		syncDetachDrag(layoutNode, element);
 		if (
@@ -990,6 +1002,7 @@ export function initializeGraphRenderer(
 				interactions,
 				rootNodeIds,
 				initializeBacklink,
+				options.nodeEffects,
 				);
 
 			content.render(graphState.getFileGroupPage(
@@ -1217,6 +1230,8 @@ export function initializeGraphRenderer(
 		nodeDetachDrags.delete(nodeId);
 		nodeFileOpenRequestCleanups.get(nodeId)?.();
 		nodeFileOpenRequestCleanups.delete(nodeId);
+		nodeEffectCleanups.get(nodeId)?.();
+		nodeEffectCleanups.delete(nodeId);
 		backlinkClickCleanups.get(nodeId)?.();
 		backlinkClickCleanups.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
@@ -2141,6 +2156,38 @@ function createNodeElement(
 	return element;
 }
 
+/** Backlink과 grouped File Group Card를 제외한 실제 Source 표현만 효과 대상으로 만든다. */
+function getLayoutNodeEffectTarget(
+	node: GraphLayoutNode,
+): { readonly nodeId: string; readonly rootId?: string } | undefined {
+	if (node.kind === 'folder-backlink') {
+		return undefined;
+	}
+
+	if (node.kind === 'file-group') {
+		const file = node.presentation === 'standalone' ? node.children[0] : undefined;
+
+		if (!file || file.presentation === 'backlink') {
+			return undefined;
+		}
+
+		const rootId = getGraphLayoutRootId(file.id)
+			?? getGraphLayoutRootId(node.id);
+
+		return {
+			nodeId: getGraphLayoutSourceId(file.id),
+			...(rootId ? { rootId } : {}),
+		};
+	}
+
+	const rootId = getGraphLayoutRootId(node.id);
+
+	return {
+		nodeId: getGraphLayoutSourceId(node.id),
+		...(rootId ? { rootId } : {}),
+	};
+}
+
 /** Standalone presentation과 grouped File Row가 공유하는 icon/name content를 추가한다. */
 function appendFileContent(
 	element: HTMLElement,
@@ -2233,6 +2280,7 @@ function initializeFileGroupContent(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
+	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
 	let renderedRootNodeIds = rootNodeIds;
@@ -2276,6 +2324,7 @@ function initializeFileGroupContent(
 					interactions,
 					renderedRootNodeIds,
 					initializeBacklink,
+					nodeEffects,
 					);
 
 				list.append(row.element);
@@ -2395,6 +2444,7 @@ function createFileRow(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
+	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
@@ -2404,6 +2454,14 @@ function createFileRow(
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	applyFileBacklinkAttributes(item, file);
 	appendFileContent(item, file, ownerDocument);
+	const sourceNodeId = getGraphLayoutSourceId(file.id);
+	const rootId = getGraphLayoutRootId(file.id);
+	const disposeNodeEffect = file.presentation === 'normal'
+		? nodeEffects?.registerNode({
+			nodeId: sourceNodeId,
+			...(rootId ? { rootId } : {}),
+		}, item)
+		: undefined;
 	const backlinkTargetRootIds = file.targetRootIds
 		?? (file.targetRootId ? [file.targetRootId] : []);
 	const disposeBacklinkClick = file.presentation === 'backlink'
@@ -2452,6 +2510,7 @@ function createFileRow(
 	return {
 		element: item,
 		dispose: () => {
+			disposeNodeEffect?.();
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
 			disposeFileOpenRequest();

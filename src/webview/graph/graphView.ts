@@ -51,6 +51,12 @@ import {
 	type GraphStateSnapshot,
 	type GraphStateStore,
 } from './graphState';
+import type {
+	GraphNodeEffect,
+	GraphNodeEffectKind,
+	GraphNodeEffectTarget,
+} from '../../messages';
+import { createGraphNodeEffects } from './graphNodeEffects';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
@@ -62,6 +68,10 @@ export interface GraphView {
 	refreshVisibleGraphArea(): void;
 	/** 기존 View와 State를 유지하며 새로운 Workspace Graph를 적용한다. */
 	updateGraph(graph: Graph): void;
+	/** Host가 지정한 transient 시각 효과를 같은 kind 기준으로 적용 또는 교체한다. */
+	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
+	/** 특정 target의 한 kind 또는 모든 transient 시각 효과를 제거한다. */
+	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
 }
@@ -863,6 +873,7 @@ export function initializeGraphView(
 	viewport.append(world, overlayLayer);
 	root.append(viewport);
 	const reattachConfirmDialog = createGraphReattachConfirmDialog(overlayLayer);
+	const nodeEffects = createGraphNodeEffects(ownerDocument);
 	const state = createGraphState(initialState);
 	let disposed = false;
 	let initialGraphState = state.getState();
@@ -1415,6 +1426,7 @@ export function initializeGraphView(
 				(root) => getGraphRootLayoutNodeId(root) === rootNodeId,
 			)?.id,
 		},
+		{ nodeEffects },
 	);
 	navigator = initializeGraphNavigator(
 		overlayLayer,
@@ -1557,6 +1569,16 @@ export function initializeGraphView(
 			syncNavigatorRoots();
 			navigator.setWorkspaceGraph(workspaceGraph);
 		},
+		setNodeEffect(target, effect): void {
+			if (!disposed) {
+				nodeEffects.setNodeEffect(target, effect);
+			}
+		},
+		clearNodeEffect(target, kind): void {
+			if (!disposed) {
+				nodeEffects.clearNodeEffect(target, kind);
+			}
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -1567,6 +1589,7 @@ export function initializeGraphView(
 			unsubscribeLayout();
 			navigator.dispose();
 			renderer.dispose();
+			nodeEffects.dispose();
 			camera.dispose();
 			viewport.remove();
 		},

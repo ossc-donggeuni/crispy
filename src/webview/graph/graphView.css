@@ -90,6 +90,156 @@
 		box-shadow 180ms ease;
 }
 
+/* Host가 지정한 transient 효과는 기존 Card/Row paint와 layout을 건드리지 않는다. */
+.graph-file-item.graph-node-effect-host {
+	--graph-node-effect-radius: 3px;
+
+	position: relative;
+}
+
+.graph-node.graph-node-effect-host {
+	--graph-node-effect-radius: 10px;
+}
+
+.graph-node-effect-layer {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	display: block;
+	border-radius: inherit;
+	pointer-events: none;
+}
+
+.graph-node-effect {
+	position: absolute;
+	inset: 0;
+	display: block;
+	border-radius: inherit;
+	pointer-events: none;
+}
+
+.graph-node-effect-marching-dash {
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+
+.graph-node-effect-marching-dash-rect {
+	x: 1px;
+	y: 1px;
+	width: calc(100% - 2px);
+	height: calc(100% - 2px);
+	rx: var(--graph-node-effect-radius);
+	ry: var(--graph-node-effect-radius);
+	fill: none;
+	stroke: var(--graph-node-effect-color);
+	stroke-width: 2px;
+	stroke-dasharray: 9 7;
+	animation: graph-node-effect-marching-dash 900ms linear infinite;
+}
+
+.graph-node-effect-pulse {
+	background: var(--graph-node-effect-color);
+	animation: graph-node-effect-pulse 1.45s ease-in-out infinite;
+}
+
+.graph-node-effect-shimmer {
+	overflow: hidden;
+}
+
+.graph-node-effect-shimmer::before {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -65%;
+	width: 55%;
+	background: linear-gradient(
+		105deg,
+		transparent 0%,
+		color-mix(in srgb, var(--graph-node-effect-color) 12%, transparent) 22%,
+		color-mix(in srgb, var(--graph-node-effect-color) 48%, transparent) 50%,
+		color-mix(in srgb, var(--graph-node-effect-color) 12%, transparent) 78%,
+		transparent 100%
+	);
+	content: '';
+	animation: graph-node-effect-shimmer 1.8s ease-in-out infinite;
+}
+
+.graph-node-effect-outline {
+	box-shadow: inset 0 0 0 1px var(--graph-node-effect-color);
+}
+
+.graph-node-effect-outline-strong {
+	box-shadow:
+		inset 0 0 0 3px var(--graph-node-effect-color),
+		0 0 10px color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 22%,
+			transparent
+		);
+}
+
+.graph-node-effect-icon {
+	top: 4px;
+	right: auto;
+	bottom: auto;
+	left: 4px;
+	display: flex;
+	width: 18px;
+	height: 18px;
+	align-items: center;
+	justify-content: center;
+	color: var(--graph-node-effect-color);
+	background: color-mix(
+		in srgb,
+		var(--graph-node-effect-color) 20%,
+		transparent
+	);
+	border-radius: 50%;
+	box-shadow:
+		inset 0 0 0 1px var(--graph-node-effect-color),
+		0 1px 5px rgb(0 0 0 / 38%);
+}
+
+.graph-node-effect-icon-svg {
+	display: block;
+	width: 14px;
+	height: 14px;
+	fill: none;
+	stroke: currentcolor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+@keyframes graph-node-effect-marching-dash {
+	to {
+		stroke-dashoffset: -32;
+	}
+}
+
+@keyframes graph-node-effect-pulse {
+	0%,
+	100% {
+		opacity: 0.05;
+	}
+
+	50% {
+		opacity: 0.28;
+	}
+}
+
+@keyframes graph-node-effect-shimmer {
+	0% {
+		transform: translateX(0);
+	}
+
+	62%,
+	100% {
+		transform: translateX(310%);
+	}
+}
+
 .graph-project-node {
 	--graph-node-outline-color: oklch(0.36 0.012 270);
 	--graph-node-background: oklch(0.228 0.0075 270);
@@ -569,6 +719,20 @@
 @media (prefers-reduced-motion: reduce) {
 	.graph-file-item.is-file-clicking {
 		animation-duration: 1ms;
+	}
+
+	.graph-node-effect-marching-dash-rect,
+	.graph-node-effect-pulse,
+	.graph-node-effect-shimmer::before {
+		animation: none;
+	}
+
+	.graph-node-effect-pulse {
+		opacity: 0.16;
+	}
+
+	.graph-node-effect-shimmer::before {
+		transform: translateX(150%);
 	}
 }
 

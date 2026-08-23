@@ -1,6 +1,11 @@
 import * as assert from 'assert';
 import { createAgentTabModel } from '../agent/UI/agentTabModel';
-import type { WebviewToExtensionMessage } from '../messages';
+import type {
+	GraphNodeEffect,
+	GraphNodeEffectKind,
+	GraphNodeEffectTarget,
+	WebviewToExtensionMessage,
+} from '../messages';
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
@@ -469,6 +474,14 @@ suite('Webview State Wiring', () => {
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
 		const graphUpdates: Graph[] = [];
+		const graphEffectSets: Array<{
+			readonly target: GraphNodeEffectTarget;
+			readonly effect: GraphNodeEffect;
+		}> = [];
+		const graphEffectClears: Array<{
+			readonly target: GraphNodeEffectTarget;
+			readonly kind?: GraphNodeEffectKind;
+		}> = [];
 		const terminalHostMessages: unknown[] = [];
 		let currentGraphState: GraphStateSnapshot = {
 			camera: initialState.graph.camera,
@@ -602,6 +615,12 @@ suite('Webview State Wiring', () => {
 				},
 				updateGraph: (nextGraph) => {
 					graphUpdates.push(nextGraph);
+				},
+				setNodeEffect: (target, effect) => {
+					graphEffectSets.push({ target, effect });
+				},
+				clearNodeEffect: (target, kind) => {
+					graphEffectClears.push({ target, ...(kind ? { kind } : {}) });
 				},
 				dispose: () => {
 					graphDisposed = true;
@@ -800,6 +819,36 @@ suite('Webview State Wiring', () => {
 			assert.deepStrictEqual(terminalHostMessages, []);
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphDisposed, false);
+
+			hostMessageHandler({
+				data: {
+					type: 'graph.nodeEffect.set',
+					target: { nodeId: 'file:app/index.ts' },
+					effect: { kind: 'shimmer', color: '#ff0088' },
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'graph.nodeEffect.clear',
+					target: {
+						nodeId: 'file:app/index.ts',
+						rootId: 'detached:file:app/index.ts:1',
+					},
+					kind: 'shimmer',
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(graphEffectSets, [{
+				target: { nodeId: 'file:app/index.ts' },
+				effect: { kind: 'shimmer', color: '#ff0088' },
+			}]);
+			assert.deepStrictEqual(graphEffectClears, [{
+				target: {
+					nodeId: 'file:app/index.ts',
+					rootId: 'detached:file:app/index.ts:1',
+				},
+				kind: 'shimmer',
+			}]);
 
 			const terminalStartingMessage = {
 				type: 'terminal.starting',

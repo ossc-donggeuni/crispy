@@ -92,6 +92,248 @@ suite('Graph View', () => {
 		assert.match(hiddenRule[0], /display:\s*none;/);
 	});
 
+	test('Node Effect를 kind별로 조합·교체하고 color/icon을 중복 DOM 없이 갱신한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK);
+		const target = { nodeId: 'folder:app/src' };
+		const folder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		graphView.setNodeEffect(target, { kind: 'shimmer', color: '#ff0088' });
+		graphView.setNodeEffect(target, { kind: 'outline', color: '#22cc88' });
+		graphView.setNodeEffect(target, {
+			kind: 'icon',
+			color: '#40a9ff',
+			icon: 'check',
+		});
+
+		const shimmer = getNodeEffect(folder, 'shimmer');
+		const outline = getNodeEffect(folder, 'outline');
+		const icon = getNodeEffect(folder, 'icon');
+
+		assert.strictEqual(
+			shimmer.style.getPropertyValue('--graph-node-effect-color'),
+			'#ff0088',
+		);
+		assert.strictEqual(getNodeEffects(folder, 'shimmer').length, 1);
+		assert.strictEqual(getNodeEffects(folder, 'outline').length, 1);
+		assert.strictEqual(getNodeEffects(folder, 'icon').length, 1);
+		assert.strictEqual(icon.getAttribute('data-graph-node-effect-icon'), 'check');
+
+		graphView.setNodeEffect(target, { kind: 'outline', color: '#ffaa00' });
+		graphView.setNodeEffect(target, {
+			kind: 'icon',
+			color: '#ff3355',
+			icon: 'cancel',
+		});
+
+		assert.strictEqual(getNodeEffect(folder, 'outline'), outline);
+		assert.strictEqual(getNodeEffect(folder, 'icon'), icon);
+		assert.strictEqual(getNodeEffects(folder, 'outline').length, 1);
+		assert.strictEqual(getNodeEffects(folder, 'icon').length, 1);
+		assert.strictEqual(
+			outline.style.getPropertyValue('--graph-node-effect-color'),
+			'#ffaa00',
+		);
+		assert.strictEqual(
+			icon.style.getPropertyValue('--graph-node-effect-color'),
+			'#ff3355',
+		);
+		assert.strictEqual(icon.getAttribute('data-graph-node-effect-icon'), 'cancel');
+
+		graphView.clearNodeEffect(target, 'outline');
+		assert.strictEqual(findNodeEffect(folder, 'outline'), undefined);
+		assert.strictEqual(getNodeEffect(folder, 'shimmer'), shimmer);
+		assert.strictEqual(getNodeEffect(folder, 'icon'), icon);
+
+		graphView.clearNodeEffect(target);
+		assert.deepStrictEqual(getNodeEffects(folder), []);
+		assert.strictEqual(folder.hasClass('graph-node-effect-host'), false);
+		graphView.dispose();
+	});
+
+	test('Folder collapse/open과 Graph refresh 뒤 새 DOM에 활성 Effect를 복원한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const initialState = {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true as const,
+				'folder:app': true as const,
+			},
+		};
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			initialState,
+			GRAPH_MOCK,
+		);
+		const target = { nodeId: 'folder:app/src' };
+		const firstFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		graphView.setNodeEffect(target, { kind: 'pulse', color: '#55ddff' });
+		assert.ok(getNodeEffect(firstFolder, 'pulse'));
+
+		graphView.state.toggleFolder('folder:app');
+		assert.strictEqual(findNodeEffect(firstFolder, 'pulse'), undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		), undefined);
+
+		graphView.state.toggleFolder('folder:app');
+		const reopenedFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		assert.notStrictEqual(reopenedFolder, firstFolder);
+		assert.strictEqual(
+			getNodeEffect(reopenedFolder, 'pulse').style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#55ddff',
+		);
+
+		graphView.updateGraph({ roots: [], rootNodes: {} });
+		assert.strictEqual(findNodeEffect(reopenedFolder, 'pulse'), undefined);
+		graphView.updateGraph(GRAPH_MOCK);
+		const refreshedFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		assert.notStrictEqual(refreshedFolder, reopenedFolder);
+		assert.ok(getNodeEffect(refreshedFolder, 'pulse'));
+		graphView.dispose();
+		assert.strictEqual(findNodeEffect(refreshedFolder, 'pulse'), undefined);
+	});
+
+	test('Grouped File Row pagination 재생성과 standalone File에 Effect를 적용한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK);
+		const pagedFileId = 'file:app/src/index.ts';
+		const fileGroupId = createFileGroupId('folder:app/src');
+
+		graphView.setNodeEffect(
+			{ nodeId: pagedFileId },
+			{ kind: 'marching-dash', color: '#cc66ff' },
+		);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-file-id',
+			pagedFileId,
+		), undefined);
+
+		graphView.state.showMoreFiles(fileGroupId);
+		const firstRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			pagedFileId,
+		);
+
+		assert.ok(getNodeEffect(firstRow, 'marching-dash'));
+		graphView.state.collapseFileGroup(fileGroupId);
+		assert.strictEqual(findNodeEffect(firstRow, 'marching-dash'), undefined);
+		graphView.state.showMoreFiles(fileGroupId);
+		const restoredRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			pagedFileId,
+		);
+
+		assert.notStrictEqual(restoredRow, firstRow);
+		assert.ok(getNodeEffect(restoredRow, 'marching-dash'));
+
+		graphView.setNodeEffect(
+			{ nodeId: GRAPH_MOCK_FILE_ROOT.id },
+			{ kind: 'outline-strong', color: '#ff9944' },
+		);
+		const standaloneFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_FILE_ROOT.id,
+		);
+
+		assert.ok(getNodeEffect(standaloneFile, 'outline-strong'));
+		graphView.dispose();
+	});
+
+	test('rootId는 Detached actual occurrence만 지정하고 Backlink에는 복제하지 않는다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:effect-detached',
+			name: 'effect-detached',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:effect-detached/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:effect-detached',
+			name: 'effect-detached',
+			status: 'loaded',
+			children: [folder],
+		};
+		const detachedRootId = createPromotedGraphRootId(folder.id);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+			detachedRootNodeIds: { [folder.id]: true },
+		}, createSingleRootGraph(project, 'root:effect-detached'));
+		const detachedCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createGraphLayoutNodeId(detachedRootId, folder.id),
+		);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-target-node-id',
+			folder.id,
+		);
+
+		graphView.setNodeEffect(
+			{ nodeId: folder.id, rootId: detachedRootId },
+			{ kind: 'outline', color: '#44dd88' },
+		);
+
+		assert.ok(getNodeEffect(detachedCard, 'outline'));
+		assert.strictEqual(findNodeEffect(backlink, 'outline'), undefined);
+		graphView.clearNodeEffect({ nodeId: folder.id, rootId: detachedRootId });
+		assert.strictEqual(findNodeEffect(detachedCard, 'outline'), undefined);
+		graphView.dispose();
+	});
+
 	test('정렬 대상 강조는 Drag Card보다 위에 표시된다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
@@ -5644,15 +5886,40 @@ class FakeDocument {
 	}
 }
 
+class FakeStyle {
+	transform = '';
+	backgroundPosition = '';
+	backgroundSize = '';
+	width = '';
+	height = '';
+	left = '';
+	right = '';
+	top = '';
+	bottom = '';
+	maxWidth = '';
+	opacity = '';
+	scale = '';
+	private readonly customProperties = new Map<string, string>();
+
+	setProperty(name: string, value: string): void {
+		this.customProperties.set(name, value);
+	}
+
+	getPropertyValue(name: string): string {
+		return this.customProperties.get(name) ?? '';
+	}
+
+	removeProperty(name: string): string {
+		const previous = this.customProperties.get(name) ?? '';
+
+		this.customProperties.delete(name);
+		return previous;
+	}
+}
+
 class FakeElement {
 	readonly children: FakeElement[] = [];
-	readonly style = {
-		transform: '',
-		backgroundPosition: '',
-		backgroundSize: '',
-		width: '',
-		height: '',
-	};
+	readonly style = new FakeStyle();
 	readonly classList = {
 		add: (...tokens: string[]) => {
 			for (const token of tokens) {
@@ -6012,6 +6279,30 @@ function readTranslate(transform: string): { x: number; y: number } {
 
 	assert.ok(match?.[1] && match[2]);
 	return { x: Number(match[1]), y: Number(match[2]) };
+}
+
+function getNodeEffects(
+	element: FakeElement,
+	kind?: string,
+): FakeElement[] {
+	return getDescendantsByClass(element, 'graph-node-effect').filter(
+		(effect) => kind === undefined
+			|| effect.getAttribute('data-graph-node-effect') === kind,
+	);
+}
+
+function findNodeEffect(
+	element: FakeElement,
+	kind: string,
+): FakeElement | undefined {
+	return getNodeEffects(element, kind)[0];
+}
+
+function getNodeEffect(element: FakeElement, kind: string): FakeElement {
+	const effect = findNodeEffect(element, kind);
+
+	assert.ok(effect, `${kind} Graph Node Effect가 있어야 한다.`);
+	return effect;
 }
 
 function subtractPositions(

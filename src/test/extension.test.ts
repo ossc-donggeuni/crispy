@@ -1,9 +1,13 @@
 import * as assert from 'assert';
 import {
+	CLEAR_NODE_EFFECTS_COMMAND_ID,
 	CrispyExtensionApi,
+	DEBUG_NODE_EFFECTS_COMMAND_ID,
+	OPEN_CANVAS_COMMAND_ID,
 	TerminalMessageHost,
 	WorkspaceFileHost,
 	createCanvasRuntime,
+	createGraphNodeEffectDebugMessages,
 	createInitialWebviewState,
 	handleWebviewMessage as handleHostWebviewMessage,
 	loadWorkspacePersistentStateForRoots,
@@ -26,7 +30,9 @@ import {
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
 import { deserializeGraphFromWebview } from '../webview/graph/graphTransport';
+import { createGraphLayout } from '../webview/graph/graphLayout';
 import type { Graph } from '../webview/graph/graphModel';
+import { addGraphRoot } from '../webview/graph/graphRootPromotion';
 import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
@@ -34,7 +40,7 @@ import {
 
 import * as vscode from 'vscode';
 
-const COMMAND_ID = 'crispy.openCanvas';
+const COMMAND_ID = OPEN_CANVAS_COMMAND_ID;
 
 /** handleWebviewMessage가 호출하는 Host 경계를 그대로 만족하는 테스트 대역이다. */
 interface TerminalHostStub extends TerminalMessageHost {
@@ -137,9 +143,211 @@ suite('Crispy Extension Host', () => {
 		assert.ok(
 			manifestCommands.some(({ command }) => command === COMMAND_ID),
 		);
+		assert.ok(manifestCommands.some(
+			({ command }) => command === DEBUG_NODE_EFFECTS_COMMAND_ID,
+		));
+		assert.ok(manifestCommands.some(
+			({ command }) => command === CLEAR_NODE_EFFECTS_COMMAND_ID,
+		));
 
 		const registeredCommands = await vscode.commands.getCommands(true);
 		assert.ok(registeredCommands.includes(COMMAND_ID));
+		assert.ok(registeredCommands.includes(DEBUG_NODE_EFFECTS_COMMAND_ID));
+		assert.ok(registeredCommands.includes(CLEAR_NODE_EFFECTS_COMMAND_ID));
+	});
+
+	test('Debug Effect 메시지는 Root 직계 Source 순서대로 6종과 icon 조합을 만든다', () => {
+		const project = {
+			kind: 'project' as const,
+			id: 'project:debug-effects',
+			name: 'debug-effects',
+			status: 'loaded' as const,
+			children: Array.from({ length: 8 }, (_, index) => ({
+				kind: 'file' as const,
+				id: `file:debug-effects/${index + 1}.ts`,
+				name: `${index + 1}.ts`,
+			})),
+		};
+		const graph: Graph = {
+			roots: [{ id: 'root:debug-effects', nodeId: project.id }],
+			rootNodes: { [project.id]: project },
+		};
+		const first = createGraphNodeEffectDebugMessages(graph, 0);
+		const updated = createGraphNodeEffectDebugMessages(graph, 1);
+
+		assert.deepStrictEqual(first.map(({ target, effect }) => ({
+			nodeId: target.nodeId,
+			kind: effect.kind,
+			icon: effect.kind === 'icon' ? effect.icon : undefined,
+		})), [
+			{ nodeId: project.children[0]?.id, kind: 'marching-dash', icon: undefined },
+			{ nodeId: project.children[1]?.id, kind: 'pulse', icon: undefined },
+			{ nodeId: project.children[2]?.id, kind: 'shimmer', icon: undefined },
+			{ nodeId: project.children[3]?.id, kind: 'outline', icon: undefined },
+			{ nodeId: project.children[4]?.id, kind: 'outline-strong', icon: undefined },
+			{ nodeId: project.children[5]?.id, kind: 'icon', icon: 'check' },
+			{ nodeId: project.children[6]?.id, kind: 'outline', icon: undefined },
+			{ nodeId: project.children[6]?.id, kind: 'icon', icon: 'alert' },
+			{ nodeId: project.children[7]?.id, kind: 'outline', icon: undefined },
+			{ nodeId: project.children[7]?.id, kind: 'icon', icon: 'cancel' },
+		]);
+		assert.deepStrictEqual(
+			updated.map(({ effect }) => effect.kind),
+			first.map(({ effect }) => effect.kind),
+		);
+		assert.ok(updated.every(({ effect }, index) => (
+			effect.color !== first[index]?.effect.color
+		)));
+		assert.deepStrictEqual(
+			createGraphNodeEffectDebugMessages({ roots: [], rootNodes: {} }),
+			[],
+		);
+	});
+
+	test('Debug 후보는 Root 직계 File/Folder만 사용하고 nested fallback을 하지 않는다', () => {
+		const nestedFolder = {
+			kind: 'folder' as const,
+			id: 'folder:debug-root/folder-a/nested-folder',
+			name: 'nested-folder',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const nestedFile = {
+			kind: 'file' as const,
+			id: 'file:debug-root/folder-a/nested.ts',
+			name: 'nested.ts',
+		};
+		const folderA = {
+			kind: 'folder' as const,
+			id: 'folder:debug-root/folder-a',
+			name: 'folder-a',
+			status: 'loaded' as const,
+			children: [nestedFolder, nestedFile],
+		};
+		const rootFile = {
+			kind: 'file' as const,
+			id: 'file:debug-root/root-file.ts',
+			name: 'root-file.ts',
+		};
+		const folderB = {
+			kind: 'folder' as const,
+			id: 'folder:debug-root/folder-b',
+			name: 'folder-b',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project = {
+			kind: 'project' as const,
+			id: 'project:debug-root',
+			name: 'debug-root',
+			status: 'loaded' as const,
+			children: [folderA, rootFile, folderB],
+		};
+		const messages = createGraphNodeEffectDebugMessages({
+			roots: [{ id: 'root:debug-root', nodeId: project.id }],
+			rootNodes: { [project.id]: project },
+		});
+
+		assert.deepStrictEqual(messages.map(({ target }) => target.nodeId), [
+			folderA.id,
+			rootFile.id,
+			folderB.id,
+		]);
+		assert.strictEqual(messages.some(
+			({ target }) => target.nodeId === project.id,
+		), false);
+		assert.strictEqual(messages.some(
+			({ target }) => target.nodeId === nestedFolder.id,
+		), false);
+		assert.strictEqual(messages.some(
+			({ target }) => target.nodeId === nestedFile.id,
+		), false);
+		assert.deepStrictEqual(messages.map(({ effect }) => effect.kind), [
+			'marching-dash',
+			'pulse',
+			'shimmer',
+		]);
+	});
+
+	test('Multi-root 직계 자식만 합치고 nested Detached Root와 Backlink를 후보에서 제외한다', () => {
+		const nestedFile = {
+			kind: 'file' as const,
+			id: 'file:debug-root-a/src/a.ts',
+			name: 'a.ts',
+		};
+		const src = {
+			kind: 'folder' as const,
+			id: 'folder:debug-root-a/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: [nestedFile],
+		};
+		const readme = {
+			kind: 'file' as const,
+			id: 'file:debug-root-a/README.md',
+			name: 'README.md',
+		};
+		const app = {
+			kind: 'folder' as const,
+			id: 'folder:debug-root-b/app',
+			name: 'app',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:debug-root-b/app/main.ts',
+				name: 'main.ts',
+			}],
+		};
+		const packageFile = {
+			kind: 'file' as const,
+			id: 'file:debug-root-b/package.json',
+			name: 'package.json',
+		};
+		const rootA = {
+			kind: 'project' as const,
+			id: 'project:debug-root-a',
+			name: 'debug-root-a',
+			status: 'loaded' as const,
+			children: [src, readme],
+		};
+		const rootB = {
+			kind: 'project' as const,
+			id: 'project:debug-root-b',
+			name: 'debug-root-b',
+			status: 'loaded' as const,
+			children: [app, packageFile],
+		};
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:debug-root-a', nodeId: rootA.id },
+				{ id: 'root:debug-root-b', nodeId: rootB.id },
+			],
+			rootNodes: {
+				[rootA.id]: rootA,
+				[rootB.id]: rootB,
+			},
+		};
+		const addition = addGraphRoot(graph, nestedFile.id);
+
+		assert.ok(addition);
+		const messages = createGraphNodeEffectDebugMessages(addition.graph);
+		const layout = createGraphLayout(addition.graph, {
+			openedFolders: { [rootA.id]: true, [src.id]: true },
+		});
+
+		assert.ok(layout.nodes.some((node) => (
+			node.kind === 'file-group'
+			&& node.children.some((file) => file.presentation === 'backlink')
+		)));
+		assert.deepStrictEqual(messages.map(({ target }) => target.nodeId), [
+			src.id,
+			readme.id,
+			app.id,
+			packageFile.id,
+		]);
+		assert.strictEqual(messages.some(
+			({ target }) => target.nodeId === nestedFile.id,
+		), false);
 	});
 
 	test('activate 반환 API가 VS Code extension exports와 같은 instance다', () => {
