@@ -214,7 +214,7 @@ function createActivitiesSnapshot(
 }
 
 /** Priority, Store sequence, sessionId 순으로 유일한 ordered 조회 규칙을 적용한다. */
-function compareAgentActivities(
+export function compareAgentActivities(
 	left: AgentSessionActivitySnapshot,
 	right: AgentSessionActivitySnapshot,
 ): number {

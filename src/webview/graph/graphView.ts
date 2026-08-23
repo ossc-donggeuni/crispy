@@ -61,6 +61,8 @@ import {
 	createGraphNodeEffects,
 	type GraphNodeEffectOwner,
 } from './graphNodeEffects';
+import type { AgentActivityStore } from '../../agent/webview/agentActivityStore';
+import { createAgentActivityBindings } from './agentActivityBindings';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
@@ -922,6 +924,7 @@ export function focusGraphBacklink(
  * @param initialState 복원할 초기 Graph 상태
  * @param graph 렌더링할 Root 목록과 Project Tree
  * @param interactions Detach 완료 요청을 Graph 변경 없이 전달할 callback
+ * @param agentActivityStore 현재 Target별 Session Binding을 제공할 runtime Store
  * @returns State와 Camera 및 전체 lifecycle을 제공하는 Graph View
  */
 export function initializeGraphView(
@@ -929,6 +932,7 @@ export function initializeGraphView(
 	initialState: GraphState,
 	graph: Graph,
 	interactions: GraphViewInteractions = {},
+	agentActivityStore?: AgentActivityStore,
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
 	const viewport = ownerDocument.createElement('div');
@@ -957,6 +961,9 @@ export function initializeGraphView(
 		undefined,
 		effectRegionLayer,
 	);
+	const agentActivityBindings = agentActivityStore
+		? createAgentActivityBindings(agentActivityStore)
+		: undefined;
 	const state = createGraphState(initialState);
 	let disposed = false;
 	let initialGraphState = state.getState();
@@ -1545,7 +1552,7 @@ export function initializeGraphView(
 				(root) => getGraphRootLayoutNodeId(root) === rootNodeId,
 			)?.id,
 		},
-		{ nodeEffects },
+		{ nodeEffects, agentActivityBindings },
 	);
 	navigator = initializeGraphNavigator(
 		overlayLayer,
@@ -1717,6 +1724,7 @@ export function initializeGraphView(
 			unsubscribeLayout();
 			navigator.dispose();
 			renderer.dispose();
+			agentActivityBindings?.dispose();
 			nodeEffects.dispose();
 			camera.dispose();
 			viewport.remove();

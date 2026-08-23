@@ -72,6 +72,8 @@ const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
+/** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
+const agentActivityStore = createAgentActivityStore();
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
@@ -90,10 +92,9 @@ const graphView = initializeGraphView(
 			panelState.collapsed,
 		),
 	},
+	agentActivityStore,
 );
 
-/** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
-const agentActivityStore = createAgentActivityStore();
 const agentActivityEffects = createAgentActivityEffectReconciler(
 	agentActivityStore,
 	graphView.createNodeEffectOwner(),

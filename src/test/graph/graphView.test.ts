@@ -47,6 +47,7 @@ import {
 	initializeGraphView,
 } from '../../webview/graph/graphView';
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
+import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
 import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
@@ -91,6 +92,26 @@ suite('Graph View', () => {
 
 		assert.ok(hiddenRule);
 		assert.match(hiddenRule[0], /display:\s*none;/);
+	});
+
+	test('Agent Binding은 Layout에 참여하지 않고 긴 Session Id를 자른다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const containerRule = graphViewCss.match(
+			/\.graph-agent-activity-bindings\s*\{[^}]*\}/,
+		);
+		const sessionRule = graphViewCss.match(
+			/\.graph-agent-activity-session-id\s*\{[^}]*\}/,
+		);
+
+		assert.ok(containerRule);
+		assert.match(containerRule[0], /position:\s*absolute;/);
+		assert.match(containerRule[0], /pointer-events:\s*none;/);
+		assert.ok(sessionRule);
+		assert.match(sessionRule[0], /overflow:\s*hidden;/);
+		assert.match(sessionRule[0], /text-overflow:\s*ellipsis;/);
 	});
 
 	test('Effect Region은 World layer에서 interaction 없이 기존 reflow easing을 사용한다', () => {
@@ -728,6 +749,177 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Folder Binding을 snapshot 순서로 갱신하고 Graph remount 뒤 복원한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+			},
+		}, GRAPH_MOCK, {}, store);
+		const target = { nodeId: 'folder:app/src' };
+
+		store.setAgentActivity('session-A', target, 'planned');
+		store.setAgentActivity('session-B', target, 'editing');
+		store.setAgentActivity('session-C', target, 'active');
+		const firstFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+		const sessionABinding = getAgentBindingElements(firstFolder)[2];
+
+		assert.deepStrictEqual(getAgentBindingState(firstFolder), [
+			['session-B', 'editing'],
+			['session-C', 'active'],
+			['session-A', 'planned'],
+		]);
+
+		store.setAgentActivity('session-A', target, 'rejected');
+
+		assert.strictEqual(getAgentBindingElements(firstFolder)[0], sessionABinding);
+		assert.deepStrictEqual(getAgentBindingState(firstFolder), [
+			['session-A', 'rejected'],
+			['session-B', 'editing'],
+			['session-C', 'active'],
+		]);
+
+		graphView.state.toggleFolder('folder:app');
+		assert.strictEqual(findAgentBindingContainer(firstFolder), undefined);
+		graphView.state.toggleFolder('folder:app');
+		const reopenedFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		assert.notStrictEqual(reopenedFolder, firstFolder);
+		assert.deepStrictEqual(getAgentBindingState(reopenedFolder), [
+			['session-A', 'rejected'],
+			['session-B', 'editing'],
+			['session-C', 'active'],
+		]);
+
+		graphView.updateGraph({ roots: [], rootNodes: {} });
+		assert.strictEqual(findAgentBindingContainer(reopenedFolder), undefined);
+		graphView.updateGraph(GRAPH_MOCK);
+		const refreshedFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		assert.deepStrictEqual(getAgentBindingState(refreshedFolder), [
+			['session-A', 'rejected'],
+			['session-B', 'editing'],
+			['session-C', 'active'],
+		]);
+
+		graphView.dispose();
+		assert.strictEqual(findAgentBindingContainer(refreshedFolder), undefined);
+		store.setAgentActivity('session-D', target, 'mentioned');
+		assert.strictEqual(findAgentBindingContainer(refreshedFolder), undefined);
+	});
+
+	test('clearSession은 여러 Target Binding에서 해당 Session만 한 번에 제거한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+			},
+		}, GRAPH_MOCK, {}, store);
+		const targetX = { nodeId: 'folder:app/src' };
+		const targetY = { nodeId: 'folder:app' };
+
+		store.setAgentActivity('session-A', targetX, 'editing');
+		store.setAgentActivity('session-B', targetX, 'planned');
+		store.setAgentActivity('session-A', targetY, 'active');
+		const elementX = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetX.nodeId,
+		);
+		const elementY = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetY.nodeId,
+		);
+
+		store.clearAgentActivitiesBySession('session-A');
+
+		assert.deepStrictEqual(getAgentBindingState(elementX), [
+			['session-B', 'planned'],
+		]);
+		assert.strictEqual(findAgentBindingContainer(elementY), undefined);
+		assert.deepStrictEqual(store.getActivities(targetX).map((entry) => (
+			entry.sessionId
+		)), ['session-B']);
+
+		graphView.dispose();
+	});
+
+	test('Grouped File pagination과 standalone File의 Target Binding lifecycle을 따른다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const pagedFileId = 'file:app/src/index.ts';
+		const fileGroupId = createFileGroupId('folder:app/src');
+
+		store.setAgentActivity('session-row', { nodeId: pagedFileId }, 'editing');
+		store.setAgentActivity(
+			'session-standalone',
+			{ nodeId: GRAPH_MOCK_FILE_ROOT.id },
+			'active',
+		);
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK, {}, store);
+		const standaloneFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_FILE_ROOT.id,
+		);
+
+		assert.deepStrictEqual(getAgentBindingState(standaloneFile), [
+			['session-standalone', 'active'],
+		]);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-file-id',
+			pagedFileId,
+		), undefined);
+
+		graphView.state.showMoreFiles(fileGroupId);
+		const firstRow = getDescendantByAttribute(root, 'data-file-id', pagedFileId);
+
+		assert.deepStrictEqual(getAgentBindingState(firstRow), [
+			['session-row', 'editing'],
+		]);
+		graphView.state.collapseFileGroup(fileGroupId);
+		assert.strictEqual(findAgentBindingContainer(firstRow), undefined);
+		graphView.state.showMoreFiles(fileGroupId);
+		const restoredRow = getDescendantByAttribute(root, 'data-file-id', pagedFileId);
+
+		assert.notStrictEqual(restoredRow, firstRow);
+		assert.deepStrictEqual(getAgentBindingState(restoredRow), [
+			['session-row', 'editing'],
+		]);
+
+		graphView.dispose();
+	});
+
 	test('rootId는 Detached actual occurrence만 지정하고 Backlink에는 복제하지 않는다', () => {
 		const folder = {
 			kind: 'folder' as const,
@@ -792,6 +984,79 @@ suite('Graph View', () => {
 			createGraphLayoutNodeId(detachedRootId, folder.id),
 		), undefined);
 		assert.strictEqual(findNodeEffect(detachedRootButton, 'outline'), undefined);
+		graphView.dispose();
+	});
+
+	test('Source Agent Binding은 Detached occurrence에 투영되고 Backlink에는 표시되지 않는다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:binding-detached',
+			name: 'binding-detached',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:binding-detached/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:binding-detached',
+			name: 'binding-detached',
+			status: 'loaded',
+			children: [folder],
+		};
+		const detachedRootId = createPromotedGraphRootId(folder.id);
+		const detachedLayoutNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			folder.id,
+		);
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity(
+			'session-global',
+			{ nodeId: folder.id },
+			'planned',
+		);
+		store.setAgentActivity(
+			'session-occurrence',
+			{ nodeId: folder.id, rootId: detachedRootId },
+			'editing',
+		);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[detachedLayoutNodeId]: true,
+			},
+			detachedRootNodeIds: { [folder.id]: true },
+		}, createSingleRootGraph(project, 'root:binding-detached'), {}, store);
+		const detachedCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedLayoutNodeId,
+		);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-target-node-id',
+			folder.id,
+		);
+
+		assert.deepStrictEqual(getAgentBindingState(detachedCard), [
+			['session-occurrence', 'editing'],
+			['session-global', 'planned'],
+		]);
+		assert.strictEqual(
+			getDescendantByClass(
+				detachedCard,
+				'graph-agent-activity-bindings',
+			).getAttribute('data-graph-root-id'),
+			detachedRootId,
+		);
+		assert.strictEqual(findAgentBindingContainer(backlink), undefined);
+
 		graphView.dispose();
 	});
 
@@ -6970,6 +7235,28 @@ function getDescendantsByClass(
 	return element.children.flatMap((child) => [
 		...(child.hasClass(className) ? [child] : []),
 		...getDescendantsByClass(child, className),
+	]);
+}
+
+function findAgentBindingContainer(element: FakeElement): FakeElement | undefined {
+	return element.children.find((child) => (
+		child.hasClass('graph-agent-activity-bindings')
+	));
+}
+
+function getAgentBindingElements(element: FakeElement): FakeElement[] {
+	const container = findAgentBindingContainer(element);
+
+	assert.ok(container);
+	return container.children;
+}
+
+function getAgentBindingState(
+	element: FakeElement,
+): Array<readonly [string, string]> {
+	return getAgentBindingElements(element).map((binding) => [
+		binding.getAttribute('data-session-id') ?? '',
+		binding.getAttribute('data-activity') ?? '',
 	]);
 }
 

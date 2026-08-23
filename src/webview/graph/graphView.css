@@ -344,6 +344,61 @@ body.vscode-high-contrast-light .graph-viewport {
 		box-shadow 180ms ease;
 }
 
+/* G-12.6 전에는 Target 아래에 겹쳐 그리되 기존 Graph geometry에는 참여하지 않는다. */
+.graph-file-item.graph-agent-activity-binding-host {
+	position: relative;
+}
+
+.graph-agent-activity-bindings {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	z-index: 4;
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+	flex-direction: column;
+	gap: 4px;
+	pointer-events: none;
+}
+
+.graph-agent-activity-binding {
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 4px 8px;
+	color: var(--vscode-foreground);
+	background: var(
+		--vscode-editorWidget-background,
+		var(--vscode-editor-background)
+	);
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 6px;
+	box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgb(0 0 0 / 24%));
+	font-family: Inter, var(--vscode-font-family);
+	font-size: 11px;
+	font-weight: 400;
+	line-height: 16px;
+}
+
+.graph-agent-activity-session-id {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-agent-activity-kind {
+	flex: none;
+	color: var(--vscode-descriptionForeground);
+	white-space: nowrap;
+}
+
 /* Host가 지정한 transient 효과는 기존 Card/Row paint와 layout을 건드리지 않는다. */
 .graph-file-item.graph-node-effect-host {
 	--graph-node-effect-ring-inset: 2px -3px;

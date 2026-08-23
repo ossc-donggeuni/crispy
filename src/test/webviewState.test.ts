@@ -532,6 +532,10 @@ suite('Webview State Wiring', () => {
 		let agentPanelUiDisposed = false;
 		let terminalPoolDisposed = false;
 		let terminalFitCount = 0;
+		let graphAgentActivityStore: ReturnType<
+			typeof import('../agent/webview/agentActivityStore').createAgentActivityStore
+		> | undefined;
+		let createdAgentActivityStore: typeof graphAgentActivityStore;
 
 		const graphViewModulePath = require.resolve('../webview/graph/graphView');
 		const panelDockModulePath = require.resolve('../webview/panel/panelDock');
@@ -579,8 +583,15 @@ suite('Webview State Wiring', () => {
 			'acquireVsCodeApi',
 		);
 
-		graphViewModule.initializeGraphView = ((_root, restoredGraphState, graph) => {
+		graphViewModule.initializeGraphView = ((
+			_root,
+			restoredGraphState,
+			graph,
+			_interactions,
+			agentActivityStore,
+		) => {
 			graphInitializeCount += 1;
+			graphAgentActivityStore = agentActivityStore;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
@@ -744,8 +755,9 @@ suite('Webview State Wiring', () => {
 
 		agentActivityStoreModule.createAgentActivityStore = (() => {
 			const store = originalCreateAgentActivityStore();
-
-			return {
+			const recordingStore: ReturnType<
+				typeof originalCreateAgentActivityStore
+			> = {
 				getActivities: store.getActivities,
 				getSnapshot: store.getSnapshot,
 				setAgentActivity(sessionId, target, activity): void {
@@ -762,6 +774,9 @@ suite('Webview State Wiring', () => {
 				},
 				subscribe: store.subscribe,
 			};
+
+			createdAgentActivityStore = recordingStore;
+			return recordingStore;
 		}) as typeof agentActivityStoreModule.createAgentActivityStore;
 
 		/**
@@ -869,6 +884,7 @@ suite('Webview State Wiring', () => {
 			assert.deepStrictEqual(ensuredTabs, [agentTabId]);
 			assert.deepStrictEqual(activeTabs, [agentTabId]);
 			assert.strictEqual(graphInitializeCount, 1);
+			assert.strictEqual(graphAgentActivityStore, createdAgentActivityStore);
 			assert.strictEqual(graphVisibleRefreshCount, 1);
 			assert.ok(hostMessageHandler);
 
