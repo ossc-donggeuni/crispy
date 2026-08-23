@@ -63,3 +63,9 @@ Source: SVG Repo / Variety Duotone Filled Icons
 License: Public Domain (CC0)
 Author: Mary Akveo
 Attribution required: No
+
+- clean.svg
+Source: SVG Repo / Home Assistant Outlined Icons
+License: Public Domain (CC0)
+Author: IonutNeagu
+Attribution required: No

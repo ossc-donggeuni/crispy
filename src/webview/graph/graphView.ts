@@ -31,6 +31,7 @@ import {
 	type GraphNavigator,
 } from './graphNavigator';
 import { createGraphNavigatorRoots } from './graphNavigatorRoots';
+import { createGraphArrangeAllConfirmDialog } from './graphArrangeAllConfirmDialog';
 import {
 	initializeGraphRenderer,
 	type GraphLayoutApplyOptions,
@@ -404,6 +405,7 @@ export function initializeGraphLayoutReflow(
 	createLayout: (state: GraphStateSnapshot) => GraphLayout,
 	getLogicalParentByChild: () => ReadonlyMap<string, string> = () => new Map(),
 	onHiddenNodeIdsChange: (state: GraphStateSnapshot) => void = () => undefined,
+	shouldSkipLayoutReflow: () => boolean = () => false,
 ): () => void {
 	let active = true;
 	let renderedFileGroupPages = state.getState().fileGroupPages;
@@ -428,6 +430,12 @@ export function initializeGraphLayoutReflow(
 		renderedFileGroupPages = nextState.fileGroupPages;
 		renderedOpenedFolders = nextState.openedFolders;
 		renderedHiddenNodeIds = nextState.hiddenNodeIds;
+		if (shouldSkipLayoutReflow()) {
+			if (hiddenNodeIdsChanged) {
+				onHiddenNodeIdsChange(nextState);
+			}
+			return;
+		}
 		const previousLayout = getCurrentLayout();
 		const nextLayout = createLayout(nextState);
 		const rebasedNodePositions = normalizeGraphNodePositions(
@@ -719,6 +727,68 @@ function reattachInstanceVisualState(
 	return { openedFolders, fileGroupPages };
 }
 
+/** 모든 Detached occurrence 상태를 가장 깊은 Root부터 원래 occurrence로 복원한다. */
+function restoreAllDetachedInstanceVisualState(
+	graph: Graph,
+	snapshot: GraphStateSnapshot,
+): GraphInstanceVisualState {
+	const rootsById = new Map(graph.roots.map((root) => [root.id, root]));
+	const depthByRootId = new Map<string, number>();
+	const resolveDepth = (root: GraphRoot, visiting = new Set<string>()): number => {
+		const cached = depthByRootId.get(root.id);
+
+		if (cached !== undefined) {
+			return cached;
+		}
+		if (visiting.has(root.id)) {
+			return 1;
+		}
+		const originRootId = getDetachedRootOriginId(root.id);
+		const originRoot = originRootId ? rootsById.get(originRootId) : undefined;
+		const nextVisiting = new Set(visiting).add(root.id);
+		const depth = originRoot && isDetachedRootId(originRoot.id)
+			? resolveDepth(originRoot, nextVisiting) + 1
+			: 1;
+
+		depthByRootId.set(root.id, depth);
+		return depth;
+	};
+	const detachedRoots = graph.roots
+		.filter((root) => isDetachedRootId(root.id))
+		.slice()
+		.sort((left, right) => resolveDepth(right) - resolveDepth(left));
+	const remainingRootIds = new Set(graph.roots.map((root) => root.id));
+	let currentSnapshot = snapshot;
+
+	for (const root of detachedRoots) {
+		remainingRootIds.delete(root.id);
+		const rootNode = graph.rootNodes[root.nodeId];
+
+		if (!rootNode) {
+			continue;
+		}
+		const originRootId = getDetachedRootOriginId(root.id);
+		const restoreOccurrence = !graph.roots.some((candidate) => (
+			remainingRootIds.has(candidate.id)
+			&& candidate.nodeId === root.nodeId
+			&& getDetachedRootOriginId(candidate.id) === originRootId
+		));
+		const visualState = reattachInstanceVisualState(
+			currentSnapshot,
+			rootNode,
+			root,
+			restoreOccurrence,
+		);
+
+		currentSnapshot = { ...currentSnapshot, ...visualState };
+	}
+
+	return {
+		openedFolders: { ...currentSnapshot.openedFolders },
+		fileGroupPages: { ...currentSnapshot.fileGroupPages },
+	};
+}
+
 /** Persisted legacy Source-keyed Visual 상태를 복원된 모든 Root Instance로 이관한다. */
 function normalizeDetachedInstanceVisualState(
 	graph: Graph,
@@ -876,6 +946,7 @@ export function initializeGraphView(
 	viewport.append(world, overlayLayer);
 	root.append(viewport);
 	const reattachConfirmDialog = createGraphReattachConfirmDialog(overlayLayer);
+	const arrangeAllConfirmDialog = createGraphArrangeAllConfirmDialog(overlayLayer);
 	const nodeEffects = createGraphNodeEffects(
 		ownerDocument,
 		undefined,
@@ -972,6 +1043,7 @@ export function initializeGraphView(
 		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
+	let skipGraphLayoutReflow = false;
 	const syncNavigatorRoots = (
 		snapshot: GraphStateSnapshot = state.getState(),
 	): void => {
@@ -1141,6 +1213,41 @@ export function initializeGraphView(
 			camera,
 			rootId,
 		);
+	};
+	const performArrangeAll = (): void => {
+		const snapshot = state.getState();
+		const visualState = restoreAllDetachedInstanceVisualState(
+			currentGraph,
+			snapshot,
+		);
+		const nextSnapshot = { ...snapshot, ...visualState };
+
+		currentGraph = workspaceGraph;
+		currentLogicalParentByChild = createGraphLogicalParentByChild(currentGraph);
+		currentUnarrangedNodeIds = new Set();
+		currentLayout = createLayout(currentGraph, nextSnapshot);
+		applyGraphLayout(renderer, navigator, currentLayout, {});
+		skipGraphLayoutReflow = true;
+		try {
+			state.setState({
+				camera: snapshot.camera,
+				nodePositions: {},
+				fileGroupPages: visualState.fileGroupPages,
+				openedFolders: visualState.openedFolders,
+				detachedRootNodeIds: {},
+				hiddenNodeIds: snapshot.hiddenNodeIds,
+			});
+		} finally {
+			skipGraphLayoutReflow = false;
+		}
+		syncNavigatorRoots();
+	};
+	const handleArrangeAll = (): void => {
+		void arrangeAllConfirmDialog.confirm().then((confirmed) => {
+			if (confirmed && !disposed) {
+				performArrangeAll();
+			}
+		});
 	};
 	const handleRootContextClick = (rootId: string): void => {
 		focusGraphBacklink(renderer, viewport, camera, rootId);
@@ -1441,7 +1548,10 @@ export function initializeGraphView(
 		state,
 		camera,
 		initialLayout,
-		{ onRootSelect: handleNavigatorRootSelect },
+		{
+			onRootSelect: handleNavigatorRootSelect,
+			onArrangeAll: handleArrangeAll,
+		},
 		getVisibleGraphArea,
 		nodeEffects,
 	);
@@ -1455,6 +1565,7 @@ export function initializeGraphView(
 		createCurrentLayout,
 		() => currentLogicalParentByChild,
 		syncNavigatorRoots,
+		() => skipGraphLayoutReflow,
 	);
 
 	return {
@@ -1594,6 +1705,7 @@ export function initializeGraphView(
 
 			disposed = true;
 			reattachConfirmDialog.dispose();
+			arrangeAllConfirmDialog.dispose();
 			unsubscribeLayout();
 			navigator.dispose();
 			renderer.dispose();

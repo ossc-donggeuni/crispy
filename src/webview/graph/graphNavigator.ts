@@ -51,6 +51,7 @@ export interface GraphNavigator {
 /** Navigator의 사용자 선택을 Graph 해석 없이 상위 계층에 전달한다. */
 export interface GraphNavigatorInteractions {
 	onRootSelect?: (rootId: string) => void;
+	onArrangeAll?: () => void;
 }
 
 const NAVIGATOR_ZOOM_STEP = 0.1;
@@ -63,6 +64,8 @@ const FILTER_LABEL = 'Workspace Filter';
 const FILTER_PANEL_ID = 'graph-navigator-filter-panel';
 const FILTER_PANEL_TITLE_ID = 'graph-navigator-filter-title';
 const FILTER_ICON_ASSET = 'navigator-filter.svg';
+const ARRANGE_ALL_LABEL = '그래프 전부 정렬하기';
+const ARRANGE_ALL_ICON_ASSET = 'clean.svg';
 const FILTER_OPENED_ICON_ASSET = 'filter-opened.svg';
 const FILTER_CLOSED_ICON_ASSET = 'filter-closed.svg';
 const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
@@ -74,7 +77,7 @@ const NAVIGATOR_VIEWPORT_MARGIN = 16;
 /** Action Rail에 추가할 Navigator Action의 공통 DOM 계약이다. */
 interface NavigatorActionDefinition {
 	readonly label: string;
-	readonly controlsId: string;
+	readonly controlsId?: string;
 	readonly iconAsset: string;
 	readonly onActivate: () => void;
 }
@@ -161,8 +164,10 @@ function createNavigatorActionButton(
 	button.type = 'button';
 	button.title = definition.label;
 	button.setAttribute('aria-label', definition.label);
-	button.setAttribute('aria-controls', definition.controlsId);
-	button.setAttribute('aria-expanded', 'false');
+	if (definition.controlsId) {
+		button.setAttribute('aria-controls', definition.controlsId);
+		button.setAttribute('aria-expanded', 'false');
+	}
 	icon.className = 'graph-navigator-action-icon';
 	icon.setAttribute('data-navigator-icon', definition.iconAsset);
 	icon.setAttribute('aria-hidden', 'true');
@@ -417,7 +422,12 @@ export function initializeGraphNavigator(
 		iconAsset: FILTER_ICON_ASSET,
 		onActivate: handleFilterToggle,
 	});
-	const navigatorActions = [rootListAction, filterAction];
+	const arrangeAllAction = createNavigatorActionButton(ownerDocument, {
+		label: ARRANGE_ALL_LABEL,
+		iconAsset: ARRANGE_ALL_ICON_ASSET,
+		onActivate: () => interactions.onArrangeAll?.(),
+	});
+	const navigatorActions = [rootListAction, filterAction, arrangeAllAction];
 	let renderedRootItems: NavigatorRootListItem[] = [];
 	const disposeRootItems = (): void => {
 		for (const item of renderedRootItems) {
