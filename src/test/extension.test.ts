@@ -156,7 +156,7 @@ suite('Crispy Extension Host', () => {
 		assert.ok(registeredCommands.includes(CLEAR_NODE_EFFECTS_COMMAND_ID));
 	});
 
-	test('Debug Effect 메시지는 Root 직계 Source 순서대로 6종과 icon 조합을 만든다', () => {
+	test('Debug Effect 메시지는 Root 직계 Source 순서대로 6종과 icon 조합에 임의 색을 배정한다', () => {
 		const project = {
 			kind: 'project' as const,
 			id: 'project:debug-effects',
@@ -172,8 +172,18 @@ suite('Crispy Extension Host', () => {
 			roots: [{ id: 'root:debug-effects', nodeId: project.id }],
 			rootNodes: { [project.id]: project },
 		};
-		const first = createGraphNodeEffectDebugMessages(graph, 0);
-		const updated = createGraphNodeEffectDebugMessages(graph, 1);
+		const randomValues = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
+		let randomIndex = 0;
+		const first = createGraphNodeEffectDebugMessages(
+			graph,
+			{},
+			() => randomValues[randomIndex++] ?? 0,
+		);
+		let updatedRandomCalls = 0;
+		const updated = createGraphNodeEffectDebugMessages(graph, {}, () => {
+			updatedRandomCalls += 1;
+			return 0.999;
+		});
 
 		assert.deepStrictEqual(first.map(({ target, effect }) => ({
 			nodeId: target.nodeId,
@@ -195,6 +205,20 @@ suite('Crispy Extension Host', () => {
 			updated.map(({ effect }) => effect.kind),
 			first.map(({ effect }) => effect.kind),
 		);
+		assert.strictEqual(randomIndex, 8);
+		assert.strictEqual(updatedRandomCalls, 8);
+		assert.deepStrictEqual(first.map(({ effect }) => effect.color), [
+			'hsl(0deg 84% 64%)',
+			'hsl(45deg 84% 64%)',
+			'hsl(90deg 84% 64%)',
+			'hsl(135deg 84% 64%)',
+			'hsl(180deg 84% 64%)',
+			'hsl(225deg 84% 64%)',
+			'hsl(270deg 84% 64%)',
+			'hsl(270deg 84% 64%)',
+			'hsl(315deg 84% 64%)',
+			'hsl(315deg 84% 64%)',
+		]);
 		assert.ok(updated.every(({ effect }, index) => (
 			effect.color !== first[index]?.effect.color
 		)));

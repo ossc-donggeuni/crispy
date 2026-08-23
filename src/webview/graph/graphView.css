@@ -92,13 +92,33 @@
 
 /* Host가 지정한 transient 효과는 기존 Card/Row paint와 layout을 건드리지 않는다. */
 .graph-file-item.graph-node-effect-host {
-	--graph-node-effect-radius: 3px;
+	--graph-node-effect-ring-inset: 2px -3px;
+	--graph-node-effect-ring-radius: 6px;
+	--graph-node-effect-surface-inset: 3px 1px;
+	--graph-node-effect-surface-radius: 6px;
+	--graph-node-effect-dash-width: 2px;
+	--graph-node-effect-outline-width: 2px;
+	--graph-node-effect-outline-strong-width: 3px;
+	--graph-node-effect-pulse-width: 2px;
+	--graph-node-effect-badge-size: 18px;
+	--graph-node-effect-badge-top: -6px;
+	--graph-node-effect-badge-left: -6px;
 
 	position: relative;
 }
 
 .graph-node.graph-node-effect-host {
-	--graph-node-effect-radius: 10px;
+	--graph-node-effect-ring-inset: -4px;
+	--graph-node-effect-ring-radius: 15px;
+	--graph-node-effect-surface-inset: 1px;
+	--graph-node-effect-surface-radius: 10px;
+	--graph-node-effect-dash-width: 1.5px;
+	--graph-node-effect-outline-width: 1px;
+	--graph-node-effect-outline-strong-width: 2px;
+	--graph-node-effect-pulse-width: 2px;
+	--graph-node-effect-badge-size: 22px;
+	--graph-node-effect-badge-top: -10px;
+	--graph-node-effect-badge-left: -10px;
 }
 
 .graph-node-effect-layer {
@@ -106,6 +126,7 @@
 	inset: 0;
 	z-index: 2;
 	display: block;
+	overflow: visible;
 	border-radius: inherit;
 	pointer-events: none;
 }
@@ -114,14 +135,25 @@
 	position: absolute;
 	inset: 0;
 	display: block;
+	box-sizing: border-box;
 	border-radius: inherit;
 	pointer-events: none;
 }
 
 .graph-node-effect-marching-dash {
-	width: 100%;
-	height: 100%;
+	inset: var(--graph-node-effect-ring-inset);
+	z-index: 3;
 	overflow: visible;
+}
+
+.graph-file-item.graph-node-effect-host .graph-node-effect-marching-dash {
+	width: calc(100% + 6px);
+	height: calc(100% - 4px);
+}
+
+.graph-node.graph-node-effect-host .graph-node-effect-marching-dash {
+	width: calc(100% + 8px);
+	height: calc(100% + 8px);
 }
 
 .graph-node-effect-marching-dash-rect {
@@ -129,85 +161,136 @@
 	y: 1px;
 	width: calc(100% - 2px);
 	height: calc(100% - 2px);
-	rx: var(--graph-node-effect-radius);
-	ry: var(--graph-node-effect-radius);
+	rx: var(--graph-node-effect-ring-radius);
+	ry: var(--graph-node-effect-ring-radius);
 	fill: none;
 	stroke: var(--graph-node-effect-color);
-	stroke-width: 2px;
-	stroke-dasharray: 9 7;
-	animation: graph-node-effect-marching-dash 900ms linear infinite;
+	stroke-width: var(--graph-node-effect-dash-width);
+	stroke-dasharray: 8 6;
+	filter: drop-shadow(
+		0 0 3px color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 28%,
+			transparent
+		)
+	);
+	animation: graph-node-effect-marching-dash 1.35s linear infinite;
 }
 
 .graph-node-effect-pulse {
-	background: var(--graph-node-effect-color);
-	animation: graph-node-effect-pulse 1.45s ease-in-out infinite;
+	inset: var(--graph-node-effect-ring-inset);
+	z-index: 0;
+	background: transparent;
+	border: var(--graph-node-effect-pulse-width) solid var(--graph-node-effect-color);
+	border-radius: var(--graph-node-effect-ring-radius);
+	will-change: opacity;
+	animation: graph-node-effect-pulse 2.25s ease-in-out infinite;
+}
+
+.graph-node-effect-host:has(
+	> .graph-node-effect-layer > .graph-node-effect-pulse
+) > .graph-folder-name,
+.graph-node-effect-host:has(
+	> .graph-node-effect-layer > .graph-node-effect-pulse
+) > .graph-file-name {
+	will-change: opacity;
+	animation: graph-node-effect-pulse-name 2.25s ease-in-out infinite;
 }
 
 .graph-node-effect-shimmer {
+	inset: var(--graph-node-effect-surface-inset);
+	z-index: 1;
 	overflow: hidden;
+	border-radius: var(--graph-node-effect-surface-radius);
 }
 
 .graph-node-effect-shimmer::before {
 	position: absolute;
 	top: 0;
 	bottom: 0;
-	left: -65%;
-	width: 55%;
+	left: -68%;
+	width: 64%;
 	background: linear-gradient(
-		105deg,
+		108deg,
 		transparent 0%,
-		color-mix(in srgb, var(--graph-node-effect-color) 12%, transparent) 22%,
-		color-mix(in srgb, var(--graph-node-effect-color) 48%, transparent) 50%,
-		color-mix(in srgb, var(--graph-node-effect-color) 12%, transparent) 78%,
+		color-mix(in srgb, var(--graph-node-effect-color) 8%, transparent) 34%,
+		color-mix(in srgb, var(--graph-node-effect-color) 56%, transparent) 50%,
+		color-mix(in srgb, var(--graph-node-effect-color) 8%, transparent) 66%,
 		transparent 100%
 	);
+	filter: drop-shadow(
+		0 0 4px color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 22%,
+			transparent
+		)
+	);
 	content: '';
-	animation: graph-node-effect-shimmer 1.8s ease-in-out infinite;
+	will-change: transform;
+	animation: graph-node-effect-shimmer 1.55s cubic-bezier(0.38, 0, 0.22, 1) infinite;
 }
 
 .graph-node-effect-outline {
-	box-shadow: inset 0 0 0 1px var(--graph-node-effect-color);
+	inset: var(--graph-node-effect-ring-inset);
+	z-index: 2;
+	border: var(--graph-node-effect-outline-width) solid var(--graph-node-effect-color);
+	border-radius: var(--graph-node-effect-ring-radius);
+	box-shadow: 0 0 0 1px color-mix(
+		in srgb,
+		var(--graph-node-effect-color) 12%,
+		transparent
+	);
 }
 
 .graph-node-effect-outline-strong {
+	inset: var(--graph-node-effect-ring-inset);
+	z-index: 2;
+	border: var(--graph-node-effect-outline-strong-width) solid var(--graph-node-effect-color);
+	border-radius: var(--graph-node-effect-ring-radius);
 	box-shadow:
-		inset 0 0 0 3px var(--graph-node-effect-color),
-		0 0 10px color-mix(
+		0 0 0 1px color-mix(
 			in srgb,
-			var(--graph-node-effect-color) 22%,
+			var(--graph-node-effect-color) 18%,
+			transparent
+		),
+		0 0 12px color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 24%,
 			transparent
 		);
 }
 
 .graph-node-effect-icon {
-	top: 4px;
+	top: var(--graph-node-effect-badge-top);
 	right: auto;
 	bottom: auto;
-	left: 4px;
+	left: var(--graph-node-effect-badge-left);
+	z-index: 4;
 	display: flex;
-	width: 18px;
-	height: 18px;
+	width: var(--graph-node-effect-badge-size);
+	height: var(--graph-node-effect-badge-size);
 	align-items: center;
 	justify-content: center;
-	color: var(--graph-node-effect-color);
-	background: color-mix(
-		in srgb,
-		var(--graph-node-effect-color) 20%,
-		transparent
-	);
+	color: #fff;
+	background: var(--graph-node-effect-color);
 	border-radius: 50%;
 	box-shadow:
-		inset 0 0 0 1px var(--graph-node-effect-color),
-		0 1px 5px rgb(0 0 0 / 38%);
+		0 0 0 2px var(--vscode-editor-background),
+		0 3px 9px rgb(0 0 0 / 45%),
+		0 0 8px color-mix(
+			in srgb,
+			var(--graph-node-effect-color) 24%,
+			transparent
+		);
 }
 
 .graph-node-effect-icon-svg {
 	display: block;
-	width: 14px;
-	height: 14px;
+	width: 68%;
+	height: 68%;
 	fill: none;
 	stroke: currentcolor;
-	stroke-width: 2;
+	stroke-width: 2.25;
 	stroke-linecap: round;
 	stroke-linejoin: round;
 }
@@ -221,22 +304,44 @@
 @keyframes graph-node-effect-pulse {
 	0%,
 	100% {
-		opacity: 0.05;
+		opacity: 0.2;
 	}
 
 	50% {
-		opacity: 0.28;
+		opacity: 1;
+	}
+}
+
+@keyframes graph-node-effect-pulse-name {
+	0%,
+	100% {
+		opacity: 0.52;
+	}
+
+	50% {
+		opacity: 1;
 	}
 }
 
 @keyframes graph-node-effect-shimmer {
 	0% {
-		transform: translateX(0);
+		opacity: 0;
+		transform: translate3d(0, 0, 0);
 	}
 
-	62%,
+	7% {
+		opacity: 0.86;
+	}
+
+	72% {
+		opacity: 0.86;
+		transform: translate3d(265%, 0, 0);
+	}
+
+	82%,
 	100% {
-		transform: translateX(310%);
+		opacity: 0;
+		transform: translate3d(265%, 0, 0);
 	}
 }
 
@@ -723,16 +828,32 @@
 
 	.graph-node-effect-marching-dash-rect,
 	.graph-node-effect-pulse,
-	.graph-node-effect-shimmer::before {
+	.graph-node-effect-shimmer::before,
+	.graph-node-effect-host:has(
+		> .graph-node-effect-layer > .graph-node-effect-pulse
+	) > .graph-folder-name,
+	.graph-node-effect-host:has(
+		> .graph-node-effect-layer > .graph-node-effect-pulse
+	) > .graph-file-name {
 		animation: none;
 	}
 
 	.graph-node-effect-pulse {
-		opacity: 0.16;
+		opacity: 0.65;
+	}
+
+	.graph-node-effect-host:has(
+		> .graph-node-effect-layer > .graph-node-effect-pulse
+	) > .graph-folder-name,
+	.graph-node-effect-host:has(
+		> .graph-node-effect-layer > .graph-node-effect-pulse
+	) > .graph-file-name {
+		opacity: 0.8;
 	}
 
 	.graph-node-effect-shimmer::before {
-		transform: translateX(150%);
+		opacity: 0.42;
+		transform: translate3d(145%, 0, 0);
 	}
 }
 

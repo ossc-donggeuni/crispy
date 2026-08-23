@@ -104,19 +104,22 @@ const GRAPH_NODE_EFFECT_DEBUG_TEMPLATES:
 		[{ kind: 'outline' }, { kind: 'icon', icon: 'alert' }],
 		[{ kind: 'outline' }, { kind: 'icon', icon: 'cancel' }],
 	];
-const GRAPH_NODE_EFFECT_DEBUG_PALETTES: readonly (readonly string[])[] = [
-	['#ff4d8d', '#53d8fb', '#ffb84d', '#66e28a', '#b58cff', '#40e0d0', '#ffd166', '#ff6b6b'],
-	['#ff75ad', '#7ee7ff', '#ffd27a', '#8ef0a8', '#c9adff', '#67f3e6', '#ffe08a', '#ff9292'],
-];
+
+/** Debug Effect가 매 호출마다 구분 가능한 밝은 임의 색상을 사용하도록 한다. */
+function createRandomGraphNodeEffectColor(random: () => number): string {
+	const hue = Math.floor(random() * 36_000) / 100;
+
+	return `hsl(${hue}deg 84% 64%)`;
+}
 
 /** 현재 Workspace Graph의 Source Node를 안정적인 traversal 순서로 Debug 메시지에 배정한다. */
 export function createGraphNodeEffectDebugMessages(
 	graph: Graph,
-	paletteIndex = 0,
 	graphState: Pick<
 		GraphState,
 		'fileGroupPages' | 'openedFolders' | 'hiddenNodeIds'
 	> = {},
+	random: () => number = Math.random,
 ): GraphNodeEffectSetMessage[] {
 	const nodeIds: string[] = [];
 	const visitedNodeIds = new Set<string>();
@@ -144,9 +147,6 @@ export function createGraphNodeEffectDebugMessages(
 		}
 	}
 
-	const palette = GRAPH_NODE_EFFECT_DEBUG_PALETTES[
-		Math.abs(paletteIndex) % GRAPH_NODE_EFFECT_DEBUG_PALETTES.length
-	] ?? GRAPH_NODE_EFFECT_DEBUG_PALETTES[0];
 	const messages: GraphNodeEffectSetMessage[] = [];
 
 	for (
@@ -156,7 +156,7 @@ export function createGraphNodeEffectDebugMessages(
 	) {
 		const nodeId = nodeIds[index];
 		const templates = GRAPH_NODE_EFFECT_DEBUG_TEMPLATES[index];
-		const color = palette?.[index];
+		const color = createRandomGraphNodeEffectColor(random);
 
 		if (!nodeId || !templates || !color) {
 			continue;
@@ -269,7 +269,6 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		convertWorkspaceSnapshotToGraph,
 	};
 	let debugEffectMessages: GraphNodeEffectSetMessage[] = [];
-	let debugInvocationCount = 0;
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
 	 */
@@ -423,7 +422,6 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		}
 		const nextMessages = createGraphNodeEffectDebugMessages(
 			graph,
-			debugInvocationCount,
 			lastWebviewState?.graph,
 		);
 		const nextKindsByTarget = collectEffectKindsByTarget(nextMessages);
@@ -446,7 +444,6 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			await postGraphEffectMessage(panel, message);
 		}
 		debugEffectMessages = nextMessages;
-		debugInvocationCount += 1;
 	};
 	const clearNodeEffects = async (): Promise<void> => {
 		const panel = currentRuntime?.panel;
