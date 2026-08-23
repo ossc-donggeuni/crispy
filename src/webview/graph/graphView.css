@@ -287,7 +287,20 @@
 	inset: var(--graph-node-effect-surface-inset);
 	z-index: 1;
 	overflow: hidden;
+	background: color-mix(
+		in srgb,
+		color-mix(in srgb, var(--graph-node-effect-color) 42%, black) 18%,
+		transparent
+	);
 	border-radius: var(--graph-node-effect-surface-radius);
+}
+
+.graph-node-effect-region .graph-node-effect-shimmer {
+	background: color-mix(
+		in srgb,
+		color-mix(in srgb, var(--graph-node-effect-color) 42%, black) 12%,
+		transparent
+	);
 }
 
 .graph-node-effect-shimmer::before {

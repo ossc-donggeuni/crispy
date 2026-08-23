@@ -118,6 +118,28 @@ suite('Graph View', () => {
 		);
 	});
 
+	test('Shimmer는 전달된 색에서 파생한 어두운 ambient surface를 사용한다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const shimmerRule = graphViewCss.match(
+			/\.graph-node-effect-shimmer\s*\{[\s\S]*?\n\}/,
+		);
+		const regionShimmerRule = graphViewCss.match(
+			/\.graph-node-effect-region \.graph-node-effect-shimmer\s*\{[\s\S]*?\n\}/,
+		);
+
+		assert.ok(shimmerRule);
+		assert.match(shimmerRule[0], /background:\s*color-mix\(/);
+		assert.match(
+			shimmerRule[0],
+			/var\(--graph-node-effect-color\) 42%, black/,
+		);
+		assert.ok(regionShimmerRule);
+		assert.match(regionShimmerRule[0], /transparent/);
+	});
+
 	test('Node Effect를 kind별로 조합·교체하고 color/icon을 중복 DOM 없이 갱신한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
