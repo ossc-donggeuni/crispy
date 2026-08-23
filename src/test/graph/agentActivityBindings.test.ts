@@ -15,6 +15,7 @@ import {
 	getAgentActivityEffects,
 	resolveAgentActivityColor,
 } from '../../webview/graph/agentActivityPresentation';
+import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 
 const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
 const TARGET_Y: GraphNodeEffectTarget = { nodeId: 'folder:workspace/src/y' };
@@ -420,6 +421,57 @@ suite('Agent Activity Bindings', () => {
 		);
 
 		bindings.dispose();
+	});
+
+	test('Parent Effect와 remount된 Binding은 같은 G-11 animation timeline에 합류한다', () => {
+		const ownerDocument = new FakeDocument();
+		let animationTime = 100;
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+			() => animationTime,
+		);
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(
+			store,
+			nodeEffects.createLocalEffectHost,
+		);
+		const element = ownerDocument.createElement();
+
+		nodeEffects.registerNode(TARGET_X, element.asHtmlElement());
+		const unregisterBinding = bindings.registerTarget(
+			TARGET_X,
+			element.asHtmlElement(),
+		);
+		animationTime = 350;
+		for (const effect of getAgentActivityEffects('session-A', 'active')) {
+			nodeEffects.setNodeEffect(TARGET_X, effect);
+		}
+		store.setAgentActivity('session-A', TARGET_X, 'active');
+		const parentShimmer = findBindingEffect(element, 'shimmer');
+		const firstBinding = getBindingElements(element)[0];
+
+		assert.ok(parentShimmer);
+		assert.strictEqual(parentShimmer.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '-250ms');
+		assert.strictEqual(findBindingEffect(
+			firstBinding,
+			'shimmer',
+		)?.style.getPropertyValue('--graph-node-effect-animation-delay'), '-250ms');
+
+		unregisterBinding();
+		animationTime = 850;
+		bindings.registerTarget(TARGET_X, element.asHtmlElement());
+		const remountedBinding = getBindingElements(element)[0];
+
+		assert.strictEqual(findBindingEffect(element, 'shimmer'), parentShimmer);
+		assert.strictEqual(findBindingEffect(
+			remountedBinding,
+			'shimmer',
+		)?.style.getPropertyValue('--graph-node-effect-animation-delay'), '-750ms');
+
+		bindings.dispose();
+		nodeEffects.dispose();
 	});
 });
 

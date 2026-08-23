@@ -8,6 +8,11 @@ import type {
 } from '../../agent/webview/agentActivityStore';
 import type { GraphNodeEffectOwner } from './graphNodeEffects';
 import { getAgentActivityEffects } from './agentActivityPresentation';
+import {
+	createAgentActivityTargetKey,
+	getEffectiveAgentActivities,
+	indexAgentActivitiesByTarget,
+} from './agentActivityProjection';
 
 /** Target별 대표 Agent Activity Effect 구독과 소유 Effect의 수명주기다. */
 export interface AgentActivityEffectReconciler {
@@ -33,16 +38,20 @@ export function createAgentActivityEffectReconciler(
 		}
 
 		const currentTargetKeys = new Set<string>();
+		const activitiesByTarget = indexAgentActivitiesByTarget(snapshot);
 
 		for (const targetSnapshot of snapshot) {
 			const target = targetSnapshot.target;
-			const representative = targetSnapshot.activities[0];
+			const representative = getEffectiveAgentActivities(
+				target,
+				activitiesByTarget,
+			)[0];
 
 			if (!representative) {
 				continue;
 			}
 
-			const key = createTargetKey(target);
+			const key = createAgentActivityTargetKey(target);
 			const applied = appliedByTarget.get(key);
 			const effects = getAgentActivityEffects(
 				representative.sessionId,
@@ -54,12 +63,9 @@ export function createAgentActivityEffectReconciler(
 				continue;
 			}
 
-			if (applied) {
-				effectOwner.clearNodeEffect(applied.target);
-			}
-			for (const effect of effects) {
-				effectOwner.setNodeEffect(target, effect);
-			}
+			effectOwner.replaceNodeEffects(target, effects, {
+				sourceInheritance: target.rootId === undefined ? 'merge' : 'replace',
+			});
 			appliedByTarget.set(key, {
 				target: createTargetSnapshot(target),
 				effects: effects.map((effect) => ({ ...effect })),
@@ -109,10 +115,6 @@ function areEffectsEqual(
 				candidate.kind === 'icon' && effect.icon === candidate.icon
 			));
 	});
-}
-
-function createTargetKey(target: GraphNodeEffectTarget): string {
-	return JSON.stringify([target.nodeId, target.rootId ?? null]);
 }
 
 function createTargetSnapshot(

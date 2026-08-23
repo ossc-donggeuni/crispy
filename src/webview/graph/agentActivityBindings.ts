@@ -1,6 +1,5 @@
 import type { GraphNodeEffectTarget } from '../../messages';
 import {
-	compareAgentActivities,
 	type AgentActivityStore,
 	type AgentActivityStoreSnapshot,
 	type AgentSessionActivitySnapshot,
@@ -15,6 +14,12 @@ import {
 	type GraphNodeLocalEffectHost,
 } from './graphNodeEffects';
 import { getAgentActivityEffects } from './agentActivityPresentation';
+import {
+	type AgentActivitiesByTarget,
+	createAgentActivityTargetKey,
+	getEffectiveAgentActivities,
+	indexAgentActivitiesByTarget,
+} from './agentActivityProjection';
 
 export interface AgentActivityBindingRegistrationOptions {
 	/** Project/Folder Binding을 G-11 visible subtree horizontal bounds에 맞춘다. */
@@ -39,7 +44,7 @@ export interface AgentActivityBindings {
 	getBindingCount(target: GraphNodeEffectTarget): number;
 	/** 마운트된 Target의 effective Binding 개수가 바뀔 때만 구독자를 호출한다. */
 	subscribeBindingCountChanges(subscriber: () => void): () => void;
-	/** Store 구독과 G-12.5가 만든 모든 Binding DOM을 정리한다. */
+	/** Store 구독, Local Effect와 모든 Binding DOM을 정리한다. */
 	dispose(): void;
 }
 
@@ -65,6 +70,7 @@ interface TargetRegistration {
 	readonly element: HTMLElement;
 	readonly target: Readonly<GraphNodeEffectTarget>;
 	readonly bindingsBySession: Map<string, BindingRegistration>;
+	readonly createLocalEffectHost: GraphNodeLocalEffectHostFactory;
 	readonly layoutNodeId?: string;
 	container?: HTMLElement;
 	horizontalBounds?: Readonly<{ left: number; width: number }>;
@@ -75,16 +81,24 @@ interface BindingRegistration {
 	readonly effectHost: GraphNodeLocalEffectHost;
 }
 
+type GraphNodeLocalEffectHostFactory = (
+	element: HTMLElement,
+) => GraphNodeLocalEffectHost;
+
 /**
  * G-12.3 snapshot의 정렬된 Activity를 Target별 Session Binding Box로 동기화한다.
- * Graph layout에는 관여하지 않고 Renderer가 제공하는 Target DOM lifecycle만 따른다.
+ * Binding DOM, Local Effect와 presentation geometry를 Renderer lifecycle에 맞춘다.
+ * 고정 footprint 규약은 Graph Layout과 공유하고 개수 변경을 reflow에 통지한다.
  */
 export function createAgentActivityBindings(
 	store: AgentActivityStore,
+	createLocalEffectHost: GraphNodeLocalEffectHostFactory = (
+		createGraphNodeLocalEffectHost
+	),
 ): AgentActivityBindings {
 	const registrationsByTarget = new Map<string, Set<TargetRegistration>>();
 	const bindingCountSubscribers = new Set<() => void>();
-	let snapshotsByTarget = new Map<string, readonly AgentSessionActivitySnapshot[]>();
+	let snapshotsByTarget: AgentActivitiesByTarget = new Map();
 	let currentLayout: GraphLayout | undefined;
 	let currentPositions: ReadonlyMap<string, GraphLayoutPosition> = new Map();
 	let disposed = false;
@@ -94,16 +108,7 @@ export function createAgentActivityBindings(
 			return;
 		}
 
-		const nextSnapshotsByTarget = new Map<
-			string,
-			readonly AgentSessionActivitySnapshot[]
-		>();
-
-		for (const targetSnapshot of snapshot) {
-			const key = createTargetKey(targetSnapshot.target);
-
-			nextSnapshotsByTarget.set(key, targetSnapshot.activities);
-		}
+		const nextSnapshotsByTarget = indexAgentActivitiesByTarget(snapshot);
 
 		let bindingCountChanged = false;
 
@@ -112,10 +117,10 @@ export function createAgentActivityBindings(
 
 			if (
 				registration
-				&& getEffectiveActivities(
+				&& getEffectiveAgentActivities(
 					registration.target,
 					snapshotsByTarget,
-				).length !== getEffectiveActivities(
+				).length !== getEffectiveAgentActivities(
 					registration.target,
 					nextSnapshotsByTarget,
 				).length
@@ -126,7 +131,7 @@ export function createAgentActivityBindings(
 			for (const registration of registrations) {
 				reconcileTarget(
 					registration,
-					getEffectiveActivities(
+					getEffectiveAgentActivities(
 						registration.target,
 						nextSnapshotsByTarget,
 					),
@@ -155,11 +160,12 @@ export function createAgentActivityBindings(
 				return () => {};
 			}
 
-			const key = createTargetKey(target);
+			const key = createAgentActivityTargetKey(target);
 			const registration: TargetRegistration = {
 				element,
 				target: createTargetSnapshot(target),
 				bindingsBySession: new Map(),
+				createLocalEffectHost,
 				...(options.layoutNodeId
 					? { layoutNodeId: options.layoutNodeId }
 					: {}),
@@ -170,7 +176,7 @@ export function createAgentActivityBindings(
 			registrationsByTarget.set(key, registrations);
 			reconcileTarget(
 				registration,
-				getEffectiveActivities(registration.target, snapshotsByTarget),
+				getEffectiveAgentActivities(registration.target, snapshotsByTarget),
 			);
 			if (currentLayout) {
 				syncTargetHorizontalGeometry(
@@ -223,7 +229,7 @@ export function createAgentActivityBindings(
 		getBindingCount(target): number {
 			return disposed
 				? 0
-				: getEffectiveActivities(target, snapshotsByTarget).length;
+				: getEffectiveAgentActivities(target, snapshotsByTarget).length;
 		},
 
 		subscribeBindingCountChanges(subscriber): () => void {
@@ -251,72 +257,11 @@ export function createAgentActivityBindings(
 			}
 			registrationsByTarget.clear();
 			bindingCountSubscribers.clear();
-			snapshotsByTarget.clear();
+			snapshotsByTarget = new Map();
 			currentLayout = undefined;
 			currentPositions = new Map();
 		},
 	};
-}
-
-/** G-11처럼 source를 모든 occurrence에 투영하고 occurrence Session만 덮어쓴다. */
-function getEffectiveActivities(
-	target: Readonly<GraphNodeEffectTarget>,
-	snapshotsByTarget: ReadonlyMap<
-		string,
-		readonly AgentSessionActivitySnapshot[]
-	>,
-): readonly AgentSessionActivitySnapshot[] {
-	const sourceActivities = snapshotsByTarget.get(createTargetKey({
-		nodeId: target.nodeId,
-	})) ?? [];
-
-	if (target.rootId === undefined) {
-		return sourceActivities;
-	}
-
-	const occurrenceActivities = snapshotsByTarget.get(createTargetKey(target)) ?? [];
-
-	if (occurrenceActivities.length === 0) {
-		return sourceActivities;
-	}
-	if (sourceActivities.length === 0) {
-		return occurrenceActivities;
-	}
-
-	const occurrenceSessionIds = new Set(
-		occurrenceActivities.map((entry) => entry.sessionId),
-	);
-	const inheritedActivities = sourceActivities.filter(
-		(entry) => !occurrenceSessionIds.has(entry.sessionId),
-	);
-
-	return mergeOrderedActivities(inheritedActivities, occurrenceActivities);
-}
-
-/** 두 G-12.3 ordered 배열을 동일 comparator로 병합하며 별도 sort하지 않는다. */
-function mergeOrderedActivities(
-	left: readonly AgentSessionActivitySnapshot[],
-	right: readonly AgentSessionActivitySnapshot[],
-): readonly AgentSessionActivitySnapshot[] {
-	const merged: AgentSessionActivitySnapshot[] = [];
-	let leftIndex = 0;
-	let rightIndex = 0;
-
-	while (leftIndex < left.length && rightIndex < right.length) {
-		const leftEntry = left[leftIndex];
-		const rightEntry = right[rightIndex];
-
-		if (compareAgentActivities(leftEntry, rightEntry) <= 0) {
-			merged.push(leftEntry);
-			leftIndex += 1;
-		} else {
-			merged.push(rightEntry);
-			rightIndex += 1;
-		}
-	}
-
-	merged.push(...left.slice(leftIndex), ...right.slice(rightIndex));
-	return Object.freeze(merged);
 }
 
 /** Store가 제공한 순서를 유지하며 Session DOM을 갱신하고 이동한다. */
@@ -342,6 +287,7 @@ function reconcileTarget(
 			binding = createBindingRegistration(
 				registration.element.ownerDocument,
 				entry.sessionId,
+				registration.createLocalEffectHost,
 			);
 			registration.bindingsBySession.set(entry.sessionId, binding);
 		}
@@ -401,6 +347,7 @@ function createBindingContainer(registration: TargetRegistration): HTMLElement {
 function createBindingRegistration(
 	ownerDocument: Document,
 	sessionId: string,
+	createLocalEffectHost: GraphNodeLocalEffectHostFactory,
 ): BindingRegistration {
 	const binding = ownerDocument.createElement('div');
 	const session = ownerDocument.createElement('span');
@@ -416,7 +363,7 @@ function createBindingRegistration(
 	binding.append(session, activity);
 	return {
 		element: binding,
-		effectHost: createGraphNodeLocalEffectHost(binding),
+		effectHost: createLocalEffectHost(binding),
 	};
 }
 
@@ -527,10 +474,6 @@ function applyTargetHorizontalGeometry(
 	}
 	container.style.left = `${bounds.left}px`;
 	container.style.width = `${bounds.width}px`;
-}
-
-function createTargetKey(target: Readonly<GraphNodeEffectTarget>): string {
-	return JSON.stringify([target.nodeId, target.rootId ?? null]);
 }
 
 function createTargetSnapshot(

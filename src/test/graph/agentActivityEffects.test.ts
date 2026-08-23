@@ -14,7 +14,10 @@ import {
 	getAgentActivityEffects,
 	resolveAgentActivityColor,
 } from '../../webview/graph/agentActivityPresentation';
-import type { GraphNodeEffectOwner } from '../../webview/graph/graphNodeEffects';
+import type {
+	GraphNodeEffectOwner,
+	GraphNodeEffectRecipeOptions,
+} from '../../webview/graph/graphNodeEffects';
 
 const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
 const TARGET_Y: GraphNodeEffectTarget = { nodeId: 'folder:workspace/src/y' };
@@ -149,7 +152,7 @@ suite('Representative Agent Activity Effects', () => {
 			{ kind: 'marching-dash', color: ACTIVITY_COLOR },
 			{ kind: 'icon', icon: 'alert', color: ACTIVITY_COLOR },
 		]);
-		assert.strictEqual(effectOwner.clearCalls.length, 1);
+		assert.strictEqual(effectOwner.replaceCalls.length, 2);
 
 		reconciler.dispose();
 	});
@@ -163,11 +166,13 @@ suite('Representative Agent Activity Effects', () => {
 		store.setAgentActivity('session-B', TARGET_X, 'planned');
 		const setCount = effectOwner.setCalls.length;
 		const clearCount = effectOwner.clearCalls.length;
+		const replaceCount = effectOwner.replaceCalls.length;
 
 		store.setAgentActivity('session-B', TARGET_X, 'active');
 
 		assert.strictEqual(effectOwner.setCalls.length, setCount);
 		assert.strictEqual(effectOwner.clearCalls.length, clearCount);
+		assert.strictEqual(effectOwner.replaceCalls.length, replaceCount);
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
 			{ kind: 'pulse', color: ACTIVITY_COLOR },
 		]);
@@ -191,8 +196,9 @@ suite('Representative Agent Activity Effects', () => {
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
 			{ kind: 'shimmer', color: expectedColor },
 		]);
-		assert.strictEqual(effectOwner.clearCalls.length, 1);
+		assert.strictEqual(effectOwner.clearCalls.length, 0);
 		assert.strictEqual(effectOwner.setCalls.length, 2);
+		assert.strictEqual(effectOwner.replaceCalls.length, 2);
 
 		reconciler.dispose();
 	});
@@ -254,9 +260,9 @@ suite('Representative Agent Activity Effects', () => {
 		]);
 		assert.deepStrictEqual(agentEffectOwner.getEffects(TARGET_Y), []);
 		assert.deepStrictEqual(agentEffectOwner.clearCalls, [
-			{ target: TARGET_X },
 			{ target: TARGET_Y },
 		]);
+		assert.strictEqual(agentEffectOwner.replaceCalls.length, 3);
 		assert.deepStrictEqual(externalEffectOwner.getEffects(TARGET_X), [{
 			kind: 'outline-strong',
 			color: '#abcdef',
@@ -271,7 +277,7 @@ suite('Representative Agent Activity Effects', () => {
 		externalEffectOwner.dispose();
 	});
 
-	test('Target과 root occurrence를 독립적으로 reconcile한다', () => {
+	test('root occurrence는 Source와 병합한 대표 recipe로 같은 owner Source를 대체한다', () => {
 		const occurrenceTarget: GraphNodeEffectTarget = {
 			nodeId: TARGET_X.nodeId,
 			rootId: 'detached:root:x',
@@ -280,18 +286,50 @@ suite('Representative Agent Activity Effects', () => {
 		const effectOwner = new RecordingGraphNodeEffectOwner();
 		const reconciler = createAgentActivityEffectReconciler(store, effectOwner);
 
-		store.setAgentActivity('session-X', TARGET_X, 'editing');
-		store.setAgentActivity('session-Y', TARGET_Y, 'active');
-		store.setAgentActivity('session-O', occurrenceTarget, 'rejected');
-		store.clearAgentActivity('session-X', TARGET_X);
+		store.setAgentActivity('session-A', TARGET_X, 'planned');
+		store.setAgentActivity('session-A', occurrenceTarget, 'editing');
 
-		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), []);
-		assert.deepStrictEqual(effectOwner.getEffects(TARGET_Y), [
-			{ kind: 'shimmer', color: ACTIVITY_COLOR },
+		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), [
+			{ kind: 'pulse', color: ACTIVITY_COLOR },
 		]);
+		assert.deepStrictEqual(
+			effectOwner.replaceCalls.at(-1)?.options,
+			{ sourceInheritance: 'replace' },
+		);
+
+		store.clearAgentActivity('session-A', occurrenceTarget);
+
+		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), []);
+		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
+			{ kind: 'marching-dash', color: ACTIVITY_COLOR },
+			{ kind: 'icon', icon: 'alert', color: ACTIVITY_COLOR },
+		]);
+
+		reconciler.dispose();
+	});
+
+	test('Source와 다른 occurrence Session도 canonical Priority로 한 recipe만 선택한다', () => {
+		const occurrenceTarget: GraphNodeEffectTarget = {
+			nodeId: TARGET_X.nodeId,
+			rootId: 'detached:root:priority',
+		};
+		const store = createAgentActivityStore();
+		const effectOwner = new RecordingGraphNodeEffectOwner();
+		const reconciler = createAgentActivityEffectReconciler(store, effectOwner);
+
+		store.setAgentActivity('session-A', TARGET_X, 'rejected');
+		store.setAgentActivity('session-B', occurrenceTarget, 'planned');
+
 		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), [
 			{ kind: 'outline', color: ERROR_COLOR },
 			{ kind: 'icon', icon: 'cancel', color: ERROR_COLOR },
+		]);
+
+		store.setAgentActivity('session-A', TARGET_X, 'planned');
+		store.setAgentActivity('session-B', occurrenceTarget, 'editing');
+
+		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), [
+			{ kind: 'pulse', color: ACTIVITY_COLOR },
 		]);
 
 		reconciler.dispose();
@@ -326,6 +364,12 @@ class RecordingGraphNodeEffectOwner implements GraphNodeEffectOwner {
 		readonly kind?: GraphNodeEffectKind;
 	}> = [];
 
+	readonly replaceCalls: Array<{
+		readonly target: GraphNodeEffectTarget;
+		readonly effects: readonly GraphNodeEffect[];
+		readonly options: GraphNodeEffectRecipeOptions;
+	}> = [];
+
 	readonly effectsByTarget = new Map<
 		string,
 		Map<GraphNodeEffectKind, GraphNodeEffect>
@@ -344,6 +388,25 @@ class RecordingGraphNodeEffectOwner implements GraphNodeEffectOwner {
 		effects.set(effect.kind, effect);
 		this.effectsByTarget.set(createTargetKey(target), effects);
 		this.setCalls.push({ target, effect });
+	}
+
+	replaceNodeEffects(
+		target: GraphNodeEffectTarget,
+		effects: readonly GraphNodeEffect[],
+		options: GraphNodeEffectRecipeOptions = {},
+	): void {
+		if (this.disposed) {
+			return;
+		}
+
+		this.effectsByTarget.set(
+			createTargetKey(target),
+			new Map(effects.map((effect) => [effect.kind, effect])),
+		);
+		for (const effect of effects) {
+			this.setCalls.push({ target, effect });
+		}
+		this.replaceCalls.push({ target, effects, options });
 	}
 
 	clearNodeEffect(

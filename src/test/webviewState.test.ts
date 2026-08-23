@@ -665,6 +665,11 @@ suite('Webview State Wiring', () => {
 					setNodeEffect(target, effect): void {
 						agentEffectSets.push({ target, effect });
 					},
+					replaceNodeEffects(target, effects): void {
+						for (const effect of effects) {
+							agentEffectSets.push({ target, effect });
+						}
+					},
 					clearNodeEffect(target, kind): void {
 						agentEffectClears.push({
 							target,

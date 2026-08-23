@@ -962,7 +962,10 @@ export function initializeGraphView(
 		effectRegionLayer,
 	);
 	const agentActivityBindings = agentActivityStore
-		? createAgentActivityBindings(agentActivityStore)
+		? createAgentActivityBindings(
+			agentActivityStore,
+			nodeEffects.createLocalEffectHost,
+		)
 		: undefined;
 	const state = createGraphState(initialState);
 	let disposed = false;

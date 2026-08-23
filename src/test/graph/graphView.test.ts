@@ -306,6 +306,80 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('기존 occurrence kind merge와 opt-in owner recipe 교체를 함께 보존한다', () => {
+		const ownerDocument = new FakeDocument();
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+		);
+		const sourceTarget = { nodeId: 'folder:effect-owner-recipe' };
+		const occurrenceTarget = {
+			...sourceTarget,
+			rootId: 'folder:effect-owner-recipe::detached:1',
+		};
+		const sourceElement = ownerDocument.createElement('article');
+		const occurrenceElement = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(sourceTarget, sourceElement.asHtmlElement());
+		nodeEffects.registerNode(
+			occurrenceTarget,
+			occurrenceElement.asHtmlElement(),
+		);
+		const genericOwner = nodeEffects.createOwner();
+
+		genericOwner.setNodeEffect(sourceTarget, {
+			kind: 'marching-dash',
+			color: '#55ccff',
+		});
+		genericOwner.setNodeEffect(sourceTarget, {
+			kind: 'icon',
+			icon: 'alert',
+			color: '#55ccff',
+		});
+		genericOwner.setNodeEffect(occurrenceTarget, {
+			kind: 'pulse',
+			color: '#55ccff',
+		});
+
+		assert.deepStrictEqual(
+			getDirectNodeEffects(occurrenceElement).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['marching-dash', 'icon', 'pulse'],
+		);
+		genericOwner.dispose();
+
+		const externalOwner = nodeEffects.createOwner();
+		const recipeOwner = nodeEffects.createOwner();
+
+		externalOwner.setNodeEffect(sourceTarget, {
+			kind: 'outline-strong',
+			color: '#ffaa33',
+		});
+		recipeOwner.replaceNodeEffects(sourceTarget, [
+			{ kind: 'marching-dash', color: '#55ccff' },
+			{ kind: 'icon', icon: 'alert', color: '#55ccff' },
+		]);
+		recipeOwner.replaceNodeEffects(occurrenceTarget, [
+			{ kind: 'pulse', color: '#55ccff' },
+		], { sourceInheritance: 'replace' });
+
+		assert.deepStrictEqual(
+			getDirectNodeEffects(occurrenceElement).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['outline-strong', 'pulse'],
+		);
+
+		recipeOwner.clearNodeEffect(occurrenceTarget);
+		assert.deepStrictEqual(
+			getDirectNodeEffects(occurrenceElement).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['outline-strong', 'marching-dash', 'icon'],
+		);
+		nodeEffects.dispose();
+	});
+
 	test('Parent Effect는 열린 visible subtree를 하나의 Region으로 재귀 확장·수축한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -636,6 +710,111 @@ suite('Graph View', () => {
 		assert.ok(marchingDashOffset);
 		const dashPeriod = Number(marchingDashPattern[1]) + Number(marchingDashPattern[2]);
 		assert.strictEqual(Math.abs(Number(marchingDashOffset[1])) % dashPeriod, 0);
+		nodeEffects.dispose();
+	});
+
+	test('Target과 Local Effect Host는 remount와 kind 전환에도 G-11 timeline을 공유한다', () => {
+		const ownerDocument = new FakeDocument();
+		let animationTime = 100;
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+			() => animationTime,
+		);
+		const target = { nodeId: 'file:shared-effect-timeline.ts' };
+		const targetElement = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(target, targetElement.asHtmlElement());
+		animationTime = 350;
+		for (const kind of ['shimmer', 'pulse', 'marching-dash'] as const) {
+			nodeEffects.setNodeEffect(target, { kind, color: '#55ccff' });
+		}
+		const bindingElement = ownerDocument.createElement('div');
+		const localHost = nodeEffects.createLocalEffectHost(
+			bindingElement.asHtmlElement(),
+		);
+
+		localHost.setEffects([
+			{ kind: 'shimmer', color: '#55ccff' },
+			{ kind: 'pulse', color: '#55ccff' },
+			{ kind: 'marching-dash', color: '#55ccff' },
+			{ kind: 'outline', color: '#55ccff' },
+			{ kind: 'icon', icon: 'alert', color: '#55ccff' },
+		]);
+
+		for (const kind of ['shimmer', 'pulse', 'marching-dash'] as const) {
+			assert.strictEqual(
+				getDirectNodeEffect(targetElement, kind).style.getPropertyValue(
+					'--graph-node-effect-animation-delay',
+				),
+				'-250ms',
+			);
+			assert.strictEqual(
+				getDirectNodeEffect(bindingElement, kind).style.getPropertyValue(
+					'--graph-node-effect-animation-delay',
+				),
+				'-250ms',
+			);
+		}
+		assert.strictEqual(bindingElement.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '-250ms');
+		assert.strictEqual(getDirectNodeEffect(
+			bindingElement,
+			'outline',
+		).style.getPropertyValue('--graph-node-effect-animation-delay'), '');
+		assert.strictEqual(getDirectNodeEffect(
+			bindingElement,
+			'icon',
+		).style.getPropertyValue('--graph-node-effect-animation-delay'), '');
+
+		localHost.dispose();
+		animationTime = 850;
+		const remountedBinding = ownerDocument.createElement('div');
+		const remountedHost = nodeEffects.createLocalEffectHost(
+			remountedBinding.asHtmlElement(),
+		);
+
+		remountedHost.setEffects([
+			{ kind: 'shimmer', color: '#ff8844' },
+			{ kind: 'pulse', color: '#ff8844' },
+			{ kind: 'marching-dash', color: '#ff8844' },
+		]);
+		for (const kind of ['shimmer', 'pulse', 'marching-dash'] as const) {
+			assert.strictEqual(
+				getDirectNodeEffect(remountedBinding, kind).style.getPropertyValue(
+					'--graph-node-effect-animation-delay',
+				),
+				'-750ms',
+			);
+		}
+
+		animationTime = 950;
+		remountedHost.setEffects([{ kind: 'outline', color: '#ff8844' }]);
+		assert.strictEqual(remountedBinding.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '');
+		animationTime = 1_100;
+		remountedHost.setEffects([{ kind: 'pulse', color: '#ff8844' }]);
+		assert.strictEqual(
+			getDirectNodeEffect(remountedBinding, 'pulse').style.getPropertyValue(
+				'--graph-node-effect-animation-delay',
+			),
+			'-1000ms',
+		);
+		animationTime = 1_300;
+		remountedHost.setEffects([{
+			kind: 'marching-dash',
+			color: '#ff8844',
+		}]);
+		assert.strictEqual(
+			getDirectNodeEffect(
+				remountedBinding,
+				'marching-dash',
+			).style.getPropertyValue('--graph-node-effect-animation-delay'),
+			'-1200ms',
+		);
+
+		remountedHost.dispose();
 		nodeEffects.dispose();
 	});
 
@@ -1515,6 +1694,194 @@ suite('Graph View', () => {
 				> initialBindingWidth,
 		);
 
+		graphView.dispose();
+	});
+
+	test('Detached occurrence의 Binding과 대표 Effect가 같은 effective Activity를 따른다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:activity-effect-detached',
+			name: 'activity-effect-detached',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:activity-effect-detached/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:activity-effect-detached',
+			name: 'activity-effect-detached',
+			status: 'loaded',
+			children: [folder],
+		};
+		const firstRootId = createDetachedRootId(folder.id, 1);
+		const secondRootId = createDetachedRootId(folder.id, 2);
+		const firstLayoutNodeId = createGraphLayoutNodeId(firstRootId, folder.id);
+		const secondLayoutNodeId = createGraphLayoutNodeId(secondRootId, folder.id);
+		const sourceTarget = { nodeId: folder.id };
+		const firstTarget = { ...sourceTarget, rootId: firstRootId };
+		const store = createAgentActivityStore();
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[firstLayoutNodeId]: true,
+				[secondLayoutNodeId]: true,
+			},
+			detachedRootNodeIds: {
+				[firstRootId]: true,
+				[secondRootId]: true,
+			},
+		}, createSingleRootGraph(
+			project,
+			'root:activity-effect-detached',
+		), {}, store);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+		);
+		let firstCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			firstLayoutNodeId,
+		);
+		let secondCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondLayoutNodeId,
+		);
+
+		store.setAgentActivity('session-A', sourceTarget, 'planned');
+		store.setAgentActivity('session-A', firstTarget, 'editing');
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'editing'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+		assert.deepStrictEqual(getAgentBindingState(secondCard), [
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, secondCard, secondLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		store.clearAgentActivity('session-A', firstTarget);
+		store.setAgentActivity('session-A', sourceTarget, 'rejected');
+		store.setAgentActivity('session-B', firstTarget, 'planned');
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'rejected'],
+			['session-B', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['outline', 'icon'],
+		);
+		assert.strictEqual(
+			getNodeEffect(
+				getEffectRegion(root, firstLayoutNodeId),
+				'outline',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'var(--vscode-errorForeground, #f14c4c)',
+		);
+		assert.strictEqual(
+			getDirectNodeEffect(firstCard, 'icon').getAttribute(
+				'data-graph-node-effect-icon',
+			),
+			'cancel',
+		);
+
+		store.setAgentActivity('session-A', sourceTarget, 'planned');
+		store.setAgentActivity('session-B', firstTarget, 'editing');
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-B', 'editing'],
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+
+		store.clearAgentActivity('session-B', firstTarget);
+		store.setAgentActivity('session-A', firstTarget, 'editing');
+		store.clearAgentActivity('session-A', firstTarget);
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		store.setAgentActivity('session-A', firstTarget, 'editing');
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, secondCard, secondLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		const visibleState = graphView.state.getState();
+
+		graphView.state.setState({
+			...visibleState,
+			hiddenNodeIds: { [folder.id]: true },
+		});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			firstLayoutNodeId,
+		), undefined);
+
+		const hiddenState = graphView.state.getState();
+
+		graphView.state.setState({
+			...hiddenState,
+			hiddenNodeIds: {},
+		});
+		const remountedFirstCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			firstLayoutNodeId,
+		);
+		const remountedSecondCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondLayoutNodeId,
+		);
+
+		assert.notStrictEqual(remountedFirstCard, firstCard);
+		assert.notStrictEqual(remountedSecondCard, secondCard);
+		firstCard = remountedFirstCard;
+		secondCard = remountedSecondCard;
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'editing'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+		assert.deepStrictEqual(getAgentBindingState(secondCard), [
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, secondCard, secondLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		activityEffects.dispose();
 		graphView.dispose();
 	});
 
@@ -7976,6 +8343,19 @@ function getDirectNodeEffect(element: FakeElement, kind: string): FakeElement {
 
 	assert.ok(effect, `${kind} direct Graph Node Effect가 있어야 한다.`);
 	return effect;
+}
+
+function getRepresentativeEffectKinds(
+	root: FakeElement,
+	target: FakeElement,
+	layoutNodeId: string,
+): Array<string | null> {
+	const region = findEffectRegion(root, layoutNodeId);
+
+	return [
+		...(region ? getNodeEffects(region) : []),
+		...getDirectNodeEffects(target),
+	].map((effect) => effect.getAttribute('data-graph-node-effect'));
 }
 
 function findEffectRegion(
