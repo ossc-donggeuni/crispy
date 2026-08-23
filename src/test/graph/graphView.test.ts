@@ -46,6 +46,7 @@ import {
 	initializeGraphLayoutReflow,
 	initializeGraphView,
 } from '../../webview/graph/graphView';
+import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
@@ -161,6 +162,122 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getNodeEffects(folder), []);
 		assert.strictEqual(folder.hasClass('graph-node-effect-host'), false);
 		graphView.dispose();
+	});
+
+	test('나중에 생성된 같은 Node occurrence를 기존 Effect animation 위상에 동기화한다', () => {
+		const ownerDocument = new FakeDocument();
+		let animationTime = 100;
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+			() => animationTime,
+		);
+		const target = { nodeId: 'folder:synchronized-effect' };
+		const firstOccurrence = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(target, firstOccurrence.asHtmlElement());
+		animationTime = 350;
+		nodeEffects.setNodeEffect(target, {
+			kind: 'marching-dash',
+			color: '#55ccff',
+		});
+		const firstDash = getNodeEffect(firstOccurrence, 'marching-dash');
+
+		assert.strictEqual(
+			firstDash.style.getPropertyValue('--graph-node-effect-animation-delay'),
+			'-250ms',
+		);
+
+		animationTime = 850;
+		const secondOccurrence = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(target, secondOccurrence.asHtmlElement());
+		const secondDash = getNodeEffect(secondOccurrence, 'marching-dash');
+
+		assert.strictEqual(
+			secondDash.style.getPropertyValue('--graph-node-effect-animation-delay'),
+			'-750ms',
+		);
+
+		animationTime = 900;
+		nodeEffects.setNodeEffect(target, {
+			kind: 'marching-dash',
+			color: '#ff66aa',
+		});
+		assert.strictEqual(getNodeEffect(firstOccurrence, 'marching-dash'), firstDash);
+		assert.strictEqual(getNodeEffect(secondOccurrence, 'marching-dash'), secondDash);
+		assert.strictEqual(
+			firstDash.style.getPropertyValue('--graph-node-effect-animation-delay'),
+			'-250ms',
+		);
+		assert.strictEqual(
+			secondDash.style.getPropertyValue('--graph-node-effect-animation-delay'),
+			'-750ms',
+		);
+
+		animationTime = 950;
+		nodeEffects.setNodeEffect(target, { kind: 'pulse', color: '#44dd88' });
+		assert.strictEqual(
+			firstOccurrence.style.getPropertyValue(
+				'--graph-node-effect-animation-delay',
+			),
+			'-850ms',
+		);
+		assert.strictEqual(
+			secondOccurrence.style.getPropertyValue(
+				'--graph-node-effect-animation-delay',
+			),
+			'-850ms',
+		);
+
+		animationTime = 1_300;
+		const thirdOccurrence = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(target, thirdOccurrence.asHtmlElement());
+		assert.strictEqual(
+			getNodeEffect(thirdOccurrence, 'marching-dash').style.getPropertyValue(
+				'--graph-node-effect-animation-delay',
+			),
+			'-1200ms',
+		);
+		assert.strictEqual(
+			thirdOccurrence.style.getPropertyValue(
+				'--graph-node-effect-animation-delay',
+			),
+			'-1200ms',
+		);
+
+		nodeEffects.clearNodeEffect(target, 'pulse');
+		assert.strictEqual(firstOccurrence.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '');
+		assert.strictEqual(secondOccurrence.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '');
+		assert.strictEqual(thirdOccurrence.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '');
+
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const synchronizedAnimationRules = graphViewCss.match(
+			/animation-delay:\s*var\(--graph-node-effect-animation-delay,\s*0ms\);/g,
+		);
+
+		assert.ok((synchronizedAnimationRules?.length ?? 0) >= 4);
+
+		const marchingDashPattern = graphViewCss.match(
+			/stroke-dasharray:\s*(\d+)\s+(\d+);/,
+		);
+		const marchingDashOffset = graphViewCss.match(
+			/@keyframes graph-node-effect-marching-dash\s*\{[\s\S]*?stroke-dashoffset:\s*(-?\d+);/,
+		);
+		assert.ok(marchingDashPattern);
+		assert.ok(marchingDashOffset);
+		const dashPeriod = Number(marchingDashPattern[1]) + Number(marchingDashPattern[2]);
+		assert.strictEqual(Math.abs(Number(marchingDashOffset[1])) % dashPeriod, 0);
+		nodeEffects.dispose();
 	});
 
 	test('Folder collapse/open과 Graph refresh 뒤 새 DOM에 활성 Effect를 복원한다', () => {

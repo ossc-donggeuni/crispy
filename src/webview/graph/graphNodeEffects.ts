@@ -21,6 +21,7 @@ export interface GraphNodeEffects {
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const EFFECT_COLOR_PROPERTY = '--graph-node-effect-color';
+const EFFECT_ANIMATION_DELAY_PROPERTY = '--graph-node-effect-animation-delay';
 const ICON_PATHS = {
 	check: 'M5 10.5 8.25 13.5 15 6.75',
 	cancel: 'M6.25 6.25 13.75 13.75 M13.75 6.25 6.25 13.75',
@@ -28,7 +29,12 @@ const ICON_PATHS = {
 } as const;
 
 /** GraphState와 분리된 in-memory 효과 저장소를 생성한다. */
-export function createGraphNodeEffects(ownerDocument: Document): GraphNodeEffects {
+export function createGraphNodeEffects(
+	ownerDocument: Document,
+	getAnimationTime: () => number = () => (
+		ownerDocument.defaultView?.performance.now() ?? Date.now()
+	),
+): GraphNodeEffects {
 	const effectsByTarget = new Map<
 		string,
 		Map<GraphNodeEffectKind, GraphNodeEffect>
@@ -37,11 +43,31 @@ export function createGraphNodeEffects(ownerDocument: Document): GraphNodeEffect
 		string,
 		Set<GraphNodeEffectRegistration>
 	>();
+	const initialAnimationTime = getAnimationTime();
+	const animationEpoch = Number.isFinite(initialAnimationTime)
+		? initialAnimationTime
+		: 0;
 	let disposed = false;
+	const getAnimationDelay = (): string => {
+		const currentTime = getAnimationTime();
+		const elapsed = Number.isFinite(currentTime)
+			? Math.max(0, currentTime - animationEpoch)
+			: 0;
+		const roundedElapsed = Math.round(elapsed * 1_000) / 1_000;
+
+		return `-${roundedElapsed}ms`;
+	};
 
 	const syncNodeRegistrations = (nodeId: string): void => {
+		const animationDelay = getAnimationDelay();
+
 		for (const registration of registrationsByNodeId.get(nodeId) ?? []) {
-			syncRegistration(registration, effectsByTarget, ownerDocument);
+			syncRegistration(
+				registration,
+				effectsByTarget,
+				ownerDocument,
+				animationDelay,
+			);
 		}
 	};
 
@@ -96,7 +122,12 @@ export function createGraphNodeEffects(ownerDocument: Document): GraphNodeEffect
 
 			registrations.add(registration);
 			registrationsByNodeId.set(target.nodeId, registrations);
-			syncRegistration(registration, effectsByTarget, ownerDocument);
+			syncRegistration(
+				registration,
+				effectsByTarget,
+				ownerDocument,
+				getAnimationDelay(),
+			);
 			let registered = true;
 
 			return () => {
@@ -161,6 +192,7 @@ function syncRegistration(
 		ReadonlyMap<GraphNodeEffectKind, GraphNodeEffect>
 	>,
 	ownerDocument: Document,
+	animationDelay: string,
 ): void {
 	const effects = getRegistrationEffects(registration, effectsByTarget);
 
@@ -168,6 +200,11 @@ function syncRegistration(
 		if (!effects.has(kind)) {
 			element.remove();
 			registration.effectElements.delete(kind);
+			if (kind === 'pulse') {
+				registration.element.style.removeProperty(
+					EFFECT_ANIMATION_DELAY_PROPERTY,
+				);
+			}
 		}
 	}
 
@@ -177,6 +214,12 @@ function syncRegistration(
 
 		updateEffectElement(effectElement, effect);
 		if (!current) {
+			applyAnimationPhase(
+				registration,
+				effectElement,
+				effect.kind,
+				animationDelay,
+			);
 			const layer = registration.layer
 				?? createEffectLayer(registration, ownerDocument);
 
@@ -189,6 +232,29 @@ function syncRegistration(
 		registration.layer?.remove();
 		registration.layer = undefined;
 		registration.element.classList.remove('graph-node-effect-host');
+	}
+}
+
+/** 나중에 생성된 occurrence도 기존 Effect와 같은 Document 시간 위상에 합류시킨다. */
+function applyAnimationPhase(
+	registration: GraphNodeEffectRegistration,
+	effectElement: Element,
+	kind: GraphNodeEffectKind,
+	animationDelay: string,
+): void {
+	if (kind !== 'marching-dash' && kind !== 'pulse' && kind !== 'shimmer') {
+		return;
+	}
+
+	(effectElement as HTMLElement | SVGElement).style.setProperty(
+		EFFECT_ANIMATION_DELAY_PROPERTY,
+		animationDelay,
+	);
+	if (kind === 'pulse') {
+		registration.element.style.setProperty(
+			EFFECT_ANIMATION_DELAY_PROPERTY,
+			animationDelay,
+		);
 	}
 }
 
@@ -262,6 +328,7 @@ function removeRegistrationEffects(
 	registration.layer = undefined;
 	registration.effectElements.clear();
 	registration.element.classList.remove('graph-node-effect-host');
+	registration.element.style.removeProperty(EFFECT_ANIMATION_DELAY_PROPERTY);
 }
 
 function createTargetKey(target: GraphNodeEffectTarget): string {

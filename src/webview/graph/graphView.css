@@ -196,6 +196,7 @@
 		)
 	);
 	animation: graph-node-effect-marching-dash 1.35s linear infinite;
+	animation-delay: var(--graph-node-effect-animation-delay, 0ms);
 }
 
 .graph-node-effect-pulse {
@@ -206,6 +207,7 @@
 	border-radius: var(--graph-node-effect-ring-radius);
 	will-change: opacity;
 	animation: graph-node-effect-pulse 2.25s ease-in-out infinite;
+	animation-delay: var(--graph-node-effect-animation-delay, 0ms);
 }
 
 .graph-node-effect-host:has(
@@ -216,6 +218,7 @@
 ) > .graph-file-name {
 	will-change: opacity;
 	animation: graph-node-effect-pulse-name 2.25s ease-in-out infinite;
+	animation-delay: var(--graph-node-effect-animation-delay, 0ms);
 }
 
 .graph-navigator-root-button.graph-node-effect-host:has(
@@ -223,6 +226,7 @@
 ) .graph-navigator-root-name {
 	will-change: opacity;
 	animation: graph-node-effect-pulse-name 2.25s ease-in-out infinite;
+	animation-delay: var(--graph-node-effect-animation-delay, 0ms);
 }
 
 .graph-node-effect-shimmer {
@@ -256,6 +260,7 @@
 	content: '';
 	will-change: transform;
 	animation: graph-node-effect-shimmer 1.55s cubic-bezier(0.38, 0, 0.22, 1) infinite;
+	animation-delay: var(--graph-node-effect-animation-delay, 0ms);
 }
 
 .graph-node-effect-outline {
@@ -325,7 +330,7 @@
 
 @keyframes graph-node-effect-marching-dash {
 	to {
-		stroke-dashoffset: -32;
+		stroke-dashoffset: -28;
 	}
 }
 
