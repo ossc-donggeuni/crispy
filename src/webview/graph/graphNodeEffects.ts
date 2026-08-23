@@ -5,9 +5,12 @@ import type {
 } from '../../messages';
 import type {
 	GraphLayout,
-	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
+import {
+	getGraphNodeEffectRegionBounds,
+	type GraphNodeEffectRegionBounds,
+} from './graphNodeEffectGeometry';
 
 interface GraphNodeEffectRegion {
 	readonly element: HTMLElement;
@@ -15,20 +18,16 @@ interface GraphNodeEffectRegion {
 	bounds?: GraphNodeEffectRegionBounds;
 }
 
-interface GraphNodeEffectRegistration {
-	readonly target: GraphNodeEffectTarget;
+interface GraphNodeEffectElementHost {
 	readonly element: HTMLElement;
 	readonly effectElements: Map<string, Element>;
-	readonly layoutNodeId?: string;
 	layer?: HTMLElement;
 	region?: GraphNodeEffectRegion;
 }
 
-interface GraphNodeEffectRegionBounds {
-	readonly x: number;
-	readonly y: number;
-	readonly width: number;
-	readonly height: number;
+interface GraphNodeEffectRegistration extends GraphNodeEffectElementHost {
+	readonly target: GraphNodeEffectTarget;
+	readonly layoutNodeId?: string;
 }
 
 export interface GraphNodeEffectRegistrationOptions {
@@ -40,6 +39,14 @@ export interface GraphNodeEffectRegistrationOptions {
 export interface GraphNodeEffectOwner {
 	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
 	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
+	dispose(): void;
+}
+
+/** Graph Target 저장소와 분리된 단일 Element 전용 Effect Host다. */
+export interface GraphNodeLocalEffectHost {
+	/** 기존 kind DOM은 재사용하면서 이 Element가 표시할 Effect만 동기화한다. */
+	setEffects(effects: readonly GraphNodeEffect[]): void;
+	/** 이 local host가 만든 Effect DOM과 animation state를 정리한다. */
 	dispose(): void;
 }
 
@@ -68,7 +75,6 @@ const EFFECT_COLOR_PROPERTY = '--graph-node-effect-color';
 const EFFECT_ANIMATION_DELAY_PROPERTY = '--graph-node-effect-animation-delay';
 const EFFECT_REGION_TRANSITION_DURATION_PROPERTY =
 	'--graph-node-effect-region-transition-duration';
-const EFFECT_REGION_PADDING = 6;
 const EFFECT_REGION_TRANSITION_CLASS = 'is-layout-transitioning';
 const EFFECT_PULSE_SOURCE_CLASS = 'graph-node-effect-pulse-source';
 const ICON_PATHS = {
@@ -76,6 +82,58 @@ const ICON_PATHS = {
 	cancel: 'M6.25 6.25 13.75 13.75 M13.75 6.25 6.25 13.75',
 	alert: 'M10 5.5V11.25 M10 14.25V14.35',
 } as const;
+
+/**
+ * Target registration 없이 한 Binding 같은 독립 Element에 G-11 primitive를 렌더링한다.
+ */
+export function createGraphNodeLocalEffectHost(
+	element: HTMLElement,
+	getAnimationTime: () => number = () => (
+		element.ownerDocument.defaultView?.performance.now() ?? Date.now()
+	),
+): GraphNodeLocalEffectHost {
+	const ownerDocument = element.ownerDocument;
+	const initialAnimationTime = getAnimationTime();
+	const animationEpoch = Number.isFinite(initialAnimationTime)
+		? initialAnimationTime
+		: 0;
+	const registration: GraphNodeEffectElementHost = {
+		element,
+		effectElements: new Map(),
+	};
+	let disposed = false;
+
+	return {
+		setEffects(effects): void {
+			if (disposed) {
+				return;
+			}
+			const supportedEffects = new Map<string, GraphNodeEffect>();
+
+			for (const effect of effects) {
+				if (isSupportedColor(ownerDocument, effect.color)) {
+					supportedEffects.set(effect.kind, { ...effect });
+				}
+			}
+			syncEffectElements(
+				registration,
+				supportedEffects,
+				ownerDocument,
+				getAnimationDelay(getAnimationTime, animationEpoch),
+				() => registration.layer
+					?? createEffectLayer(registration, ownerDocument),
+			);
+		},
+		dispose(): void {
+			if (disposed) {
+				return;
+			}
+
+			disposed = true;
+			removeRegistrationEffects(registration);
+		},
+	};
+}
 
 /** GraphState와 분리된 in-memory 효과 저장소를 생성한다. */
 export function createGraphNodeEffects(
@@ -102,18 +160,13 @@ export function createGraphNodeEffects(
 	let nextOwnerId = 1;
 	let disposed = false;
 	const defaultOwnerId = 0;
-	const getAnimationDelay = (): string => {
-		const currentTime = getAnimationTime();
-		const elapsed = Number.isFinite(currentTime)
-			? Math.max(0, currentTime - animationEpoch)
-			: 0;
-		const roundedElapsed = Math.round(elapsed * 1_000) / 1_000;
-
-		return `-${roundedElapsed}ms`;
-	};
+	const resolveAnimationDelay = (): string => getAnimationDelay(
+		getAnimationTime,
+		animationEpoch,
+	);
 
 	const syncNodeRegistrations = (nodeId: string): void => {
-		const animationDelay = getAnimationDelay();
+		const animationDelay = resolveAnimationDelay();
 
 		for (const registration of registrationsByNodeId.get(nodeId) ?? []) {
 			syncRegistration(
@@ -259,7 +312,7 @@ export function createGraphNodeEffects(
 				registration,
 				effectsByTarget,
 				ownerDocument,
-				getAnimationDelay(),
+				resolveAnimationDelay(),
 				regionLayer,
 			);
 			if (currentLayout) {
@@ -381,6 +434,48 @@ function syncRegistration(
 ): void {
 	const effects = getRegistrationEffects(registration, effectsByTarget);
 
+	syncEffectElements(
+		registration,
+		effects,
+		ownerDocument,
+		animationDelay,
+		(kind) => shouldUseEffectRegion(registration, kind, regionLayer)
+			? registration.region?.layer
+				?? createEffectRegion(registration, ownerDocument, regionLayer).layer
+			: registration.layer
+				?? createEffectLayer(registration, ownerDocument),
+	);
+
+	if (registration.effectElements.size === 0) {
+		return;
+	}
+
+	const usesRegion = regionLayer && registration.layoutNodeId
+		? [...effects.values()].some(({ kind }) => kind !== 'icon')
+		: false;
+	const usesLocalLayer = [...effects.values()].some(({ kind }) => (
+		!shouldUseEffectRegion(registration, kind, regionLayer)
+	));
+
+	if (!usesRegion) {
+		registration.region?.element.remove();
+		registration.region = undefined;
+	}
+	if (!usesLocalLayer) {
+		registration.layer?.remove();
+		registration.layer = undefined;
+	}
+}
+
+/** Effect kind별 Element를 유지하며 지정된 host/layer에만 DOM primitive를 동기화한다. */
+function syncEffectElements(
+	registration: GraphNodeEffectElementHost,
+	effects: ReadonlyMap<string, GraphNodeEffect>,
+	ownerDocument: Document,
+	animationDelay: string,
+	resolveLayer: (kind: GraphNodeEffectKind) => HTMLElement,
+): void {
+
 	for (const [key, current] of registration.effectElements) {
 		if (!effects.has(key)) {
 			current.remove();
@@ -400,11 +495,7 @@ function syncRegistration(
 				effect.kind,
 				animationDelay,
 			);
-			const layer = shouldUseEffectRegion(registration, effect.kind, regionLayer)
-				? registration.region?.layer
-					?? createEffectRegion(registration, ownerDocument, regionLayer).layer
-				: registration.layer
-					?? createEffectLayer(registration, ownerDocument);
+			const layer = resolveLayer(effect.kind);
 
 			layer.append(effectElement);
 			registration.effectElements.set(key, effectElement);
@@ -428,22 +519,6 @@ function syncRegistration(
 		registration.element.classList.remove(EFFECT_PULSE_SOURCE_CLASS);
 		return;
 	}
-
-	const usesRegion = regionLayer && registration.layoutNodeId
-		? [...effects.values()].some(({ kind }) => kind !== 'icon')
-		: false;
-	const usesLocalLayer = [...effects.values()].some(({ kind }) => (
-		!shouldUseEffectRegion(registration, kind, regionLayer)
-	));
-
-	if (!usesRegion) {
-		registration.region?.element.remove();
-		registration.region = undefined;
-	}
-	if (!usesLocalLayer) {
-		registration.layer?.remove();
-		registration.layer = undefined;
-	}
 }
 
 function shouldUseEffectRegion(
@@ -458,7 +533,7 @@ function shouldUseEffectRegion(
 
 /** 나중에 생성된 occurrence도 기존 Effect와 같은 Document 시간 위상에 합류시킨다. */
 function applyAnimationPhase(
-	registration: GraphNodeEffectRegistration,
+	registration: GraphNodeEffectElementHost,
 	effectElement: Element,
 	kind: GraphNodeEffectKind,
 	animationDelay: string,
@@ -480,7 +555,7 @@ function applyAnimationPhase(
 }
 
 function createEffectLayer(
-	registration: GraphNodeEffectRegistration,
+	registration: GraphNodeEffectElementHost,
 	ownerDocument: Document,
 ): HTMLElement {
 	const layer = ownerDocument.createElement('span');
@@ -530,7 +605,7 @@ function syncRegionGeometry(
 		return false;
 	}
 
-	const bounds = calculateVisibleSubtreeBounds(layout, positions, layoutNodeId);
+	const bounds = getGraphNodeEffectRegionBounds(layout, positions, layoutNodeId);
 
 	if (!bounds) {
 		const changed = region.element.hidden === false;
@@ -562,75 +637,6 @@ function syncRegionGeometry(
 	region.element.style.height = `${bounds.height}px`;
 	region.bounds = bounds;
 	return true;
-}
-
-function calculateVisibleSubtreeBounds(
-	layout: GraphLayout,
-	positions: ReadonlyMap<string, GraphLayoutPosition>,
-	rootNodeId: string,
-): GraphNodeEffectRegionBounds | undefined {
-	const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
-	const childrenByParent = new Map<string, string[]>();
-
-	for (const edge of layout.edges) {
-		if (edge.hidden) {
-			continue;
-		}
-		const childIds = childrenByParent.get(edge.sourceId) ?? [];
-
-		childIds.push(edge.targetId);
-		childrenByParent.set(edge.sourceId, childIds);
-	}
-
-	let minX = Number.POSITIVE_INFINITY;
-	let minY = Number.POSITIVE_INFINITY;
-	let maxX = Number.NEGATIVE_INFINITY;
-	let maxY = Number.NEGATIVE_INFINITY;
-	const visited = new Set<string>();
-	const pending = [rootNodeId];
-
-	while (pending.length > 0) {
-		const nodeId = pending.pop();
-
-		if (!nodeId || visited.has(nodeId)) {
-			continue;
-		}
-		visited.add(nodeId);
-		const node = nodesById.get(nodeId);
-
-		if (!node || node.hidden || isBacklinkOnlyNode(node)) {
-			continue;
-		}
-		const position = positions.get(nodeId) ?? node.position;
-
-		minX = Math.min(minX, position.x);
-		minY = Math.min(minY, position.y);
-		maxX = Math.max(maxX, position.x + node.width);
-		maxY = Math.max(
-			maxY,
-			position.y + (node.graphContentHeight ?? node.height),
-		);
-		pending.push(...(childrenByParent.get(nodeId) ?? []));
-	}
-
-	if (!Number.isFinite(minX)) {
-		return undefined;
-	}
-
-	return {
-		x: minX - EFFECT_REGION_PADDING,
-		y: minY - EFFECT_REGION_PADDING,
-		width: maxX - minX + EFFECT_REGION_PADDING * 2,
-		height: maxY - minY + EFFECT_REGION_PADDING * 2,
-	};
-}
-
-function isBacklinkOnlyNode(node: GraphLayoutNode): boolean {
-	return node.kind === 'folder-backlink'
-		|| (
-			node.kind === 'file-group'
-			&& node.children.every((file) => file.presentation === 'backlink')
-		);
 }
 
 function hasSameRegionBounds(
@@ -692,7 +698,7 @@ function updateEffectElement(element: Element, effect: GraphNodeEffect): void {
 }
 
 function removeRegistrationEffects(
-	registration: GraphNodeEffectRegistration,
+	registration: GraphNodeEffectElementHost,
 ): void {
 	registration.layer?.remove();
 	registration.layer = undefined;
@@ -719,4 +725,17 @@ function isSupportedColor(ownerDocument: Document, color: string): boolean {
 	const css = ownerDocument.defaultView?.CSS;
 
 	return typeof css?.supports !== 'function' || css.supports('color', color);
+}
+
+function getAnimationDelay(
+	getAnimationTime: () => number,
+	animationEpoch: number,
+): string {
+	const currentTime = getAnimationTime();
+	const elapsed = Number.isFinite(currentTime)
+		? Math.max(0, currentTime - animationEpoch)
+		: 0;
+	const roundedElapsed = Math.round(elapsed * 1_000) / 1_000;
+
+	return `-${roundedElapsed}ms`;
 }

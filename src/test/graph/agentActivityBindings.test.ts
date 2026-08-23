@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import type { GraphNodeEffectTarget } from '../../messages';
+import type { AgentActivityKind, GraphNodeEffectTarget } from '../../messages';
 import {
 	createAgentActivityStore,
 	type AgentActivityStore,
@@ -11,6 +11,10 @@ import {
 	createAgentActivityBindings,
 	getAgentActivityBindingBlockHeight,
 } from '../../webview/graph/agentActivityBindings';
+import {
+	getAgentActivityEffects,
+	resolveAgentActivityColor,
+} from '../../webview/graph/agentActivityPresentation';
 
 const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
 const TARGET_Y: GraphNodeEffectTarget = { nodeId: 'folder:workspace/src/y' };
@@ -286,10 +290,145 @@ suite('Agent Activity Bindings', () => {
 		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_GAP, 4);
 		assert.strictEqual(getAgentActivityBindingBlockHeight(2), 62);
 	});
+
+	test('각 Binding은 6개 Activity별 G-11 Effect 조합을 독립적으로 렌더링한다', () => {
+		const mappings: ReadonlyArray<readonly [AgentActivityKind, readonly string[]]> = [
+			['planned', ['marching-dash', 'icon:alert']],
+			['active', ['shimmer']],
+			['editing', ['pulse']],
+			['completed', ['outline', 'icon:check']],
+			['mentioned', ['outline-strong']],
+			['rejected', ['outline', 'icon:cancel']],
+		];
+
+		for (const [activity, expectedEffects] of mappings) {
+			const store = createAgentActivityStore();
+			const bindings = createAgentActivityBindings(store);
+			const element = createTargetElement();
+
+			bindings.registerTarget(TARGET_X, element.asHtmlElement());
+			store.setAgentActivity('session-A', TARGET_X, activity);
+
+			const binding = getBindingElements(element)[0];
+			assert.deepStrictEqual(getBindingEffectKinds(binding), expectedEffects);
+			assert.strictEqual(binding.hasClass('graph-node-effect-host'), true);
+			assert.strictEqual(
+				getBindingEffectColor(binding),
+				getAgentActivityEffects('session-A', activity)[0]?.color,
+			);
+
+			bindings.dispose();
+		}
+	});
+
+	test('Multi-Session Binding은 자신의 Activity Effect만 유지한다', () => {
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(store);
+		const element = createTargetElement();
+
+		bindings.registerTarget(TARGET_X, element.asHtmlElement());
+		store.setAgentActivity('session-A', TARGET_X, 'active');
+		store.setAgentActivity('session-B', TARGET_X, 'planned');
+
+		const [activeBinding, plannedBinding] = getBindingElements(element);
+		assert.strictEqual(activeBinding.getAttribute('data-session-id'), 'session-A');
+		assert.deepStrictEqual(getBindingEffectKinds(activeBinding), ['shimmer']);
+		assert.strictEqual(plannedBinding.getAttribute('data-session-id'), 'session-B');
+		assert.deepStrictEqual(getBindingEffectKinds(plannedBinding), [
+			'marching-dash',
+			'icon:alert',
+		]);
+
+		bindings.dispose();
+	});
+
+	test('Activity 변경은 Binding DOM을 재사용하며 이전 Effect를 제거하고 같은 Activity는 재생성하지 않는다', () => {
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(store);
+		const element = createTargetElement();
+
+		bindings.registerTarget(TARGET_X, element.asHtmlElement());
+		store.setAgentActivity('session-A', TARGET_X, 'planned');
+		const binding = getBindingElements(element)[0];
+		const originalLayer = getBindingEffectLayer(binding);
+
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+
+		assert.strictEqual(getBindingElements(element)[0], binding);
+		assert.deepStrictEqual(getBindingEffectKinds(binding), ['pulse']);
+		assert.strictEqual(findBindingEffect(binding, 'marching-dash'), undefined);
+		assert.strictEqual(findBindingEffect(binding, 'icon'), undefined);
+		assert.strictEqual(getBindingEffectLayer(binding), originalLayer);
+
+		const updatedLayer = getBindingEffectLayer(binding);
+		const updatedPulse = findBindingEffect(binding, 'pulse');
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+		assert.strictEqual(getBindingEffectLayer(binding), updatedLayer);
+		assert.strictEqual(findBindingEffect(binding, 'pulse'), updatedPulse);
+		assert.deepStrictEqual(getBindingEffectKinds(binding), ['pulse']);
+
+		bindings.dispose();
+	});
+
+	test('clear, clearSession, unregister 및 dispose는 Binding local Effect를 함께 정리한다', () => {
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(store);
+		const elementX = createTargetElement();
+		const elementY = createTargetElement();
+
+		const unregisterX = bindings.registerTarget(TARGET_X, elementX.asHtmlElement());
+		bindings.registerTarget(TARGET_Y, elementY.asHtmlElement());
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+		store.setAgentActivity('session-A', TARGET_Y, 'active');
+		const bindingX = getBindingElements(elementX)[0];
+		const bindingY = getBindingElements(elementY)[0];
+
+		store.clearAgentActivity('session-A', TARGET_X);
+		assert.strictEqual(getBindingEffectLayer(bindingX), undefined);
+		assert.strictEqual(bindingX.hasClass('graph-node-effect-host'), false);
+
+		store.clearAgentActivitiesBySession('session-A');
+		assert.strictEqual(getBindingEffectLayer(bindingY), undefined);
+		assert.strictEqual(bindingY.hasClass('graph-node-effect-host'), false);
+
+		store.setAgentActivity('session-B', TARGET_X, 'planned');
+		const bindingAfterReregister = getBindingElements(elementX)[0];
+		unregisterX();
+		assert.strictEqual(getBindingEffectLayer(bindingAfterReregister), undefined);
+		assert.strictEqual(bindingAfterReregister.hasClass('graph-node-effect-host'), false);
+
+		store.setAgentActivity('session-C', TARGET_Y, 'rejected');
+		const bindingBeforeDispose = getBindingElements(elementY)[0];
+		bindings.dispose();
+		assert.strictEqual(getBindingEffectLayer(bindingBeforeDispose), undefined);
+		assert.strictEqual(bindingBeforeDispose.hasClass('graph-node-effect-host'), false);
+	});
+
+	test('debug-g12 Binding은 target representative와 공유하는 안정적인 Session 색을 사용한다', () => {
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(store);
+		const element = createTargetElement();
+		const sessionId = 'debug-g12-editing';
+
+		bindings.registerTarget(TARGET_X, element.asHtmlElement());
+		store.setAgentActivity(sessionId, TARGET_X, 'editing');
+
+		const binding = getBindingElements(element)[0];
+		assert.strictEqual(
+			getBindingEffectColor(binding),
+			resolveAgentActivityColor(sessionId, 'editing'),
+		);
+
+		bindings.dispose();
+	});
 });
 
 class FakeDocument {
 	createElement(): FakeElement {
+		return new FakeElement(this);
+	}
+
+	createElementNS(): FakeElement {
 		return new FakeElement(this);
 	}
 }
@@ -299,6 +438,15 @@ class FakeElement {
 	readonly style = {
 		setProperty: (name: string, value: string) => {
 			this.styleProperties.set(name, value);
+		},
+		getPropertyValue: (name: string) => (
+			this.styleProperties.get(name) ?? ''
+		),
+		removeProperty: (name: string) => {
+			const previous = this.styleProperties.get(name) ?? '';
+
+			this.styleProperties.delete(name);
+			return previous;
 		},
 	};
 	readonly classList = {
@@ -395,4 +543,37 @@ function getBindingState(element: FakeElement): Array<readonly [string, string]>
 		binding.getAttribute('data-session-id') ?? '',
 		binding.getAttribute('data-activity') ?? '',
 	]);
+}
+
+function getBindingEffectLayer(binding: FakeElement): FakeElement | undefined {
+	return binding.children.find((child) => (
+		child.hasClass('graph-node-effect-layer')
+	));
+}
+
+function findBindingEffect(
+	binding: FakeElement,
+	kind: string,
+): FakeElement | undefined {
+	return getBindingEffectLayer(binding)?.children.find((effect) => (
+		effect.getAttribute('data-graph-node-effect') === kind
+	));
+}
+
+function getBindingEffectKinds(binding: FakeElement): string[] {
+	const layer = getBindingEffectLayer(binding);
+
+	return (layer?.children ?? []).map((effect) => {
+		const kind = effect.getAttribute('data-graph-node-effect') ?? '';
+
+		return kind === 'icon'
+			? `icon:${effect.getAttribute('data-graph-node-effect-icon')}`
+			: kind;
+	});
+}
+
+function getBindingEffectColor(binding: FakeElement): string | undefined {
+	return getBindingEffectLayer(binding)?.children[0]?.style.getPropertyValue(
+		'--graph-node-effect-color',
+	) || undefined;
 }

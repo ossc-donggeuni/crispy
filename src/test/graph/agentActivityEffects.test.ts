@@ -10,6 +10,10 @@ import {
 	type AgentActivityStore,
 } from '../../agent/webview/agentActivityStore';
 import { createAgentActivityEffectReconciler } from '../../webview/graph/agentActivityEffects';
+import {
+	getAgentActivityEffects,
+	resolveAgentActivityColor,
+} from '../../webview/graph/agentActivityPresentation';
 import type { GraphNodeEffectOwner } from '../../webview/graph/graphNodeEffects';
 
 const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
@@ -52,6 +56,40 @@ suite('Representative Agent Activity Effects', () => {
 		}
 
 		reconciler.dispose();
+	});
+
+	test('debug-g12 Session은 안정적이고 서로 구분되는 presentation 색을 사용한다', () => {
+		const sessionIds = [
+			'debug-g12-planned',
+			'debug-g12-active',
+			'debug-g12-editing',
+			'debug-g12-completed',
+			'debug-g12-mentioned',
+			'debug-g12-rejected',
+		] as const;
+		const colors = sessionIds.map((sessionId) => (
+			resolveAgentActivityColor(sessionId, 'editing')
+		));
+
+		assert.strictEqual(new Set(colors).size, sessionIds.length);
+		assert.strictEqual(
+			resolveAgentActivityColor('debug-g12-editing', 'editing'),
+			resolveAgentActivityColor('debug-g12-editing', 'editing'),
+		);
+	});
+
+	test('production Session은 기존 semantic color 정책을 유지한다', () => {
+		assert.deepStrictEqual(getAgentActivityEffects('session-A', 'active'), [
+			{ kind: 'shimmer', color: ACTIVITY_COLOR },
+		]);
+		assert.deepStrictEqual(getAgentActivityEffects('session-A', 'completed'), [
+			{ kind: 'outline', color: SUCCESS_COLOR },
+			{ kind: 'icon', icon: 'check', color: SUCCESS_COLOR },
+		]);
+		assert.deepStrictEqual(getAgentActivityEffects('session-A', 'rejected'), [
+			{ kind: 'outline', color: ERROR_COLOR },
+			{ kind: 'icon', icon: 'cancel', color: ERROR_COLOR },
+		]);
 	});
 
 	test('G-12.3 ordered 조회의 첫 Activity만 대표 Effect로 사용한다', () => {
@@ -133,6 +171,28 @@ suite('Representative Agent Activity Effects', () => {
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
 			{ kind: 'pulse', color: ACTIVITY_COLOR },
 		]);
+
+		reconciler.dispose();
+	});
+
+	test('대표 Activity가 같아도 debug Session 색이 바뀌면 Effect를 갱신한다', () => {
+		const store = createAgentActivityStore();
+		const effectOwner = new RecordingGraphNodeEffectOwner();
+		const reconciler = createAgentActivityEffectReconciler(store, effectOwner);
+
+		store.setAgentActivity('debug-g12-active', TARGET_X, 'active');
+		store.setAgentActivity('debug-g12-editing', TARGET_X, 'active');
+		store.clearAgentActivity('debug-g12-active', TARGET_X);
+
+		const expectedColor = resolveAgentActivityColor(
+			'debug-g12-editing',
+			'active',
+		);
+		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
+			{ kind: 'shimmer', color: expectedColor },
+		]);
+		assert.strictEqual(effectOwner.clearCalls.length, 1);
+		assert.strictEqual(effectOwner.setCalls.length, 2);
 
 		reconciler.dispose();
 	});

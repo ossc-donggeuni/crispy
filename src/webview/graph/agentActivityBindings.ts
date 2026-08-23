@@ -5,11 +5,36 @@ import {
 	type AgentActivityStoreSnapshot,
 	type AgentSessionActivitySnapshot,
 } from '../../agent/webview/agentActivityStore';
+import type {
+	GraphLayout,
+	GraphLayoutPosition,
+} from './graphLayout';
+import { getGraphNodeEffectRegionBounds } from './graphNodeEffectGeometry';
+import {
+	createGraphNodeLocalEffectHost,
+	type GraphNodeLocalEffectHost,
+} from './graphNodeEffects';
+import { getAgentActivityEffects } from './agentActivityPresentation';
+
+export interface AgentActivityBindingRegistrationOptions {
+	/** Project/Folder Binding을 G-11 visible subtree horizontal bounds에 맞춘다. */
+	readonly layoutNodeId?: string;
+}
 
 /** Graph Target DOM과 Agent Activity Binding Box의 독립적인 수명주기다. */
 export interface AgentActivityBindings {
 	/** 현재 마운트된 정확한 Target DOM에 Store snapshot을 연결한다. */
-	registerTarget(target: GraphNodeEffectTarget, element: HTMLElement): () => void;
+	registerTarget(
+		target: GraphNodeEffectTarget,
+		element: HTMLElement,
+		options?: AgentActivityBindingRegistrationOptions,
+	): () => void;
+	/** 최신 World Layout으로 subtree Binding의 horizontal geometry를 동기화한다. */
+	syncLayout(
+		layout: GraphLayout,
+		positions: ReadonlyMap<string, GraphLayoutPosition>,
+		transitionDuration?: number,
+	): boolean;
 	/** G-12.5 source/occurrence merge가 실제 표시하는 Binding 개수를 반환한다. */
 	getBindingCount(target: GraphNodeEffectTarget): number;
 	/** 마운트된 Target의 effective Binding 개수가 바뀔 때만 구독자를 호출한다. */
@@ -39,8 +64,15 @@ export function getAgentActivityBindingBlockHeight(bindingCount: number): number
 interface TargetRegistration {
 	readonly element: HTMLElement;
 	readonly target: Readonly<GraphNodeEffectTarget>;
-	readonly bindingsBySession: Map<string, HTMLElement>;
+	readonly bindingsBySession: Map<string, BindingRegistration>;
+	readonly layoutNodeId?: string;
 	container?: HTMLElement;
+	horizontalBounds?: Readonly<{ left: number; width: number }>;
+}
+
+interface BindingRegistration {
+	readonly element: HTMLElement;
+	readonly effectHost: GraphNodeLocalEffectHost;
 }
 
 /**
@@ -53,6 +85,8 @@ export function createAgentActivityBindings(
 	const registrationsByTarget = new Map<string, Set<TargetRegistration>>();
 	const bindingCountSubscribers = new Set<() => void>();
 	let snapshotsByTarget = new Map<string, readonly AgentSessionActivitySnapshot[]>();
+	let currentLayout: GraphLayout | undefined;
+	let currentPositions: ReadonlyMap<string, GraphLayoutPosition> = new Map();
 	let disposed = false;
 
 	const reconcile = (snapshot: AgentActivityStoreSnapshot): void => {
@@ -116,7 +150,7 @@ export function createAgentActivityBindings(
 	const unsubscribe = store.subscribe(reconcile);
 
 	return {
-		registerTarget(target, element): () => void {
+		registerTarget(target, element, options = {}): () => void {
 			if (disposed) {
 				return () => {};
 			}
@@ -126,6 +160,9 @@ export function createAgentActivityBindings(
 				element,
 				target: createTargetSnapshot(target),
 				bindingsBySession: new Map(),
+				...(options.layoutNodeId
+					? { layoutNodeId: options.layoutNodeId }
+					: {}),
 			};
 			const registrations = registrationsByTarget.get(key) ?? new Set();
 
@@ -135,6 +172,14 @@ export function createAgentActivityBindings(
 				registration,
 				getEffectiveActivities(registration.target, snapshotsByTarget),
 			);
+			if (currentLayout) {
+				syncTargetHorizontalGeometry(
+					registration,
+					currentLayout,
+					currentPositions,
+					0,
+				);
+			}
 
 			let registered = true;
 
@@ -150,6 +195,29 @@ export function createAgentActivityBindings(
 					registrationsByTarget.delete(key);
 				}
 			};
+		},
+
+		syncLayout(layout, positions, transitionDuration = 0): boolean {
+			if (disposed) {
+				return false;
+			}
+
+			currentLayout = layout;
+			currentPositions = positions;
+			let changed = false;
+
+			for (const registrations of registrationsByTarget.values()) {
+				for (const registration of registrations) {
+					changed = syncTargetHorizontalGeometry(
+						registration,
+						layout,
+						positions,
+						transitionDuration,
+					) || changed;
+				}
+			}
+
+			return changed;
 		},
 
 		getBindingCount(target): number {
@@ -184,6 +252,8 @@ export function createAgentActivityBindings(
 			registrationsByTarget.clear();
 			bindingCountSubscribers.clear();
 			snapshotsByTarget.clear();
+			currentLayout = undefined;
+			currentPositions = new Map();
 		},
 	};
 }
@@ -269,7 +339,7 @@ function reconcileTarget(
 		let binding = registration.bindingsBySession.get(entry.sessionId);
 
 		if (!binding) {
-			binding = createBindingElement(
+			binding = createBindingRegistration(
 				registration.element.ownerDocument,
 				entry.sessionId,
 			);
@@ -277,7 +347,7 @@ function reconcileTarget(
 		}
 
 		updateBindingElement(binding, entry);
-		orderedBindings.push(binding);
+		orderedBindings.push(binding.element);
 	}
 
 	for (const [sessionId, binding] of registration.bindingsBySession) {
@@ -285,7 +355,8 @@ function reconcileTarget(
 			continue;
 		}
 
-		binding.remove();
+		binding.effectHost.dispose();
+		binding.element.remove();
 		registration.bindingsBySession.delete(sessionId);
 	}
 
@@ -323,13 +394,14 @@ function createBindingContainer(registration: TargetRegistration): HTMLElement {
 	registration.element.classList.add('graph-agent-activity-binding-host');
 	registration.element.append(container);
 	registration.container = container;
+	applyTargetHorizontalGeometry(registration, 0);
 	return container;
 }
 
-function createBindingElement(
+function createBindingRegistration(
 	ownerDocument: Document,
 	sessionId: string,
-): HTMLElement {
+): BindingRegistration {
 	const binding = ownerDocument.createElement('div');
 	const session = ownerDocument.createElement('span');
 	const activity = ownerDocument.createElement('span');
@@ -342,30 +414,119 @@ function createBindingElement(
 	session.setAttribute('title', sessionId);
 	activity.className = 'graph-agent-activity-kind';
 	binding.append(session, activity);
-	return binding;
+	return {
+		element: binding,
+		effectHost: createGraphNodeLocalEffectHost(binding),
+	};
 }
 
 function updateBindingElement(
-	binding: HTMLElement,
+	binding: BindingRegistration,
 	entry: AgentSessionActivitySnapshot,
 ): void {
-	if (binding.getAttribute('data-activity') === entry.activity) {
+	if (binding.element.getAttribute('data-activity') === entry.activity) {
 		return;
 	}
 
-	binding.setAttribute('data-activity', entry.activity);
-	const activity = binding.children[1];
+	binding.element.setAttribute('data-activity', entry.activity);
+	const activity = binding.element.children[1];
 
 	if (activity) {
 		activity.textContent = `[${entry.activity}]`;
 	}
+	binding.effectHost.setEffects(getAgentActivityEffects(
+		entry.sessionId,
+		entry.activity,
+	));
 }
 
 function clearRegistration(registration: TargetRegistration): void {
+	for (const binding of registration.bindingsBySession.values()) {
+		binding.effectHost.dispose();
+	}
 	registration.container?.remove();
 	registration.container = undefined;
 	registration.bindingsBySession.clear();
 	registration.element.classList.remove('graph-agent-activity-binding-host');
+}
+
+function syncTargetHorizontalGeometry(
+	registration: TargetRegistration,
+	layout: GraphLayout,
+	positions: ReadonlyMap<string, GraphLayoutPosition>,
+	transitionDuration: number,
+): boolean {
+	const layoutNodeId = registration.layoutNodeId;
+
+	if (!layoutNodeId) {
+		return false;
+	}
+	const node = layout.nodes.find(({ id }) => id === layoutNodeId);
+	const bounds = getGraphNodeEffectRegionBounds(
+		layout,
+		positions,
+		layoutNodeId,
+	);
+
+	if (!node || !bounds) {
+		const changed = registration.horizontalBounds !== undefined;
+
+		registration.horizontalBounds = undefined;
+		applyTargetHorizontalGeometry(registration, transitionDuration);
+		return changed;
+	}
+	const nodePosition = positions.get(layoutNodeId) ?? node.position;
+	const horizontalBounds = {
+		left: bounds.x - nodePosition.x,
+		width: bounds.width,
+	};
+	const changed = registration.horizontalBounds?.left !== horizontalBounds.left
+		|| registration.horizontalBounds.width !== horizontalBounds.width;
+
+	if (!changed) {
+		return false;
+	}
+
+	registration.horizontalBounds = horizontalBounds;
+	applyTargetHorizontalGeometry(registration, transitionDuration);
+	return true;
+}
+
+function applyTargetHorizontalGeometry(
+	registration: TargetRegistration,
+	transitionDuration: number,
+): void {
+	const container = registration.container;
+
+	if (!container) {
+		return;
+	}
+	const bounds = registration.horizontalBounds;
+
+	if (!bounds) {
+		container.style.removeProperty('left');
+		container.style.removeProperty('width');
+		container.classList.remove('is-layout-transitioning');
+		container.style.removeProperty(
+			'--graph-agent-activity-binding-transition-duration',
+		);
+		return;
+	}
+
+	if (transitionDuration > 0) {
+		container.classList.add('is-layout-transitioning');
+		container.style.setProperty(
+			'--graph-agent-activity-binding-transition-duration',
+			`${transitionDuration}ms`,
+		);
+	} else {
+		container.classList.remove('is-layout-transitioning');
+		container.style.removeProperty(
+			'--graph-agent-activity-binding-transition-duration',
+		);
+	}
+	container.style.left = `${bounds.left}px`;
+	container.style.width = `${bounds.width}px`;
 }
 
 function createTargetKey(target: Readonly<GraphNodeEffectTarget>): string {

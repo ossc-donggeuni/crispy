@@ -165,8 +165,9 @@ export interface GraphRendererOptions {
 	/** Renderer DOM의 생성/제거를 transient Node Effect registration과 연결한다. */
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>
 		& Partial<Pick<GraphNodeEffects, 'syncLayout'>>;
-	/** Renderer DOM의 생성/제거를 exact Target의 Agent Binding과 연결한다. */
-	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>;
+	/** Renderer DOM의 생성/제거 및 Layout을 Agent Binding과 연결한다. */
+	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>
+		& Partial<Pick<AgentActivityBindings, 'syncLayout'>>;
 }
 
 /** 특정 Layout 전환에서 새 Detached subtree가 출발할 기존 Instance를 지정한다. */
@@ -594,6 +595,24 @@ export function initializeGraphRenderer(
 		));
 	};
 
+	/** G-11 Effect Region과 G-12 Binding horizontal bounds를 같은 Layout으로 맞춘다. */
+	const syncPresentationLayout = (
+		currentLayout: GraphLayout,
+		currentPositions: ReadonlyMap<string, GraphLayoutPosition>,
+		transitionDuration = 0,
+	): void => {
+		options.nodeEffects?.syncLayout?.(
+			currentLayout,
+			currentPositions,
+			transitionDuration,
+		);
+		options.agentActivityBindings?.syncLayout?.(
+			currentLayout,
+			currentPositions,
+			transitionDuration,
+		);
+	};
+
 	/** Node DOM 위치를 반영하고 해당 Node에 직접 연결된 Edge만 갱신한다. */
 	const updateNodePosition = (
 		nodeId: string,
@@ -615,7 +634,7 @@ export function initializeGraphRenderer(
 			}
 		}
 		if (!pendingEdges) {
-			options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
+			syncPresentationLayout(renderedLayout, renderedPositions);
 		}
 	};
 
@@ -696,7 +715,7 @@ export function initializeGraphRenderer(
 			&& transitionDuration > 0
 			&& !prefersReducedMotion;
 
-		options.nodeEffects?.syncLayout?.(
+		syncPresentationLayout(
 			renderedLayout,
 			targetPositions,
 			canAnimate ? transitionDuration : 0,
@@ -969,6 +988,10 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 		const presentationTarget = getLayoutNodePresentationTarget(layoutNode);
+		const subtreePresentationOptions = layoutNode.kind === 'project'
+			|| layoutNode.kind === 'folder'
+			? { layoutNodeId: layoutNode.id }
+			: undefined;
 
 		syncAgentActivityBindingLayout(element, layoutNode);
 
@@ -978,9 +1001,7 @@ export function initializeGraphRenderer(
 				options.nodeEffects.registerNode(
 					presentationTarget,
 					element,
-					layoutNode.kind === 'project' || layoutNode.kind === 'folder'
-						? { layoutNodeId: layoutNode.id }
-						: undefined,
+					subtreePresentationOptions,
 				),
 			);
 		}
@@ -990,6 +1011,7 @@ export function initializeGraphRenderer(
 				options.agentActivityBindings.registerTarget(
 					presentationTarget,
 					element,
+					subtreePresentationOptions,
 				),
 			);
 		}
@@ -1134,7 +1156,7 @@ export function initializeGraphRenderer(
 				for (const edge of pendingEdges.values()) {
 					renderEdge(edge);
 				}
-				options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
+				syncPresentationLayout(renderedLayout, renderedPositions);
 			};
 				const commitSubtreeDragPositions = (): boolean => {
 				const startPositions = subtreeDragStartPositions;
@@ -1308,7 +1330,7 @@ export function initializeGraphRenderer(
 	for (const layoutNode of layout.nodes) {
 		addNode(layoutNode);
 	}
-	options.nodeEffects?.syncLayout?.(layout, renderedPositions);
+	syncPresentationLayout(layout, renderedPositions);
 
 	for (const edge of layout.edges) {
 		renderEdge(edge);

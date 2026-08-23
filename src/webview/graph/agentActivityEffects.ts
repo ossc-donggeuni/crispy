@@ -1,5 +1,4 @@
 import type {
-	AgentActivityKind,
 	GraphNodeEffect,
 	GraphNodeEffectTarget,
 } from '../../messages';
@@ -8,6 +7,7 @@ import type {
 	AgentActivityStoreSnapshot,
 } from '../../agent/webview/agentActivityStore';
 import type { GraphNodeEffectOwner } from './graphNodeEffects';
+import { getAgentActivityEffects } from './agentActivityPresentation';
 
 /** Target별 대표 Agent Activity Effect 구독과 소유 Effect의 수명주기다. */
 export interface AgentActivityEffectReconciler {
@@ -16,13 +16,8 @@ export interface AgentActivityEffectReconciler {
 
 interface AppliedRepresentativeActivity {
 	readonly target: Readonly<GraphNodeEffectTarget>;
-	readonly activity: AgentActivityKind;
+	readonly effects: readonly GraphNodeEffect[];
 }
-
-const AGENT_ACTIVITY_COLOR = 'var(--graph-viewport-accent-color, #007acc)';
-const AGENT_ACTIVITY_SUCCESS_COLOR =
-	'var(--vscode-testing-iconPassed, var(--vscode-charts-green, #73c991))';
-const AGENT_ACTIVITY_ERROR_COLOR = 'var(--vscode-errorForeground, #f14c4c)';
 
 /** G-12.3의 첫 Activity만 G-11 Effect 조합으로 동기화한다. */
 export function createAgentActivityEffectReconciler(
@@ -49,21 +44,25 @@ export function createAgentActivityEffectReconciler(
 
 			const key = createTargetKey(target);
 			const applied = appliedByTarget.get(key);
+			const effects = getAgentActivityEffects(
+				representative.sessionId,
+				representative.activity,
+			);
 
 			currentTargetKeys.add(key);
-			if (applied?.activity === representative.activity) {
+			if (applied && areEffectsEqual(applied.effects, effects)) {
 				continue;
 			}
 
 			if (applied) {
 				effectOwner.clearNodeEffect(applied.target);
 			}
-			for (const effect of getAgentActivityEffects(representative.activity)) {
+			for (const effect of effects) {
 				effectOwner.setNodeEffect(target, effect);
 			}
 			appliedByTarget.set(key, {
 				target: createTargetSnapshot(target),
-				activity: representative.activity,
+				effects: effects.map((effect) => ({ ...effect })),
 			});
 		}
 
@@ -94,40 +93,22 @@ export function createAgentActivityEffectReconciler(
 	};
 }
 
-function getAgentActivityEffects(
-	activity: AgentActivityKind,
-): readonly GraphNodeEffect[] {
-	switch (activity) {
-		case 'planned':
-			return [
-				{ kind: 'marching-dash', color: AGENT_ACTIVITY_COLOR },
-				{ kind: 'icon', icon: 'alert', color: AGENT_ACTIVITY_COLOR },
-			];
-		case 'active':
-			return [{ kind: 'shimmer', color: AGENT_ACTIVITY_COLOR }];
-		case 'editing':
-			return [{ kind: 'pulse', color: AGENT_ACTIVITY_COLOR }];
-		case 'completed':
-			return [
-				{ kind: 'outline', color: AGENT_ACTIVITY_SUCCESS_COLOR },
-				{
-					kind: 'icon',
-					icon: 'check',
-					color: AGENT_ACTIVITY_SUCCESS_COLOR,
-				},
-			];
-		case 'mentioned':
-			return [{ kind: 'outline-strong', color: AGENT_ACTIVITY_COLOR }];
-		case 'rejected':
-			return [
-				{ kind: 'outline', color: AGENT_ACTIVITY_ERROR_COLOR },
-				{
-					kind: 'icon',
-					icon: 'cancel',
-					color: AGENT_ACTIVITY_ERROR_COLOR,
-				},
-			];
+function areEffectsEqual(
+	left: readonly GraphNodeEffect[],
+	right: readonly GraphNodeEffect[],
+): boolean {
+	if (left.length !== right.length) {
+		return false;
 	}
+
+	return left.every((effect, index) => {
+		const candidate = right[index];
+		return effect.kind === candidate.kind
+			&& effect.color === candidate.color
+			&& (effect.kind !== 'icon' || (
+				candidate.kind === 'icon' && effect.icon === candidate.icon
+			));
+	});
 }
 
 function createTargetKey(target: GraphNodeEffectTarget): string {

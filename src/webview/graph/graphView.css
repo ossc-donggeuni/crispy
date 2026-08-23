@@ -366,6 +366,15 @@ body.vscode-high-contrast-light .graph-viewport {
 	pointer-events: none;
 }
 
+.graph-agent-activity-bindings.is-layout-transitioning {
+	will-change: left, width;
+	transition:
+		left var(--graph-agent-activity-binding-transition-duration, 220ms)
+			cubic-bezier(0.333333, 1, 0.666667, 1),
+		width var(--graph-agent-activity-binding-transition-duration, 220ms)
+			cubic-bezier(0.333333, 1, 0.666667, 1);
+}
+
 .graph-agent-activity-binding {
 	display: flex;
 	height: var(--graph-agent-activity-binding-row-height);
@@ -390,7 +399,33 @@ body.vscode-high-contrast-light .graph-viewport {
 	line-height: 16px;
 }
 
+/* 각 Session Binding은 Target registration과 분리된 G-11 local Effect host다. */
+.graph-agent-activity-binding.graph-node-effect-host {
+	--graph-node-effect-ring-inset: -2px;
+	--graph-node-effect-ring-radius: 7px;
+	--graph-node-effect-surface-inset: 1px;
+	--graph-node-effect-surface-radius: 5px;
+	--graph-node-effect-dash-width: 1.5px;
+	--graph-node-effect-outline-width: 1px;
+	--graph-node-effect-outline-strong-width: 2px;
+	--graph-node-effect-pulse-width: 1.5px;
+	--graph-node-effect-badge-size: 14px;
+	--graph-node-effect-badge-top: -6px;
+	--graph-node-effect-badge-left: -6px;
+
+	position: relative;
+}
+
+.graph-agent-activity-binding.graph-node-effect-host
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
+	width: calc(100% + 4px);
+	height: calc(100% + 4px);
+}
+
 .graph-agent-activity-session-id {
+	position: relative;
+	z-index: 3;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -398,6 +433,8 @@ body.vscode-high-contrast-light .graph-viewport {
 }
 
 .graph-agent-activity-kind {
+	position: relative;
+	z-index: 3;
 	flex: none;
 	color: var(--vscode-descriptionForeground);
 	white-space: nowrap;
@@ -506,22 +543,30 @@ body.vscode-high-contrast-light .graph-viewport {
 	overflow: visible;
 }
 
-.graph-file-item.graph-node-effect-host .graph-node-effect-marching-dash {
+.graph-file-item.graph-node-effect-host
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
 	width: calc(100% + 6px);
 	height: calc(100% - 4px);
 }
 
-.graph-node.graph-node-effect-host .graph-node-effect-marching-dash {
+.graph-node.graph-node-effect-host
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
 	width: calc(100% + 8px);
 	height: calc(100% + 8px);
 }
 
-.graph-navigator-root-button.graph-node-effect-host .graph-node-effect-marching-dash {
+.graph-navigator-root-button.graph-node-effect-host
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
 	width: calc(100% - 2px);
 	height: calc(100% - 2px);
 }
 
-.graph-node-effect-region .graph-node-effect-marching-dash {
+.graph-node-effect-region
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
 	width: 100%;
 	height: 100%;
 }
