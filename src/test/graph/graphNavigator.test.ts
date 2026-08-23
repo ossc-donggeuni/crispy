@@ -743,11 +743,11 @@ suite('Graph Navigator', () => {
 		);
 	});
 
-	test('Action Rail과 Root List Action을 접근 가능한 버튼으로 생성한다', () => {
+	test('Action Rail에 Panel Toggle과 전체 정렬 Command를 접근 가능한 버튼으로 생성한다', () => {
 		const fixture = createNavigatorFixture();
 
 		assert.strictEqual(fixture.actionRail.hasClass('graph-navigator-action-rail'), true);
-		assert.strictEqual(fixture.actionRail.children.length, 2);
+		assert.strictEqual(fixture.actionRail.children.length, 3);
 		assert.strictEqual(fixture.actionRail.getAttribute('role'), 'toolbar');
 		assert.strictEqual(
 			fixture.actionRail.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
@@ -794,6 +794,33 @@ suite('Graph Navigator', () => {
 			fixture.filterPanel.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
 			true,
 		);
+		assert.strictEqual(fixture.arrangeAllButton.type, 'button');
+		assert.strictEqual(
+			fixture.arrangeAllButton.getAttribute('aria-label'),
+			'그래프 전부 정렬하기',
+		);
+		assert.strictEqual(fixture.arrangeAllButton.title, '그래프 전부 정렬하기');
+		assert.strictEqual(fixture.arrangeAllButton.hasAttribute('aria-controls'), false);
+		assert.strictEqual(fixture.arrangeAllButton.hasAttribute('aria-expanded'), false);
+		assert.strictEqual(
+			fixture.arrangeAllIcon.getAttribute('data-navigator-icon'),
+			'clean.svg',
+		);
+	});
+
+	test('전체 정렬 Command는 Panel 상태를 만들지 않고 interaction callback을 즉시 호출한다', () => {
+		let arrangeAllCalls = 0;
+		const fixture = createNavigatorFixture(
+			undefined,
+			{ onArrangeAll: () => arrangeAllCalls += 1 },
+		);
+
+		fixture.arrangeAllButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(arrangeAllCalls, 1);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(fixture.arrangeAllButton.hasClass('is-active'), false);
 	});
 
 	test('Project, Folder와 File Root를 전달 순서와 기존 Icon 규약으로 렌더링한다', () => {
@@ -1910,6 +1937,8 @@ function createNavigatorFixture(
 	const rootListIcon = getChild(rootListButton, 0);
 	const filterButton = getChild(actionRail, 1);
 	const filterIcon = getChild(filterButton, 0);
+	const arrangeAllButton = getChild(actionRail, 2);
+	const arrangeAllIcon = getChild(arrangeAllButton, 0);
 	const filterPanel = getChild(featureRow, 2);
 	const filterTitle = getChild(filterPanel, 0);
 	const filterTree = getChild(filterPanel, 1);
@@ -1942,6 +1971,8 @@ function createNavigatorFixture(
 		rootListIcon,
 		filterButton,
 		filterIcon,
+		arrangeAllButton,
+		arrangeAllIcon,
 		filterPanel,
 		filterTitle,
 		filterTree,

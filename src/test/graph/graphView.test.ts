@@ -4701,6 +4701,343 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('전체 정렬은 미정렬 Node의 저장 좌표를 지우고 기본 Layout 위치로 되돌린다', async () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:arrange-all-unarranged',
+			name: 'unarranged',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:arrange-all-unarranged',
+			name: 'arrange-all',
+			status: 'loaded',
+			children: [folder],
+		};
+		const graph = createSingleRootGraph(project);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const openedFolders = { [project.id]: true as const };
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 30, y: -20, scale: 1.25 },
+			nodePositions: { [folder.id]: { x: 900, y: 640 } },
+			openedFolders,
+		}, graph);
+		const defaultLayout = createGraphLayout(graph, { openedFolders });
+		const defaultFolder = defaultLayout.nodes.find((node) => node.id === folder.id);
+
+		assert.ok(defaultFolder);
+		assert.deepStrictEqual(readTranslate(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folder.id,
+		).style.transform), { x: 900, y: 640 });
+
+		const dialog = openArrangeAllDialog(root);
+
+		getDescendantByClass(dialog, 'graph-arrange-all-confirm-accept').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				dialog,
+				'graph-arrange-all-confirm-accept',
+			)),
+		);
+		await Promise.resolve();
+
+		assert.deepStrictEqual(graphView.state.getState().nodePositions, {});
+		assert.deepStrictEqual(readTranslate(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folder.id,
+		).style.transform), defaultFolder.position);
+		assert.deepStrictEqual(graphView.state.getState().camera, {
+			x: 30,
+			y: -20,
+			scale: 1.25,
+		});
+		graphView.dispose();
+	});
+
+	test('전체 정렬은 Detached Root와 Backlink를 canonical Workspace Graph로 복구한다', async () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:arrange-all-detached',
+			name: 'detached',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:arrange-all-detached',
+			name: 'arrange-all',
+			status: 'loaded',
+			children: [folder],
+		};
+		const graph = createSingleRootGraph(project);
+		const rootId = createDetachedRootId(folder.id, 1);
+		const detachedFolderId = createGraphLayoutNodeId(rootId, folder.id);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: {},
+			openedFolders: {
+				[project.id]: true,
+				[detachedFolderId]: true,
+			},
+			detachedRootNodeIds: { [rootId]: true },
+		}, graph);
+
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFolderId,
+		));
+		assert.ok(getDescendantByClass(root, 'graph-folder-backlink-node'));
+
+		const dialog = openArrangeAllDialog(root);
+
+		getDescendantByClass(dialog, 'graph-arrange-all-confirm-accept').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				dialog,
+				'graph-arrange-all-confirm-accept',
+			)),
+		);
+		await Promise.resolve();
+
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFolderId,
+		), undefined);
+		assert.strictEqual(
+			findDescendantByClass(root, 'graph-folder-backlink-node'),
+			undefined,
+		);
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			folder.id,
+		));
+		assert.strictEqual(graphView.state.isFolderOpened(folder.id), true);
+		graphView.dispose();
+	});
+
+	test('전체 정렬 취소는 Graph, State와 Layout을 변경하지 않는다', async () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera: { x: 10, y: 20, scale: 1.5 },
+			nodePositions: { [GRAPH_MOCK_PROJECT.id]: { x: 780, y: 520 } },
+			openedFolders: { [GRAPH_MOCK_PROJECT.id]: true },
+		}, GRAPH_MOCK);
+		const beforeState = graphView.state.getState();
+		const beforeTransform = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		).style.transform;
+		let stateChanges = 0;
+		const unsubscribe = graphView.state.subscribe(() => stateChanges += 1);
+		const dialog = openArrangeAllDialog(root);
+
+		assert.strictEqual(
+			getDescendantByClass(dialog, 'graph-arrange-all-confirm-title').textContent,
+			'그래프를 전부 정렬하시겠습니까?',
+		);
+		assert.strictEqual(
+			getDescendantByClass(dialog, 'graph-arrange-all-confirm-message').textContent,
+			'분리된 노드와 미정렬 상태의 노드들이 정렬됩니다.',
+		);
+		getDescendantByClass(dialog, 'graph-arrange-all-confirm-cancel').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				dialog,
+				'graph-arrange-all-confirm-cancel',
+			)),
+		);
+		await Promise.resolve();
+
+		assert.strictEqual(dialog.hidden, true);
+		assert.strictEqual(graphView.state.getState(), beforeState);
+		assert.strictEqual(stateChanges, 0);
+		assert.strictEqual(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		).style.transform, beforeTransform);
+		unsubscribe();
+		graphView.dispose();
+	});
+
+	test('전체 정렬은 중첩 Detached visual state와 미정렬 좌표를 한 번에 복구해 저장한다', async () => {
+		const files = Array.from({ length: 12 }, (_, index) => ({
+			kind: 'file' as const,
+			id: `file:arrange-all/a/b/c/${index}.ts`,
+			name: `${index}.ts`,
+		}));
+		const childC = {
+			kind: 'folder' as const,
+			id: 'folder:arrange-all/a/b/c',
+			name: 'c',
+			status: 'loaded' as const,
+			children: files,
+		};
+		const childB = {
+			kind: 'folder' as const,
+			id: 'folder:arrange-all/a/b',
+			name: 'b',
+			status: 'loaded' as const,
+			children: [childC],
+		};
+		const childA = {
+			kind: 'folder' as const,
+			id: 'folder:arrange-all/a',
+			name: 'a',
+			status: 'loaded' as const,
+			children: [childB],
+		};
+		const unrelated = {
+			kind: 'folder' as const,
+			id: 'folder:arrange-all/unrelated',
+			name: 'unrelated',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:arrange-all/unrelated.ts',
+				name: 'unrelated.ts',
+			}],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:arrange-all-nested',
+			name: 'arrange-all-nested',
+			status: 'loaded',
+			children: [childA, unrelated],
+		};
+		const graph = createSingleRootGraph(project);
+		const rootA = createDetachedRootId(childA.id, 1);
+		const rootB = createDetachedRootId(childB.id, 1, rootA);
+		const rootC = createDetachedRootId(childC.id, 1, rootB);
+		const detachedAId = createGraphLayoutNodeId(rootA, childA.id);
+		const detachedBId = createGraphLayoutNodeId(rootB, childB.id);
+		const detachedCId = createGraphLayoutNodeId(rootC, childC.id);
+		const childCFileGroupId = createFileGroupId(childC.id);
+		const detachedCFileGroupId = createGraphLayoutNodeId(
+			rootC,
+			childCFileGroupId,
+		);
+		const unrelatedFileGroupId = createFileGroupId(unrelated.id);
+		const camera = { x: 125, y: -75, scale: 1.5 };
+		const hiddenNodeIds = { [unrelated.id]: true as const };
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			camera,
+			nodePositions: {
+				[project.id]: { x: 420, y: 260 },
+				[detachedAId]: { x: 900, y: 540 },
+			},
+			openedFolders: {
+				[project.id]: true,
+				[detachedAId]: true,
+				[detachedBId]: true,
+				[detachedCId]: true,
+				[unrelated.id]: true,
+			},
+			fileGroupPages: {
+				[detachedCFileGroupId]: 2,
+				[unrelatedFileGroupId]: 3,
+			},
+			detachedRootNodeIds: {
+				[rootA]: true,
+				[rootB]: true,
+				[rootC]: true,
+			},
+			hiddenNodeIds,
+		}, graph);
+		const originalSetState = graphView.state.setState.bind(graphView.state);
+		let setStateCalls = 0;
+		let stateChanges = 0;
+
+		graphView.state.setState = (nextState) => {
+			setStateCalls += 1;
+			originalSetState(nextState);
+		};
+		const unsubscribe = graphView.state.subscribe(() => stateChanges += 1);
+		const dialog = openArrangeAllDialog(root);
+
+		getDescendantByClass(dialog, 'graph-arrange-all-confirm-accept').dispatch(
+			'click',
+			createClickEvent(getDescendantByClass(
+				dialog,
+				'graph-arrange-all-confirm-accept',
+			)),
+		);
+		await Promise.resolve();
+
+		const arrangedState = graphView.state.getState();
+
+		assert.strictEqual(setStateCalls, 1);
+		assert.strictEqual(stateChanges, 1);
+		assert.deepStrictEqual(arrangedState.camera, camera);
+		assert.deepStrictEqual(arrangedState.hiddenNodeIds, hiddenNodeIds);
+		assert.deepStrictEqual(arrangedState.detachedRootNodeIds, {});
+		assert.deepStrictEqual(arrangedState.nodePositions, {});
+		assert.deepStrictEqual(arrangedState.openedFolders, {
+			[project.id]: true,
+			[childA.id]: true,
+			[childB.id]: true,
+			[childC.id]: true,
+			[unrelated.id]: true,
+		});
+		assert.deepStrictEqual(arrangedState.fileGroupPages, {
+			[childCFileGroupId]: 2,
+			[unrelatedFileGroupId]: 3,
+		});
+		assert.deepStrictEqual(getNavigatorRootNames(root), [project.name]);
+		assert.strictEqual(
+			getDescendantsByClass(root, 'graph-folder-backlink-node').length,
+			0,
+		);
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			childC.id,
+		));
+
+		const restoredRoot = ownerDocument.createElement('section');
+		const restoredView = initializeGraphView(restoredRoot.asHtmlElement(), {
+			camera: { ...arrangedState.camera },
+			nodePositions: { ...arrangedState.nodePositions },
+			fileGroupPages: { ...arrangedState.fileGroupPages },
+			openedFolders: { ...arrangedState.openedFolders },
+			detachedRootNodeIds: { ...arrangedState.detachedRootNodeIds },
+			hiddenNodeIds: { ...arrangedState.hiddenNodeIds },
+		}, graph);
+
+		assert.deepStrictEqual(restoredView.state.getState().detachedRootNodeIds, {});
+		assert.deepStrictEqual(restoredView.state.getState().nodePositions, {});
+		assert.deepStrictEqual(getNavigatorRootNames(restoredRoot), [project.name]);
+		assert.strictEqual(
+			getDescendantsByClass(restoredRoot, 'graph-folder-backlink-node').length,
+			0,
+		);
+		assert.ok(getDescendantByAttribute(
+			restoredRoot,
+			'data-graph-node-id',
+			childC.id,
+		));
+
+		unsubscribe();
+		restoredView.dispose();
+		graphView.dispose();
+	});
+
 	test('Folder Detach는 Navigator에 추가되고 Focus 후 Reattach 시 즉시 제거된다', () => {
 		const promotedFolder = {
 			kind: 'folder' as const,
@@ -6581,6 +6918,20 @@ function getDescendantsByClass(
 		...(child.hasClass(className) ? [child] : []),
 		...getDescendantsByClass(child, className),
 	]);
+}
+
+function openArrangeAllDialog(root: FakeElement): FakeElement {
+	const button = getDescendantByAttribute(
+		root,
+		'aria-label',
+		'그래프 전부 정렬하기',
+	);
+
+	button.dispatch('click', createClickEvent(button));
+	const dialog = getDescendantByClass(root, 'graph-arrange-all-confirm-overlay');
+
+	assert.strictEqual(dialog.hidden, false);
+	return dialog;
 }
 
 function getNavigatorRootNames(root: FakeElement): string[] {
