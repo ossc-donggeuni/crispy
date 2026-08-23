@@ -6,6 +6,10 @@ import {
 	type TaskBlueprint,
 } from '../../task';
 import {
+	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
+	type GraphCameraState,
+} from '../../webview/graph/graphCamera';
+import {
 	createFileGroupId,
 	createGraphLayoutNodeId,
 	createGraphLayout,
@@ -369,6 +373,318 @@ suite('Graph View', () => {
 		assert.ok(taskAEdges.every((edge) => !edgeLayer.children.includes(edge)));
 		assert.ok(taskBNodes.every((node) => nodeLayer.children.includes(node)));
 		assert.ok(taskBEdges.every((edge) => edgeLayer.children.includes(edge)));
+
+		graphView.dispose();
+	});
+
+	test('Navigator Task 추가는 Visible Graph 중심에 기본 Task를 생성하고 겹침을 피한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+		);
+		const addTaskButton = getDescendantByAttribute(
+			root,
+			'aria-label',
+			'Task 추가',
+		);
+
+		assert.strictEqual(addTaskButton.title, 'Task 추가');
+		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
+		const firstSnapshot = graphView.taskState.getSnapshot();
+		const firstTask = firstSnapshot.tasks[0];
+
+		assert.ok(firstTask);
+		assert.strictEqual(firstSnapshot.tasks.length, 1);
+		assert.deepStrictEqual(
+			firstTask.nodes.map((node) => node.kind),
+			['start', 'work', 'end'],
+		);
+		assert.deepStrictEqual(firstTask.edges.map((edge) => ({
+			source: edge.source,
+			target: edge.target,
+		})), [
+			{ source: firstTask.nodes[0]?.id, target: firstTask.nodes[1]?.id },
+			{ source: firstTask.nodes[1]?.id, target: firstTask.nodes[2]?.id },
+		]);
+		assert.deepStrictEqual(firstTask.origin, { x: 360, y: 210 });
+		assert.strictEqual(getTaskElements(root, 'data-task-id', firstTask.id).length, 5);
+
+		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
+		const tasks = graphView.taskState.getSnapshot().tasks;
+
+		assert.strictEqual(tasks.length, 2);
+		assert.notStrictEqual(tasks[0]?.id, tasks[1]?.id);
+		assert.deepStrictEqual(tasks[1]?.origin, { x: 392, y: 242 });
+		assert.strictEqual(getDescendantsByClass(root, 'task-node').length, 6);
+		assert.strictEqual(getTaskElements(root, 'data-task-id', tasks[0]?.id ?? '').length, 5);
+		assert.strictEqual(getTaskElements(root, 'data-task-id', tasks[1]?.id ?? '').length, 5);
+
+		graphView.dispose();
+	});
+
+	test('Task 선택은 동일 내부 Node ID도 taskId와 조합해 하나씩 독립 적용한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const taskA = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000001',
+			'Task A',
+			{ x: 100, y: 50 },
+		);
+		const taskB = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000002',
+			'Task B',
+			{ x: -300, y: 400 },
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[taskA, taskB],
+		);
+		const taskAStart = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskA.nodes[0]?.id ?? '',
+			taskA.id,
+		);
+		const taskAWork = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskA.nodes[1]?.id ?? '',
+			taskA.id,
+		);
+		const taskBStart = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskB.nodes[0]?.id ?? '',
+			taskB.id,
+		);
+
+		taskAStart.dispatch('click', createClickEvent(taskAStart));
+		assert.strictEqual(taskAStart.hasClass('is-selected'), true);
+		assert.strictEqual(taskBStart.hasClass('is-selected'), false);
+
+		taskAWork.dispatch('click', createClickEvent(taskAWork));
+		assert.strictEqual(taskAStart.hasClass('is-selected'), false);
+		assert.strictEqual(taskAWork.hasClass('is-selected'), true);
+
+		taskBStart.dispatch('click', createClickEvent(taskBStart));
+		assert.strictEqual(taskAWork.hasClass('is-selected'), false);
+		assert.strictEqual(taskBStart.hasClass('is-selected'), true);
+		assert.strictEqual(getDescendantsByClass(root, 'is-selected').length, 1);
+		assert.ok(graphView.taskState.getSnapshot().tasks.every((task) => (
+			task.nodes.every((node) => !Object.hasOwn(node, 'selected'))
+		)));
+
+		graphView.dispose();
+	});
+
+	test('Start Drag은 Camera scale의 World delta로 Task origin과 전체 geometry만 갱신한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const taskA = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000001',
+			'Task A',
+			{ x: 100, y: 50 },
+		);
+		const taskB = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000002',
+			'Task B',
+			{ x: -300, y: 400 },
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[taskA, taskB],
+		);
+		const taskANodes = taskA.nodes.map((node) => getTaskElement(
+			root,
+			'data-task-node-id',
+			node.id,
+			taskA.id,
+		));
+		const taskBNodes = taskB.nodes.map((node) => getTaskElement(
+			root,
+			'data-task-node-id',
+			node.id,
+			taskB.id,
+		));
+		const taskAEdges = taskA.edges.map((edge) => getTaskElement(
+			root,
+			'data-task-edge-id',
+			edge.id,
+			taskA.id,
+		));
+		const taskBTransforms = taskBNodes.map((node) => node.style.transform);
+		const taskBCameraState: GraphCameraState = { x: 0, y: 0, scale: 2 };
+
+		graphView.camera.setState(taskBCameraState);
+		assert.ok(taskANodes.every((node) => (
+			node.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE)
+		)));
+		taskANodes[0]?.dispatch('pointerdown', createPointerEvent(
+			taskANodes[0] as FakeElement,
+			10,
+			10,
+		));
+		taskANodes[0]?.dispatch('pointermove', createPointerEvent(
+			taskANodes[0] as FakeElement,
+			50,
+			30,
+		));
+
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(taskA.id)?.origin,
+			{ x: 120, y: 60 },
+		);
+		assert.deepStrictEqual(
+			taskANodes.map((node) => node.style.transform),
+			[
+				'translate(120px, 60px)',
+				'translate(120px, 212px)',
+				'translate(190px, 392px)',
+			],
+		);
+		assert.deepStrictEqual(
+			taskAEdges.map((edge) => edge.getAttribute('d')),
+			[
+				'M 260 164 C 260 188 260 188 260 212',
+				'M 260 344 C 260 368 260 368 260 392',
+			],
+		);
+		assert.deepStrictEqual(
+			taskBNodes.map((node) => node.style.transform),
+			taskBTransforms,
+		);
+		assert.strictEqual(taskANodes[0]?.hasClass('is-dragging'), true);
+
+		taskANodes[0]?.dispatch('pointerup', createPointerEvent(
+			taskANodes[0] as FakeElement,
+			50,
+			30,
+		));
+		taskANodes[0]?.dispatch('click', createClickEvent(taskANodes[0] as FakeElement));
+		assert.strictEqual(taskANodes[0]?.hasClass('is-dragging'), false);
+		assert.strictEqual(taskANodes[0]?.hasClass('is-selected'), false);
+
+		for (const node of taskANodes.slice(1)) {
+			node.dispatch('pointerdown', createPointerEvent(node, 50, 30));
+			node.dispatch('pointermove', createPointerEvent(node, 90, 70));
+			node.dispatch('pointerup', createPointerEvent(node, 90, 70));
+		}
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(taskA.id)?.origin,
+			{ x: 120, y: 60 },
+		);
+		assert.deepStrictEqual(graphView.camera.getState(), taskBCameraState);
+
+		graphView.dispose();
+	});
+
+	test('Task Drag cancel, capture 상실과 dispose는 origin 및 listener lifecycle을 정리한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = getTaskElement(
+			root,
+			'data-task-node-id',
+			task.nodes[0]?.id ?? '',
+			task.id,
+		);
+
+		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
+		start.dispatch('pointermove', createPointerEvent(start, 30, 40));
+		start.dispatch('pointercancel', createPointerEvent(start, 30, 40));
+		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, task.origin);
+		assert.strictEqual(start.hasPointerCapture(1), false);
+		assert.strictEqual(start.hasClass('is-dragging'), false);
+
+		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
+		start.dispatch('pointermove', createPointerEvent(start, 40, 20));
+		start.losePointerCapture(1);
+		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, task.origin);
+		assert.strictEqual(start.hasClass('is-dragging'), false);
+
+		start.dispatch('pointerdown', createPointerEvent(start, 10, 10));
+		start.dispatch('pointermove', createPointerEvent(start, 50, 50));
+		const originAtDispose = graphView.taskState.getTask(task.id)?.origin;
+
+		graphView.dispose();
+		start.dispatch('pointermove', createPointerEvent(start, 100, 100));
+		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.origin, originAtDispose);
+		assert.strictEqual(start.hasPointerCapture(1), false);
+	});
+
+	test('Start와 Work Double Click은 복합 identity의 최신 Layout 중심으로 Focus한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const taskA = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000001',
+			'Task A',
+			{ x: 100, y: 50 },
+		);
+		const taskB = createCollidingRenderingTask(
+			'task:00000000-0000-4000-8000-000000000002',
+			'Task B',
+			{ x: -300, y: 400 },
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[taskA, taskB],
+		);
+		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+		const taskAStart = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskA.nodes[0]?.id ?? '',
+			taskA.id,
+		);
+		const taskAWork = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskA.nodes[1]?.id ?? '',
+			taskA.id,
+		);
+		const taskAEnd = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskA.nodes[2]?.id ?? '',
+			taskA.id,
+		);
+		const taskBStart = getTaskElement(
+			root,
+			'data-task-node-id',
+			taskB.nodes[0]?.id ?? '',
+			taskB.id,
+		);
+
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		taskAStart.dispatch('dblclick', createClickEvent(taskAStart));
+		taskAWork.dispatch('dblclick', createClickEvent(taskAWork));
+		taskBStart.dispatch('dblclick', createClickEvent(taskBStart));
+		taskAEnd.dispatch('dblclick', createClickEvent(taskAEnd));
+
+		assert.deepStrictEqual(focusPoints, [
+			{ x: 240, y: 102 },
+			{ x: 240, y: 268 },
+			{ x: -160, y: 452 },
+		]);
 
 		graphView.dispose();
 	});
@@ -7060,6 +7376,7 @@ class FakeElement {
 	hidden = false;
 	indeterminate = false;
 	textContent = '';
+	title = '';
 	type = '';
 	clientWidth = 1000;
 	clientHeight = 800;
@@ -7165,6 +7482,14 @@ class FakeElement {
 
 	releasePointerCapture(pointerId: number): void {
 		this.capturedPointers.delete(pointerId);
+	}
+
+	losePointerCapture(pointerId: number): void {
+		this.capturedPointers.delete(pointerId);
+		this.dispatch(
+			'lostpointercapture',
+			createPointerEvent(this, 0, 0, pointerId),
+		);
 	}
 
 	getBoundingClientRect(): DOMRect {
@@ -7373,13 +7698,14 @@ function createPointerEvent(
 	target: FakeElement,
 	clientX: number,
 	clientY: number,
+	pointerId = 1,
 ): PointerEvent {
 	let propagationStopped = false;
 
 	return {
 		isPrimary: true,
 		button: 0,
-		pointerId: 1,
+		pointerId,
 		clientX,
 		clientY,
 		target: target.asHtmlElement(),

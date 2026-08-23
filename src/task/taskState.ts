@@ -22,6 +22,8 @@ export type TaskBlueprintUpdater = (
 export interface TaskStateStore {
 	/** 현재 Task 목록의 immutable snapshot을 반환한다. */
 	getSnapshot(): TaskStateSnapshot;
+	/** 외부에서 전달된 검증된 Task 목록으로 현재 snapshot을 교체한다. */
+	replaceTasks(tasks: readonly TaskBlueprint[]): TaskStateSnapshot;
 
 	/** ID가 일치하는 Task를 반환하며 없으면 undefined를 반환한다. */
 	getTask(taskId: string): TaskBlueprint | undefined;
@@ -56,6 +58,12 @@ export function createTaskState(
 
 	return {
 		getSnapshot: () => snapshot,
+
+		replaceTasks(tasks): TaskStateSnapshot {
+			assertUniqueTaskIds(tasks);
+			snapshot = createStateSnapshot(tasks);
+			return snapshot;
+		},
 
 		getTask(taskId): TaskBlueprint | undefined {
 			return snapshot.tasks.find((task) => task.id === taskId);

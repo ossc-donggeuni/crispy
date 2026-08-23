@@ -79,6 +79,17 @@ suite('Task Domain', () => {
 			state.updateTask('task:missing', (task) => task),
 			undefined,
 		);
+
+		let replacementSequence = 0;
+		const replacement = createDefaultTaskBlueprint(
+			{ title: 'Replacement Task' },
+			() => `replacement-${++replacementSequence}`,
+		);
+		const replacementSnapshot = state.replaceTasks([replacement]);
+
+		assert.deepStrictEqual(replacementSnapshot.tasks, [replacement]);
+		assert.strictEqual(state.getTask(created.id), undefined);
+		assert.strictEqual(state.getTask(replacement.id), replacementSnapshot.tasks[0]);
 	});
 
 	test('Start Node 누락과 중복을 거부한다', () => {

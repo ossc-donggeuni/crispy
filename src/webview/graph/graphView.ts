@@ -58,8 +58,21 @@ import type {
 	GraphNodeEffectTarget,
 } from '../../messages';
 import { createGraphNodeEffects } from './graphNodeEffects';
-import type { TaskBlueprint } from '../../task';
-import { createTaskGraphLayout } from '../task/taskLayout';
+import {
+	createTaskState,
+	type TaskBlueprint,
+	type TaskOrigin,
+	type TaskStateStore,
+} from '../../task';
+import {
+	createTaskGraphLayout,
+	TASK_END_NODE_HEIGHT,
+	TASK_NODE_VERTICAL_GAP,
+	TASK_NODE_WIDTH,
+	TASK_START_NODE_HEIGHT,
+	TASK_WORK_NODE_HEIGHT,
+	type TaskLayoutNode,
+} from '../task/taskLayout';
 import { initializeTaskRenderer } from '../task/taskRenderer';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
@@ -68,6 +81,8 @@ export interface GraphView {
 	readonly state: GraphStateStore;
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
+	/** Task 생성과 origin 갱신의 source of truth인 독립 Domain Store다. */
+	readonly taskState: TaskStateStore;
 	/** Panel/Dock/Webview 변화 뒤 Visible Graph 기반 Overlay를 즉시 다시 배치한다. */
 	refreshVisibleGraphArea(): void;
 	/** 기존 View와 State를 유지하며 새로운 Workspace Graph를 적용한다. */
@@ -80,6 +95,40 @@ export interface GraphView {
 	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
+}
+
+const TASK_CREATION_OFFSET = 32;
+const DEFAULT_TASK_LAYOUT_HEIGHT = TASK_START_NODE_HEIGHT
+	+ TASK_WORK_NODE_HEIGHT
+	+ TASK_END_NODE_HEIGHT
+	+ TASK_NODE_VERTICAL_GAP * 2;
+
+/** 현재 Visible Graph 중심을 기본 Task 전체 중심으로 사용하고 겹친 origin은 비켜 놓는다. */
+function createTaskOriginInVisibleArea(
+	camera: GraphCamera,
+	visibleArea: GraphVisibleArea,
+	tasks: readonly TaskBlueprint[],
+): TaskOrigin {
+	const center = camera.viewportToWorld(visibleArea.center);
+	const baseOrigin = {
+		x: center.x - TASK_NODE_WIDTH / 2,
+		y: center.y - DEFAULT_TASK_LAYOUT_HEIGHT / 2,
+	};
+
+	for (let slot = 0; slot <= tasks.length; slot += 1) {
+		const candidate = {
+			x: baseOrigin.x + slot * TASK_CREATION_OFFSET,
+			y: baseOrigin.y + slot * TASK_CREATION_OFFSET,
+		};
+
+		if (!tasks.some((task) => (
+			task.origin.x === candidate.x && task.origin.y === candidate.y
+		))) {
+			return candidate;
+		}
+	}
+
+	return baseOrigin;
 }
 
 /** Graph View가 Renderer의 향후 Root Promotion 요청을 전달할 상위 계약이다. */
@@ -960,6 +1009,7 @@ export function initializeGraphView(
 		effectRegionLayer,
 	);
 	const state = createGraphState(initialState);
+	const taskState = createTaskState(initialTasks);
 	let disposed = false;
 	let initialGraphState = state.getState();
 	let workspaceGraph = graph;
@@ -1549,10 +1599,51 @@ export function initializeGraphView(
 		},
 		{ nodeEffects },
 	);
-	const taskRenderer = initializeTaskRenderer(
+	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
+	const applyTaskState = (): void => {
+		taskRenderer.applyLayout(createTaskGraphLayout(
+			taskState.getSnapshot().tasks,
+		));
+	};
+	const handleTaskOriginChange = (taskId: string, origin: TaskOrigin): void => {
+		const updated = taskState.updateTask(taskId, (task) => ({
+			...task,
+			origin,
+		}));
+
+		if (updated) {
+			applyTaskState();
+		}
+	};
+	const handleTaskNodeFocus = (node: TaskLayoutNode): void => {
+		camera.focusOn({
+			x: node.position.x + node.width / 2,
+			y: node.position.y + node.height / 2,
+		});
+	};
+	const handleTaskCreate = (): void => {
+		const tasks = taskState.getSnapshot().tasks;
+
+		taskState.createTask({
+			title: `Task ${tasks.length + 1}`,
+			origin: createTaskOriginInVisibleArea(
+				camera,
+				getVisibleGraphArea(),
+				tasks,
+			),
+		});
+		applyTaskState();
+	};
+
+	taskRenderer = initializeTaskRenderer(
 		edgeLayer,
 		nodeLayer,
-		createTaskGraphLayout(initialTasks),
+		createTaskGraphLayout(taskState.getSnapshot().tasks),
+		{
+			getCameraScale: () => camera.getState().scale,
+			onTaskOriginChange: handleTaskOriginChange,
+			onNodeFocus: handleTaskNodeFocus,
+		},
 	);
 	navigator = initializeGraphNavigator(
 		overlayLayer,
@@ -1563,6 +1654,7 @@ export function initializeGraphView(
 		{
 			onRootSelect: handleNavigatorRootSelect,
 			onArrangeAll: handleArrangeAll,
+			onTaskCreate: handleTaskCreate,
 		},
 		getVisibleGraphArea,
 		nodeEffects,
@@ -1583,6 +1675,7 @@ export function initializeGraphView(
 	return {
 		state,
 		camera,
+		taskState,
 		refreshVisibleGraphArea(): void {
 			if (!disposed) {
 				navigator.refreshVisibleGraphArea();
@@ -1702,7 +1795,8 @@ export function initializeGraphView(
 		},
 		updateTasks(tasks): void {
 			if (!disposed) {
-				taskRenderer.applyLayout(createTaskGraphLayout(tasks));
+				taskState.replaceTasks(tasks);
+				applyTaskState();
 			}
 		},
 		setNodeEffect(target, effect): void {

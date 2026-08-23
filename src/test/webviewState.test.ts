@@ -610,6 +610,9 @@ suite('Webview State Wiring', () => {
 				camera: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['camera'],
+				taskState: {} as ReturnType<
+					typeof originalInitializeGraphView
+				>['taskState'],
 				refreshVisibleGraphArea: () => {
 					graphVisibleRefreshCount += 1;
 				},

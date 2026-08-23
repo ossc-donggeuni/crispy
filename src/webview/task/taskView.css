@@ -4,7 +4,20 @@
 	gap: 5px;
 	justify-content: center;
 	padding: 13px 16px;
-	cursor: default;
+	cursor: pointer;
+}
+
+.task-node.is-selected {
+	--graph-node-border-color: var(--graph-viewport-accent-color);
+	--graph-node-shadow: var(--graph-node-active-shadow);
+}
+
+.task-start-node {
+	cursor: grab;
+}
+
+.task-start-node.is-dragging {
+	cursor: grabbing;
 }
 
 .task-start-node {

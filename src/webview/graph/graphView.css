@@ -2099,6 +2099,11 @@ body.vscode-high-contrast-light .graph-viewport {
 	-webkit-mask-image: url('./assets/ui-icons/clean.svg');
 }
 
+.graph-navigator-action-icon[data-navigator-icon='task-add.svg'] {
+	mask-image: url('./assets/ui-icons/task-add.svg');
+	-webkit-mask-image: url('./assets/ui-icons/task-add.svg');
+}
+
 .graph-navigator-coordinate {
 	color: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
 	font-size: 0.9em;

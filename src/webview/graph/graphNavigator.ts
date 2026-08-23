@@ -52,6 +52,7 @@ export interface GraphNavigator {
 export interface GraphNavigatorInteractions {
 	onRootSelect?: (rootId: string) => void;
 	onArrangeAll?: () => void;
+	onTaskCreate?: () => void;
 }
 
 const NAVIGATOR_ZOOM_STEP = 0.1;
@@ -66,6 +67,8 @@ const FILTER_PANEL_TITLE_ID = 'graph-navigator-filter-title';
 const FILTER_ICON_ASSET = 'navigator-filter.svg';
 const ARRANGE_ALL_LABEL = '그래프 전부 정렬하기';
 const ARRANGE_ALL_ICON_ASSET = 'clean.svg';
+const ADD_TASK_LABEL = 'Task 추가';
+const ADD_TASK_ICON_ASSET = 'task-add.svg';
 const FILTER_OPENED_ICON_ASSET = 'filter-opened.svg';
 const FILTER_CLOSED_ICON_ASSET = 'filter-closed.svg';
 const PROJECT_ROOT_ICON_ASSET = 'folder-open.svg';
@@ -427,7 +430,17 @@ export function initializeGraphNavigator(
 		iconAsset: ARRANGE_ALL_ICON_ASSET,
 		onActivate: () => interactions.onArrangeAll?.(),
 	});
-	const navigatorActions = [rootListAction, filterAction, arrangeAllAction];
+	const addTaskAction = createNavigatorActionButton(ownerDocument, {
+		label: ADD_TASK_LABEL,
+		iconAsset: ADD_TASK_ICON_ASSET,
+		onActivate: () => interactions.onTaskCreate?.(),
+	});
+	const navigatorActions = [
+		rootListAction,
+		filterAction,
+		arrangeAllAction,
+		addTaskAction,
+	];
 	let renderedRootItems: NavigatorRootListItem[] = [];
 	const disposeRootItems = (): void => {
 		for (const item of renderedRootItems) {
