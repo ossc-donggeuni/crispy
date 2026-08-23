@@ -2,6 +2,10 @@ import * as assert from 'assert';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
+	createDefaultTaskBlueprint,
+	type TaskBlueprint,
+} from '../../task';
+import {
 	createFileGroupId,
 	createGraphLayoutNodeId,
 	createGraphLayout,
@@ -53,6 +57,184 @@ import {
 } from '../../webview/graph/graphVisibleArea';
 
 suite('Graph View', () => {
+	test('Workspace Graph와 Task Start/Work/End 및 Edge를 같은 World Layer에 렌더링한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 360, y: 80 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const startNode = task.nodes.find((node) => node.kind === 'start');
+		const workNode = task.nodes.find((node) => node.kind === 'work');
+		const endNode = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(startNode);
+		assert.ok(workNode);
+		assert.ok(endNode);
+		const startElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			startNode.id,
+		);
+		const workElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			workNode.id,
+		);
+		const endElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			endNode.id,
+		);
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+		const edgeLayer = getDescendantByClass(root, 'graph-edge-layer');
+		const workspaceRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+
+		assert.strictEqual(startElement.getAttribute('data-task-node-kind'), 'start');
+		assert.strictEqual(workElement.getAttribute('data-task-node-kind'), 'work');
+		assert.strictEqual(endElement.getAttribute('data-task-node-kind'), 'end');
+		assert.ok(getText(startElement).includes(task.title));
+		assert.ok(getText(startElement).includes(task.description));
+		assert.ok(getText(workElement).includes(workNode.title));
+		assert.ok(getText(workElement).includes(workNode.description));
+		assert.ok(getText(workElement).includes(workNode.prompt));
+		assert.ok(getText(endElement).includes('End'));
+		assert.ok(nodeLayer.children.includes(workspaceRoot));
+		assert.ok(nodeLayer.children.includes(startElement));
+
+		for (const edge of task.edges) {
+			const edgeElement = getDescendantByAttribute(
+				root,
+				'data-task-edge-id',
+				edge.id,
+			);
+
+			assert.ok(edgeLayer.children.includes(edgeElement));
+			assert.strictEqual(edgeElement.getAttribute('data-task-edge-source'), edge.source);
+			assert.strictEqual(edgeElement.getAttribute('data-task-edge-target'), edge.target);
+			assert.match(edgeElement.getAttribute('d') ?? '', /^M .+ C .+/);
+		}
+
+		graphView.dispose();
+	});
+
+	test('Task Blueprint 변경은 Node DOM을 재사용하며 내용, origin 위치와 Edge를 갱신한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 360, y: 80 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const startNode = task.nodes.find((node) => node.kind === 'start');
+		const workNode = task.nodes.find((node) => node.kind === 'work');
+		const firstEdge = task.edges[0];
+
+		assert.ok(startNode);
+		assert.ok(workNode);
+		assert.ok(firstEdge);
+		const startElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			startNode.id,
+		);
+		const workElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			workNode.id,
+		);
+		const edgeElement = getDescendantByAttribute(
+			root,
+			'data-task-edge-id',
+			firstEdge.id,
+		);
+		const workspaceRoot = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		);
+		const initialStartTransform = startElement.style.transform;
+		const initialEdgePath = edgeElement.getAttribute('d');
+		const updatedTask: TaskBlueprint = {
+			...task,
+			title: 'Updated Task title',
+			description: 'Updated Task description',
+			origin: { x: 660, y: 280 },
+			nodes: task.nodes.map((node) => node.kind === 'work'
+				? {
+					...node,
+					title: 'Updated Work title',
+					description: 'Updated Work description',
+					prompt: 'Updated prompt',
+				}
+				: node),
+		};
+
+		graphView.updateTasks([updatedTask]);
+
+		const updatedStartElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			startNode.id,
+		);
+		const updatedWorkElement = getDescendantByAttribute(
+			root,
+			'data-task-node-id',
+			workNode.id,
+		);
+		const updatedEdgeElement = getDescendantByAttribute(
+			root,
+			'data-task-edge-id',
+			firstEdge.id,
+		);
+
+		assert.strictEqual(updatedStartElement, startElement);
+		assert.strictEqual(updatedWorkElement, workElement);
+		assert.strictEqual(updatedEdgeElement, edgeElement);
+		assert.notStrictEqual(updatedStartElement.style.transform, initialStartTransform);
+		assert.notStrictEqual(updatedEdgeElement.getAttribute('d'), initialEdgePath);
+		assert.ok(getText(updatedStartElement).includes('Updated Task title'));
+		assert.ok(getText(updatedStartElement).includes('Updated Task description'));
+		assert.ok(getText(updatedWorkElement).includes('Updated Work title'));
+		assert.ok(getText(updatedWorkElement).includes('Updated prompt'));
+		assert.strictEqual(
+			getDescendantByAttribute(
+				root,
+				'data-graph-node-id',
+				GRAPH_MOCK_PROJECT.id,
+			),
+			workspaceRoot,
+		);
+
+		graphView.updateTasks([]);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-task-node-id', startNode.id),
+			undefined,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-task-edge-id', firstEdge.id),
+			undefined,
+		);
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		));
+
+		graphView.dispose();
+	});
+
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
 		const graphViewCss = readFileSync(resolve(
 			__dirname,
@@ -7173,4 +7355,22 @@ function subtractPositions(
 
 function getText(element: FakeElement): string {
 	return [element.textContent, ...element.children.map(getText)].join(' ');
+}
+
+/** Graph View 통합 테스트에 사용할 고정 ID Task Blueprint를 만든다. */
+function createRenderingTask(
+	origin: { readonly x: number; readonly y: number },
+): TaskBlueprint {
+	let sequence = 0;
+
+	return createDefaultTaskBlueprint({
+		title: 'Render Task Graph',
+		description: 'Show Task and Workspace Graph together.',
+		origin,
+		work: {
+			title: 'Render Task nodes',
+			description: 'Render Start, Work, and End nodes.',
+			prompt: 'Reuse the existing Graph World layers.',
+		},
+	}, () => `render-${++sequence}`);
 }

@@ -616,6 +616,7 @@ suite('Webview State Wiring', () => {
 				updateGraph: (nextGraph) => {
 					graphUpdates.push(nextGraph);
 				},
+				updateTasks: () => undefined,
 				setNodeEffect: (target, effect) => {
 					graphEffectSets.push({ target, effect });
 				},
