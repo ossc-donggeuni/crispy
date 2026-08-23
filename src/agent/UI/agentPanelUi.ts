@@ -17,6 +17,7 @@ import {
 } from './agentTabModel';
 import { initializeAgentProviderPicker } from './agentProviderPicker';
 import { initializeAgentTabStrip } from './agentTabStrip';
+import { createAgentTabRenameDialog } from './agentTabRenameDialog';
 import { initializeAgentTopBar } from './agentTopBar';
 import {
 	defaultAgentUiDependencies,
@@ -30,12 +31,16 @@ export interface AgentPanelUiElements {
 
 	/** 탭 목록을 담는 strip이다. */
 	readonly tabStrip: HTMLElement;
+	/** 탭 우클릭/키보드 메뉴를 Panel 경계 안에 표시하는 host다. */
+	readonly tabMenuHost: HTMLElement;
 
 	/** provider 미선택 탭에서 xterm 중앙 선택기를 표시할 host다. */
 	readonly providerPicker: HTMLElement;
 
 	/** 탭 닫기 확인 다이얼로그를 표시하는 컨테이너다. */
 	readonly dialogHost: HTMLElement;
+	/** 수동 이름 변경 dialog를 표시하는 별도 컨테이너다. */
+	readonly renameDialogHost: HTMLElement;
 }
 
 /**
@@ -119,6 +124,10 @@ export function initializeAgentPanelUi(
 	const model = createAgentTabModel();
 	const confirmDialog = dependencies.createConfirmDialog(
 		elements.dialogHost,
+		dependencies,
+	);
+	const renameDialog = createAgentTabRenameDialog(
+		elements.renameDialogHost,
 		dependencies,
 	);
 	let disposed = false;
@@ -236,6 +245,7 @@ export function initializeAgentPanelUi(
 
 	const tabStrip = initializeAgentTabStrip(
 		elements.tabStrip,
+		elements.tabMenuHost,
 		{
 			onSelectTab(tabId): void {
 				if (model.getSnapshot().activeTabId === tabId) {
@@ -267,11 +277,30 @@ export function initializeAgentPanelUi(
 						/** 확인 다이얼로그 실패는 탭을 닫지 않은 상태로 그대로 둔다. */
 					});
 			},
+
+			onRequestRenameTab(tabId): void {
+				const tab = model.getSnapshot().tabs.find((entry) => entry.id === tabId);
+				if (tab === undefined) {
+					return;
+				}
+
+				renameDialog.open(
+					tabId,
+					tab.displayName,
+					(value) => model.renameTab(tabId, value),
+					() => tabStrip.focusTab(tabId),
+				);
+			},
+
+			onTogglePinned(tabId, pinned): void {
+				model.setPinned(tabId, pinned);
+			},
 		},
 		dependencies,
 	);
 
 	const unsubscribe = model.subscribe((snapshot) => {
+		renameDialog.syncTabs(snapshot.tabs.map((tab) => tab.id));
 		topBar.render(snapshot);
 		tabStrip.render(snapshot);
 		providerPicker.render(snapshot);
@@ -324,6 +353,7 @@ export function initializeAgentPanelUi(
 			const cleanupActions = [
 				() => unsubscribe(),
 				() => confirmDialog.dispose(),
+				() => renameDialog.dispose(),
 				() => topBar.dispose(),
 				() => tabStrip.dispose(),
 				() => providerPicker.dispose(),

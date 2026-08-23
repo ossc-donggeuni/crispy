@@ -751,8 +751,10 @@ suite('Webview State Wiring', () => {
 			['#agent-terminal-area', {} as HTMLElement],
 			['#agent-top-bar', {} as HTMLElement],
 			['#agent-tab-strip', {} as HTMLElement],
+			['#agent-tab-menu-host', {} as HTMLElement],
 			['#agent-provider-picker-host', {} as HTMLElement],
 			['#agent-dialog-host', {} as HTMLElement],
+			['#agent-rename-dialog-host', {} as HTMLElement],
 		]);
 		const documentMock = {
 			currentScript: {

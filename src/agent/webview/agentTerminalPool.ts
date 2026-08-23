@@ -1,10 +1,11 @@
-import type { HostToWebviewMessage, TabId } from '../protocol';
+import type { HostToWebviewMessage, SessionId, TabId } from '../protocol';
 import {
 	defaultShellTerminalDependencies,
 	initializeShellTerminal,
 	type PostTerminalMessage,
 	type ShellTerminalController,
 } from './shellTerminal';
+import type { TerminalTitleCandidateEvent } from './terminalInputCollector';
 
 /**
  * 탭 하나가 사용하는 Terminal 표면을 만들고 xterm 제어 객체와 연결하는 경계다.
@@ -54,6 +55,12 @@ export interface AgentTerminalPool {
 
 	/** 모든 탭의 Terminal과 표면을 정리한다. */
 	dispose(): void;
+}
+
+/** 기본 pool이 Terminal 내부 자동 제목 collector와 탭 모델을 연결하는 callback이다. */
+export interface AgentTerminalAutoTitleOptions {
+	isEligible(tabId: TabId, sessionId: SessionId): boolean;
+	onCandidate(event: TerminalTitleCandidateEvent): void;
 }
 
 /**
@@ -234,6 +241,7 @@ export function createAgentTerminalPool(
 export function createDefaultAgentTerminalPool(
 	container: HTMLElement,
 	postMessage: PostTerminalMessage,
+	autoTitle?: AgentTerminalAutoTitleOptions,
 ): AgentTerminalPool {
 	return createAgentTerminalPool(container, {
 		createElement: (tagName) => document.createElement(tagName),
@@ -245,6 +253,7 @@ export function createDefaultAgentTerminalPool(
 			initializeShellTerminal(surface, mount, overlay, postMessage, {
 				...defaultShellTerminalDependencies,
 				createTabId: () => tabId,
+				...(autoTitle === undefined ? {} : { autoTitle }),
 			}),
 	});
 }

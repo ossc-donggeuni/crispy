@@ -46,8 +46,10 @@ class FakeConfirmDialog implements AgentConfirmDialog {
 interface PanelFixture {
 	readonly topBar: FakeAgentElement;
 	readonly tabStrip: FakeAgentElement;
+	readonly tabMenuHost: FakeAgentElement;
 	readonly providerPicker: FakeAgentElement;
 	readonly dialogHost: FakeAgentElement;
+	readonly renameDialogHost: FakeAgentElement;
 	readonly dialog: FakeConfirmDialog;
 	readonly documentEvents: FakeDocumentEvents;
 	readonly controller: AgentPanelUiController;
@@ -57,8 +59,10 @@ interface PanelFixture {
 function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
 	const topBar = new FakeAgentElement();
 	const tabStrip = new FakeAgentElement();
+	const tabMenuHost = new FakeAgentElement();
 	const providerPicker = new FakeAgentElement();
 	const dialogHost = new FakeAgentElement();
+	const renameDialogHost = new FakeAgentElement();
 	const dialog = new FakeConfirmDialog();
 	const documentEvents = new FakeDocumentEvents();
 	const dependencies: AgentPanelUiDependencies = {
@@ -70,8 +74,10 @@ function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
 		{
 			topBar: topBar.asHtmlElement(),
 			tabStrip: tabStrip.asHtmlElement(),
+			tabMenuHost: tabMenuHost.asHtmlElement(),
 			providerPicker: providerPicker.asHtmlElement(),
 			dialogHost: dialogHost.asHtmlElement(),
+			renameDialogHost: renameDialogHost.asHtmlElement(),
 		},
 		callbacks,
 		dependencies,
@@ -80,8 +86,10 @@ function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
 	return {
 		topBar,
 		tabStrip,
+		tabMenuHost,
 		providerPicker,
 		dialogHost,
+		renameDialogHost,
 		dialog,
 		documentEvents,
 		controller,
@@ -504,6 +512,139 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator').length, 2);
 	});
 
+	test('비활성 탭 우클릭은 활성 탭을 바꾸지 않고 접근 가능한 메뉴를 연다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const first = fixture.controller.getSnapshot().tabs[0].id;
+		requireElement(fixture.topBar, 'agent-create-tab').click();
+		const second = fixture.controller.getSnapshot().tabs[1].id;
+		let prevented = false;
+
+		fixture.tabStrip.findAll('agent-tab')[0].dispatch('contextmenu', {
+			clientX: 20,
+			clientY: 18,
+			preventDefault: () => prevented = true,
+		});
+
+		assert.strictEqual(prevented, true);
+		assert.strictEqual(fixture.controller.getSnapshot().activeTabId, second);
+		assert.strictEqual(fixture.tabMenuHost.hidden, false);
+		const menu = requireElement(fixture.tabMenuHost, 'agent-tab-context-menu');
+		assert.strictEqual(menu.getAttribute('role'), 'menu');
+		assert.strictEqual(menu.getAttribute('aria-label'), 'Codex #1 탭 메뉴');
+		assert.deepStrictEqual(
+			fixture.tabMenuHost.findAll('agent-tab-context-menu-item').map(
+				(item) => item.textContent,
+			),
+			['이름 변경', '고정'],
+		);
+		assert.strictEqual(first === second, false);
+	});
+
+	test('Shift+F10 메뉴의 방향키와 Escape는 focus를 이동하고 원래 탭으로 복귀한다', () => {
+		const fixture = createFixture();
+		const tabButton = requireElement(fixture.tabStrip, 'agent-tab-select');
+		let prevented = 0;
+		tabButton.dispatch('keydown', {
+			key: 'F10',
+			shiftKey: true,
+			preventDefault: () => prevented += 1,
+		});
+
+		const menu = requireElement(fixture.tabMenuHost, 'agent-tab-context-menu');
+		const items = fixture.tabMenuHost.findAll('agent-tab-context-menu-item');
+		assert.strictEqual(items[0].focusCount, 1);
+		menu.dispatch('keydown', {
+			key: 'ArrowDown',
+			preventDefault: () => prevented += 1,
+		});
+		assert.strictEqual(items[1].focusCount, 1);
+		menu.dispatch('keydown', {
+			key: 'Escape',
+			preventDefault: () => prevented += 1,
+		});
+		assert.strictEqual(fixture.tabMenuHost.hidden, true);
+		assert.strictEqual(tabButton.focusCount, 1);
+		assert.strictEqual(prevented, 3);
+	});
+
+	test('메뉴에서 수동 이름을 저장하고 검증 오류에서는 dialog와 입력을 유지한다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const tab = requireElement(fixture.tabStrip, 'agent-tab');
+		tab.dispatch('contextmenu', {
+			clientX: 10,
+			clientY: 10,
+			preventDefault: () => undefined,
+		});
+		fixture.tabMenuHost.findAll('agent-tab-context-menu-item')[0].click();
+
+		assert.strictEqual(fixture.renameDialogHost.hidden, false);
+		assert.strictEqual(fixture.renameDialogHost.getAttribute('role'), 'dialog');
+		const input = requireElement(fixture.renameDialogHost, 'agent-tab-rename-input');
+		assert.strictEqual(input.value, 'Codex #1');
+		assert.strictEqual(input.focusCount, 1);
+		assert.strictEqual(input.selectCount, 1);
+
+		input.value = '   ';
+		requireElement(fixture.renameDialogHost, 'agent-tab-rename-save').click();
+		assert.strictEqual(fixture.renameDialogHost.hidden, false);
+		assert.strictEqual(
+			requireElement(fixture.renameDialogHost, 'agent-tab-rename-error').textContent,
+			'이름을 입력해주세요.',
+		);
+
+		input.value = '인증 오류 조사';
+		requireElement(fixture.renameDialogHost, 'agent-tab-rename-save').click();
+		assert.strictEqual(fixture.renameDialogHost.hidden, true);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].displayName, '인증 오류 조사');
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].titleSource, 'manual');
+		assert.deepStrictEqual(readTabLabels(fixture.tabStrip), ['인증 오류 조사']);
+	});
+
+	test('고정과 고정 해제는 그룹 끝으로 이동하며 활성 탭과 접근성 이름을 유지한다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const first = fixture.controller.getSnapshot().tabs[0].id;
+		requireElement(fixture.topBar, 'agent-create-tab').click();
+		selectProvider(fixture.providerPicker, 'claude');
+		const second = fixture.controller.getSnapshot().tabs[1].id;
+
+		const firstButton = fixture.tabStrip.findAll('agent-tab-select')[0];
+		firstButton.dispatch('keydown', {
+			key: 'ContextMenu',
+			preventDefault: () => undefined,
+		});
+		fixture.tabMenuHost.findAll('agent-tab-context-menu-item')[1].click();
+
+		let snapshot = fixture.controller.getSnapshot();
+		assert.deepStrictEqual(snapshot.tabs.map((tab) => tab.id), [first, second]);
+		assert.strictEqual(snapshot.tabs[0].isPinned, true);
+		assert.strictEqual(snapshot.activeTabId, second);
+		assert.strictEqual(
+			fixture.tabStrip.findAll('agent-tab-select')[0].getAttribute('aria-label'),
+			'Codex, Codex #1, 고정됨',
+		);
+		assert.strictEqual(
+			fixture.tabStrip.findAll('agent-tab')[1].dataset.pinnedBoundary,
+			'true',
+		);
+
+		fixture.tabStrip.findAll('agent-tab')[0].dispatch('contextmenu', {
+			clientX: 5,
+			clientY: 5,
+			preventDefault: () => undefined,
+		});
+		assert.strictEqual(
+			fixture.tabMenuHost.findAll('agent-tab-context-menu-item')[1].textContent,
+			'고정 해제',
+		);
+		fixture.tabMenuHost.findAll('agent-tab-context-menu-item')[1].click();
+		snapshot = fixture.controller.getSnapshot();
+		assert.deepStrictEqual(snapshot.tabs.map((tab) => tab.id), [second, first]);
+		assert.strictEqual(snapshot.activeTabId, second);
+	});
+
 	test('layout 변경 콜백은 탭 상태가 바뀐 때마다 호출된다', () => {
 		let layoutChangeCount = 0;
 		const fixture = createFixture({
@@ -537,6 +678,9 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.dialog.disposeCount, 1);
 		assert.strictEqual(fixture.documentEvents.countListeners('pointerdown'), 0);
 		assert.strictEqual(fixture.documentEvents.countListeners('keydown'), 0);
+		assert.strictEqual(fixture.documentEvents.countListeners('scroll'), 0);
+		assert.strictEqual(fixture.documentEvents.countListeners('focusin'), 0);
+		assert.strictEqual(fixture.documentEvents.countListeners('window:resize'), 0);
 	});
 
 	test('dispose 뒤 MCP 확인 Promise continuation은 restart callback을 호출하지 않는다', async () => {
