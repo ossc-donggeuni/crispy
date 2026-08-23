@@ -2210,7 +2210,7 @@ function createNodeElement(
 	return element;
 }
 
-/** Edge/Effect용 visual height와 별개인 실제 Renderer DOM 높이를 반환한다. */
+/** Edge/Direct Effect용 visual height와 별개인 실제 Renderer DOM 높이를 반환한다. */
 function getRenderedNodeHeight(node: GraphLayoutNode): number {
 	return node.renderedHeight ?? node.height;
 }

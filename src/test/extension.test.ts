@@ -1,12 +1,17 @@
 import * as assert from 'assert';
 import {
+	AGENT_ACTIVITY_DEBUG_SESSION_IDS,
+	CLEAR_AGENT_ACTIVITIES_COMMAND_ID,
 	CLEAR_NODE_EFFECTS_COMMAND_ID,
 	CrispyExtensionApi,
+	DEBUG_AGENT_ACTIVITIES_COMMAND_ID,
 	DEBUG_NODE_EFFECTS_COMMAND_ID,
 	OPEN_CANVAS_COMMAND_ID,
 	TerminalMessageHost,
 	WorkspaceFileHost,
 	createCanvasRuntime,
+	createAgentActivityDebugClearMessages,
+	createAgentActivityDebugMessages,
 	createGraphNodeEffectDebugMessages,
 	createInitialWebviewState,
 	handleWebviewMessage as handleHostWebviewMessage,
@@ -17,8 +22,10 @@ import type {
 	ExtensionToWebviewMessage,
 	WebviewToExtensionMessage,
 } from '../messages';
+import { parseAgentActivityToWebviewMessage } from '../messages';
 import {
 	createDefaultWebviewSessionState,
+	parseWebviewState,
 	parseWebviewSessionState,
 	serializeWebviewState,
 	type PersistedWebviewState,
@@ -31,7 +38,10 @@ import {
 } from '../workspace/workspaceMetadata';
 import { deserializeGraphFromWebview } from '../webview/graph/graphTransport';
 import { createGraphLayout } from '../webview/graph/graphLayout';
-import type { Graph } from '../webview/graph/graphModel';
+import {
+	createSingleRootGraph,
+	type Graph,
+} from '../webview/graph/graphModel';
 import { addGraphRoot } from '../webview/graph/graphRootPromotion';
 import {
 	createCurrentWorkspaceGraph,
@@ -149,11 +159,19 @@ suite('Crispy Extension Host', () => {
 		assert.ok(manifestCommands.some(
 			({ command }) => command === CLEAR_NODE_EFFECTS_COMMAND_ID,
 		));
+		assert.ok(manifestCommands.some(
+			({ command }) => command === DEBUG_AGENT_ACTIVITIES_COMMAND_ID,
+		));
+		assert.ok(manifestCommands.some(
+			({ command }) => command === CLEAR_AGENT_ACTIVITIES_COMMAND_ID,
+		));
 
 		const registeredCommands = await vscode.commands.getCommands(true);
 		assert.ok(registeredCommands.includes(COMMAND_ID));
 		assert.ok(registeredCommands.includes(DEBUG_NODE_EFFECTS_COMMAND_ID));
 		assert.ok(registeredCommands.includes(CLEAR_NODE_EFFECTS_COMMAND_ID));
+		assert.ok(registeredCommands.includes(DEBUG_AGENT_ACTIVITIES_COMMAND_ID));
+		assert.ok(registeredCommands.includes(CLEAR_AGENT_ACTIVITIES_COMMAND_ID));
 	});
 
 	test('Debug Effect 메시지는 Root 직계 Source 순서대로 6종과 icon 조합에 임의 색을 배정한다', () => {
@@ -372,6 +390,207 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(messages.some(
 			({ target }) => target.nodeId === nestedFile.id,
 		), false);
+	});
+
+	test('Agent Activity Debug 메시지는 visible Layout 순서와 public set 계약으로 6종 및 Multi-Session 예시를 만든다', () => {
+		const groupedFiles = ['a', 'b', 'c', 'd'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:debug-agent/src/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:debug-agent/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: groupedFiles,
+		};
+		const rootFiles = ['README.md', 'package.json'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:debug-agent/${name}`,
+			name,
+		}));
+		const project = {
+			kind: 'project' as const,
+			id: 'project:debug-agent',
+			name: 'debug-agent',
+			status: 'loaded' as const,
+			children: [folder, ...rootFiles],
+		};
+		const graph = createSingleRootGraph(project, 'root:debug-agent');
+		const graphState = {
+			openedFolders: {
+				[project.id]: true as const,
+				[folder.id]: true as const,
+			},
+		};
+		const first = createAgentActivityDebugMessages(graph, graphState);
+		const second = createAgentActivityDebugMessages(graph, graphState);
+		const coreMessages = first.slice(0, 6);
+		const groupedTarget = { nodeId: groupedFiles[1]?.id ?? '' };
+		const groupedActivities = first.filter(({ target }) => (
+			target.nodeId === groupedTarget.nodeId && target.rootId === undefined
+		));
+
+		assert.deepStrictEqual(second, first);
+		assert.deepStrictEqual(coreMessages.map(({ activity }) => activity), [
+			'planned',
+			'active',
+			'editing',
+			'completed',
+			'mentioned',
+			'rejected',
+		]);
+		assert.strictEqual(new Set(coreMessages.map(({ target }) => (
+			JSON.stringify(target)
+		))).size, 6);
+		assert.deepStrictEqual(
+			new Set(first.map(({ activity }) => activity)),
+			new Set([
+				'planned',
+				'active',
+				'editing',
+				'completed',
+				'mentioned',
+				'rejected',
+			]),
+		);
+		assert.ok(first.every((message) => (
+			message.type === 'agent.activity.set'
+			&& parseAgentActivityToWebviewMessage(message) !== undefined
+			&& message.sessionId.startsWith('debug-g12-')
+		)));
+		assert.ok(first.some((message) => (
+			message.target.nodeId === folder.id
+			&& message.activity === 'active'
+		)));
+		assert.deepStrictEqual(
+			groupedActivities.map(({ activity }) => activity),
+			['editing', 'planned', 'mentioned'],
+		);
+	});
+
+	test('Agent Activity Debug는 기존 Detached occurrence에 Source/override 예시만 추가한다', () => {
+		const nestedFile = {
+			kind: 'file' as const,
+			id: 'file:debug-agent-detached/src/index.ts',
+			name: 'index.ts',
+		};
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:debug-agent-detached/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: [nestedFile],
+		};
+		const project = {
+			kind: 'project' as const,
+			id: 'project:debug-agent-detached',
+			name: 'debug-agent-detached',
+			status: 'loaded' as const,
+			children: [folder],
+		};
+		const addition = addGraphRoot(
+			createSingleRootGraph(project, 'root:debug-agent-detached'),
+			folder.id,
+		);
+
+		assert.ok(addition);
+		const messages = createAgentActivityDebugMessages(addition.graph, {
+			openedFolders: { [project.id]: true },
+		});
+		const detachedMessages = messages.filter(({ sessionId }) => (
+			sessionId === 'debug-g12-detached'
+			|| sessionId === 'debug-g12-extra'
+		));
+
+		assert.deepStrictEqual(detachedMessages, [
+			{
+				type: 'agent.activity.set',
+				sessionId: 'debug-g12-detached',
+				target: { nodeId: folder.id },
+				activity: 'planned',
+			},
+			{
+				type: 'agent.activity.set',
+				sessionId: 'debug-g12-detached',
+				target: { nodeId: folder.id, rootId: addition.root.id },
+				activity: 'editing',
+			},
+			{
+				type: 'agent.activity.set',
+				sessionId: 'debug-g12-extra',
+				target: { nodeId: folder.id, rootId: addition.root.id },
+				activity: 'active',
+			},
+		]);
+	});
+
+	test('Agent Activity Debug clear는 reserved Session만 public clearSession 계약으로 생성한다', () => {
+		const messages = createAgentActivityDebugClearMessages();
+
+		assert.deepStrictEqual(
+			messages.map(({ sessionId }) => sessionId),
+			[...AGENT_ACTIVITY_DEBUG_SESSION_IDS],
+		);
+		assert.ok(messages.every((message) => (
+			message.type === 'agent.activity.clearSession'
+			&& message.sessionId.startsWith('debug-g12-')
+			&& parseAgentActivityToWebviewMessage(message) !== undefined
+		)));
+		assert.strictEqual(messages.some(
+			({ sessionId }) => sessionId === 'session-real-agent',
+		), false);
+	});
+
+	test('Agent Activity Debug/Clear Command는 Canvas를 열고 reserved clear 뒤 public set 메시지만 전송한다', async () => {
+		await vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID);
+		const openedByDebugCommand = await openCanvas();
+
+		await extensionModule.deactivate();
+		const panel = await openCanvas();
+
+		assert.notStrictEqual(panel, openedByDebugCommand);
+		const graph = getInitialWorkspaceGraph(panel);
+		const initialState = parseWebviewState(JSON.parse(decodeURIComponent(
+			getSerializedInitialWebviewState(panel),
+		)));
+
+		assert.ok(initialState);
+		await installHostMessageRelay(panel);
+		const clearMessages = createAgentActivityDebugClearMessages();
+		const setMessages = createAgentActivityDebugMessages(
+			graph,
+			initialState.graph,
+		);
+
+		const debugMessagesPromise = collectRelayedHostMessages(
+			panel.webview,
+			clearMessages.length + setMessages.length,
+		);
+
+		await vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID);
+		const debugMessages = await debugMessagesPromise;
+
+		assert.deepStrictEqual(
+			debugMessages.slice(0, clearMessages.length),
+			clearMessages,
+		);
+		assert.deepStrictEqual(
+			debugMessages.slice(clearMessages.length),
+			setMessages,
+		);
+
+		const clearOnlyMessagesPromise = collectRelayedHostMessages(
+			panel.webview,
+			clearMessages.length,
+		);
+
+		await vscode.commands.executeCommand(CLEAR_AGENT_ACTIVITIES_COMMAND_ID);
+		assert.deepStrictEqual(await clearOnlyMessagesPromise, clearMessages);
+		assert.ok(clearMessages.every(({ sessionId }) => (
+			sessionId.startsWith('debug-g12-')
+		)));
 	});
 
 	test('activate 반환 API가 VS Code extension exports와 같은 instance다', () => {
@@ -1564,6 +1783,63 @@ async function sendWorkspaceState(
 		getWorkspaceStateFromMessage(await received),
 		state,
 	);
+}
+
+/** Host→Webview Debug 메시지를 test Webview가 다시 Host로 전달하도록 설치한다. */
+async function installHostMessageRelay(panel: vscode.WebviewPanel): Promise<void> {
+	const ready = onceWebviewMessage(
+		panel.webview,
+		(message) => isRecordWithType(message, 'test.hostMessageRelay.ready'),
+	);
+
+	panel.webview.html = `<!DOCTYPE html>
+		<html lang="en">
+		<body>
+			<script>
+				const vscode = acquireVsCodeApi();
+				window.addEventListener('message', (event) => {
+					vscode.postMessage({
+						type: 'test.hostMessageRelay.message',
+						message: event.data,
+					});
+				});
+				vscode.postMessage({ type: 'test.hostMessageRelay.ready' });
+			</script>
+		</body>
+		</html>`;
+
+	await ready;
+}
+
+/** Relay가 전달한 Host 메시지를 지정 개수만큼 순서대로 수집한다. */
+function collectRelayedHostMessages(
+	webview: vscode.Webview,
+	expectedCount: number,
+): Promise<ExtensionToWebviewMessage[]> {
+	return new Promise((resolve) => {
+		const messages: ExtensionToWebviewMessage[] = [];
+		const subscription = webview.onDidReceiveMessage((value: unknown) => {
+			if (!isRecordWithType(value, 'test.hostMessageRelay.message')) {
+				return;
+			}
+			messages.push(value.message as ExtensionToWebviewMessage);
+
+			if (messages.length >= expectedCount) {
+				subscription.dispose();
+				resolve(messages);
+			}
+		});
+	});
+}
+
+function isRecordWithType(
+	value: unknown,
+	type: string,
+): value is Record<string, unknown> & { readonly type: string } {
+	return typeof value === 'object'
+		&& value !== null
+		&& !Array.isArray(value)
+		&& (value as Record<string, unknown>).type === type;
 }
 
 function getWebviewStateFromMessage(

@@ -606,7 +606,10 @@ function calculateVisibleSubtreeBounds(
 		minX = Math.min(minX, position.x);
 		minY = Math.min(minY, position.y);
 		maxX = Math.max(maxX, position.x + node.width);
-		maxY = Math.max(maxY, position.y + node.height);
+		maxY = Math.max(
+			maxY,
+			position.y + (node.graphContentHeight ?? node.height),
+		);
 		pending.push(...(childrenByParent.get(nodeId) ?? []));
 	}
 

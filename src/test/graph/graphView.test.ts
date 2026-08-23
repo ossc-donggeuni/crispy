@@ -48,6 +48,7 @@ import {
 } from '../../webview/graph/graphView';
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
+import { createAgentActivityEffectReconciler } from '../../webview/graph/agentActivityEffects';
 import {
 	AGENT_ACTIVITY_BINDING_TOP_GAP,
 	getAgentActivityBindingBlockHeight,
@@ -932,7 +933,7 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(readTranslate(secondCard.style.transform), initialSecond);
 	});
 
-	test('Binding footprint는 Target Card, Edge anchor와 G-11 Effect bounds를 확장하지 않는다', () => {
+	test('Binding footprint는 Target Card, Edge anchor와 G-11 Direct Effect bounds를 확장하지 않는다', () => {
 		const file = {
 			kind: 'file' as const,
 			id: 'file:binding-geometry/index.ts',
@@ -978,6 +979,90 @@ suite('Graph View', () => {
 		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
 		assert.strictEqual(getNodeEffect(fileCard, 'shimmer'), shimmer);
 		assert.ok(findAgentBindingContainer(fileCard));
+		graphView.dispose();
+	});
+
+	test('Grouped File Binding 뒤 실제 Row까지 Folder subtree Effect content extent를 확장한다', () => {
+		const files = ['a', 'b', 'c', 'd'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:folder-effect-extent/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:folder-effect-extent/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: files,
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:folder-effect-extent',
+			name: 'folder-effect-extent',
+			status: 'loaded',
+			children: [folder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[folder.id]: true,
+			},
+		}, createSingleRootGraph(project), {}, store);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+		);
+		const folderTarget = { nodeId: folder.id };
+		const fileTarget = { nodeId: files[1]?.id ?? '' };
+		const fileGroupId = createFileGroupId(folder.id);
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const edge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${folder.id}->${fileGroupId}`,
+		);
+
+		store.setAgentActivity('session-folder', folderTarget, 'active');
+		const region = getEffectRegion(root, folder.id);
+		const initialBounds = readEffectRegionBounds(region);
+		const initialEdgePath = edge.getAttribute('d');
+		const initialGroupHeight = Number.parseFloat(fileGroup.style.height);
+
+		store.setAgentActivity('session-file', fileTarget, 'editing');
+
+		const bindingHeight = getAgentActivityBindingBlockHeight(1);
+		const updatedBounds = readEffectRegionBounds(region);
+		const groupPosition = readTranslate(fileGroup.style.transform);
+		const fileRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			fileTarget.nodeId,
+		);
+		const bindingContainer = findAgentBindingContainer(fileRow);
+
+		assert.strictEqual(updatedBounds.height, initialBounds.height + bindingHeight);
+		assert.strictEqual(
+			updatedBounds.y + updatedBounds.height,
+			groupPosition.y + initialGroupHeight + bindingHeight + 6,
+		);
+		assert.strictEqual(
+			fileGroup.style.height,
+			`${initialGroupHeight + bindingHeight}px`,
+		);
+		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.ok(getNodeEffect(region, 'shimmer'));
+		assert.ok(getNodeEffect(fileRow, 'pulse'));
+		assert.ok(bindingContainer);
+		assert.deepStrictEqual(getNodeEffects(bindingContainer), []);
+		activityEffects.dispose();
 		graphView.dispose();
 	});
 

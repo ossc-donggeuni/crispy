@@ -40,10 +40,12 @@ interface GraphLayoutNodeBase {
 	readonly depth: number;
 	readonly position: GraphLayoutPosition;
 	readonly width: number;
-	/** Edge/Effect geometry에서 사용하는 실제 Graph Card 높이다. */
+	/** Edge와 Direct Node Effect geometry에서 사용하는 실제 Graph Card 높이다. */
 	readonly height: number;
 	/** Card geometry와 별개로 Renderer DOM이 확보해야 하는 높이다. */
 	readonly renderedHeight?: number;
+	/** Binding으로 이동한 마지막 실제 Graph Content까지의 세로 범위다. */
+	readonly graphContentHeight?: number;
 	/** Card 좌상단 기준 Agent Binding Container의 Layout 결정 위치다. */
 	readonly agentActivityBindingTop?: number;
 	/** 이 Target에서 실제 표시되는 effective Session Binding 개수다. */
@@ -233,6 +235,7 @@ interface LayoutTreeNode {
 	readonly width: number;
 	readonly height: number;
 	readonly renderedHeight?: number;
+	readonly graphContentHeight?: number;
 	readonly agentActivityBindingCount?: number;
 	readonly parentId?: string;
 	readonly fileChildren?: readonly GraphFileNode[];
@@ -559,13 +562,21 @@ function createArrangedFileLayoutTrees(
 		getAgentActivityBindingCount,
 	));
 	const height = getFileGroupHeight(visibleFileCount, hasPaginationControls);
-	const renderedHeight = height + fileChildren
+	const visibleBindingBlockHeights = fileChildren
 		.slice(0, visibleFileCount)
-		.reduce((sum, file) => (
-			sum + getAgentActivityBindingBlockHeight(
-				file.agentActivityBindingCount ?? 0,
-			)
-		), 0);
+		.map((file) => getAgentActivityBindingBlockHeight(
+			file.agentActivityBindingCount ?? 0,
+		));
+	const renderedHeight = height + visibleBindingBlockHeights.reduce(
+		(sum, bindingBlockHeight) => sum + bindingBlockHeight,
+		0,
+	);
+	const graphContentBindingCount = hasPaginationControls
+		? visibleBindingBlockHeights.length
+		: Math.max(0, visibleBindingBlockHeights.length - 1);
+	const graphContentHeight = height + visibleBindingBlockHeights
+		.slice(0, graphContentBindingCount)
+		.reduce((sum, bindingBlockHeight) => sum + bindingBlockHeight, 0);
 
 	return [{
 		id,
@@ -575,6 +586,7 @@ function createArrangedFileLayoutTrees(
 		width: GRAPH_FILE_GROUP_NODE_WIDTH,
 		height,
 		...(renderedHeight === height ? {} : { renderedHeight }),
+		...(graphContentHeight === height ? {} : { graphContentHeight }),
 		parentId: createGraphLayoutNodeId(layoutRoot.id, parent.id),
 		fileChildren,
 		fileGroupPresentation: 'grouped',
@@ -850,6 +862,9 @@ function toGraphLayoutNode(
 		...(tree.renderedHeight === undefined
 			? {}
 			: { renderedHeight: tree.renderedHeight }),
+		...(tree.graphContentHeight === undefined
+			? {}
+			: { graphContentHeight: tree.graphContentHeight }),
 		...(tree.agentActivityBindingCount === undefined
 			? {}
 			: { agentActivityBindingCount: tree.agentActivityBindingCount }),

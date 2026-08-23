@@ -17,14 +17,19 @@ import {
 	runCleanupWithTimeout,
 	type DetachableTerminalRuntime,
 } from './agent/host/terminal/terminalRuntimeCleanup';
-import type {
-	ExtensionToWebviewMessage,
-	GraphNodeEffect,
-	GraphNodeEffectKind,
-	GraphNodeEffectSetMessage,
-	GraphNodeEffectTarget,
-	WorkspaceOpenFileMessage,
-	WorkspaceToWebviewMessage,
+import {
+	clearAgentActivitiesBySession,
+	setAgentActivity,
+	type AgentActivityClearSessionMessage,
+	type AgentActivityKind,
+	type AgentActivitySetMessage,
+	type ExtensionToWebviewMessage,
+	type GraphNodeEffect,
+	type GraphNodeEffectKind,
+	type GraphNodeEffectSetMessage,
+	type GraphNodeEffectTarget,
+	type WorkspaceOpenFileMessage,
+	type WorkspaceToWebviewMessage,
 } from './messages';
 import {
 	createDefaultWebviewSessionState,
@@ -39,7 +44,22 @@ import {
 } from './workspace/workspaceMetadata';
 import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
-import type { GraphState } from './webview/graph/graphState';
+import {
+	createGraphLayout,
+	getGraphLayoutRootId,
+	getGraphLayoutSourceId,
+	getGraphRootLayoutNodeId,
+	type GraphFileGroupNode,
+	type GraphLayout,
+} from './webview/graph/graphLayout';
+import {
+	getVisibleFileCount,
+	type GraphState,
+} from './webview/graph/graphState';
+import {
+	applyDetachedGraphRoots,
+	isDetachedRootId,
+} from './webview/graph/graphRootPromotion';
 import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
@@ -88,6 +108,40 @@ const pendingWorkspaceWrites = new Set<Promise<void>>();
 export const OPEN_CANVAS_COMMAND_ID = 'crispy.openCanvas';
 export const DEBUG_NODE_EFFECTS_COMMAND_ID = 'crispy.debugNodeEffects';
 export const CLEAR_NODE_EFFECTS_COMMAND_ID = 'crispy.clearNodeEffects';
+export const DEBUG_AGENT_ACTIVITIES_COMMAND_ID = 'crispy.debugAgentActivities';
+export const CLEAR_AGENT_ACTIVITIES_COMMAND_ID = 'crispy.clearAgentActivities';
+
+/** G-12 Debug Command가 독점 소유하고 clear할 수 있는 고정 Session ID다. */
+export const AGENT_ACTIVITY_DEBUG_SESSION_IDS = [
+	'debug-g12-planned',
+	'debug-g12-active',
+	'debug-g12-editing',
+	'debug-g12-completed',
+	'debug-g12-mentioned',
+	'debug-g12-rejected',
+	'debug-g12-detached',
+	'debug-g12-extra',
+] as const;
+
+const AGENT_ACTIVITY_DEBUG_ASSIGNMENTS = [
+	{ sessionId: 'debug-g12-planned', activity: 'planned' },
+	{ sessionId: 'debug-g12-active', activity: 'active' },
+	{ sessionId: 'debug-g12-editing', activity: 'editing' },
+	{ sessionId: 'debug-g12-completed', activity: 'completed' },
+	{ sessionId: 'debug-g12-mentioned', activity: 'mentioned' },
+	{ sessionId: 'debug-g12-rejected', activity: 'rejected' },
+] as const satisfies ReadonlyArray<{
+	readonly sessionId: string;
+	readonly activity: AgentActivityKind;
+}>;
+
+type AgentActivityDebugGraphState = Pick<
+	GraphState,
+	| 'fileGroupPages'
+	| 'openedFolders'
+	| 'hiddenNodeIds'
+	| 'detachedRootNodeIds'
+>;
 
 type GraphNodeEffectDebugTemplate =
 	| { readonly kind: Exclude<GraphNodeEffectKind, 'icon'> }
@@ -173,6 +227,229 @@ export function createGraphNodeEffectDebugMessages(
 				effect,
 			});
 		}
+	}
+
+	return messages;
+}
+
+/** G-12 Debug Command가 소유한 Session만 지우는 public clearSession 메시지를 만든다. */
+export function createAgentActivityDebugClearMessages(): AgentActivityClearSessionMessage[] {
+	return AGENT_ACTIVITY_DEBUG_SESSION_IDS.map((sessionId) => (
+		clearAgentActivitiesBySession(sessionId)
+	));
+}
+
+/** 현재 Canvas에서 실제 표시되는 Graph Target을 Layout traversal 순서로 수집한다. */
+function collectAgentActivityDebugTargets(
+	layout: GraphLayout,
+	graphState: AgentActivityDebugGraphState,
+): GraphNodeEffectTarget[] {
+	const targets: GraphNodeEffectTarget[] = [];
+	const targetKeys = new Set<string>();
+	const appendTarget = (layoutNodeId: string): void => {
+		const target = toGraphNodeEffectTarget(layoutNodeId);
+		const key = createEffectTargetKey(target);
+
+		if (!targetKeys.has(key)) {
+			targetKeys.add(key);
+			targets.push(target);
+		}
+	};
+
+	for (const node of layout.nodes) {
+		if (node.hidden) {
+			continue;
+		}
+
+		if (node.kind === 'folder') {
+			appendTarget(node.id);
+			continue;
+		}
+
+		if (node.kind !== 'file-group') {
+			continue;
+		}
+
+		if (node.presentation === 'standalone') {
+			const file = node.children.find((candidate) => (
+				candidate.hidden !== true && candidate.presentation === 'normal'
+			));
+
+			if (file) {
+				appendTarget(file.id);
+			}
+			continue;
+		}
+
+		for (const file of getVisibleNormalDebugFiles(node, graphState)) {
+			appendTarget(file.id);
+		}
+	}
+
+	return targets;
+}
+
+/** grouped File의 현재 page에서 실제 Renderer가 생성하는 normal Row만 반환한다. */
+function getVisibleNormalDebugFiles(
+	fileGroup: GraphFileGroupNode,
+	graphState: AgentActivityDebugGraphState,
+): GraphFileGroupNode['children'] {
+	const sourceGroupId = getGraphLayoutSourceId(fileGroup.id);
+	const page = graphState.fileGroupPages?.[fileGroup.id]
+		?? graphState.fileGroupPages?.[sourceGroupId]
+		?? 1;
+	const visibleFileCount = getVisibleFileCount(fileGroup.children.length, page);
+
+	return fileGroup.children
+		.slice(0, visibleFileCount)
+		.filter((file) => (
+			file.hidden !== true && file.presentation === 'normal'
+		));
+}
+
+/** grouped File Binding과 Folder subtree Effect를 함께 볼 수 있는 visible pair를 찾는다. */
+function findAgentActivityGroupedDebugTargets(
+	layout: GraphLayout,
+	graphState: AgentActivityDebugGraphState,
+): Readonly<{
+	readonly folder: GraphNodeEffectTarget;
+	readonly file: GraphNodeEffectTarget;
+}> | undefined {
+	const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
+	let fallback: Readonly<{
+		readonly folder: GraphNodeEffectTarget;
+		readonly file: GraphNodeEffectTarget;
+	}> | undefined;
+
+	for (const node of layout.nodes) {
+		if (
+			node.kind !== 'file-group'
+			|| node.presentation !== 'grouped'
+			|| node.hidden
+			|| !node.parentId
+		) {
+			continue;
+		}
+		const parent = nodesById.get(node.parentId);
+
+		if (parent?.kind !== 'folder' || parent.hidden) {
+			continue;
+		}
+		const files = getVisibleNormalDebugFiles(node, graphState);
+
+		if (files.length === 0) {
+			continue;
+		}
+		const fileIndex = files.length >= 4 ? 1 : 0;
+		const file = files[fileIndex];
+
+		if (!file) {
+			continue;
+		}
+		const targets = {
+			folder: toGraphNodeEffectTarget(parent.id),
+			file: toGraphNodeEffectTarget(file.id),
+		};
+
+		if (files.length >= 4) {
+			return targets;
+		}
+		fallback ??= targets;
+	}
+
+	return fallback;
+}
+
+/** Layout의 Source/Detached occurrence 식별 정보를 G-11 Target 계약으로 복원한다. */
+function toGraphNodeEffectTarget(layoutNodeId: string): GraphNodeEffectTarget {
+	const rootId = getGraphLayoutRootId(layoutNodeId);
+
+	return {
+		nodeId: getGraphLayoutSourceId(layoutNodeId),
+		...(rootId ? { rootId } : {}),
+	};
+}
+
+/**
+ * 현재 Graph의 visible Target에 G-12 Activity 예시를 결정적인 순서로 배치한다.
+ * 모든 메시지는 실제 G-12.1 public set 진입점을 사용한다.
+ */
+export function createAgentActivityDebugMessages(
+	graph: Graph,
+	graphState: AgentActivityDebugGraphState = {},
+): AgentActivitySetMessage[] {
+	const currentGraph = applyDetachedGraphRoots(
+		graph,
+		graphState.detachedRootNodeIds ?? {},
+	);
+	const layout = createGraphLayout(currentGraph, {
+		fileGroupPages: graphState.fileGroupPages,
+		openedFolders: graphState.openedFolders,
+		hiddenNodeIds: graphState.hiddenNodeIds,
+	});
+	const targets = collectAgentActivityDebugTargets(layout, graphState);
+	const messages: AgentActivitySetMessage[] = [];
+	const messageKeys = new Set<string>();
+	const appendActivity = (
+		sessionId: string,
+		target: GraphNodeEffectTarget,
+		activity: AgentActivityKind,
+	): void => {
+		const key = JSON.stringify([
+			sessionId,
+			target.nodeId,
+			target.rootId ?? null,
+		]);
+
+		if (messageKeys.has(key)) {
+			return;
+		}
+		messageKeys.add(key);
+		messages.push(setAgentActivity(sessionId, target, activity));
+	};
+
+	for (
+		let index = 0;
+		index < Math.min(targets.length, AGENT_ACTIVITY_DEBUG_ASSIGNMENTS.length);
+		index += 1
+	) {
+		const target = targets[index];
+		const assignment = AGENT_ACTIVITY_DEBUG_ASSIGNMENTS[index];
+
+		if (target && assignment) {
+			appendActivity(assignment.sessionId, target, assignment.activity);
+		}
+	}
+
+	const groupedTargets = findAgentActivityGroupedDebugTargets(layout, graphState);
+	const multiSessionTarget = groupedTargets?.file ?? targets[2] ?? targets[0];
+
+	if (groupedTargets) {
+		appendActivity('debug-g12-active', groupedTargets.folder, 'active');
+	}
+	if (multiSessionTarget) {
+		appendActivity('debug-g12-editing', multiSessionTarget, 'editing');
+		appendActivity('debug-g12-planned', multiSessionTarget, 'planned');
+		appendActivity('debug-g12-mentioned', multiSessionTarget, 'mentioned');
+	}
+
+	const detachedRoot = currentGraph.roots.find((root) => (
+		isDetachedRootId(root.id)
+		&& layout.nodes.some((node) => (
+			node.id === getGraphRootLayoutNodeId(root) && !node.hidden
+		))
+	));
+
+	if (detachedRoot) {
+		const sourceTarget = { nodeId: detachedRoot.nodeId };
+		const occurrenceTarget = {
+			nodeId: detachedRoot.nodeId,
+			rootId: detachedRoot.id,
+		};
+
+		appendActivity('debug-g12-detached', sourceTarget, 'planned');
+		appendActivity('debug-g12-detached', occurrenceTarget, 'editing');
+		appendActivity('debug-g12-extra', occurrenceTarget, 'active');
 	}
 
 	return messages;
@@ -397,7 +674,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		return panel;
 	};
 
-	const postGraphEffectMessage = async (
+	const postDebugMessage = async (
 		panel: vscode.WebviewPanel,
 		message: ExtensionToWebviewMessage,
 	): Promise<void> => {
@@ -432,7 +709,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			));
 
 			if (!nextKinds?.has(previousMessage.effect.kind)) {
-				await postGraphEffectMessage(panel, {
+				await postDebugMessage(panel, {
 					type: 'graph.nodeEffect.clear',
 					target: previousMessage.target,
 					kind: previousMessage.effect.kind,
@@ -441,7 +718,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		}
 
 		for (const message of nextMessages) {
-			await postGraphEffectMessage(panel, message);
+			await postDebugMessage(panel, message);
 		}
 		debugEffectMessages = nextMessages;
 	};
@@ -455,13 +732,48 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			]));
 
 			for (const target of targets.values()) {
-				await postGraphEffectMessage(panel, {
+				await postDebugMessage(panel, {
 					type: 'graph.nodeEffect.clear',
 					target,
 				});
 			}
 		}
 		debugEffectMessages = [];
+	};
+	const debugAgentActivities = async (): Promise<void> => {
+		const panel = await openCanvas();
+		let graph: Graph;
+
+		try {
+			graph = await createCurrentWorkspaceGraph(workspaceGraphDependencies);
+		} catch {
+			return;
+		}
+
+		if (currentRuntime?.panel !== panel) {
+			return;
+		}
+
+		for (const message of createAgentActivityDebugClearMessages()) {
+			await postDebugMessage(panel, message);
+		}
+		for (const message of createAgentActivityDebugMessages(
+			graph,
+			lastWebviewState?.graph,
+		)) {
+			await postDebugMessage(panel, message);
+		}
+	};
+	const clearAgentActivities = async (): Promise<void> => {
+		const panel = currentRuntime?.panel;
+
+		if (!panel) {
+			return;
+		}
+
+		for (const message of createAgentActivityDebugClearMessages()) {
+			await postDebugMessage(panel, message);
+		}
 	};
 	const openCanvasDisposable = vscode.commands.registerCommand(
 		OPEN_CANVAS_COMMAND_ID,
@@ -475,11 +787,21 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		CLEAR_NODE_EFFECTS_COMMAND_ID,
 		clearNodeEffects,
 	);
+	const debugAgentActivitiesDisposable = vscode.commands.registerCommand(
+		DEBUG_AGENT_ACTIVITIES_COMMAND_ID,
+		debugAgentActivities,
+	);
+	const clearAgentActivitiesDisposable = vscode.commands.registerCommand(
+		CLEAR_AGENT_ACTIVITIES_COMMAND_ID,
+		clearAgentActivities,
+	);
 
 	context.subscriptions.push(
 		openCanvasDisposable,
 		debugNodeEffectsDisposable,
 		clearNodeEffectsDisposable,
+		debugAgentActivitiesDisposable,
+		clearAgentActivitiesDisposable,
 	);
 
 	return Object.freeze({

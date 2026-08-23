@@ -1540,9 +1540,65 @@ suite('Graph Model / Layout', () => {
 			expandedGroup.height + getAgentActivityBindingBlockHeight(2),
 		);
 		assert.strictEqual(
+			expandedGroup.graphContentHeight,
+			expandedGroup.renderedHeight,
+		);
+		assert.strictEqual(
 			expandedGroup.height,
 			getFileGroupHeight(7, true),
 		);
+	});
+
+	test('Grouped File의 graphContentHeight는 Binding 뒤 실제 Graph Content까지만 확장한다', () => {
+		const files = ['a', 'b', 'c', 'd'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:content-extent/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const folder: Folder = {
+			kind: 'folder',
+			id: 'folder:content-extent/src',
+			name: 'src',
+			status: 'loaded',
+			children: files,
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:content-extent',
+			name: 'content-extent',
+			status: 'loaded',
+			children: [folder],
+		};
+		const bindingHeight = getAgentActivityBindingBlockHeight(1);
+		const createGroup = (bindingFileId: string): GraphFileGroupNode => {
+			const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+				openedFolders: {
+					[project.id]: true,
+					[folder.id]: true,
+				},
+				getAgentActivityBindingCount: (target) => (
+					target.nodeId === bindingFileId ? 1 : 0
+				),
+			});
+
+			return getFileGroup(layout.nodes, folder.id);
+		};
+		const middleBindingGroup = createGroup(files[1]?.id ?? '');
+		const lastBindingGroup = createGroup(files[3]?.id ?? '');
+
+		assert.strictEqual(
+			middleBindingGroup.renderedHeight,
+			middleBindingGroup.height + bindingHeight,
+		);
+		assert.strictEqual(
+			middleBindingGroup.graphContentHeight,
+			middleBindingGroup.height + bindingHeight,
+		);
+		assert.strictEqual(
+			lastBindingGroup.renderedHeight,
+			lastBindingGroup.height + bindingHeight,
+		);
+		assert.strictEqual(lastBindingGroup.graphContentHeight, undefined);
 	});
 
 	test('Detached occurrence Layout은 G-12.5 source merge와 Session override 개수를 재사용한다', () => {
