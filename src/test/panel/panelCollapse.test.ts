@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { initializePanelCollapse } from '../../webview/panel/panelCollapse';
 import {
 	INITIAL_SIDE_SIZE,
@@ -8,23 +10,56 @@ import {
 } from '../../webview/panel/panelState';
 
 suite('Panel Collapse', () => {
+	test('좌우는 가로, 상하는 세로 방향으로 Panel 전체를 Slide한다', () => {
+		const webviewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/webview.css',
+		), 'utf8');
+		const translations: Readonly<Record<DockPosition, string>> = {
+			left: 'translateX(calc(-100% - var(--chat-floating-margin)))',
+			right: 'translateX(calc(100% + var(--chat-floating-margin)))',
+			top: 'translateY(calc(-100% - var(--chat-floating-margin)))',
+			bottom: 'translateY(calc(100% + var(--chat-floating-margin)))',
+		};
+
+		for (const dock of ['left', 'right', 'top', 'bottom'] as const) {
+			const selector = `.crispy-layout[data-dock='${dock}'] #agent-chat-area[data-collapse-state='collapsed']`;
+			const ruleStart = webviewCss.indexOf(selector);
+			const ruleEnd = webviewCss.indexOf('}', ruleStart);
+
+			assert.ok(ruleStart >= 0);
+			assert.ok(ruleEnd > ruleStart);
+			assert.ok(webviewCss.slice(ruleStart, ruleEnd).includes(
+				`transform: ${translations[dock]};`,
+			));
+		}
+	});
+
 	test('펼침 상태에서는 Chat Panel과 Resize Handle을 표시하고 Sticker를 숨긴다', () => {
 		const fixture = createCollapseFixture('right');
 
 		assert.strictEqual(fixture.chatPanel.hidden, false);
 		assert.strictEqual(fixture.resizeHandle.hidden, false);
 		assert.strictEqual(fixture.stickerOpener.hidden, true);
+		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.chatPanel.inert, false);
 		assert.strictEqual(fixture.state.collapsed, false);
 	});
 
-	test('접기 버튼은 Chat Panel과 Resize Handle을 숨기고 Sticker를 표시한다', () => {
+	test('접기 버튼은 Chat Panel 전체와 Resize Handle의 Slide 상태를 적용하고 Sticker를 표시한다', () => {
 		const fixture = createCollapseFixture('right');
 
 		fixture.collapseButton.click();
 
 		assert.strictEqual(fixture.state.collapsed, true);
-		assert.strictEqual(fixture.chatPanel.hidden, true);
-		assert.strictEqual(fixture.resizeHandle.hidden, true);
+		assert.strictEqual(fixture.chatPanel.hidden, false);
+		assert.strictEqual(fixture.resizeHandle.hidden, false);
+		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'collapsed');
+		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'collapsed');
+		assert.strictEqual(fixture.chatPanel.dataset.collapseMotion, 'slide');
+		assert.strictEqual(fixture.resizeHandle.dataset.collapseMotion, 'slide');
+		assert.strictEqual(fixture.chatPanel.inert, true);
 		assert.strictEqual(fixture.stickerOpener.hidden, false);
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 1);
 		assert.strictEqual(fixture.getExpandCount(), 0);
@@ -74,6 +109,9 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.state.verticalSize, 340);
 		assert.strictEqual(fixture.chatPanel.hidden, false);
 		assert.strictEqual(fixture.resizeHandle.hidden, false);
+		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.chatPanel.inert, false);
 		assert.strictEqual(fixture.stickerOpener.hidden, true);
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 2);
 		assert.strictEqual(fixture.getExpandCount(), 1);
@@ -82,8 +120,12 @@ suite('Panel Collapse', () => {
 	test('접힌 상태로 복원하면 처음부터 Sticker만 표시한다', () => {
 		const fixture = createCollapseFixture('top', INITIAL_SIDE_SIZE, 340, true);
 
-		assert.strictEqual(fixture.chatPanel.hidden, true);
-		assert.strictEqual(fixture.resizeHandle.hidden, true);
+		assert.strictEqual(fixture.chatPanel.hidden, false);
+		assert.strictEqual(fixture.resizeHandle.hidden, false);
+		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'collapsed');
+		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'collapsed');
+		assert.strictEqual(fixture.chatPanel.dataset.collapseMotion, undefined);
+		assert.strictEqual(fixture.chatPanel.inert, true);
 		assert.strictEqual(fixture.stickerOpener.hidden, false);
 		assert.strictEqual(fixture.stickerOpener.dataset.dock, 'top');
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 0);
@@ -182,6 +224,7 @@ function createCollapseFixture(
 class FakeElement {
 	readonly dataset = {} as DOMStringMap;
 	hidden = false;
+	inert = false;
 	private readonly listeners = new Map<string, () => void>();
 
 	asHtmlElement(): HTMLElement {

@@ -34,6 +34,8 @@ body {
 	--chat-floating-margin: 12px;
 	--chat-floating-radius: 8px;
 	--resize-handle-size: 5px;
+	--chat-collapse-duration: 240ms;
+	--chat-collapse-easing: cubic-bezier(0.2, 0, 0, 1);
 
 	/* JS clamp가 아직 실행되지 않은 첫 paint에서도 Panel이 화면 밖으로 나가지 않게 한다. */
 	--chat-side-display: min(
@@ -79,6 +81,25 @@ body {
 	display: none;
 }
 
+/*
+ * hidden/display로 Panel을 제거하지 않고 Dock 바깥까지 통째로 이동시킨다.
+ * visibility는 닫힘 Slide가 끝난 뒤 전환되고, 열 때는 즉시 복원된다.
+ */
+#agent-chat-area[data-collapse-motion='slide'] {
+	transition:
+		transform var(--chat-collapse-duration) var(--chat-collapse-easing),
+		visibility 0s linear;
+}
+
+#agent-chat-area[data-collapse-state='collapsed'] {
+	visibility: hidden;
+	pointer-events: none;
+}
+
+#agent-chat-area[data-collapse-motion='slide'][data-collapse-state='collapsed'] {
+	transition-delay: 0s, var(--chat-collapse-duration);
+}
+
 .crispy-layout[data-dock='left'] #agent-chat-area,
 .crispy-layout[data-dock='right'] #agent-chat-area {
 	top: var(--chat-floating-margin);
@@ -90,8 +111,16 @@ body {
 	left: var(--chat-floating-margin);
 }
 
+.crispy-layout[data-dock='left'] #agent-chat-area[data-collapse-state='collapsed'] {
+	transform: translateX(calc(-100% - var(--chat-floating-margin)));
+}
+
 .crispy-layout[data-dock='right'] #agent-chat-area {
 	right: var(--chat-floating-margin);
+}
+
+.crispy-layout[data-dock='right'] #agent-chat-area[data-collapse-state='collapsed'] {
+	transform: translateX(calc(100% + var(--chat-floating-margin)));
 }
 
 .crispy-layout[data-dock='top'] #agent-chat-area,
@@ -105,8 +134,16 @@ body {
 	top: var(--chat-floating-margin);
 }
 
+.crispy-layout[data-dock='top'] #agent-chat-area[data-collapse-state='collapsed'] {
+	transform: translateY(calc(-100% - var(--chat-floating-margin)));
+}
+
 .crispy-layout[data-dock='bottom'] #agent-chat-area {
 	bottom: var(--chat-floating-margin);
+}
+
+.crispy-layout[data-dock='bottom'] #agent-chat-area[data-collapse-state='collapsed'] {
+	transform: translateY(calc(100% + var(--chat-floating-margin)));
 }
 
 /* 탭마다 자기 표면을 겹쳐 두고 활성 탭 하나만 표시한다. */
@@ -305,6 +342,21 @@ body {
 	display: none;
 }
 
+#panel-resize-handle[data-collapse-motion='slide'] {
+	transition:
+		transform var(--chat-collapse-duration) var(--chat-collapse-easing),
+		visibility 0s linear;
+}
+
+#panel-resize-handle[data-collapse-state='collapsed'] {
+	visibility: hidden;
+	pointer-events: none;
+}
+
+#panel-resize-handle[data-collapse-motion='slide'][data-collapse-state='collapsed'] {
+	transition-delay: 0s, var(--chat-collapse-duration);
+}
+
 .crispy-layout[data-dock='left'] #panel-resize-handle,
 .crispy-layout[data-dock='right'] #panel-resize-handle {
 	top: var(--chat-floating-margin);
@@ -317,8 +369,29 @@ body {
 	left: calc(var(--chat-floating-margin) + var(--chat-side-display));
 }
 
+.crispy-layout[data-dock='left'] #panel-resize-handle[data-collapse-state='collapsed'] {
+	transform: translateX(
+		calc(
+			0px
+			- var(--chat-side-display)
+			- var(--chat-floating-margin)
+			- var(--resize-handle-size)
+		)
+	);
+}
+
 .crispy-layout[data-dock='right'] #panel-resize-handle {
 	right: calc(var(--chat-floating-margin) + var(--chat-side-display));
+}
+
+.crispy-layout[data-dock='right'] #panel-resize-handle[data-collapse-state='collapsed'] {
+	transform: translateX(
+		calc(
+			var(--chat-side-display)
+			+ var(--chat-floating-margin)
+			+ var(--resize-handle-size)
+		)
+	);
 }
 
 .crispy-layout[data-dock='top'] #panel-resize-handle,
@@ -333,8 +406,29 @@ body {
 	top: calc(var(--chat-floating-margin) + var(--chat-vertical-display));
 }
 
+.crispy-layout[data-dock='top'] #panel-resize-handle[data-collapse-state='collapsed'] {
+	transform: translateY(
+		calc(
+			0px
+			- var(--chat-vertical-display)
+			- var(--chat-floating-margin)
+			- var(--resize-handle-size)
+		)
+	);
+}
+
 .crispy-layout[data-dock='bottom'] #panel-resize-handle {
 	bottom: calc(var(--chat-floating-margin) + var(--chat-vertical-display));
+}
+
+.crispy-layout[data-dock='bottom'] #panel-resize-handle[data-collapse-state='collapsed'] {
+	transform: translateY(
+		calc(
+			var(--chat-vertical-display)
+			+ var(--chat-floating-margin)
+			+ var(--resize-handle-size)
+		)
+	);
 }
 
 #panel-resize-handle:hover,
@@ -479,4 +573,10 @@ body {
 
 #dock-preview[data-dock='bottom']::after {
 	content: 'Bottom Dock';
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.crispy-layout {
+		--chat-collapse-duration: 0ms;
+	}
 }

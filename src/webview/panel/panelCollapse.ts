@@ -50,13 +50,30 @@ export function initializePanelCollapse(
 	onExpand: () => void = () => undefined,
 ): () => void {
 	/**
+	 * 첫 렌더에서는 저장된 상태를 즉시 반영하고, 사용자 동작부터 Slide transition을 사용한다.
+	 * 접힌 상태로 복원할 때 펼친 Panel이 잠깐 보이는 현상도 함께 막는다.
+	 */
+	const enableSlideMotion = () => {
+		elements.chatPanel.dataset.collapseMotion = 'slide';
+		elements.resizeHandle.dataset.collapseMotion = 'slide';
+	};
+
+	/**
 	 * 현재 접힘 여부와 Dock 방향을 Chat Panel, Resize Handle과 두 버튼에 반영한다.
 	 */
 	const refreshCollapse = () => {
 		const dock = state.preferredDock;
+		const collapseState = state.collapsed ? 'collapsed' : 'expanded';
 
-		elements.chatPanel.hidden = state.collapsed;
-		elements.resizeHandle.hidden = state.collapsed;
+		/**
+		 * hidden은 transition을 즉시 끊으므로 Panel과 Handle은 Layout에 유지하고,
+		 * CSS의 transform / visibility로 전체 영역을 Dock 바깥까지 이동시킨다.
+		 */
+		elements.chatPanel.hidden = false;
+		elements.resizeHandle.hidden = false;
+		elements.chatPanel.inert = state.collapsed;
+		elements.chatPanel.dataset.collapseState = collapseState;
+		elements.resizeHandle.dataset.collapseState = collapseState;
 		elements.stickerOpener.hidden = !state.collapsed;
 		elements.stickerOpener.dataset.dock = dock;
 		elements.stickerOpener.dataset.panelIcon = OPENER_ICON_ASSETS[dock];
@@ -71,6 +88,7 @@ export function initializePanelCollapse(
 			return;
 		}
 
+		enableSlideMotion();
 		state.collapsed = true;
 		refreshCollapse();
 		onCollapsedChange();
@@ -84,6 +102,7 @@ export function initializePanelCollapse(
 			return;
 		}
 
+		enableSlideMotion();
 		state.collapsed = false;
 		refreshCollapse();
 		onCollapsedChange();
