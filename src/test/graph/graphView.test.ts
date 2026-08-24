@@ -1850,6 +1850,121 @@ suite('Graph View', () => {
 		assert.strictEqual(root.children.length, 0);
 	});
 
+	test('Task-bound grouped File standalone을 원래 File Group에 놓으면 binding과 occurrence가 함께 복귀한다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:task-file-arrangement/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const project: Project = {
+			kind: 'project',
+			id: 'project:task-file-arrangement',
+			name: 'task-file-arrangement',
+			status: 'loaded',
+			children: files,
+		};
+		const task = createRenderingTask({ x: 900, y: 360 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const file = files[1];
+
+		assert.ok(file);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+		}, createSingleRootGraph(project), {}, [task]);
+		const nodeLayer = getDescendantByClass(root, 'graph-node-layer');
+		const referenceArea = getTaskScopeArea(root, task.id, work.id, 'reference');
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const fileGroupId = createFileGroupId(project.id);
+		let fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+
+		setClientBounds(referenceArea, 900, 100, 280, 72);
+		setClientBounds(workArea, 900, 200, 280, 72);
+		const row = getDescendantByAttribute(fileGroup, 'data-file-id', file.id);
+
+		row.dispatch('pointerdown', createPointerEvent(row, 10, 10));
+		row.dispatch('pointermove', createPointerEvent(row, 940, 130));
+		row.dispatch('pointerup', createPointerEvent(row, 940, 130));
+		const standalone = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			file.id,
+		);
+		let boundWork = graphView.taskState.getTask(task.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+
+		assert.ok(boundWork?.kind === 'work');
+		assert.deepStrictEqual(boundWork.graphTargets, {
+			reference: [file.id],
+			work: [],
+		});
+		assert.strictEqual(
+			standalone.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${file.id}`,
+		));
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const fileGroupPosition = readTranslate(fileGroup.style.transform);
+
+		performNodeDrop(
+			standalone,
+			fileGroupPosition.x + 8,
+			fileGroupPosition.y + 8,
+		);
+		boundWork = graphView.taskState.getTask(task.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+		fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+
+		assert.ok(boundWork?.kind === 'work');
+		assert.deepStrictEqual(boundWork.graphTargets, {
+			reference: [],
+			work: [],
+		});
+		assert.strictEqual(findDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			file.id,
+		), undefined);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item').map(
+				(item) => item.getAttribute('data-file-id'),
+			),
+			files.map((entry) => entry.id),
+		);
+		assert.strictEqual(graphView.state.getState().nodePositions[file.id], undefined);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${file.id}`,
+		), undefined);
+		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		graphView.dispose();
+	});
+
 	test('전체 정렬 후에도 opened Scope Folder의 arranged sibling과 grouped File이 겹치지 않는다', async () => {
 		const task = createRenderingTask({ x: 100, y: 520 });
 		const work = task.nodes.find((node) => node.kind === 'work');
@@ -11558,7 +11673,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('grouped File은 Row Drag로 standalone이 되지 않고 Detach Handle로만 분리된다', () => {
+	test('grouped File을 Row에서 standalone으로 빼고 원래 File Group에 다시 넣는다', () => {
 		const files = ['a', 'b', 'c'].map((name) => ({
 			kind: 'file' as const,
 			id: `file:view-arrangement/${name}.ts`,
@@ -11593,11 +11708,76 @@ suite('Graph View', () => {
 		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
 		row.dispatch('pointerup', createPointerEvent(row, -500, -500));
 
+		const standalone = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			file.id,
+		);
+
 		fileGroup = getDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
 			fileGroupId,
 		);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item').map(
+				(item) => item.getAttribute('data-file-id'),
+			),
+			[files[0]?.id, files[2]?.id],
+		);
+		assert.ok(graphView.state.getState().nodePositions[file.id]);
+		assert.strictEqual(
+			standalone.getAttribute('data-file-group-presentation'),
+			'standalone',
+		);
+		assert.ok(findDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${file.id}`,
+		));
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		const parent = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			project.id,
+		);
+		const parentPosition = readTranslate(parent.style.transform);
+
+		performNodeDrop(
+			standalone,
+			parentPosition.x + 8,
+			parentPosition.y + 8,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				nodeLayer,
+				'data-graph-node-id',
+				file.id,
+			),
+			standalone,
+		);
+		assert.deepStrictEqual(
+			getDescendantsByClass(fileGroup, 'graph-file-item').map(
+				(item) => item.getAttribute('data-file-id'),
+			),
+			[files[0]?.id, files[2]?.id],
+		);
+		assert.ok(graphView.state.getState().nodePositions[file.id]);
+
+		const fileGroupPosition = readTranslate(fileGroup.style.transform);
+
+		performNodeDrop(
+			standalone,
+			fileGroupPosition.x + 8,
+			fileGroupPosition.y + 8,
+		);
+
+		fileGroup = getDescendantByAttribute(
+			nodeLayer,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+
 		assert.strictEqual(findDescendantByAttribute(
 			nodeLayer,
 			'data-graph-node-id',
@@ -11610,64 +11790,11 @@ suite('Graph View', () => {
 			files.map((entry) => entry.id),
 		);
 		assert.strictEqual(graphView.state.getState().nodePositions[file.id], undefined);
-		const currentRow = getDescendantByAttribute(
-			fileGroup,
-			'data-file-id',
-			file.id,
-		);
-		const detachHandle = getDescendantByClass(
-			currentRow,
-			'graph-detach-handle',
-		);
-
-		detachHandle.dispatch(
-			'pointerdown',
-			createPointerEvent(detachHandle, 10, 10),
-		);
-		detachHandle.dispatch(
-			'pointermove',
-			createPointerEvent(detachHandle, 30, 30),
-		);
-		detachHandle.dispatch(
-			'pointerup',
-			createPointerEvent(detachHandle, 900, 600),
-		);
-		const detachedRootId = createPromotedGraphRootId(file.id);
-		const detachedNodeId = createGraphLayoutNodeId(detachedRootId, file.id);
-		const detachedNode = getDescendantByAttribute(
-			nodeLayer,
-			'data-graph-node-id',
-			detachedNodeId,
-		);
-
-		fileGroup = getDescendantByAttribute(
-			nodeLayer,
-			'data-graph-node-id',
-			fileGroupId,
-		);
-		const backlinkRow = getDescendantByAttribute(
-			fileGroup,
-			'data-file-id',
-			file.id,
-		);
-
-		assert.strictEqual(
-			detachedNode.getAttribute('data-file-group-presentation'),
-			'standalone',
-		);
-		assert.strictEqual(
-			backlinkRow.getAttribute('data-target-root-id'),
-			detachedRootId,
-		);
-		assert.deepStrictEqual(
-			getDescendantsByClass(fileGroup, 'graph-file-item').map(
-				(item) => item.getAttribute('data-file-id'),
-			),
-			files.map((entry) => entry.id),
-		);
-		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
-			[detachedRootId]: true,
-		});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${file.id}`,
+		), undefined);
 		graphView.dispose();
 	});
 

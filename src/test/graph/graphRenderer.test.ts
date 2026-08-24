@@ -3373,7 +3373,7 @@ suite('Graph Renderer / Node Drag', () => {
 		fixture.renderer.dispose();
 	});
 
-	test('grouped File Row Drag는 standalone preview나 비정렬 요청을 만들지 않는다', () => {
+	test('grouped File Row를 밖으로 Drag하면 기존 preview lifecycle로 standalone 비정렬을 요청한다', () => {
 		const files = ['a', 'b', 'c'].map((name) => ({
 			kind: 'file' as const,
 			id: `file:arrangement/${name}.ts`,
@@ -3399,19 +3399,126 @@ suite('Graph Renderer / Node Drag', () => {
 		const fileGroupId = createFileGroupId(project.id);
 		const fileGroup = fixture.getNode(fileGroupId);
 		const row = getDescendantByAttribute(fileGroup, 'data-file-id', file.id);
+		const fileGroupPosition = getLayoutNode(fixture.layout, fileGroupId).position;
 
 		row.dispatch('pointerdown', createPointerEvent(row, 10, 10));
 		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
+		const preview = getDescendantByAttribute(
+			fixture.nodeLayer,
+			'data-graph-arrangement-preview-id',
+			file.id,
+		);
+
+		assert.strictEqual(row.hasClass('is-arrangement-drag-source'), true);
+		assert.ok(preview.style.transform.includes('translate('));
+		assert.ok(getText(preview).includes(file.name));
+
+		row.dispatch('pointermove', createPointerEvent(
+			row,
+			fileGroupPosition.x + 10,
+			fileGroupPosition.y + 10,
+		));
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), true);
+		row.dispatch('pointermove', createPointerEvent(row, -500, -500));
 		row.dispatch('pointerup', createPointerEvent(row, -500, -500));
 
-		assert.deepStrictEqual(requests, []);
-		assert.strictEqual(fixture.graphState.getState().nodePositions[file.id], undefined);
+		assert.deepStrictEqual(requests, [{ nodeId: file.id, arranged: false }]);
+		assert.ok(fixture.graphState.getState().nodePositions[file.id]);
 		assert.ok(findDescendantByClass(row, 'graph-detach-handle'));
+		assert.strictEqual(row.hasClass('is-arrangement-drag-source'), false);
 		assert.strictEqual(findDescendantByAttribute(
 			fixture.nodeLayer,
 			'data-graph-arrangement-preview-id',
 			file.id,
 		), undefined);
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), false);
+		fixture.renderer.dispose();
+	});
+
+	test('standalone File은 Parent가 아니라 원래 grouped File Group만 정렬 복귀 대상으로 사용한다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:arrangement-restore/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const project: Project = {
+			kind: 'project',
+			id: 'project:file-arrangement-restore',
+			name: 'file-arrangement-restore',
+			status: 'loaded',
+			children: files,
+		};
+		const file = files[1];
+
+		assert.ok(file);
+		const detachedPosition = { x: 820, y: 360 };
+		const requests: GraphNodeArrangementRequest[] = [];
+		const fixture = createRendererFixture(1, {
+			camera: { x: 0, y: 0, scale: 1 },
+			nodePositions: { [file.id]: detachedPosition },
+		}, {
+			onNodeArrangementChange: (request) => {
+				requests.push(request);
+				return true;
+			},
+		}, project);
+		const state = fixture.graphState.getState();
+		const unarrangedLayout = createGraphLayout(createSingleRootGraph(project), {
+			openedFolders: state.openedFolders,
+			unarrangedNodeIds: new Set([file.id]),
+		});
+
+		fixture.renderer.applyLayout(unarrangedLayout, state.nodePositions);
+		const standalone = fixture.getNode(file.id);
+		const parent = fixture.getNode(project.id);
+		const fileGroupId = createFileGroupId(project.id);
+		const fileGroup = fixture.getNode(fileGroupId);
+		const parentPosition = getLayoutNode(unarrangedLayout, project.id).position;
+		const fileGroupPosition = getLayoutNode(
+			unarrangedLayout,
+			fileGroupId,
+		).position;
+
+		standalone.dispatch('pointerdown', createPointerEvent(
+			standalone,
+			detachedPosition.x + 8,
+			detachedPosition.y + 8,
+		));
+		standalone.dispatch('pointermove', createPointerEvent(
+			standalone,
+			parentPosition.x + 8,
+			parentPosition.y + 8,
+		));
+		assert.strictEqual(parent.hasClass('is-arrangement-target'), false);
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), false);
+		standalone.dispatch('pointerup', createPointerEvent(
+			standalone,
+			parentPosition.x + 8,
+			parentPosition.y + 8,
+		));
+		assert.deepStrictEqual(requests, []);
+
+		const currentPosition = readTranslate(standalone.style.transform);
+
+		standalone.dispatch('pointerdown', createPointerEvent(
+			standalone,
+			currentPosition.x + 8,
+			currentPosition.y + 8,
+		));
+		standalone.dispatch('pointermove', createPointerEvent(
+			standalone,
+			fileGroupPosition.x + 8,
+			fileGroupPosition.y + 8,
+		));
+		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), true);
+		assert.strictEqual(parent.hasClass('is-arrangement-target'), false);
+		standalone.dispatch('pointerup', createPointerEvent(
+			standalone,
+			fileGroupPosition.x + 8,
+			fileGroupPosition.y + 8,
+		));
+
+		assert.deepStrictEqual(requests, [{ nodeId: file.id, arranged: true }]);
 		assert.strictEqual(fileGroup.hasClass('is-arrangement-target'), false);
 		fixture.renderer.dispose();
 	});

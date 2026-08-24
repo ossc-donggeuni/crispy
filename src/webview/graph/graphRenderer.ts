@@ -5,6 +5,8 @@ import {
 import {
 	createFileGroupId,
 	createGraphLayoutNodeId,
+	GRAPH_FILE_GROUP_NODE_WIDTH,
+	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 	getGraphLayoutRootId,
 	getGraphLayoutSourceId,
 	resolveGraphLayoutNodePosition,
@@ -60,6 +62,13 @@ type FileRowRenderer = {
 	readonly element: HTMLLIElement;
 	readonly dispose: () => void;
 };
+
+type FileArrangementDragInitializer = (
+	element: HTMLElement,
+	file: GraphFileNode,
+	fileGroupId: string,
+	onDragComplete: () => void,
+) => GraphDetachDrag;
 
 type BacklinkInitializer = (
 	element: HTMLElement,
@@ -179,6 +188,8 @@ export interface GraphSourceDragRequest {
 	readonly isIndependentOccurrence: boolean;
 	/** Pointer가 현재 actual Root의 기존 Backlink reattach zone에 있으면 Root ID다. */
 	readonly reattachTargetRootId?: string;
+	/** Pointer가 occurrence의 기존 정렬 복귀 zone에 있으면 true다. */
+	readonly isArrangementTarget?: boolean;
 	/** 실제 Graph Node drag일 때 다른 bound occurrence를 꺼낼 수 있는 시작 World 위치다. */
 	readonly startPosition?: GraphLayoutPosition;
 	/** Pointer 종료 시 Renderer가 가진 transient actual occurrence World 위치다. */
@@ -323,6 +334,8 @@ export function initializeGraphRenderer(
 		readonly wasUnarranged: boolean;
 		readonly dropZone?: GraphArrangementDropZone;
 		readonly placeholder?: HTMLElement;
+		readonly sourceElement?: HTMLElement;
+		readonly preview?: HTMLElement;
 		isDropZoneActive?: boolean;
 	} | undefined;
 	/** 정렬 Drag placeholder와 hover target 표시를 모두 제거한다. */
@@ -336,6 +349,10 @@ export function initializeGraphRenderer(
 		}
 
 		activeArrangementDrag.placeholder?.remove();
+		activeArrangementDrag.sourceElement?.classList.remove(
+			'is-arrangement-drag-source',
+		);
+		activeArrangementDrag.preview?.remove();
 		activeArrangementDrag = undefined;
 	};
 	/** 최신 World 위치와 Camera scale로 Node의 client rect를 계산한다. */
@@ -478,13 +495,70 @@ export function initializeGraphRenderer(
 			placeholder,
 		};
 	};
+	/** Grouped File Row의 원래 목록 target과 standalone 전환 preview를 준비한다. */
+	const beginFileArrangementDrag = (
+		file: GraphFileNode,
+		fileGroupId: string,
+		sourceElement: HTMLElement,
+	): HTMLElement | undefined => {
+		clearArrangementDrag();
+		const targetElement = nodeElements.get(fileGroupId);
+
+		if (!targetElement) {
+			return undefined;
+		}
+		const targetBounds = getNodeClientRect(fileGroupId);
+		const preview = ownerDocument.createElement('div');
+		const name = ownerDocument.createElement('span');
+
+		preview.className = 'graph-node graph-file-group-node graph-arrangement-drag-preview';
+		preview.setAttribute('data-graph-arrangement-preview-id', file.id);
+		preview.style.width = `${GRAPH_FILE_GROUP_NODE_WIDTH}px`;
+		preview.style.height = `${GRAPH_FILE_GROUP_STANDALONE_HEIGHT}px`;
+		name.className = 'graph-file-name';
+		name.textContent = file.name;
+		preview.append(name);
+		nodeLayer.append(preview);
+		sourceElement.classList.add('is-arrangement-drag-source');
+		activeArrangementDrag = {
+			nodeId: file.id,
+			wasUnarranged: false,
+			dropZone: targetBounds
+				? {
+					hitBounds: [targetBounds],
+					highlightElements: [targetElement],
+				}
+				: undefined,
+			sourceElement,
+			preview,
+		};
+		return preview;
+	};
+	/** Pointer 중심에 grouped File preview를 두고 standalone World 좌표를 반환한다. */
+	const moveFileArrangementPreview = (
+		preview: HTMLElement,
+		clientX: number,
+		clientY: number,
+	): GraphLayoutPosition => {
+		const layerBounds = nodeLayer.getBoundingClientRect();
+		const scale = graphState.getState().camera.scale;
+		const position = {
+			x: (clientX - layerBounds.left) / scale
+				- GRAPH_FILE_GROUP_NODE_WIDTH / 2,
+			y: (clientY - layerBounds.top) / scale
+				- GRAPH_FILE_GROUP_STANDALONE_HEIGHT / 2,
+		};
+
+		preview.style.transform = `translate(${position.x}px, ${position.y}px)`;
+		return position;
+	};
 	/** Pointer/Card가 정렬 목록에 들어왔는지 판별하고 목록의 모든 슬롯을 강조한다. */
 	const updateArrangementTarget = (
 		clientX: number,
 		clientY: number,
 	): boolean => {
 		const session = activeArrangementDrag;
-		const draggedBounds = session
+		const draggedBounds = session && !session.preview
 			? getNodeClientRect(session.nodeId)
 			: undefined;
 		const isTarget = session?.dropZone
@@ -1011,6 +1085,78 @@ export function initializeGraphRenderer(
 			);
 		}
 	};
+	/** Grouped File Row를 기존 standalone arrangement와 Task Scope Drop에 함께 연결한다. */
+	const initializeFileArrangementDrag: FileArrangementDragInitializer = (
+		element,
+		file,
+		fileGroupId,
+		onDragComplete,
+	) => {
+		const sourceNodeId = getGraphLayoutSourceId(file.id);
+		const rootId = getGraphLayoutRootId(file.id);
+		let preview: HTMLElement | undefined;
+		let position: GraphLayoutPosition | undefined;
+
+		return initializeGraphDetachDrag(element, sourceNodeId, {
+			canStart: () => interactions.canStartNodeBodyDrag?.(file.id) !== false,
+			onDragMove: ({ clientX, clientY }) => {
+				preview ??= beginFileArrangementDrag(file, fileGroupId, element);
+				if (preview) {
+					position = moveFileArrangementPreview(preview, clientX, clientY);
+				}
+				interactions.onSourceDragMove?.({
+					sourceNodeId,
+					occurrenceNodeId: file.id,
+					...(rootId ? { occurrenceRootId: rootId } : {}),
+					isIndependentOccurrence: false,
+					clientX,
+					clientY,
+				});
+				updateArrangementTarget(clientX, clientY);
+			},
+			onDrop: ({ clientX, clientY }) => {
+				const isArrangementTarget = updateArrangementTarget(clientX, clientY);
+				const result = interactions.onSourceDrop?.({
+					sourceNodeId,
+					occurrenceNodeId: file.id,
+					...(rootId ? { occurrenceRootId: rootId } : {}),
+					isIndependentOccurrence: false,
+					...(isArrangementTarget ? { isArrangementTarget: true } : {}),
+					clientX,
+					clientY,
+				});
+
+				return result === true || (
+					typeof result === 'object' && result !== null
+				);
+			},
+			onDetachDrop: ({ clientX, clientY }) => {
+				const shouldArrange = updateArrangementTarget(clientX, clientY);
+
+				if (!shouldArrange && position) {
+					const snapshot = graphState.getState();
+
+					graphState.setState({
+						camera: snapshot.camera,
+						nodePositions: {
+							...snapshot.nodePositions,
+							[file.id]: position,
+						},
+					});
+					interactions.onNodeArrangementChange?.({
+						nodeId: file.id,
+						arranged: false,
+					});
+				}
+			},
+			onDragComplete,
+			onDragCancel: () => {
+				interactions.onSourceDragCancel?.();
+				clearArrangementDrag();
+			},
+			consumeClick: false,
+		}, rootId);
+	};
 	/** 초기 렌더링과 Reflow 추가 경로에서 공통으로 Node와 interaction을 생성한다. */
 	const addNode = (layoutNode: GraphLayoutNode): void => {
 		const element = createNodeElement(
@@ -1079,6 +1225,7 @@ export function initializeGraphRenderer(
 					interactions,
 					rootNodeIds,
 					initializeBacklink,
+					initializeFileArrangementDrag,
 					options.nodeEffects,
 				);
 
@@ -1290,6 +1437,10 @@ export function initializeGraphRenderer(
 							clientX,
 							clientY,
 						);
+						const isArrangementTarget = updateArrangementTarget(
+							clientX,
+							clientY,
+						);
 						const bindingDropResult = bindingSourceId
 							? interactions.onSourceDrop?.({
 								sourceNodeId: bindingSourceId,
@@ -1298,6 +1449,9 @@ export function initializeGraphRenderer(
 									? { occurrenceRootId: getGraphLayoutRootId(layoutNode.id) }
 									: {}),
 								isIndependentOccurrence: rootNodeIds.has(layoutNode.id),
+								...(isArrangementTarget
+									? { isArrangementTarget: true }
+									: {}),
 								...(reattachTargetRootId
 									? { reattachTargetRootId }
 									: {}),
@@ -1374,10 +1528,7 @@ export function initializeGraphRenderer(
 						}
 
 						const arrangement = activeArrangementDrag;
-						const shouldArrange = updateArrangementTarget(
-							clientX,
-							clientY,
-						);
+						const shouldArrange = isArrangementTarget;
 						const wasUnarranged = arrangement?.wasUnarranged ?? false;
 
 						clearArrangementDrag();
@@ -2474,6 +2625,7 @@ function initializeFileGroupContent(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
+	initializeFileArrangementDrag: FileArrangementDragInitializer,
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
@@ -2518,6 +2670,8 @@ function initializeFileGroupContent(
 					interactions,
 					renderedRootNodeIds,
 					initializeBacklink,
+					initializeFileArrangementDrag,
+					renderedNode.id,
 					nodeEffects,
 					);
 
@@ -2638,6 +2792,8 @@ function createFileRow(
 	interactions: GraphRendererInteractions,
 	rootNodeIds: ReadonlySet<string>,
 	initializeBacklink: BacklinkInitializer,
+	initializeFileArrangementDrag: FileArrangementDragInitializer,
+	fileGroupId: string,
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
@@ -2677,25 +2833,17 @@ function createFileRow(
 	const sourceRowDrag = file.presentation === 'normal'
 		&& !rootNodeIds.has(file.id)
 		&& Boolean(
-			interactions.onSourceDragMove
+			interactions.onNodeArrangementChange
+			|| interactions.onSourceDragMove
 			|| interactions.onSourceDrop
 			|| interactions.onSourceDragCancel,
 		)
-		? initializeSourceDetachDrag(
+		? initializeFileArrangementDrag(
 			item,
-			sourceNodeId,
-			file.id,
-			rootId,
-			interactions,
-			sourceNodeId,
-			{
-				canStart: () => interactions.canStartNodeBodyDrag?.(file.id)
-					!== false,
-				consumeClick: false,
-				detachOnUnhandledDrop: false,
-				onDragComplete: () => {
-					suppressNextFileClick = true;
-				},
+			file,
+			fileGroupId,
+			() => {
+				suppressNextFileClick = true;
 			},
 		)
 		: undefined;

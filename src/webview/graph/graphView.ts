@@ -2463,7 +2463,10 @@ export function initializeGraphView(
 						);
 					}
 					applyTaskState();
-					return {};
+					// 원래 File Group 같은 기존 arrangement target은 Scope 해제만
+					// 처리한 뒤 Renderer의 실제 standalone → grouped 전환을 계속한다.
+					// 그 밖의 Region-out은 이 경로가 최종 World 위치를 소유한다.
+					return request.isArrangementTarget ? false : {};
 				}
 			}
 			return false;

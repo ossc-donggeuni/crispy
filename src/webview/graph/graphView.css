@@ -763,6 +763,28 @@ body.vscode-high-contrast-light .graph-viewport {
 	pointer-events: none;
 }
 
+.graph-file-item.is-arrangement-drag-source {
+	background: color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 8%,
+		transparent
+	);
+	box-shadow: inset 0 0 0 1px color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 34%,
+		transparent
+	);
+	opacity: 0.48;
+}
+
+.graph-arrangement-drag-preview {
+	z-index: 3;
+	align-items: center;
+	padding: 0 14px;
+	opacity: 0.9;
+	pointer-events: none;
+}
+
 .graph-node.is-arrangement-target,
 .graph-arrangement-placeholder.is-arrangement-target {
 	--graph-node-border-color: color-mix(
