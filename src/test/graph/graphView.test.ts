@@ -66,13 +66,14 @@ import {
 	TASK_EDGE_ACTION_ATTRIBUTE,
 	TASK_EDGE_ACTION_EDGE_ID_ATTRIBUTE,
 	TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE,
+	TASK_CONNECTION_STATE_ATTRIBUTE,
 	TASK_FLOW_STATE_ATTRIBUTE,
 	TASK_NODE_ACTION_ATTRIBUTE,
 	TASK_PORT_DIRECTION_ATTRIBUTE,
 } from '../../webview/task/taskRenderer';
 import {
 	createTaskGraphLayout,
-	TASK_BOUNDARY_NODE_HEIGHT,
+	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
 } from '../../webview/task/taskLayout';
 
@@ -126,8 +127,16 @@ suite('Graph View', () => {
 		assert.strictEqual(endElement.getAttribute(TASK_FLOW_STATE_ATTRIBUTE), 'incomplete');
 		assert.strictEqual(startElement.style.width, `${TASK_NODE_WIDTH}px`);
 		assert.strictEqual(endElement.style.width, startElement.style.width);
-		assert.strictEqual(startElement.style.height, `${TASK_BOUNDARY_NODE_HEIGHT}px`);
+		assert.strictEqual(startElement.style.height, `${TASK_NODE_HEIGHT}px`);
 		assert.strictEqual(endElement.style.height, startElement.style.height);
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
 		assert.strictEqual(
 			getDescendantByClass(startElement, 'task-node-title').textContent,
 			firstTask.title,
@@ -214,8 +223,9 @@ suite('Graph View', () => {
 
 		assert.ok(workPositions.every((position) => position?.x === 320));
 		for (let index = 1; index < workPositions.length; index += 1) {
-			assert.ok(
-				(workPositions[index]?.y ?? 0) - (workPositions[index - 1]?.y ?? 0) >= 132,
+			assert.strictEqual(
+				(workPositions[index]?.y ?? 0) - (workPositions[index - 1]?.y ?? 0),
+				104,
 			);
 		}
 
@@ -240,7 +250,24 @@ suite('Graph View', () => {
 		for (const work of works) {
 			const input = getTaskPort(root, task.id, work.id, 'input');
 			const output = getTaskPort(root, task.id, work.id, 'output');
+			const workNode = getTaskElement(
+				root,
+				'data-task-node-id',
+				work.id,
+				task.id,
+			);
 
+			assert.strictEqual(workNode.style.width, `${TASK_NODE_WIDTH}px`);
+			assert.strictEqual(workNode.style.height, `${TASK_NODE_HEIGHT}px`);
+			assert.strictEqual(
+				getDescendantByClass(workNode, 'task-node-title').textContent,
+				work.title,
+			);
+			assert.ok(getDescendantByAttribute(
+				workNode,
+				TASK_NODE_ACTION_ATTRIBUTE,
+				'remove-work',
+			));
 			assert.strictEqual(
 				input.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
 				true,
@@ -320,8 +347,36 @@ suite('Graph View', () => {
 			{},
 			[prepared],
 		);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			end.id,
+			task.id,
+		);
 
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
 		connectTaskPorts(root, task.id, start.id, workA.id);
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
 		connectTaskPorts(root, task.id, start.id, workB.id);
 		const previewSource = getTaskPort(root, task.id, start.id, 'output');
 
@@ -358,6 +413,10 @@ suite('Graph View', () => {
 		connectTaskPorts(root, task.id, workB.id, workC.id);
 		connectTaskPorts(root, task.id, workD.id, workC.id);
 		connectTaskPorts(root, task.id, workC.id, end.id);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
 		const connected = graphView.taskState.getTask(task.id);
 
 		assert.ok(connected);
@@ -532,8 +591,22 @@ suite('Graph View', () => {
 			[task, secondTask],
 		);
 		const edge = task.edges[0];
+		const endEdge = task.edges[1];
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const end = task.nodes.find((node) => node.kind === 'end');
 
-		assert.ok(edge);
+		assert.ok(edge && endEdge && start && end);
+		const startElement = getTaskElement(root, 'data-task-node-id', start.id, task.id);
+		const endElement = getTaskElement(root, 'data-task-node-id', end.id, task.id);
+
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
 		const edgeAction = getTaskEdgeAction(root, task.id, edge.id);
 		const disconnect = getDescendantByAttribute(
 			edgeAction,
@@ -564,6 +637,25 @@ suite('Graph View', () => {
 			getTaskElement(root, 'data-task-edge-id', edge.id, secondTask.id)
 				.getAttribute('data-task-id'),
 			secondTask.id,
+		);
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		const endDisconnect = getDescendantByAttribute(
+			getTaskEdgeAction(root, task.id, endEdge.id),
+			TASK_EDGE_ACTION_ATTRIBUTE,
+			'disconnect-edge',
+		);
+
+		endDisconnect.dispatch('click', createClickEvent(endDisconnect));
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
 		);
 
 		graphView.dispose();
@@ -652,7 +744,7 @@ suite('Graph View', () => {
 
 		assert.ok(updated);
 		assert.deepStrictEqual(updated.origin, task.origin);
-		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: -18 });
+		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: 20 });
 		assert.deepStrictEqual(updated.nodePositions[endNode.id], task.nodePositions[endNode.id]);
 		assertRenderedTaskGeometry(root, updated);
 
@@ -669,7 +761,7 @@ suite('Graph View', () => {
 
 		assert.ok(updated);
 		assert.deepStrictEqual(updated.origin, { x: 120, y: 80 });
-		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: -18 });
+		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: 20 });
 		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 40 });
 		assertRenderedTaskGeometry(root, updated);
 
@@ -735,7 +827,7 @@ suite('Graph View', () => {
 		performTaskDrag(workA, { x: 10, y: 10 }, { x: 40, y: 25 });
 		assert.deepStrictEqual(
 			graphView.taskState.getTask(taskA.id)?.nodePositions[workId],
-			{ x: 350, y: -23 },
+			{ x: 350, y: 15 },
 		);
 		assert.deepStrictEqual(
 			graphView.taskState.getTask(taskB.id)?.nodePositions[workId],
@@ -842,8 +934,21 @@ suite('Graph View', () => {
 		assert.match(taskViewCss, /\.task-connection-preview\s*\{[^}]*pointer-events:\s*none;/s);
 		assert.match(
 			taskViewCss,
-			/\.task-start-node\[data-task-flow-state=['"]incomplete['"]\],[^{]*\{[^}]*--graph-node-background:[^}]*62%/s,
+			/\.task-start-node\[data-task-connection-state=['"]disconnected['"]\]\s*\{[^}]*--vscode-editorWarning-foreground[^}]*--graph-node-background:[^}]*62%/s,
 		);
+		assert.match(
+			taskViewCss,
+			/\.task-start-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-testing-iconPassed[^}]*--graph-node-background:\s*var\(--graph-node-default-background\)/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-end-node\[data-task-connection-state=['"]disconnected['"]\]\s*\{[^}]*--vscode-charts-orange[^}]*--graph-node-background:[^}]*62%/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-end-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-focusBorder[^}]*--graph-node-background:\s*var\(--graph-node-default-background\)/s,
+		);
+		assert.match(taskViewCss, /\.task-work-node\s*>\s*\.task-node-description,[^{]*\{[^}]*display:\s*none;/s);
 		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);
 		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);
 	});
@@ -8210,7 +8315,7 @@ function createSerialRenderingTask(
 		nodePositions: {
 			...Object.fromEntries(works.map((work, index) => [
 				work.id,
-				{ x: 320 * (index + 1), y: -38 },
+				{ x: 320 * (index + 1), y: 0 },
 			])),
 			[end.id]: { x: 320 * (workCount + 1), y: 0 },
 		},
@@ -8301,7 +8406,7 @@ function createCollidingRenderingTask(
 		id: taskId,
 		nodePositions: {
 			...task.nodePositions,
-			[work.id]: { x: 320, y: -38 },
+			[work.id]: { x: 320, y: 0 },
 		},
 		nodes: [start, work, end],
 		edges: [{

@@ -94,10 +94,10 @@ suite('Task Domain', () => {
 		assert.strictEqual(works[0]?.title, 'First');
 		assert.strictEqual(works[1]?.title, 'New Work');
 		assert.deepStrictEqual(works.map((node) => fourth.nodePositions[node.id]), [
-			{ x: 320, y: -38 },
-			{ x: 320, y: 142 },
-			{ x: 320, y: 322 },
-			{ x: 320, y: 502 },
+			{ x: 320, y: 0 },
+			{ x: 320, y: 104 },
+			{ x: 320, y: 208 },
+			{ x: 320, y: 312 },
 		]);
 		assert.deepStrictEqual(fourth.edges, []);
 		assert.deepStrictEqual(validateTaskBlueprint(fourth), []);
@@ -118,7 +118,7 @@ suite('Task Domain', () => {
 		const newest = added?.nodes.at(-1);
 
 		assert.ok(added && newest?.kind === 'work');
-		assert.deepStrictEqual(added.nodePositions[newest.id], { x: 320, y: -38 });
+		assert.deepStrictEqual(added.nodePositions[newest.id], { x: 320, y: 0 });
 	});
 
 	test('Work/End explicit position을 Task별 immutable snapshot으로 갱신한다', () => {

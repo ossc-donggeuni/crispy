@@ -25,10 +25,14 @@ interface TaskLayoutNodeBase {
 	readonly height: number;
 }
 
+/** Start/End가 현재 Work Edge를 하나 이상 가지는지 나타내는 파생 상태다. */
+export type TaskBoundaryConnectionState = 'connected' | 'disconnected';
+
 /** TaskBlueprint 제목을 표시하는 시작 Layout Node다. */
 export interface TaskStartLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'start';
 	readonly title: string;
+	readonly connectionState: TaskBoundaryConnectionState;
 }
 
 /** Work Node의 표시 정보와 prompt를 제공하는 Layout Node다. */
@@ -44,6 +48,7 @@ export interface TaskWorkLayoutNode extends TaskLayoutNodeBase {
 export interface TaskEndLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'end';
 	readonly title: string;
+	readonly connectionState: TaskBoundaryConnectionState;
 }
 
 /** Task Renderer가 처리하는 Start, Work, End Layout Node다. */
@@ -79,10 +84,8 @@ export interface TaskGraphLayout {
 
 /** 모든 Task Card의 고정 폭이다. */
 export const TASK_NODE_WIDTH = 280;
-/** Start와 End 경계 Card가 공유하는 컴팩트한 고정 높이다. */
-export const TASK_BOUNDARY_NODE_HEIGHT = 56;
-/** Work Card의 고정 높이다. */
-export const TASK_WORK_NODE_HEIGHT = 132;
+/** 모든 Task Card가 공유하는 컴팩트한 고정 높이다. */
+export const TASK_NODE_HEIGHT = 56;
 const TASK_EDGE_MIN_CONTROL_OFFSET = 32;
 
 /**
@@ -111,8 +114,8 @@ export function createTaskGraphLayout(
 function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 	assertValidTaskBlueprint(task);
 	const flowState = getTaskFlowStatus(task);
+	const taskNodesById = new Map(task.nodes.map((node) => [node.id, node]));
 	const nodes: TaskLayoutNode[] = task.nodes.map((node) => {
-		const geometry = getTaskNodeGeometry(node);
 		const storedPosition = task.nodePositions[node.id];
 
 		if (node.kind !== 'start' && !storedPosition) {
@@ -130,8 +133,8 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				x: task.origin.x + localPosition.x,
 				y: task.origin.y + localPosition.y,
 			},
-			width: geometry.width,
-			height: geometry.height,
+			width: TASK_NODE_WIDTH,
+			height: TASK_NODE_HEIGHT,
 		};
 
 		if (node.kind === 'start') {
@@ -139,6 +142,10 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				...base,
 				kind: node.kind,
 				title: task.title,
+				connectionState: task.edges.some((edge) => (
+					edge.source === node.id
+					&& taskNodesById.get(edge.target)?.kind === 'work'
+				)) ? 'connected' : 'disconnected',
 			};
 		} else if (node.kind === 'work') {
 			return {
@@ -150,7 +157,15 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				canRemove: true,
 			};
 		} else {
-			return { ...base, kind: node.kind, title: task.title };
+			return {
+				...base,
+				kind: node.kind,
+				title: task.title,
+				connectionState: task.edges.some((edge) => (
+					edge.target === node.id
+					&& taskNodesById.get(edge.source)?.kind === 'work'
+				)) ? 'connected' : 'disconnected',
+			};
 		}
 	});
 	const nodesById = new Map(nodes.map((node) => [node.id, node]));
@@ -242,16 +257,4 @@ export function getCubicBezierPoint(
 			+ control2Weight * control2.y
 			+ endWeight * end.y,
 	};
-}
-
-/** Task Node kind에 대응하는 이번 단계의 고정 Card 크기를 반환한다. */
-function getTaskNodeGeometry(node: TaskNode): {
-	readonly width: number;
-	readonly height: number;
-} {
-	if (node.kind === 'work') {
-		return { width: TASK_NODE_WIDTH, height: TASK_WORK_NODE_HEIGHT };
-	}
-
-	return { width: TASK_NODE_WIDTH, height: TASK_BOUNDARY_NODE_HEIGHT };
 }

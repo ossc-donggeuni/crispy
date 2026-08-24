@@ -264,16 +264,16 @@ function addWorkNode(
 	};
 }
 
-/** x=320 lane에서 -38부터 180 간격의 첫 빈 위치를 찾는다. */
+/** x=320 lane에서 0부터 104 간격의 첫 빈 위치를 찾는다. */
 function findNextWorkPosition(
 	nodePositions: Readonly<Record<string, TaskNodePosition>>,
 ): TaskNodePosition {
-	let y = -38;
+	let y = 0;
 
 	while (Object.values(nodePositions).some((position) => (
 		position.x === 320 && position.y === y
 	))) {
-		y += 180;
+		y += 104;
 	}
 
 	return { x: 320, y };

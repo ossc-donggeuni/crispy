@@ -30,6 +30,8 @@ export const TASK_NODE_ACTION_ATTRIBUTE = 'data-task-node-action';
 export const TASK_PORT_DIRECTION_ATTRIBUTE = 'data-task-port-direction';
 /** Task의 ready/incomplete 표시 상태를 Node DOM에 전달하는 attribute다. */
 export const TASK_FLOW_STATE_ATTRIBUTE = 'data-task-flow-state';
+/** START/END의 Work Edge 연결 파생 상태를 DOM에 전달하는 attribute다. */
+export const TASK_CONNECTION_STATE_ATTRIBUTE = 'data-task-connection-state';
 
 /** Task Node/Edge DOM을 ID 기반으로 갱신하고 정리하는 lifecycle 경계다. */
 export interface TaskRenderer {
@@ -899,6 +901,11 @@ function syncTaskNodeElement(
 	element.setAttribute(TASK_NODE_ID_ATTRIBUTE, node.id);
 	element.setAttribute(TASK_NODE_KIND_ATTRIBUTE, node.kind);
 	element.setAttribute(TASK_FLOW_STATE_ATTRIBUTE, node.flowState);
+	if (node.kind === 'work') {
+		element.removeAttribute(TASK_CONNECTION_STATE_ATTRIBUTE);
+	} else {
+		element.setAttribute(TASK_CONNECTION_STATE_ATTRIBUTE, node.connectionState);
+	}
 	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	element.setAttribute('role', 'group');
 	element.setAttribute('aria-label', createTaskNodeAriaLabel(node));

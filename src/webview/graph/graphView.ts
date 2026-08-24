@@ -68,7 +68,7 @@ import {
 } from '../../task';
 import {
 	createTaskGraphLayout,
-	TASK_BOUNDARY_NODE_HEIGHT,
+	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
 	type TaskLayoutNode,
 } from '../task/taskLayout';
@@ -109,7 +109,7 @@ function createTaskOriginInVisibleArea(
 	const center = camera.viewportToWorld(visibleArea.center);
 	const baseOrigin = {
 		x: center.x - DEFAULT_TASK_LAYOUT_WIDTH / 2,
-		y: center.y - TASK_BOUNDARY_NODE_HEIGHT / 2,
+		y: center.y - TASK_NODE_HEIGHT / 2,
 	};
 
 	for (let slot = 0; slot <= tasks.length; slot += 1) {

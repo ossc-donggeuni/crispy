@@ -1,9 +1,9 @@
 .task-node {
 	display: flex;
 	flex-direction: column;
-	gap: 5px;
+	gap: 3px;
 	justify-content: center;
-	padding: 13px 16px;
+	padding: 7px 16px;
 	cursor: grab;
 }
 
@@ -16,21 +16,6 @@
 	cursor: grabbing;
 }
 
-.task-start-node,
-.task-end-node {
-	gap: 3px;
-	padding: 7px 16px;
-}
-
-.task-start-node {
-	--graph-node-outline-color: color-mix(
-		in srgb,
-		var(--vscode-testing-iconPassed, #73c991) 58%,
-		transparent
-	);
-	--graph-node-border-color: var(--graph-node-outline-color);
-}
-
 .task-work-node {
 	--graph-node-outline-color: color-mix(
 		in srgb,
@@ -40,18 +25,21 @@
 	--graph-node-border-color: var(--graph-node-outline-color);
 }
 
+.task-work-node > .task-node-description,
+.task-work-node > .task-node-prompt {
+	display: none;
+}
+
+.task-start-node,
 .task-end-node {
-	--graph-node-outline-color: color-mix(
-		in srgb,
-		var(--vscode-descriptionForeground, #9d9d9d) 60%,
-		transparent
-	);
 	--graph-node-border-color: var(--graph-node-outline-color);
 }
 
-/* Incomplete feedback는 Card surface/body만 낮추고 Port와 Action은 선명하게 유지한다. */
-.task-start-node[data-task-flow-state='incomplete'],
-.task-end-node[data-task-flow-state='incomplete'] {
+.task-start-node[data-task-connection-state='disconnected'] {
+	--graph-node-outline-color: var(
+		--vscode-editorWarning-foreground,
+		var(--vscode-notificationsWarningIcon-foreground, #cca700)
+	);
 	--graph-node-background: color-mix(
 		in srgb,
 		var(--graph-node-default-background) 62%,
@@ -60,11 +48,26 @@
 	--graph-node-shadow: none;
 }
 
-.task-start-node[data-task-flow-state='incomplete'] > .task-node-kind,
-.task-start-node[data-task-flow-state='incomplete'] > .task-node-title,
-.task-end-node[data-task-flow-state='incomplete'] > .task-node-kind,
-.task-end-node[data-task-flow-state='incomplete'] > .task-node-title {
-	opacity: 0.62;
+.task-start-node[data-task-connection-state='connected'] {
+	--graph-node-outline-color: var(--vscode-testing-iconPassed, #73c991);
+	--graph-node-background: var(--graph-node-default-background);
+	--graph-node-shadow: var(--graph-node-default-shadow);
+}
+
+.task-end-node[data-task-connection-state='disconnected'] {
+	--graph-node-outline-color: var(--vscode-charts-orange, #d18616);
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-node-default-background) 62%,
+		transparent
+	);
+	--graph-node-shadow: none;
+}
+
+.task-end-node[data-task-connection-state='connected'] {
+	--graph-node-outline-color: var(--vscode-focusBorder, #007fd4);
+	--graph-node-background: var(--graph-node-default-background);
+	--graph-node-shadow: var(--graph-node-default-shadow);
 }
 
 .task-node-kind {

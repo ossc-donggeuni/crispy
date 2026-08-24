@@ -8,9 +8,8 @@ import {
 	createTaskEdgeGeometry,
 	createTaskGraphLayout,
 	getCubicBezierPoint,
-	TASK_BOUNDARY_NODE_HEIGHT,
+	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
-	TASK_WORK_NODE_HEIGHT,
 } from '../../webview/task/taskLayout';
 
 suite('Task Layout', () => {
@@ -24,26 +23,32 @@ suite('Task Layout', () => {
 		const workLayout = layout.nodes.find((node) => node.id === work.id);
 		const endLayout = layout.nodes.find((node) => node.id === end.id);
 
-		assert.ok(startLayout && workLayout?.kind === 'work' && endLayout);
+		assert.ok(
+			startLayout?.kind === 'start'
+			&& workLayout?.kind === 'work'
+			&& endLayout?.kind === 'end',
+		);
 		assert.deepStrictEqual(startLayout.localPosition, { x: 0, y: 0 });
-		assert.deepStrictEqual(workLayout.localPosition, { x: 320, y: -38 });
+		assert.deepStrictEqual(workLayout.localPosition, { x: 320, y: 0 });
 		assert.deepStrictEqual(endLayout.localPosition, { x: 640, y: 0 });
 		assert.deepStrictEqual(startLayout.position, { x: 120, y: -40 });
-		assert.deepStrictEqual(workLayout.position, { x: 440, y: -78 });
+		assert.deepStrictEqual(workLayout.position, { x: 440, y: -40 });
 		assert.deepStrictEqual(endLayout.position, { x: 760, y: -40 });
 		assert.ok(layout.nodes.every((node) => node.flowState === 'ready'));
 		assert.strictEqual(startLayout.width, TASK_NODE_WIDTH);
-		assert.strictEqual(startLayout.height, TASK_BOUNDARY_NODE_HEIGHT);
+		assert.strictEqual(startLayout.height, TASK_NODE_HEIGHT);
 		assert.strictEqual(workLayout.width, TASK_NODE_WIDTH);
-		assert.strictEqual(workLayout.height, TASK_WORK_NODE_HEIGHT);
+		assert.strictEqual(workLayout.height, TASK_NODE_HEIGHT);
 		assert.strictEqual(workLayout.canRemove, true);
 		assert.strictEqual(endLayout.width, TASK_NODE_WIDTH);
-		assert.strictEqual(endLayout.height, TASK_BOUNDARY_NODE_HEIGHT);
+		assert.strictEqual(endLayout.height, TASK_NODE_HEIGHT);
 		assert.strictEqual(startLayout.width, endLayout.width);
-		assert.strictEqual(startLayout.height, endLayout.height);
-		assert.ok(startLayout.height < workLayout.height / 2);
+		assert.strictEqual(startLayout.height, workLayout.height);
+		assert.strictEqual(workLayout.height, endLayout.height);
 		assert.strictEqual(startLayout.title, 'Ready Task');
 		assert.strictEqual(endLayout.title, startLayout.title);
+		assert.strictEqual(startLayout.connectionState, 'connected');
+		assert.strictEqual(endLayout.connectionState, 'connected');
 		assert.deepStrictEqual(layout.edges.map((edge) => ({
 			id: edge.id,
 			taskId: edge.taskId,
@@ -87,6 +92,8 @@ suite('Task Layout', () => {
 		assert.deepStrictEqual(end.position, { x: 670, y: 40 });
 		assert.strictEqual(start.title, 'Incomplete Task');
 		assert.strictEqual(end.title, start.title);
+		assert.strictEqual(start.connectionState, 'disconnected');
+		assert.strictEqual(end.connectionState, 'disconnected');
 	});
 
 	test('두 Anchor의 horizontal cubic geometry와 실제 t=0.5 midpoint를 계산한다', () => {
@@ -142,9 +149,14 @@ suite('Task Layout', () => {
 			...connected,
 			edges: connected.edges.slice(0, 1),
 		};
+		const endOnlyConnected: TaskBlueprint = {
+			...connected,
+			edges: connected.edges.slice(1),
+		};
 		const disconnectedLayout = createTaskGraphLayout([disconnected]);
 		const connectedLayout = createTaskGraphLayout([connected]);
 		const partialLayout = createTaskGraphLayout([partiallyConnected]);
+		const endOnlyLayout = createTaskGraphLayout([endOnlyConnected]);
 
 		for (const node of connected.nodes) {
 			const disconnectedNode = disconnectedLayout.nodes.find(
@@ -170,6 +182,22 @@ suite('Task Layout', () => {
 		assert.ok(partialLayout.nodes.every((node) => (
 			node.flowState === 'incomplete'
 		)));
+		assert.deepStrictEqual(getBoundaryConnectionStates(disconnectedLayout), [
+			['start', 'disconnected'],
+			['end', 'disconnected'],
+		]);
+		assert.deepStrictEqual(getBoundaryConnectionStates(partialLayout), [
+			['start', 'connected'],
+			['end', 'disconnected'],
+		]);
+		assert.deepStrictEqual(getBoundaryConnectionStates(endOnlyLayout), [
+			['start', 'disconnected'],
+			['end', 'connected'],
+		]);
+		assert.deepStrictEqual(getBoundaryConnectionStates(connectedLayout), [
+			['start', 'connected'],
+			['end', 'connected'],
+		]);
 	});
 
 	test('Single Port를 공유하는 Branch/Join Edge endpoint를 분산하지 않는다', () => {
@@ -225,6 +253,10 @@ suite('Task Layout', () => {
 			));
 		}
 		assert.ok(layout.nodes.every((node) => node.flowState === 'ready'));
+		assert.deepStrictEqual(getBoundaryConnectionStates(layout), [
+			['start', 'connected'],
+			['end', 'connected'],
+		]);
 	});
 
 	test('Work/End 위치 변경 뒤 모든 incident Edge가 최신 단일 Port 중심을 공유한다', () => {
@@ -251,11 +283,11 @@ suite('Task Layout', () => {
 		assert.strictEqual(endIncoming.length, 2);
 		assert.deepStrictEqual(
 			joinIncoming.map((edge) => edge.geometry.end),
-			Array.from({ length: 3 }, () => ({ x: 800, y: 297 })),
+			Array.from({ length: 3 }, () => ({ x: 800, y: 259 })),
 		);
 		assert.deepStrictEqual(
 			joinOutgoing.map((edge) => edge.geometry.start),
-			Array.from({ length: 2 }, () => ({ x: 1080, y: 297 })),
+			Array.from({ length: 2 }, () => ({ x: 1080, y: 259 })),
 		);
 		assert.deepStrictEqual(
 			endIncoming.map((edge) => edge.geometry.end),
@@ -330,6 +362,14 @@ function assertLayoutEdgesUsePortCenters(
 	}
 }
 
+function getBoundaryConnectionStates(
+	layout: ReturnType<typeof createTaskGraphLayout>,
+): Array<readonly ['start' | 'end', 'connected' | 'disconnected']> {
+	return layout.nodes.flatMap((node) => node.kind === 'work'
+		? []
+		: [[node.kind, node.connectionState] as const]);
+}
+
 function assertGeometryDelta(
 	initialLayout: ReturnType<typeof createTaskGraphLayout>,
 	movedLayout: ReturnType<typeof createTaskGraphLayout>,
@@ -370,7 +410,7 @@ function createReadyTask(
 		description: '',
 		origin,
 		nodePositions: {
-			[work.id]: { x: 320, y: -38 },
+			[work.id]: { x: 320, y: 0 },
 			[end.id]: { x: 640, y: 0 },
 		},
 		nodes: [start, work, end],
@@ -405,11 +445,11 @@ function createBranchTask(
 		description: '',
 		origin,
 		nodePositions: {
-			[workA.id]: { x: 320, y: -218 },
-			[workB.id]: { x: 320, y: -38 },
-			[workC.id]: { x: 320, y: 142 },
-			[join.id]: { x: 640, y: -38 },
-			[workD.id]: { x: 960, y: -128 },
+			[workA.id]: { x: 320, y: -104 },
+			[workB.id]: { x: 320, y: 0 },
+			[workC.id]: { x: 320, y: 104 },
+			[join.id]: { x: 640, y: 0 },
+			[workD.id]: { x: 960, y: -52 },
 			[workE.id]: { x: 960, y: 52 },
 			[end.id]: { x: 1280, y: 0 },
 		},
