@@ -64,6 +64,8 @@ function createHost(
 	return {
 		host: new TerminalHost({
 			...options,
+			resolveAgentAutoRunInput: options.resolveAgentAutoRunInput
+				?? (async () => undefined),
 			workspaceResolver: options.workspaceResolver
 				?? (() => ({ ok: true, root })),
 			processTreeController: options.processTreeController

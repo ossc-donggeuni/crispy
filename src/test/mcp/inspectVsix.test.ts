@@ -21,7 +21,7 @@ const {
 suite('MCP VSIX bundle dependency inspection', () => {
 	test('extension manifest는 limited Workspace capability와 restricted CLI 설정을 선언한다', () => {
 		const manifest = JSON.parse(
-			readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
+			readFileSync(join(__dirname, '../../../package.json'), 'utf8'),
 		) as {
 			readonly capabilities?: {
 				readonly untrustedWorkspaces?: unknown;

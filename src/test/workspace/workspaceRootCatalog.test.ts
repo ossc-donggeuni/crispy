@@ -15,7 +15,7 @@ suite('Workspace Root Catalog', () => {
 		]);
 
 		assert.deepStrictEqual(
-			createWorkspaceRootCatalog(snapshot, true, 'linux'),
+			createWorkspaceRootCatalog(snapshot, true),
 			[{
 				id: createWorkspaceRootId(uri),
 				name: 'app',
@@ -88,7 +88,7 @@ suite('Workspace Root Catalog', () => {
 			createRoot('long', longUri),
 			createRoot('sibling', siblingUri),
 		]);
-		const catalog = createWorkspaceRootCatalog(snapshot, true, 'linux');
+		const catalog = createWorkspaceRootCatalog(snapshot, true);
 
 		assert.ok(catalog[0] && catalog[0].id.length > 16_384);
 		assert.strictEqual(catalog[0]?.reason, 'workspace_virtual_unsupported');
