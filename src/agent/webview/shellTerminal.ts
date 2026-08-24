@@ -24,6 +24,9 @@ export const TERMINAL_EXITED_OVERLAY_TITLE = 'Terminal exited';
 /** 시작 실패를 알리는 덮개 제목이며 실행 계약 정보를 포함하지 않는다. */
 export const TERMINAL_START_FAILED_OVERLAY_TITLE = 'Unable to start terminal';
 
+/** switchAccepted 직후부터 새 PTY가 started 될 때까지 표시하는 비대화형 상태다. */
+export const TERMINAL_STARTING_OVERLAY_TITLE = 'Starting agent…';
+
 /** 재시작 요청 버튼에 표시하는 고정 문구다. */
 export const TERMINAL_RESTART_BUTTON_LABEL = 'Restart';
 
@@ -73,6 +76,7 @@ interface XtermTerminal {
  * Host가 제공한 안전한 종료 정보와 고정 오류 메시지만 값으로 가진다.
  */
 export type TerminalOverlayState =
+	| { readonly kind: 'starting' }
 	| {
 		readonly kind: 'exited';
 		readonly exitCode?: number;
@@ -203,6 +207,9 @@ function describeTerminalOverlayState(state: TerminalOverlayState): string {
 	if (state.kind === 'error') {
 		return state.message;
 	}
+	if (state.kind === 'starting') {
+		return '';
+	}
 
 	const details: string[] = [];
 	if (state.exitCode !== undefined) {
@@ -248,10 +255,13 @@ function createDefaultOverlayView(
 		show(state): void {
 			title.textContent = state.kind === 'exited'
 				? TERMINAL_EXITED_OVERLAY_TITLE
-				: TERMINAL_START_FAILED_OVERLAY_TITLE;
+				: state.kind === 'starting'
+					? TERMINAL_STARTING_OVERLAY_TITLE
+					: TERMINAL_START_FAILED_OVERLAY_TITLE;
 			detail.textContent = describeTerminalOverlayState(state);
 			detail.hidden = detail.textContent.length === 0;
-			restartButton.hidden = state.kind === 'error' && !state.canRestart;
+			restartButton.hidden = state.kind === 'starting'
+				|| (state.kind === 'error' && !state.canRestart);
 			overlay.replaceChildren(panel);
 			overlay.setAttribute('role', state.kind === 'error' ? 'alert' : 'status');
 			overlay.hidden = false;
@@ -445,7 +455,11 @@ export function initializeShellTerminal(
 		try {
 			overlayView?.show(state);
 			overlayVisible = true;
-			surface.dataset.state = state.kind === 'exited' ? 'exited' : 'error';
+			surface.dataset.state = state.kind === 'starting'
+				? 'starting'
+				: state.kind === 'exited'
+					? 'exited'
+					: 'error';
 		} catch {
 			/** 덮개 렌더링 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다. */
 		}
@@ -554,7 +568,7 @@ export function initializeShellTerminal(
 					} catch {
 						/** 이전 buffer 제거 실패와 무관하게 input session ownership은 해제된다. */
 					}
-					surface.dataset.state = 'starting';
+					showOverlay({ kind: 'starting' });
 					break;
 				case 'terminal.starting':
 					if (message.tabId !== tabId) {
@@ -564,7 +578,7 @@ export function initializeShellTerminal(
 					startingSessionId = message.sessionId;
 					restartSessionId = undefined;
 					restartRequested = false;
-					surface.dataset.state = 'starting';
+					showOverlay({ kind: 'starting' });
 					break;
 				case 'terminal.started':
 					if (

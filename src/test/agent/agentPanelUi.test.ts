@@ -8,6 +8,7 @@ import {
 } from '../../agent/UI/agentPanelUi';
 import { UNSELECTED_TAB_LABEL } from '../../agent/UI/agentProviders';
 import { PROVIDER_IDS } from '../../agent/protocol';
+import type { WorkspaceRootCatalogEntry } from '../../workspace/workspaceRootCatalog';
 import {
 	FakeAgentElement,
 	FakeDocumentEvents,
@@ -56,7 +57,18 @@ interface PanelFixture {
 }
 
 /** Agent UI를 DOM 대역 위에서 초기화한다. */
-function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
+const DEFAULT_WORKSPACE_CATALOG: readonly WorkspaceRootCatalogEntry[] = [{
+	id: 'workspace-root:file:///workspace',
+	name: 'workspace',
+	description: 'file:///workspace',
+	selectable: true,
+}];
+
+function createFixture(
+	callbacks: AgentPanelUiCallbacks = {},
+	workspaceRootCatalog: readonly WorkspaceRootCatalogEntry[] =
+		DEFAULT_WORKSPACE_CATALOG,
+): PanelFixture {
 	const topBar = new FakeAgentElement();
 	const tabStrip = new FakeAgentElement();
 	const tabMenuHost = new FakeAgentElement();
@@ -81,6 +93,7 @@ function createFixture(callbacks: AgentPanelUiCallbacks = {}): PanelFixture {
 		},
 		callbacks,
 		dependencies,
+		{ initialWorkspaceRootCatalog: workspaceRootCatalog },
 	);
 
 	return {
@@ -116,6 +129,16 @@ function selectProvider(
 		.find((element) => element.dataset.providerId === providerId);
 	assert.strictEqual(option !== undefined, true);
 	option?.click();
+}
+
+/** Agent 선택 card의 Workspace Picker에서 root 하나를 명시적으로 고른다. */
+function selectWorkspace(
+	providerPicker: FakeAgentElement,
+	workspaceRootId: string,
+): void {
+	const picker = requireElement(providerPicker, 'agent-workspace-picker');
+	picker.value = workspaceRootId;
+	picker.dispatch('change');
 }
 
 /** 현재 탭 strip에 표시된 라벨 목록을 반환한다. */
@@ -162,6 +185,18 @@ suite('Agent Panel UI', () => {
 			fixture.providerPicker.find('agent-provider-picker-hints'),
 			undefined,
 		);
+		assert.strictEqual(fixture.topBar.find('agent-workspace-picker'), undefined);
+		const workspacePicker = requireElement(
+			fixture.providerPicker,
+			'agent-workspace-picker',
+		);
+		const workspaceOption = workspacePicker.children[1];
+		assert.strictEqual(workspaceOption?.textContent, 'workspace');
+		assert.strictEqual(workspaceOption?.title, 'file:///workspace');
+		assert.strictEqual(
+			workspaceOption?.getAttribute('aria-label'),
+			'workspace, file:///workspace',
+		);
 	});
 
 	test('provider는 초기 포커스와 방향키 탐색 없이 직접 선택한다', () => {
@@ -182,6 +217,261 @@ suite('Agent Panel UI', () => {
 			undefined,
 		]);
 		assert.deepStrictEqual(options.map((option) => option.focusCount), [0, 0, 0]);
+	});
+
+	test('Workspace Picker는 다중 root를 명시 선택하고 pending 동안 provider와 root를 잠근다', () => {
+		const selections: Array<{
+			tabId: string;
+			providerId: string;
+			workspaceRootId: string;
+		}> = [];
+		const catalog: readonly WorkspaceRootCatalogEntry[] = [
+			{
+				id: 'workspace-root:file:///repo/alpha',
+				name: 'repo',
+				description: 'file:///repo/alpha',
+				selectable: true,
+			},
+			{
+				id: 'workspace-root:file:///repo/beta',
+				name: 'repo',
+				description: 'file:///repo/beta',
+				selectable: true,
+			},
+		];
+		const fixture = createFixture({
+			onProviderSelected: (tabId, providerId, workspaceRootId) => {
+				selections.push({ tabId, providerId, workspaceRootId });
+				return 9;
+			},
+		}, catalog);
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		const picker = requireElement(fixture.providerPicker, 'agent-workspace-picker');
+		const providerOptions = fixture.providerPicker.findAll('agent-provider-option');
+
+		assert.strictEqual(picker.value, '');
+		assert.strictEqual(picker.disabled, false);
+		assert.deepStrictEqual(
+			fixture.providerPicker.findAll('agent-workspace-picker').flatMap(
+				(entry) => entry.children.slice(1).map((option) => option.textContent),
+			),
+			['repo — file:///repo/alpha', 'repo — file:///repo/beta'],
+		);
+		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
+			true,
+			true,
+			true,
+		]);
+
+		selectWorkspace(fixture.providerPicker, 'workspace-root:file:///repo/beta');
+		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
+			false,
+			false,
+			false,
+		]);
+		selectProvider(fixture.providerPicker, 'claude');
+
+		assert.deepStrictEqual(selections, [{
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///repo/beta',
+		}]);
+		assert.strictEqual(picker.disabled, true);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'unassigned',
+			selectedWorkspaceRootId: 'workspace-root:file:///repo/beta',
+			pendingSwitch: {
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///repo/beta',
+				switchAttemptId: 9,
+			},
+		});
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///repo/alpha',
+			switchAttemptId: 9,
+			assignmentRevision: 1,
+		}), false);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///repo/beta',
+			switchAttemptId: 9,
+			assignmentRevision: 1,
+		}), true);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'assigned',
+			assignment: {
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///repo/beta',
+			},
+			assignmentRevision: 1,
+			pendingSwitch: null,
+		});
+		assert.strictEqual(picker.disabled, true, 'assigned root는 Reset 전까지 잠긴다.');
+		const tabButton = requireElement(fixture.tabStrip, 'agent-tab-select');
+		assert.strictEqual(tabButton.title, 'Claude Code #1 — file:///repo/beta');
+		assert.strictEqual(
+			tabButton.getAttribute('aria-label'),
+			'Claude Code, Claude Code #1, Workspace file:///repo/beta',
+		);
+	});
+
+	test('Catalog refresh는 unassigned 단일 root만 자동 선택하고 missing assignment는 synthetic entry로 유지한다', () => {
+		const fixture = createFixture({ onProviderSelected: () => 4 }, [
+			{
+				id: 'workspace-root:file:///repo/a',
+				name: 'repo-a',
+				description: 'file:///repo/a',
+				selectable: true,
+			},
+			{
+				id: 'workspace-root:file:///repo/b',
+				name: 'repo-b',
+				description: 'file:///repo/b',
+				selectable: true,
+			},
+		]);
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		let assignmentState = fixture.controller.getAssignmentState(tabId);
+		assert.strictEqual(
+			assignmentState?.kind === 'unassigned'
+				? assignmentState.selectedWorkspaceRootId
+				: undefined,
+			null,
+		);
+
+		fixture.controller.updateWorkspaceRootCatalog([{
+			id: 'workspace-root:file:///repo/b',
+			name: 'repo-b',
+			description: 'file:///repo/b',
+			selectable: true,
+		}]);
+		assignmentState = fixture.controller.getAssignmentState(tabId);
+		assert.strictEqual(
+			assignmentState?.kind === 'unassigned'
+				? assignmentState.selectedWorkspaceRootId
+				: undefined,
+			'workspace-root:file:///repo/b',
+		);
+		selectProvider(fixture.providerPicker, 'codex');
+		fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///repo/b',
+			switchAttemptId: 4,
+			assignmentRevision: 1,
+		});
+
+		fixture.controller.updateWorkspaceRootCatalog([]);
+		const picker = requireElement(fixture.providerPicker, 'agent-workspace-picker');
+		const synthetic = picker.children.find(
+			(option) => option.dataset.reason === 'workspace_root_unavailable',
+		);
+		assert.strictEqual(synthetic?.value, 'workspace-root:file:///repo/b');
+		assert.strictEqual(synthetic?.disabled, true);
+		assert.strictEqual(
+			synthetic?.textContent,
+			'repo-b (Workspace is no longer available)',
+		);
+		assert.strictEqual(synthetic?.title, 'file:///repo/b');
+		assert.strictEqual(
+			synthetic?.getAttribute('aria-label'),
+			'repo-b, file:///repo/b',
+		);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'assigned',
+			assignment: {
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///repo/b',
+			},
+			assignmentRevision: 1,
+			pendingSwitch: null,
+		});
+	});
+
+	test('provider만 바꿀 때 committed Workspace를 유지하고 실패하면 기존 assignment를 복원한다', () => {
+		let attempt = 0;
+		const selections: Array<{ providerId: string; workspaceRootId: string }> = [];
+		const fixture = createFixture({
+			onProviderSelected: (_tabId, providerId, workspaceRootId) => {
+				selections.push({ providerId, workspaceRootId });
+				attempt += 1;
+				return attempt;
+			},
+		});
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		selectProvider(fixture.providerPicker, 'codex');
+		fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 1,
+			assignmentRevision: 1,
+		});
+
+		requireElement(fixture.topBar, 'agent-change-provider').click();
+		assert.strictEqual(fixture.providerPicker.hidden, false);
+		assert.strictEqual(
+			requireElement(fixture.providerPicker, 'agent-workspace-picker').disabled,
+			true,
+		);
+		selectProvider(fixture.providerPicker, 'claude');
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'assigned',
+			assignment: {
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///workspace',
+			},
+			assignmentRevision: 1,
+			pendingSwitch: {
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///workspace',
+				switchAttemptId: 2,
+			},
+		});
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId,
+			sessionId: null,
+			code: 'workspace_untrusted',
+			message: 'Workspace unavailable',
+			canRestart: false,
+			switchAttemptId: 2,
+		});
+		assert.strictEqual(fixture.providerPicker.hidden, true);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, 'codex');
+
+		requireElement(fixture.topBar, 'agent-change-provider').click();
+		selectProvider(fixture.providerPicker, 'claude');
+		fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 3,
+			assignmentRevision: 2,
+		});
+		assert.deepStrictEqual(selections, [
+			{ providerId: 'codex', workspaceRootId: 'workspace-root:file:///workspace' },
+			{ providerId: 'claude', workspaceRootId: 'workspace-root:file:///workspace' },
+			{ providerId: 'claude', workspaceRootId: 'workspace-root:file:///workspace' },
+		]);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'assigned',
+			assignment: {
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///workspace',
+			},
+			assignmentRevision: 2,
+			pendingSwitch: null,
+		});
 	});
 
 	test('provider 요청이 수락되면 탭에 배정하고 중앙 선택기를 숨긴다', () => {
@@ -286,6 +576,59 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(attempt, 2);
 	});
 
+	test('pending switch를 Reset하면 barrier 이전 accepted와 correlated error를 모두 무시한다', async () => {
+		const resets: string[] = [];
+		const fixture = createFixture({
+			onProviderSelected: () => 12,
+			onAgentReselectionRequested: (tabId) => {
+				resets.push(tabId);
+				return true;
+			},
+		});
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		selectProvider(fixture.providerPicker, 'codex');
+		const reset = requireElement(fixture.topBar, 'agent-restart-session');
+		assert.strictEqual(reset.disabled, false);
+
+		reset.click();
+		fixture.dialog.answer(true);
+		await flushMicrotasks();
+		assert.deepStrictEqual(resets, [tabId]);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'resetting',
+			previousAssignment: null,
+			resetBarrierAttemptId: 12,
+		});
+		assert.strictEqual(reset.disabled, true);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 12,
+			assignmentRevision: 1,
+		}), false);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId,
+			sessionId: null,
+			code: 'workspace_untrusted',
+			message: 'stale failure',
+			canRestart: false,
+			switchAttemptId: 12,
+		}), false);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.resetCompleted',
+			tabId,
+			assignmentRevision: 2,
+		}), true);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'unassigned',
+			selectedWorkspaceRootId: null,
+			pendingSwitch: null,
+		});
+	});
+
 	test('Reset barrier는 늦은 accepted/error의 Terminal 전달과 provider 부활을 차단한다', async () => {
 		const resets: string[] = [];
 		let switchAttemptId = 2;
@@ -340,6 +683,7 @@ suite('Agent Panel UI', () => {
 			assignmentRevision: 1,
 		}), false);
 
+		selectWorkspace(fixture.providerPicker, 'workspace-root:file:///workspace');
 		selectProvider(fixture.providerPicker, 'claude');
 		assert.strictEqual(switchAttemptId, 4);
 		assert.strictEqual(fixture.controller.handleHostMessage({
@@ -835,7 +1179,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(snapshot.activeTabId, second);
 		assert.strictEqual(
 			fixture.tabStrip.findAll('agent-tab-select')[0].getAttribute('aria-label'),
-			'Codex, Codex #1, 고정됨',
+			'Codex, Codex #1, Workspace file:///workspace, 고정됨',
 		);
 		assert.strictEqual(
 			fixture.tabStrip.findAll('agent-tab')[1].dataset.pinnedBoundary,

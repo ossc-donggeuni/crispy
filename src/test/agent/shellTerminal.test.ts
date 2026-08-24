@@ -499,6 +499,7 @@ suite('Shell Terminal Webview', () => {
 
 	test('switchAccepted 즉시 이전 session input을 차단하고 새 starting session만 수락한다', () => {
 		const terminal = new FakeTerminal();
+		const overlayView = new FakeOverlayView();
 		const messages: unknown[] = [];
 		const elements = createElements();
 		const controller = initializeShellTerminal(
@@ -506,7 +507,14 @@ suite('Shell Terminal Webview', () => {
 			elements.mount,
 			elements.overlay,
 			(message) => messages.push(message),
-			createDependencies(terminal),
+			createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
 		);
 		controller.handleHostMessage({
 			type: 'terminal.started',
@@ -539,6 +547,10 @@ suite('Shell Terminal Webview', () => {
 		}]);
 		assert.strictEqual(terminal.resetCalls, 1);
 		assert.strictEqual(elements.surfaceElement.dataset.state, 'starting');
+		assert.deepStrictEqual(overlayView.shownStates, [
+			{ kind: 'starting' },
+			{ kind: 'starting' },
+		]);
 
 		controller.handleHostMessage({
 			type: 'terminal.started',
@@ -552,6 +564,8 @@ suite('Shell Terminal Webview', () => {
 			sessionId: 'session-next',
 			data: 'after started',
 		});
+		assert.strictEqual(overlayView.hideCalls, 1);
+		assert.strictEqual(elements.surfaceElement.dataset.state, 'ready');
 	});
 
 	test('correlated pre-assignment 오류는 terminal overlay를 만들지 않는다', () => {

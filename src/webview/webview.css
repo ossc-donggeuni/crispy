@@ -250,7 +250,8 @@ button:focus-visible {
 	display: none;
 }
 
-.terminal-surface[data-state='exited'] .terminal-overlay {
+.terminal-surface[data-state='exited'] .terminal-overlay,
+.terminal-surface[data-state='starting'] .terminal-overlay {
 	color: var(--vscode-foreground);
 }
 

@@ -202,21 +202,13 @@ try {
 				activateTab(tabId);
 			},
 
-			onProviderSelected(tabId, providerId) {
-				const selectableRoots = workspacePresentation.rootCatalog.filter(
-					(entry) => entry.selectable,
-				);
-				if (selectableRoots.length !== 1) {
-					/** Phase 8 picker가 명시적인 root를 제공하기 전에는 유일한 root만 자동 선택한다. */
-					return false;
-				}
-
+			onProviderSelected(tabId, providerId, workspaceRootId) {
 				lastIssuedSwitchAttemptId += 1;
 				const posted = postAgentMessage({
 					type: 'agent.switch',
 					tabId,
 					providerId,
-					workspaceRootId: selectableRoots[0]!.id,
+					workspaceRootId,
 					switchAttemptId: lastIssuedSwitchAttemptId,
 				});
 				return posted ? lastIssuedSwitchAttemptId : false;
@@ -249,6 +241,8 @@ try {
 			/** 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
 			onLayoutChange: () => terminalPool.scheduleActiveTerminalFit(),
 		},
+		undefined,
+		{ initialWorkspaceRootCatalog: workspacePresentation.rootCatalog },
 	);
 } catch {
 	agentPanelUi = undefined;
@@ -364,6 +358,9 @@ function handleHostMessage(message: unknown): void {
 	if (workspaceMessage) {
 		graphView.updateGraph(workspaceMessage.presentation.graph);
 		workspacePresentation = workspaceMessage.presentation;
+		agentPanelUi?.updateWorkspaceRootCatalog(
+			workspaceMessage.presentation.rootCatalog,
+		);
 		return;
 	}
 

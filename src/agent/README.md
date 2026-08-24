@@ -196,19 +196,27 @@ OAuth, API key, Google 계정 또는 provider credential을 저장하거나 처�
 1. VS Code에서 Crispy repository root를 연다.
 2. `Run and Debug`에서 `Run Extension`을 선택하거나 `F5`를 누른다.
 3. 기본 build task가 TypeScript와 esbuild watch를 시작할 때까지 기다린다.
-4. 새로 열린 Extension Development Host에서 테스트할 **로컬 단일 root 폴더**를 연다.
+4. 새로 열린 Extension Development Host에서 테스트할 로컬 폴더를 연다. multi-root를
+   확인하려면 `File: Add Folder to Workspace...`로 두 번째 로컬 폴더를 추가한다.
 5. Workspace Trust 요청이 나오면 신뢰할 수 있는 테스트 폴더에 한해 승인한다.
 6. Command Palette에서 `Crispy: Open Canvas`를 실행한다.
-7. Agent 영역에서 새 탭을 만들거나 현재 탭의 provider로 `Codex`, `Claude` 또는
-   `Antigravity`를 선택한다.
+7. Agent 영역에서 Workspace와 `Codex`, `Claude` 또는 `Antigravity`를 선택한다. 각 탭은
+   Workspace root 하나를 독립적으로 선택할 수 있다.
 
-현재 Terminal 시작 정책은 trusted, single-root, local file workspace만 허용한다. 다음
-환경에서는 PTY 시작이 거부된다.
+현재 Terminal 시작 정책은 trusted local `file:` root를 허용한다. multi-root Workspace에서는
+Host가 제공한 root ID로 선택한 폴더를 exact lookup하고 그 폴더의 fresh `fsPath`를 `cwd`로
+사용한다. 다음 환경 또는 root에서는 PTY 시작이 거부된다.
 
 - 폴더를 열지 않은 빈 window
 - untrusted workspace
-- multi-root workspace
 - virtual 또는 remote workspace
+- 빈 경로, NUL 포함 경로 또는 현재 플랫폼에서 absolute가 아닌 경로
+
+한 탭에 assignment가 생기면 Workspace는 잠긴다. provider만 바꾸면 현재 Workspace를
+유지하지만 다른 Workspace를 선택하려면 먼저 Reset을 완료해야 한다. 이미 실행 중인 root가
+Workspace에서 제거되면 현재 I/O는 유지되고 다음 start/restart/MCP restart가 차단된다.
+Workspace Trust가 해제되면 입력과 출력 publication을 즉시 차단하고 Agent/MCP process tree를
+종료하며, 기존 assignment와 retry 가능한 `workspace_untrusted` error session을 보존한다.
 
 provider 선택 후 기본 Shell만 보이거나 CLI의 `command not found`가 출력되면 Crispy 설치
 문제라기보다 Extension Host가 상속한 `PATH` 문제일 수 있다. VS Code를 완전히 종료한 뒤
@@ -232,9 +240,11 @@ Agent 관련 test는 `src/test/agent/`에 있으며 다음 범위를 포함한�
 
 - protocol 및 session state validation
 - workspace와 Shell policy
+- multi-root exact lookup, 탭별 selected-root `cwd`, POSIX/Windows path
 - 탭별 Terminal routing
 - provider 선택과 Codex/Claude/Antigravity 자동 실행 입력
 - PTY input/output, resize, restart와 cleanup
+- Workspace Trust revoke의 input/output gate, monitor, Agent/MCP cleanup과 복구
 - process tree cleanup
 - 실제 `node-pty` Terminal smoke
 - UI tab, provider bar와 confirm dialog
@@ -320,7 +330,8 @@ pnpm run verify:linux-abi
 | lockfile 또는 dependency 불일치 | `pnpm --version`이 `11.18.0`인지 확인하고 `pnpm install --frozen-lockfile`을 다시 실행한다 |
 | `CRISPY_VSIX_TARGET is required` | 직접 `vsce package`를 실행하지 말고 `pnpm run package:vsix -- --target <target>`을 사용한다 |
 | `cross packaging is not supported` | 현재 host와 같은 target을 지정한다 |
-| `workspace_untrusted` 또는 workspace 오류 | trusted local folder를 선택한다 |
+| `workspace_untrusted` | Workspace Trust를 복구한 뒤 보존된 session에서 다시 시도한다 |
+| `workspace_root_unavailable` | Reset 없이 root를 바꾸지 말고, 선택했던 local folder를 Workspace에 다시 추가한 뒤 재시도한다 |
 | `codex: command not found` | 일반 Terminal과 VS Code Extension Host가 같은 `PATH`에서 Codex CLI를 찾는지 확인한다 |
 | Windows에서 `codex.ps1` 또는 `claude.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy가 `.cmd`와 `.exe` 후보를 차례로 검사한다 |
 | `claude: command not found` 또는 Windows의 `not recognized` | VS Code Extension Host의 `PATH`에서 native Claude Code를 찾는지 확인한다 |
@@ -332,8 +343,9 @@ pnpm run verify:linux-abi
 
 Agent 탭과 Terminal 세션을 담당한다.
 
-탭은 Webview가, 세션과 실행 계약은 Extension Host가 소유한다. Webview는 `tabId`와
-`providerId`만 지정하고, 실행 파일·인자·환경·작업 디렉터리·PID는 언제나 Host가 결정한다.
+탭은 Webview가, 세션과 실행 계약은 Extension Host가 소유한다. Webview는 `tabId`,
+`providerId`와 Host가 제공한 `workspaceRootId`만 round-trip하고, 실행 파일·인자·환경·작업
+디렉터리·URI·PID는 언제나 Host가 결정한다.
 
 ## 구조
 
@@ -350,7 +362,8 @@ src/agent/
 > Host와 Webview가 공유하는 메시지 계약과 runtime validator를 정의합니다.
 
 - 메시지 type과 필드 계약을 단일 schema registry로 관리하고 TypeScript union을 여기서 추론
-- `executable`, `args`, `env`, `cwd`, `pid` 등 Host 전용 필드는 Webview 방향에서 거부
+- `executable`, `args`, `env`, `cwd`, `path`, `uri`, `fsPath`, `workspaceRoot`, `workspace`,
+  `root`, `pid` 등 Host 전용 필드는 Webview 방향에서 거부
 - `providerId`는 `PROVIDER_IDS` allowlist 밖이면 `provider_not_allowed`로 거부
 
 ### `host/`
@@ -374,7 +387,7 @@ src/agent/
 | --- | --- | --- |
 | `+` 버튼 | `tab.create` | 탭만 등록하고 세션은 만들지 않는다 |
 | 탭 전환 | `tab.switch` | 활성 탭만 기록한다 |
-| 중앙 목록의 provider 선택 | `agent.switch` | provider를 기록하고 세션을 시작한다 |
+| Workspace/provider 선택 | `agent.switch` | fresh root preflight 후 불변 assignment를 commit하고 `agent.switchAccepted`를 보낸다 |
 | `⟳` 후 재시작 확인 | `agent.reset` | 현재 세션과 xterm을 정리하고 같은 탭을 provider 미선택 상태로 되돌린다 |
 | retryable MCP 실패의 `MCP와 Agent 다시 시작` | `mcp.restart` | current tab/session의 Codex 또는 Claude와 MCP를 정리한 뒤 같은 provider로 fresh session을 시작한다 |
 | 탭 닫기 확인 | `tab.close` | 세션을 정리하고 탭 등록을 해제한다 |
@@ -382,6 +395,11 @@ src/agent/
 
 `terminal.ready`와 `agent.switch` 중 나중에 도착한 쪽이 첫 세션 시작을 유발한다. provider가
 정해지지 않은 탭에서는 어떤 경우에도 PTY를 만들지 않는다.
+
+Graph와 Workspace Picker는 하나의 atomic `WorkspacePresentation` snapshot을 사용하지만, 이
+presentation은 실행 권한이 아니다. Host는 시작, 일반 재시작, MCP 재시작, structured/bare
+fallback과 native spawn 직전에 현재 `workspaceFolders`와 Trust를 다시 읽는다. Workspace
+정책 실패는 provider fallback으로 전환하지 않고 안전한 Workspace 오류로 종료한다.
 
 ## Codex/Claude MCP 상태와 명시적 재시작
 

@@ -92,9 +92,58 @@
 }
 
 .agent-provider-picker-heading {
-	display: grid;
-	gap: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
 	padding: 12px 12px 8px;
+}
+
+.agent-provider-picker-heading-copy {
+	display: grid;
+	flex: 1 1 170px;
+	gap: 4px;
+	min-width: 0;
+}
+
+.agent-provider-picker-heading .agent-workspace-picker-host {
+	flex: 0 1 190px;
+	min-width: 150px;
+	max-width: 210px;
+}
+
+.agent-workspace-picker-label {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+
+.agent-workspace-picker-label-text {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.agent-workspace-picker {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	padding: 3px 22px 3px 6px;
+	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+	background-color: var(--vscode-dropdown-background, var(--vscode-input-background));
+	border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+	border-radius: 2px;
+	font: inherit;
+	font-size: 11px;
+}
+
+.agent-workspace-picker:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.agent-workspace-picker:disabled {
+	opacity: 0.68;
 }
 
 .agent-provider-picker-title,
@@ -138,6 +187,16 @@
 .agent-provider-option:hover {
 	color: var(--vscode-list-hoverForeground, var(--vscode-foreground));
 	background-color: var(--vscode-list-hoverBackground, transparent);
+}
+
+.agent-provider-option:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.agent-provider-option:disabled:hover {
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-input-background, transparent);
 }
 
 .agent-provider-option:focus-visible {
@@ -197,6 +256,7 @@
 }
 
 .agent-create-tab,
+.agent-change-provider,
 .agent-restart-session {
 	display: grid;
 	width: 22px;
@@ -214,17 +274,20 @@
 }
 
 .agent-create-tab:hover:not(:disabled),
+.agent-change-provider:hover:not(:disabled),
 .agent-restart-session:hover:not(:disabled) {
 	background-color: var(--vscode-toolbar-hoverBackground);
 }
 
 .agent-create-tab:focus-visible,
+.agent-change-provider:focus-visible,
 .agent-restart-session:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: 1px;
 }
 
 .agent-create-tab:disabled,
+.agent-change-provider:disabled,
 .agent-restart-session:disabled {
 	opacity: 0.5;
 	cursor: default;

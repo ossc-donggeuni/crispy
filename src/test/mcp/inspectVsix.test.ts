@@ -3,11 +3,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface InspectVsixModule {
+	findExtensionManifestCapabilityProblems(
+		manifest: unknown,
+	): readonly string[];
 	findUnresolvedMcpRuntimeSpecifiers(source: string): readonly string[];
 	findUnexpectedVsixPayloadEntries(entryNames: Iterable<string>): readonly string[];
 }
 
 const {
+	findExtensionManifestCapabilityProblems,
 	findUnresolvedMcpRuntimeSpecifiers,
 	findUnexpectedVsixPayloadEntries,
 } = require(
@@ -38,6 +42,33 @@ suite('MCP VSIX bundle dependency inspection', () => {
 				supported: 'limited',
 			},
 		});
+		assert.deepStrictEqual(
+			findExtensionManifestCapabilityProblems(manifest),
+			[],
+		);
+	});
+
+	test('VSIX manifest 검사기는 entrypoint, Node와 Workspace capability 누락을 열거한다', () => {
+		assert.deepStrictEqual(
+			findExtensionManifestCapabilityProblems({
+				main: './unexpected.js',
+				engines: { node: '22.x' },
+				capabilities: {
+					untrustedWorkspaces: {
+						supported: true,
+						restrictedConfigurations: ['crispy.codexCliPath'],
+					},
+					virtualWorkspaces: { supported: false },
+				},
+			}),
+			[
+				'main',
+				'engines.node',
+				'capabilities.untrustedWorkspaces.supported',
+				'capabilities.untrustedWorkspaces.restrictedConfigurations',
+				'capabilities.virtualWorkspaces.supported',
+			],
+		);
 	});
 
 	test('실제 import와 require에서 Node builtin만 허용한다', () => {

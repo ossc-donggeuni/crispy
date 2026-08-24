@@ -504,6 +504,8 @@ suite('Webview State Wiring', () => {
 		let resizeFit: (() => void) | undefined;
 		let agentUiLayoutChange: (() => void) | undefined;
 		let agentProviderSelect: AgentPanelUiCallbacks['onProviderSelected'];
+		const agentWorkspaceCatalogUpdates: unknown[] = [];
+		let initialAgentWorkspaceCatalog: unknown;
 		let unloadHandler: (() => void) | undefined;
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
 		let graphInitializeCount = 0;
@@ -706,10 +708,11 @@ suite('Webview State Wiring', () => {
 		 * 실제 Agent DOM 대신 초기화 여부와 Webview로 전달되는 콜백만 노출한다.
 		 * 실제 구현과 같이 초기 탭을 만들고 `onTabCreated`를 호출해 wiring을 재현한다.
 		 */
-		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks) => {
+		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks, _deps, options) => {
 			agentPanelUiInitialized = true;
 			agentUiLayoutChange = callbacks?.onLayoutChange;
 			agentProviderSelect = callbacks?.onProviderSelected;
+			initialAgentWorkspaceCatalog = options?.initialWorkspaceRootCatalog;
 
 			const model = createAgentTabModel(() => agentTabId);
 			callbacks?.onTabCreated?.(model.createTab());
@@ -717,6 +720,10 @@ suite('Webview State Wiring', () => {
 			return {
 				model,
 				getSnapshot: () => model.getSnapshot(),
+				getAssignmentState: () => undefined,
+				updateWorkspaceRootCatalog: (catalog) => {
+					agentWorkspaceCatalogUpdates.push(catalog);
+				},
 				handleHostMessage: (message) => (
 					message.type !== 'agent.switchAccepted'
 					|| message.switchAttemptId > 1
@@ -822,9 +829,8 @@ suite('Webview State Wiring', () => {
 			assert.ok(hostMessageHandler);
 			assert.ok(agentProviderSelect);
 
-			/** selectable root가 없으면 provider 요청과 UI commit을 거부한다. */
-			assert.strictEqual(agentProviderSelect(agentTabId, 'codex'), false);
-			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages), []);
+			/** 초기 atomic Presentation의 Catalog를 Agent UI에도 같은 값으로 전달한다. */
+			assert.deepStrictEqual(initialAgentWorkspaceCatalog, []);
 
 			hostMessageHandler({
 				data: {
@@ -842,7 +848,17 @@ suite('Webview State Wiring', () => {
 			} as MessageEvent);
 
 			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
-			assert.strictEqual(agentProviderSelect(agentTabId, 'claude'), 1);
+			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [[{
+				id: 'workspace-root:file:///workspace/refreshed',
+				name: 'refreshed',
+				description: 'file:///workspace/refreshed',
+				selectable: true,
+			}]]);
+			assert.strictEqual(agentProviderSelect(
+				agentTabId,
+				'claude',
+				'workspace-root:file:///workspace/refreshed',
+			), 1);
 			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages), [{
 				type: 'agent.switch',
 				tabId: agentTabId,
@@ -874,9 +890,20 @@ suite('Webview State Wiring', () => {
 				},
 			} as MessageEvent);
 
-			/** 명시적 picker가 필요한 여러 root에서도 provider를 선행 commit하지 않는다. */
-			assert.strictEqual(agentProviderSelect(agentTabId, 'codex'), false);
-			assert.strictEqual(getAgentSwitchMessages(postedMessages).length, 1);
+			/** 여러 root에서는 UI가 명시적으로 고른 ID를 callback이 그대로 보낸다. */
+			assert.strictEqual(agentProviderSelect(
+				agentTabId,
+				'codex',
+				'workspace-root:file:///workspace/sibling',
+			), 2);
+			assert.strictEqual(getAgentSwitchMessages(postedMessages).length, 2);
+			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages)[1], {
+				type: 'agent.switch',
+				tabId: agentTabId,
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///workspace/sibling',
+				switchAttemptId: 2,
+			});
 			assert.deepStrictEqual(terminalHostMessages, []);
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphDisposed, false);
