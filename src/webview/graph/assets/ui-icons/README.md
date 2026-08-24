@@ -69,3 +69,11 @@ Source: SVG Repo / Home Assistant Outlined Icons
 License: Public Domain (CC0)
 Author: IonutNeagu
 Attribution required: No
+
+- toolbar-add.svg
+- toolbar-switch.svg
+- toolbar-restart.svg
+Source: Authored for Crispy
+License: MIT (same as this project)
+Author: Crispy contributors
+Attribution required: No

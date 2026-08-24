@@ -787,6 +787,9 @@ suite('Crispy Extension Host', () => {
 		assert.ok(
 			panel.webview.html.includes('<div id="agent-provider-picker-host" hidden></div>'),
 		);
+		assert.ok(
+			panel.webview.html.includes('<div id="agent-workspace-status-bar" hidden></div>'),
+		);
 		assert.ok(!panel.webview.html.includes('agent-provider-bar'));
 		assert.ok(
 			panel.webview.html.includes(`img-src ${panel.webview.cspSource};`),

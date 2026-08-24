@@ -59,7 +59,9 @@ optionally a UNC path); on macOS/Linux use an absolute POSIX path.
 
 1. Open both folders in one trusted multi-root Workspace and run `Crispy: Open Canvas`.
 2. Create two Agent tabs, select a different Workspace in each, start a provider,
-   and ask it to report the host process working directory without modifying files.
+   confirm the custom Workspace list stays inside the Agent card, and verify the
+   bottom session bar changes to each root name when switching tabs. Then ask each
+   provider to report the host process working directory without modifying files.
 3. Change only one tab's provider and confirm its Workspace stays selected. Confirm
    that choosing another Workspace is blocked until Reset completes.
 4. Reset that tab, select the other root, and confirm the new process uses that root.

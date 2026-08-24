@@ -4,19 +4,12 @@ import {
 	type AgentUiDependencies,
 } from './agentUiDom';
 
-/** 새 탭 생성 버튼에 표시하는 고정 문구다. */
-export const AGENT_CREATE_TAB_LABEL = '+';
-
-/** 세션 재시작 버튼에 표시하는 고정 문구다. */
-export const AGENT_RESTART_LABEL = '⟳';
-
 /** 새 탭 생성 버튼의 접근성 이름이다. */
 export const AGENT_CREATE_TAB_TITLE = 'New agent tab';
 
 /** 재시작 버튼의 접근성 이름이며 Agent 선택 화면으로 돌아가는 동작임을 밝힌다. */
 export const AGENT_RESTART_TITLE = 'Restart and choose an agent';
 
-export const AGENT_CHANGE_PROVIDER_LABEL = '⇄';
 export const AGENT_CHANGE_PROVIDER_TITLE = 'Choose another agent';
 
 export const MCP_RESTART_LABEL = 'MCP와 Agent 다시 시작';
@@ -77,7 +70,6 @@ export function initializeAgentTopBar(
 	const createTabButton = dependencies.createElement('button');
 	createTabButton.type = 'button';
 	createTabButton.className = 'agent-create-tab';
-	createTabButton.textContent = AGENT_CREATE_TAB_LABEL;
 	createTabButton.title = AGENT_CREATE_TAB_TITLE;
 	createTabButton.setAttribute('aria-label', AGENT_CREATE_TAB_TITLE);
 	createTabButton.addEventListener('click', () => callbacks.onCreateTab());
@@ -85,7 +77,6 @@ export function initializeAgentTopBar(
 	const restartButton = dependencies.createElement('button');
 	restartButton.type = 'button';
 	restartButton.className = 'agent-restart-session';
-	restartButton.textContent = AGENT_RESTART_LABEL;
 	restartButton.title = AGENT_RESTART_TITLE;
 	restartButton.setAttribute('aria-label', AGENT_RESTART_TITLE);
 	restartButton.addEventListener('click', () => callbacks.onRestartActiveTab());
@@ -93,7 +84,6 @@ export function initializeAgentTopBar(
 	const changeProviderButton = dependencies.createElement('button');
 	changeProviderButton.type = 'button';
 	changeProviderButton.className = 'agent-change-provider';
-	changeProviderButton.textContent = AGENT_CHANGE_PROVIDER_LABEL;
 	changeProviderButton.title = AGENT_CHANGE_PROVIDER_TITLE;
 	changeProviderButton.setAttribute('aria-label', AGENT_CHANGE_PROVIDER_TITLE);
 	changeProviderButton.addEventListener('click', () => callbacks.onChangeProvider());

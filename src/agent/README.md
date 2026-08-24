@@ -375,7 +375,13 @@ src/agent/
 
 ### `UI/`
 
-> 상단 bar, 탭 strip과 xterm 중앙 provider 선택기 등 Agent 영역 UI를 구성합니다.
+> 상단 bar, 탭 strip, xterm 중앙 Workspace/provider 선택기와 실행 중 Workspace
+> 하단 status bar 등 Agent 영역 UI를 구성합니다.
+
+- Workspace 선택은 Webview가 그리는 combobox/listbox를 사용해 플랫폼 native dropdown
+  모양에 의존하지 않고, root 이름과 경로를 분리해 긴 항목을 말줄임 처리한다.
+- provider assignment가 commit된 활성 탭에서는 Terminal 바깥 하단 status bar에
+  `workspaceName`만 표시한다. 탭 전환 시 해당 세션 이름으로 바뀌고 Reset 완료 시 숨긴다.
 
 ### `webview/`
 

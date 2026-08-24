@@ -775,6 +775,7 @@ suite('Webview State Wiring', () => {
 			['#agent-tab-strip', {} as HTMLElement],
 			['#agent-tab-menu-host', {} as HTMLElement],
 			['#agent-provider-picker-host', {} as HTMLElement],
+			['#agent-workspace-status-bar', {} as HTMLElement],
 			['#agent-dialog-host', {} as HTMLElement],
 			['#agent-rename-dialog-host', {} as HTMLElement],
 		]);

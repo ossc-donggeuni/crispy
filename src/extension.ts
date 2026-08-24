@@ -984,6 +984,7 @@ function getWebviewHtml(
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
+						<div id="agent-workspace-status-bar" hidden></div>
 						<div id="agent-tab-menu-host" hidden></div>
 						<div id="agent-dialog-host" hidden></div>
 						<div id="agent-rename-dialog-host" hidden></div>

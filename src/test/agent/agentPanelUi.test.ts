@@ -49,6 +49,7 @@ interface PanelFixture {
 	readonly tabStrip: FakeAgentElement;
 	readonly tabMenuHost: FakeAgentElement;
 	readonly providerPicker: FakeAgentElement;
+	readonly workspaceStatusBar: FakeAgentElement;
 	readonly dialogHost: FakeAgentElement;
 	readonly renameDialogHost: FakeAgentElement;
 	readonly dialog: FakeConfirmDialog;
@@ -73,6 +74,7 @@ function createFixture(
 	const tabStrip = new FakeAgentElement();
 	const tabMenuHost = new FakeAgentElement();
 	const providerPicker = new FakeAgentElement();
+	const workspaceStatusBar = new FakeAgentElement();
 	const dialogHost = new FakeAgentElement();
 	const renameDialogHost = new FakeAgentElement();
 	const dialog = new FakeConfirmDialog();
@@ -88,6 +90,7 @@ function createFixture(
 			tabStrip: tabStrip.asHtmlElement(),
 			tabMenuHost: tabMenuHost.asHtmlElement(),
 			providerPicker: providerPicker.asHtmlElement(),
+			workspaceStatusBar: workspaceStatusBar.asHtmlElement(),
 			dialogHost: dialogHost.asHtmlElement(),
 			renameDialogHost: renameDialogHost.asHtmlElement(),
 		},
@@ -101,6 +104,7 @@ function createFixture(
 		tabStrip,
 		tabMenuHost,
 		providerPicker,
+		workspaceStatusBar,
 		dialogHost,
 		renameDialogHost,
 		dialog,
@@ -137,8 +141,12 @@ function selectWorkspace(
 	workspaceRootId: string,
 ): void {
 	const picker = requireElement(providerPicker, 'agent-workspace-picker');
-	picker.value = workspaceRootId;
-	picker.dispatch('change');
+	const option = providerPicker
+		.findAll('agent-workspace-picker-option')
+		.find((entry) => entry.dataset.workspaceRootId === workspaceRootId);
+	assert.strictEqual(option !== undefined, true);
+	picker.click();
+	option?.click();
 }
 
 /** 현재 탭 strip에 표시된 라벨 목록을 반환한다. */
@@ -149,6 +157,22 @@ function readTabLabels(tabStrip: FakeAgentElement): string[] {
 }
 
 suite('Agent Panel UI', () => {
+	test('우측 toolbar action은 font glyph 없이 접근 가능한 icon button으로 렌더링한다', () => {
+		const fixture = createFixture();
+		const actions = [
+			['agent-create-tab', 'New agent tab'],
+			['agent-change-provider', 'Choose another agent'],
+			['agent-restart-session', 'Restart and choose an agent'],
+		] as const;
+
+		for (const [className, accessibleName] of actions) {
+			const button = requireElement(fixture.topBar, className);
+			assert.strictEqual(button.textContent, '');
+			assert.strictEqual(button.getAttribute('aria-label'), accessibleName);
+			assert.strictEqual(button.title, accessibleName);
+		}
+	});
+
 	test('미선택 탭은 xterm 중앙에 세 provider를 세로 목록으로 표시한다', () => {
 		const fixture = createFixture();
 		const options = fixture.providerPicker.findAll('agent-provider-option');
@@ -190,13 +214,132 @@ suite('Agent Panel UI', () => {
 			fixture.providerPicker,
 			'agent-workspace-picker',
 		);
-		const workspaceOption = workspacePicker.children[1];
-		assert.strictEqual(workspaceOption?.textContent, 'workspace');
+		const workspaceOption = requireElement(
+			fixture.providerPicker,
+			'agent-workspace-picker-option',
+		);
+		assert.strictEqual(workspacePicker.tagName, 'button');
+		assert.strictEqual(workspacePicker.getAttribute('role'), 'combobox');
+		assert.strictEqual(
+			requireElement(
+				workspaceOption,
+				'agent-workspace-picker-option-name',
+			).textContent,
+			'workspace',
+		);
+		assert.strictEqual(
+			requireElement(
+				workspaceOption,
+				'agent-workspace-picker-option-description',
+			).textContent,
+			'file:///workspace',
+		);
 		assert.strictEqual(workspaceOption?.title, 'file:///workspace');
 		assert.strictEqual(
 			workspaceOption?.getAttribute('aria-label'),
 			'workspace, file:///workspace',
 		);
+	});
+
+	test('Workspace combobox는 카드 내부 listbox와 키보드·바깥 클릭 닫기를 제공한다', () => {
+		const fixture = createFixture({}, [
+			{
+				id: 'workspace-root:file:///repo/unavailable',
+				name: 'unavailable',
+				description: 'file:///repo/unavailable',
+				selectable: false,
+				reason: 'workspace_untrusted',
+			},
+			{
+				id: 'workspace-root:file:///repo/alpha',
+				name: 'alpha',
+				description: 'file:///repo/alpha',
+				selectable: true,
+			},
+			{
+				id: 'workspace-root:file:///repo/beta',
+				name: 'beta',
+				description: 'file:///repo/beta',
+				selectable: true,
+			},
+		]);
+		const picker = requireElement(fixture.providerPicker, 'agent-workspace-picker');
+		const listbox = requireElement(
+			fixture.providerPicker,
+			'agent-workspace-picker-listbox',
+		);
+
+		picker.click();
+		assert.strictEqual(listbox.hidden, false);
+		assert.strictEqual(picker.getAttribute('aria-expanded'), 'true');
+		assert.strictEqual(
+			picker.getAttribute('aria-controls'),
+			listbox.getAttribute('id'),
+		);
+		assert.strictEqual(
+			fixture.providerPicker
+				.findAll('agent-workspace-picker-option')[1]
+				.dataset.active,
+			'true',
+			'열 때 첫 selectable root가 활성화된다.',
+		);
+
+		let prevented = false;
+		picker.dispatch('keydown', {
+			key: 'ArrowDown',
+			preventDefault: () => prevented = true,
+		});
+		assert.strictEqual(prevented, true);
+		picker.dispatch('keydown', {
+			key: 'Enter',
+			preventDefault: () => undefined,
+		});
+		assert.strictEqual(picker.value, 'workspace-root:file:///repo/beta');
+		assert.strictEqual(listbox.hidden, true);
+		assert.strictEqual(picker.getAttribute('aria-expanded'), 'false');
+
+		picker.click();
+		picker.dispatch('keydown', {
+			key: 'Home',
+			preventDefault: () => undefined,
+		});
+		assert.strictEqual(
+			fixture.providerPicker
+				.findAll('agent-workspace-picker-option')[1]
+				.dataset.active,
+			'true',
+		);
+		picker.dispatch('keydown', {
+			key: 'End',
+			preventDefault: () => undefined,
+		});
+		assert.strictEqual(
+			fixture.providerPicker
+				.findAll('agent-workspace-picker-option')[2]
+				.dataset.active,
+			'true',
+		);
+		assert.strictEqual(
+			picker.getAttribute('aria-activedescendant'),
+			fixture.providerPicker
+				.findAll('agent-workspace-picker-option')[2]
+				.getAttribute('id'),
+		);
+		picker.dispatch('keydown', {
+			key: 'Escape',
+			preventDefault: () => undefined,
+		});
+		assert.strictEqual(listbox.hidden, true);
+		picker.click();
+		picker.dispatch('keydown', { key: 'Tab' });
+		assert.strictEqual(listbox.hidden, true);
+
+		picker.click();
+		fixture.documentEvents.dispatch('pointerdown', {
+			target: new FakeAgentElement().asHtmlElement(),
+		});
+		assert.strictEqual(listbox.hidden, true);
+		assert.strictEqual(picker.getAttribute('aria-expanded'), 'false');
 	});
 
 	test('provider는 초기 포커스와 방향키 탐색 없이 직접 선택한다', () => {
@@ -252,9 +395,9 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(picker.value, '');
 		assert.strictEqual(picker.disabled, false);
 		assert.deepStrictEqual(
-			fixture.providerPicker.findAll('agent-workspace-picker').flatMap(
-				(entry) => entry.children.slice(1).map((option) => option.textContent),
-			),
+			fixture.providerPicker
+				.findAll('agent-workspace-picker-option')
+				.map((option) => option.dataset.label),
 			['repo — file:///repo/alpha', 'repo — file:///repo/beta'],
 		);
 		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
@@ -320,6 +463,103 @@ suite('Agent Panel UI', () => {
 		);
 	});
 
+	test('하단 bar는 활성 세션별 Workspace root 이름만 표시하고 Reset 완료 후 숨긴다', async () => {
+		let switchAttemptId = 0;
+		const fixture = createFixture({
+			onProviderSelected: () => {
+				switchAttemptId += 1;
+				return switchAttemptId;
+			},
+			onAgentReselectionRequested: () => true,
+		}, [
+			{
+				id: 'workspace-root:file:///repo/crispy-scenarios',
+				name: 'crispy-scenarios',
+				description: 'file:///repo/crispy-scenarios',
+				selectable: true,
+			},
+			{
+				id: 'workspace-root:file:///repo/crispy-extension',
+				name: 'crispy-extension',
+				description: 'file:///repo/crispy-extension',
+				selectable: true,
+			},
+		]);
+		const firstTabId = fixture.controller.getSnapshot().tabs[0].id;
+		assert.strictEqual(fixture.workspaceStatusBar.hidden, true);
+
+		selectWorkspace(
+			fixture.providerPicker,
+			'workspace-root:file:///repo/crispy-scenarios',
+		);
+		selectProvider(fixture.providerPicker, 'codex');
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId: firstTabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///repo/crispy-scenarios',
+			switchAttemptId: 1,
+			assignmentRevision: 1,
+		}), true);
+		assert.strictEqual(fixture.workspaceStatusBar.hidden, false);
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-workspace-status-name',
+			).textContent,
+			'crispy-scenarios',
+		);
+		assert.strictEqual(
+			fixture.workspaceStatusBar.find('agent-workspace-status-bar')?.title,
+			'',
+			'경로나 URI tooltip을 만들지 않는다.',
+		);
+
+		requireElement(fixture.topBar, 'agent-create-tab').click();
+		const secondTabId = fixture.controller.getSnapshot().activeTabId;
+		assert.ok(secondTabId);
+		assert.strictEqual(fixture.workspaceStatusBar.hidden, true);
+		selectWorkspace(
+			fixture.providerPicker,
+			'workspace-root:file:///repo/crispy-extension',
+		);
+		selectProvider(fixture.providerPicker, 'claude');
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId: secondTabId as string,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///repo/crispy-extension',
+			switchAttemptId: 2,
+			assignmentRevision: 1,
+		}), true);
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-workspace-status-name',
+			).textContent,
+			'crispy-extension',
+		);
+
+		fixture.tabStrip.findAll('agent-tab-select')[0].click();
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-workspace-status-name',
+			).textContent,
+			'crispy-scenarios',
+		);
+		requireElement(fixture.topBar, 'agent-restart-session').click();
+		fixture.dialog.answer(true);
+		await flushMicrotasks();
+		assert.strictEqual(fixture.workspaceStatusBar.hidden, false);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.resetCompleted',
+			tabId: firstTabId,
+			assignmentRevision: 2,
+		}), true);
+		assert.strictEqual(fixture.workspaceStatusBar.hidden, true);
+	});
+
 	test('Catalog refresh는 unassigned 단일 root만 자동 선택하고 missing assignment는 synthetic entry로 유지한다', () => {
 		const fixture = createFixture({ onProviderSelected: () => 4 }, [
 			{
@@ -368,20 +608,33 @@ suite('Agent Panel UI', () => {
 		});
 
 		fixture.controller.updateWorkspaceRootCatalog([]);
-		const picker = requireElement(fixture.providerPicker, 'agent-workspace-picker');
-		const synthetic = picker.children.find(
+		const synthetic = fixture.providerPicker
+			.findAll('agent-workspace-picker-option').find(
 			(option) => option.dataset.reason === 'workspace_root_unavailable',
 		);
-		assert.strictEqual(synthetic?.value, 'workspace-root:file:///repo/b');
-		assert.strictEqual(synthetic?.disabled, true);
 		assert.strictEqual(
-			synthetic?.textContent,
+			synthetic?.dataset.workspaceRootId,
+			'workspace-root:file:///repo/b',
+		);
+		assert.strictEqual(synthetic?.getAttribute('aria-disabled'), 'true');
+		assert.strictEqual(
+			requireElement(
+				synthetic as FakeAgentElement,
+				'agent-workspace-picker-option-name',
+			).textContent,
 			'repo-b (Workspace is no longer available)',
+		);
+		assert.strictEqual(
+			requireElement(
+				synthetic as FakeAgentElement,
+				'agent-workspace-picker-option-description',
+			).textContent,
+			'file:///repo/b',
 		);
 		assert.strictEqual(synthetic?.title, 'file:///repo/b');
 		assert.strictEqual(
 			synthetic?.getAttribute('aria-label'),
-			'repo-b, file:///repo/b',
+			'repo-b, file:///repo/b, Workspace is no longer available',
 		);
 		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
 			kind: 'assigned',
@@ -1231,6 +1484,8 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.topBar.children.length, 0);
 		assert.strictEqual(fixture.tabStrip.children.length, 0);
 		assert.strictEqual(fixture.providerPicker.children.length, 0);
+		assert.strictEqual(fixture.workspaceStatusBar.children.length, 0);
+		assert.strictEqual(fixture.workspaceStatusBar.hidden, true);
 		assert.strictEqual(fixture.dialog.disposeCount, 1);
 		assert.strictEqual(fixture.documentEvents.countListeners('pointerdown'), 0);
 		assert.strictEqual(fixture.documentEvents.countListeners('keydown'), 0);

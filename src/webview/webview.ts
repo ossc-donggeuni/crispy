@@ -185,6 +185,9 @@ try {
 			providerPicker: getRequiredElement<HTMLElement>(
 				'#agent-provider-picker-host',
 			),
+			workspaceStatusBar: getRequiredElement<HTMLElement>(
+				'#agent-workspace-status-bar',
+			),
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
 			renameDialogHost: getRequiredElement<HTMLElement>(
 				'#agent-rename-dialog-host',

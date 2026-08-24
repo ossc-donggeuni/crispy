@@ -30,6 +30,7 @@ import {
 import { initializeAgentTabStrip } from './agentTabStrip';
 import { createAgentTabRenameDialog } from './agentTabRenameDialog';
 import { initializeAgentTopBar } from './agentTopBar';
+import { initializeAgentWorkspaceStatusBar } from './agentWorkspaceStatusBar';
 import {
 	defaultAgentUiDependencies,
 	type AgentUiDependencies,
@@ -47,6 +48,8 @@ export interface AgentPanelUiElements {
 
 	/** provider 미선택 탭에서 xterm 중앙 선택기를 표시할 host다. */
 	readonly providerPicker: HTMLElement;
+	/** 실행 중인 활성 세션의 Workspace root 이름을 표시할 하단 bar host다. */
+	readonly workspaceStatusBar: HTMLElement;
 
 	/** 탭 닫기 확인 다이얼로그를 표시하는 컨테이너다. */
 	readonly dialogHost: HTMLElement;
@@ -185,6 +188,10 @@ export function initializeAgentPanelUi(
 	);
 	const renameDialog = createAgentTabRenameDialog(
 		elements.renameDialogHost,
+		dependencies,
+	);
+	const workspaceStatusBar = initializeAgentWorkspaceStatusBar(
+		elements.workspaceStatusBar,
 		dependencies,
 	);
 	const assignmentStateByTab = new Map<AgentTabId, AgentTabAssignmentState>();
@@ -657,6 +664,7 @@ export function initializeAgentPanelUi(
 		renameDialog.syncTabs(snapshot.tabs.map((tab) => tab.id));
 		topBar.render(snapshot, workspaceState);
 		tabStrip.render(snapshot);
+		workspaceStatusBar.render(snapshot);
 		providerPicker.render(
 			snapshot,
 			effectiveCatalog,
@@ -668,6 +676,7 @@ export function initializeAgentPanelUi(
 		const snapshot = model.getSnapshot();
 		const workspaceState = workspacePickerStateFor(snapshot.activeTabId);
 		topBar.render(snapshot, workspaceState);
+		workspaceStatusBar.render(snapshot);
 		providerPicker.render(
 			snapshot,
 			getEffectiveCatalog(snapshot.activeTabId),
@@ -868,6 +877,7 @@ export function initializeAgentPanelUi(
 				() => renameDialog.dispose(),
 				() => topBar.dispose(),
 				() => tabStrip.dispose(),
+				() => workspaceStatusBar.dispose(),
 				() => providerPicker.dispose(),
 			];
 			for (const cleanup of cleanupActions) {
