@@ -77,9 +77,9 @@ Author: IonutNeagu
 Attribution required: No
 
 - task-add.svg
-Source: SVG Repo / Computer And Media 2
-License: CC0 1.0
-Author: Not specified
+Source: SVG Repo / Asoka Interface Icons
+License: Public Domain (PD)
+Author: Asoka
 Attribution required: No
 
 - task-start.svg
