@@ -1,3 +1,129 @@
+.task-scope-area {
+	--task-scope-accent: var(--vscode-descriptionForeground, #9d9d9d);
+
+	position: absolute;
+	top: 0;
+	left: 0;
+	z-index: 0;
+	display: grid;
+	box-sizing: border-box;
+	grid-template-rows: 28px minmax(0, 1fr);
+	min-width: 0;
+	overflow: hidden;
+	color: var(--graph-node-foreground);
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 5%,
+		transparent
+	);
+	border: 1px dashed color-mix(
+		in srgb,
+		var(--task-scope-accent) 58%,
+		var(--graph-node-default-border-color)
+	);
+	border-radius: 9px;
+	font-family: Inter, var(--vscode-font-family);
+	transform-origin: 0 0;
+	pointer-events: none;
+	user-select: none;
+	transition:
+		background 100ms ease,
+		border-color 100ms ease,
+		box-shadow 100ms ease;
+}
+
+.task-reference-area {
+	--task-scope-accent: var(--vscode-charts-blue, var(--vscode-focusBorder, #007fd4));
+}
+
+.task-work-area {
+	--task-scope-accent: var(--vscode-charts-orange, #d18616);
+}
+
+.task-scope-area.is-drag-hover {
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 14%,
+		var(--graph-node-default-background)
+	);
+	border-color: var(--task-scope-accent);
+	border-style: solid;
+	box-shadow:
+		0 0 0 3px color-mix(in srgb, var(--task-scope-accent) 22%, transparent),
+		0 0 28px color-mix(in srgb, var(--task-scope-accent) 18%, transparent);
+}
+
+.task-scope-header {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	padding: 5px 9px 3px;
+}
+
+.task-scope-title {
+	overflow: hidden;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 16px;
+	letter-spacing: 0.04em;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-scope-body {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+	align-items: center;
+	justify-content: center;
+	padding: 3px 12px 8px;
+	overflow: hidden;
+}
+
+.task-scope-empty {
+	display: flex;
+	height: 100%;
+	align-items: center;
+	justify-content: center;
+	flex-direction: column;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-size: 10px;
+	line-height: 14px;
+	text-align: center;
+}
+
+.task-scope-unavailable-summary {
+	color: var(--vscode-editorWarning-foreground, #cca700);
+	font-size: 10px;
+	line-height: 14px;
+	text-align: center;
+}
+
+.task-scope-drop-hint {
+	position: absolute;
+	inset: 28px 6px 5px;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	color: var(--task-scope-accent);
+	font-size: 12px;
+	font-weight: 700;
+	text-align: center;
+}
+
+.task-scope-area.is-drag-hover > .task-scope-body {
+	opacity: 0.18;
+}
+
+.task-scope-area.is-drag-hover > .task-scope-drop-hint {
+	display: flex;
+}
+
+/* Region은 배경이고 GraphRenderer/TaskRenderer가 소유한 실제 Node가 그 위에 놓인다. */
+.graph-node-layer > .graph-node {
+	z-index: 1;
+}
+
 .task-node {
 	display: flex;
 	align-items: center;
@@ -33,6 +159,10 @@
 
 .task-work-node[data-task-connection-state='connected']:not(.is-selected) {
 	--graph-node-border-color: var(--vscode-foreground);
+}
+
+.task-work-node[data-task-connection-state='connected'] > .task-work-icon {
+	background-color: var(--graph-node-border-color);
 }
 
 .task-start-node,
@@ -456,5 +586,11 @@ textarea.task-inspector-control {
 body.vscode-high-contrast .task-inspector,
 body.vscode-high-contrast-light .task-inspector {
 	border-color: var(--vscode-contrastBorder, var(--vscode-widget-border));
+	box-shadow: none;
+}
+
+body.vscode-high-contrast .task-scope-area,
+body.vscode-high-contrast-light .task-scope-area {
+	border-color: var(--vscode-contrastBorder, var(--task-scope-accent));
 	box-shadow: none;
 }

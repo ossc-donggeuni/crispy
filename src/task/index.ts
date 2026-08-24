@@ -4,6 +4,7 @@ export {
 	createTaskId,
 	createTaskNodeId,
 	TASK_DEFAULT_END_POSITION,
+	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	TASK_BLUEPRINT_VERSION,
 	type CreateTaskBlueprintInput,
 	type CreateWorkNodeInput,
@@ -16,6 +17,7 @@ export {
 	type TaskNodePosition,
 	type TaskOrigin,
 	type WorkNode,
+	type WorkGraphTargets,
 } from './taskModel';
 export {
 	assertValidTaskBlueprint,

@@ -9,11 +9,14 @@ import {
 	getGraphLayoutRootId,
 	getGraphLayoutSourceId,
 	getGraphRootLayoutNodeId,
+	resolveGraphLayoutNodePosition,
 	type GraphLayout,
+	type GraphLayoutPosition,
 } from './graphLayout';
 import {
 	calculateDetachedRootDuplicatePosition,
 	classifyGraphLayoutNodeArrangement,
+	collectGraphLayoutSubtreeNodeIds,
 	rebaseNodePositions,
 	translateDetachedSubtree,
 } from './graphLayoutTransition';
@@ -21,6 +24,7 @@ import type { Graph, GraphRoot, GraphRootNode } from './graphModel';
 import {
 	addGraphRoot,
 	applyDetachedGraphRoots,
+	findGraphNode,
 	getDetachedRootOriginId,
 	getDetachedRootNodeId,
 	isDetachedRootId,
@@ -39,6 +43,8 @@ import {
 	type GraphNodeArrangementRequest,
 	type GraphRootReattachRequest,
 	type GraphRootReattachResult,
+	type GraphSourceDragRequest,
+	type GraphSourceDropResult,
 } from './graphRenderer';
 import { createGraphReattachConfirmDialog } from './graphReattachConfirmDialog';
 import type { GraphDetachDropRequest } from './graphDetachDrag';
@@ -68,11 +74,21 @@ import {
 } from '../../task';
 import {
 	createTaskGraphLayout,
+	resolveTaskGraphWorkVisualCollisions,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
+	type TaskGraphLayout,
+	type TaskGraphTargetAreaKind,
 	type TaskLayoutNode,
 } from '../task/taskLayout';
 import { initializeTaskRenderer } from '../task/taskRenderer';
+import {
+	createTaskGraphScopeLayout,
+	createTaskGraphScopeNodePositions,
+	createTaskGraphTargetIndex,
+	sortTaskGraphTargetIds,
+	type TaskGraphScopeLayout,
+} from '../task/taskGraphTargetLayout';
 import {
 	initializeTaskInspector,
 	type FocusedTaskNode,
@@ -147,6 +163,30 @@ export interface GraphViewInteractions {
 interface DescendantDetachedRoot {
 	readonly root: GraphRoot;
 	readonly depth: number;
+}
+
+/** Work Domain binding과 실제 Graph occurrence를 연결하는 View-local 주소다. */
+interface TaskGraphScopeBinding {
+	readonly taskId: string;
+	readonly nodeId: string;
+	readonly area: TaskGraphTargetAreaKind;
+	readonly sourceId: string;
+}
+
+function createTaskGraphScopeBindingKey(
+	taskId: string,
+	nodeId: string,
+	sourceId: string,
+): string {
+	return `${taskId}\u0000${nodeId}\u0000${sourceId}`;
+}
+
+function createTaskGraphScopeAreaKey(
+	taskId: string,
+	nodeId: string,
+	area: TaskGraphTargetAreaKind,
+): string {
+	return `${taskId}\u0000${nodeId}\u0000${area}`;
 }
 
 /**
@@ -462,6 +502,13 @@ export function initializeGraphLayoutReflow(
 	getLogicalParentByChild: () => ReadonlyMap<string, string> = () => new Map(),
 	onHiddenNodeIdsChange: (state: GraphStateSnapshot) => void = () => undefined,
 	shouldSkipLayoutReflow: () => boolean = () => false,
+	projectNodePositions: (
+		layout: GraphLayout,
+		nodePositions: GraphStateSnapshot['nodePositions'],
+		state: GraphStateSnapshot,
+	) => GraphStateSnapshot['nodePositions'] = (_layout, nodePositions) => (
+		nodePositions
+	),
 ): () => void {
 	let active = true;
 	let renderedFileGroupPages = state.getState().fileGroupPages;
@@ -506,19 +553,24 @@ export function initializeGraphLayoutReflow(
 				},
 			),
 		);
+		const projectedNodePositions = projectNodePositions(
+			nextLayout,
+			rebasedNodePositions,
+			nextState,
+		);
 
 		applyGraphLayout(
 			renderer,
 			navigator,
 			nextLayout,
-			rebasedNodePositions,
+			projectedNodePositions,
 		);
 		if (hiddenNodeIdsChanged) {
 			onHiddenNodeIdsChange(nextState);
 		}
 		state.setState({
 			camera: nextState.camera,
-			nodePositions: rebasedNodePositions,
+			nodePositions: projectedNodePositions,
 			fileGroupPages: nextState.fileGroupPages,
 			openedFolders: nextState.openedFolders,
 			detachedRootNodeIds: nextState.detachedRootNodeIds,
@@ -1013,8 +1065,11 @@ export function initializeGraphView(
 	const state = createGraphState(initialState);
 	const taskState = createTaskState(initialTasks);
 	let disposed = false;
+	/** 활성 Task Scope가 World 위치를 소유하는 actual Graph occurrence Root다. */
+	let currentTaskScopeBoundaryNodeIds = new Set<string>();
 	let initialGraphState = state.getState();
 	let workspaceGraph = graph;
+	let taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
 	let currentGraph = applyDetachedGraphRoots(
 		workspaceGraph,
 		initialGraphState.detachedRootNodeIds,
@@ -1043,12 +1098,19 @@ export function initializeGraphView(
 	const createLayout = (
 		targetGraph: Graph,
 		snapshot: GraphStateSnapshot,
-		unarrangedNodeIds: ReadonlySet<string> = new Set(),
+		manualUnarrangedNodeIds: ReadonlySet<string> = new Set(),
 	): GraphLayout => createGraphLayout(targetGraph, {
 		fileGroupPages: snapshot.fileGroupPages,
 		openedFolders: snapshot.openedFolders,
 		hiddenNodeIds: snapshot.hiddenNodeIds,
-		unarrangedNodeIds,
+		// Scope boundary는 실제 Graph occurrence의 위치만 Task가 소유한다.
+		// 사용자 Drag로 만든 manual arrangement와 provenance를 섞지 않되,
+		// Layout에는 둘 다 sibling flow 밖의 actual Node로 전달한다.
+		unarrangedNodeIds: new Set([
+			...manualUnarrangedNodeIds,
+			...currentTaskScopeBoundaryNodeIds,
+		]),
+		pinnedNodeIds: currentTaskScopeBoundaryNodeIds,
 	});
 	const normalizedInitialSnapshot = {
 		...initialGraphState,
@@ -1087,21 +1149,33 @@ export function initializeGraphView(
 		initialStateLayout,
 		initialGraphState.nodePositions,
 	);
-	let currentUnarrangedNodeIds = new Set([
+	let currentManualUnarrangedNodeIds = new Set([
 		...initialArrangement.unarrangedNodeIds,
 		...currentGraph.roots
 			.filter((root) => isDetachedRootId(root.id))
 			.map(getGraphRootLayoutNodeId),
 	]);
-	let currentLayout = currentUnarrangedNodeIds.size === 0
+	let currentLayout = currentManualUnarrangedNodeIds.size === 0
 		? initialBaselineLayout
 		: createLayout(
 			currentGraph,
 			initialGraphState,
-			currentUnarrangedNodeIds,
+			currentManualUnarrangedNodeIds,
 		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
+	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
+	const taskScopeOccurrenceByBinding = new Map<string, string>();
+	let applyingTaskState = false;
+	let handleGraphSourceDragMove = (_request: GraphSourceDragRequest): void => {
+		return;
+	};
+	let handleGraphSourceDrop = (
+		_request: GraphSourceDragRequest,
+	): GraphSourceDropResult | false => false;
+	let handleGraphSourceDragCancel = (): void => {
+		return;
+	};
 	let skipGraphLayoutReflow = false;
 	const syncNavigatorRoots = (
 		snapshot: GraphStateSnapshot = state.getState(),
@@ -1117,7 +1191,7 @@ export function initializeGraphView(
 		currentLayout = createLayout(
 			currentGraph,
 			snapshot,
-			currentUnarrangedNodeIds,
+			currentManualUnarrangedNodeIds,
 		);
 
 		return currentLayout;
@@ -1128,7 +1202,7 @@ export function initializeGraphView(
 		targetPosition: { readonly x: number; readonly y: number },
 		templateRootIdOverride?: string,
 		animationSourceRootId?: string,
-	): boolean => {
+	): string | undefined => {
 		const occurrenceRoots = currentGraph.roots.filter((root) => (
 			root.nodeId === request.nodeId
 			&& getDetachedRootOriginId(root.id) === request.instanceRootId
@@ -1148,14 +1222,14 @@ export function initializeGraphView(
 		);
 
 		if (!addition) {
-			return false;
+			return undefined;
 		}
 
 		const snapshot = state.getState();
 		const detachedRootNode = addition.graph.rootNodes[addition.root.nodeId];
 
 		if (!detachedRootNode) {
-			return false;
+			return undefined;
 		}
 		const visualState = cloneDetachedInstanceVisualState(
 			snapshot,
@@ -1168,7 +1242,7 @@ export function initializeGraphView(
 		const nextSnapshot = { ...snapshot, ...visualState };
 		const previousLayout = currentLayout;
 		const unarrangedNodeIds = cloneDetachedSubtreeArrangement(
-			currentUnarrangedNodeIds,
+			currentManualUnarrangedNodeIds,
 			sourceRootNodeId,
 			addition.root.id,
 			currentLogicalParentByChild,
@@ -1178,7 +1252,7 @@ export function initializeGraphView(
 		const detachedRootNodeId = getGraphRootLayoutNodeId(addition.root);
 
 		unarrangedNodeIds.add(detachedRootNodeId);
-		currentUnarrangedNodeIds = unarrangedNodeIds;
+		currentManualUnarrangedNodeIds = unarrangedNodeIds;
 		const nextLayout = createLayout(
 			addition.graph,
 			nextSnapshot,
@@ -1243,7 +1317,7 @@ export function initializeGraphView(
 			hiddenNodeIds: snapshot.hiddenNodeIds,
 		});
 		syncNavigatorRoots();
-		return true;
+		return detachedRootNodeId;
 	};
 	const handleDetachDrop = (request: GraphDetachDropRequest): void => {
 		const viewportBounds = viewport.getBoundingClientRect();
@@ -1283,20 +1357,34 @@ export function initializeGraphView(
 
 		currentGraph = workspaceGraph;
 		currentLogicalParentByChild = createGraphLogicalParentByChild(currentGraph);
-		currentUnarrangedNodeIds = new Set();
+		currentManualUnarrangedNodeIds = new Set();
+		// Detached 복구로 occurrence 주소가 바뀔 수 있으므로 canonical binding을
+		// 새 Workspace Layout에서 먼저 reconcile한다. Scope boundary는 manual
+		// Arrange All 대상이 아니어서 final effective Layout에 계속 남는다.
 		currentLayout = createLayout(currentGraph, nextSnapshot);
-		applyGraphLayout(renderer, navigator, currentLayout, {});
+		reconcileTaskGraphScopeOccurrences(collectTaskGraphScopeBindings());
+		currentLayout = createLayout(currentGraph, nextSnapshot);
+		const projection = applyTaskGraphScopeProjection(currentLayout, {});
+
+		applyGraphLayout(
+			renderer,
+			navigator,
+			currentLayout,
+			projection.nodePositions,
+		);
 		skipGraphLayoutReflow = true;
+		applyingTaskState = true;
 		try {
 			state.setState({
 				camera: snapshot.camera,
-				nodePositions: {},
+				nodePositions: projection.nodePositions,
 				fileGroupPages: visualState.fileGroupPages,
 				openedFolders: visualState.openedFolders,
 				detachedRootNodeIds: {},
 				hiddenNodeIds: snapshot.hiddenNodeIds,
 			});
 		} finally {
+			applyingTaskState = false;
 			skipGraphLayoutReflow = false;
 		}
 		syncNavigatorRoots();
@@ -1353,7 +1441,7 @@ export function initializeGraphView(
 			originRootId,
 			targetRoot.nodeId,
 		);
-		const previousUnarrangedNodeIds = currentUnarrangedNodeIds;
+		const previousUnarrangedNodeIds = currentManualUnarrangedNodeIds;
 		const unarrangedNodeIds = reattachDetachedSubtreeArrangement(
 			previousUnarrangedNodeIds,
 			detachedRootNodeId,
@@ -1363,7 +1451,7 @@ export function initializeGraphView(
 		);
 		const nextLogicalParentByChild = createGraphLogicalParentByChild(nextGraph);
 
-		currentUnarrangedNodeIds = unarrangedNodeIds;
+		currentManualUnarrangedNodeIds = unarrangedNodeIds;
 		const nextLayout = createLayout(
 			nextGraph,
 			nextSnapshot,
@@ -1387,7 +1475,7 @@ export function initializeGraphView(
 				transferredNodePositions,
 				{
 					logicalParentByChild: nextLogicalParentByChild,
-					unarrangedNodeIds,
+					unarrangedNodeIds: nextLayout.unarrangedNodeIds,
 				},
 			),
 		);
@@ -1401,6 +1489,7 @@ export function initializeGraphView(
 		const detachedRootNodeIds = { ...snapshot.detachedRootNodeIds };
 
 		delete detachedRootNodeIds[rootId];
+		removeTaskGraphScopeBindingsForOccurrence(detachedRootNodeId);
 		currentGraph = nextGraph;
 		currentLogicalParentByChild = nextLogicalParentByChild;
 		currentLayout = nextLayout;
@@ -1521,7 +1610,13 @@ export function initializeGraphView(
 		nodeId,
 		arranged,
 	}: GraphNodeArrangementRequest): boolean => {
-		const nextUnarrangedNodeIds = new Set(currentUnarrangedNodeIds);
+		// Scope가 위치를 소유하는 동안 Renderer의 effective-unarranged 상태를
+		// manual provenance로 되받아 쓰지 않는다. Region 밖 Drag는 Drop 경로가
+		// 명시적으로 manual ownership으로 전환한다.
+		if (currentTaskScopeBoundaryNodeIds.has(nodeId)) {
+			return false;
+		}
+		const nextUnarrangedNodeIds = new Set(currentManualUnarrangedNodeIds);
 		const wasUnarranged = nextUnarrangedNodeIds.has(nodeId);
 
 		if (arranged) {
@@ -1557,7 +1652,7 @@ export function initializeGraphView(
 			delete nodePositions[nodeId];
 		}
 
-		currentUnarrangedNodeIds = nextUnarrangedNodeIds;
+		currentManualUnarrangedNodeIds = nextUnarrangedNodeIds;
 		currentLayout = nextLayout;
 		applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
 		state.setState({
@@ -1569,6 +1664,45 @@ export function initializeGraphView(
 			hiddenNodeIds: snapshot.hiddenNodeIds,
 		});
 		return true;
+	};
+	/**
+	 * Graph parent drag는 기존 visible/logical subtree를 유지하되, 다른 Task
+	 * Scope가 위치를 소유한 descendant occurrence부터는 이동 경계를 끊는다.
+	 * 잡은 Root 자체가 Scope-bound인 경우에는 Root와 자신의 일반 subtree를
+	 * 계속 이동하고, 그 아래 별도 Scope boundary만 고정한다.
+	 */
+	const resolveGraphDragSubtreeNodeIds = (
+		rootNodeId: string,
+		visibleSubtreeNodeIds: ReadonlySet<string>,
+	): ReadonlySet<string> => {
+		const nodeIds = new Set([
+			...visibleSubtreeNodeIds,
+			...collectGraphLogicalSubtreeNodeIds(
+				rootNodeId,
+				currentLogicalParentByChild,
+			),
+		]);
+
+		for (const boundaryNodeId of currentTaskScopeBoundaryNodeIds) {
+			if (boundaryNodeId === rootNodeId || !nodeIds.has(boundaryNodeId)) {
+				continue;
+			}
+			for (const nodeId of collectGraphLayoutSubtreeNodeIds(
+				currentLayout,
+				boundaryNodeId,
+			)) {
+				nodeIds.delete(nodeId);
+			}
+			for (const nodeId of collectGraphLogicalSubtreeNodeIds(
+				boundaryNodeId,
+				currentLogicalParentByChild,
+			)) {
+				nodeIds.delete(nodeId);
+			}
+		}
+
+		nodeIds.add(rootNodeId);
+		return nodeIds;
 	};
 	const initialLayout = currentLayout;
 
@@ -1591,13 +1725,13 @@ export function initializeGraphView(
 			onDetachedRootDelete: handleDetachedRootDelete,
 			onRootReattach: handleRootReattach,
 			onNodeArrangementChange: handleNodeArrangementChange,
-			resolveNodeSubtreeIds: (nodeId) => collectGraphLogicalSubtreeNodeIds(
-				nodeId,
-				currentLogicalParentByChild,
-			),
+			resolveNodeSubtreeIds: resolveGraphDragSubtreeNodeIds,
 			resolveRootId: (rootNodeId) => currentGraph.roots.find(
 				(root) => getGraphRootLayoutNodeId(root) === rootNodeId,
 			)?.id,
+			onSourceDragMove: (request) => handleGraphSourceDragMove(request),
+			onSourceDrop: (request) => handleGraphSourceDrop(request),
+			onSourceDragCancel: () => handleGraphSourceDragCancel(),
 		},
 		{ nodeEffects },
 	);
@@ -1605,7 +1739,6 @@ export function initializeGraphView(
 		taskState.getSnapshot().tasks,
 	);
 	let focusedTaskNode: FocusedTaskNode | undefined;
-	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
 	let taskInspector: ReturnType<typeof initializeTaskInspector> | undefined;
 	const findFocusedTaskLayoutNode = (): TaskLayoutNode | undefined => (
 		focusedTaskNode
@@ -1627,15 +1760,756 @@ export function initializeGraphView(
 		focusedTaskNode = undefined;
 		syncTaskInspector();
 	};
-	const applyTaskState = (): void => {
-		currentTaskLayout = createTaskGraphLayout(
-			taskState.getSnapshot().tasks,
+	const collectTaskGraphScopeBindings = (): TaskGraphScopeBinding[] => {
+		const bindings: TaskGraphScopeBinding[] = [];
+
+		for (const task of taskState.getSnapshot().tasks) {
+			for (const node of task.nodes) {
+				if (node.kind !== 'work') {
+					continue;
+				}
+				for (const area of ['reference', 'work'] as const) {
+					for (const sourceId of node.graphTargets[area]) {
+						bindings.push({
+							taskId: task.id,
+							nodeId: node.id,
+							area,
+							sourceId,
+						});
+					}
+				}
+			}
+		}
+		return bindings;
+	};
+	/** 현재 Layout에 실제 Card로 존재하는 Folder/standalone File occurrence만 해석한다. */
+	const resolveVisibleTaskGraphScopeOccurrenceSourceId = (
+		occurrenceNodeId: string,
+	): string | undefined => {
+		const node = currentLayout.nodes.find(
+			(candidate) => candidate.id === occurrenceNodeId,
 		);
+
+		if (node?.kind === 'folder') {
+			return getGraphLayoutSourceId(node.id);
+		}
+		if (
+			node?.kind === 'file-group'
+			&& node.presentation === 'standalone'
+			&& node.children[0]?.presentation === 'normal'
+		) {
+			return getGraphLayoutSourceId(node.children[0].id);
+		}
+		return undefined;
+	};
+	/** 현재 Graph Root topology에서 Source를 실제로 소유하는 occurrence 주소다. */
+	const resolveTaskGraphScopeTopologyOccurrenceId = (
+		sourceId: string,
+	): string | undefined => {
+		const location = findGraphNode(currentGraph, sourceId);
+
+		return location && location.node.kind !== 'project'
+			? createGraphLayoutNodeId(location.root.id, sourceId)
+			: undefined;
+	};
+	/** Collapse로 DOM이 잠시 사라져도 같은 visual occurrence 주소인지 보존한다. */
+	const isKnownTaskGraphScopeOccurrence = (
+		occurrenceNodeId: string,
+		sourceId: string,
+	): boolean => {
+		if (getGraphLayoutSourceId(occurrenceNodeId) !== sourceId) {
+			return false;
+		}
+		const occurrenceRootId = getGraphLayoutRootId(occurrenceNodeId);
+
+		return occurrenceRootId
+			? taskGraphTargetIndex.has(sourceId)
+				&& currentGraph.roots.some((root) => root.id === occurrenceRootId)
+			: resolveTaskGraphScopeTopologyOccurrenceId(sourceId)
+				=== occurrenceNodeId;
+	};
+	const findAvailableScopeOccurrence = (
+		sourceId: string,
+		claimedOccurrenceIds: ReadonlySet<string>,
+		bindingKey: string,
+		reservedOwnerByOccurrenceId: ReadonlyMap<string, string>,
+	): string | undefined => {
+		for (const node of currentLayout.nodes) {
+			const occurrenceNodeId = node.id;
+
+			if (
+				!claimedOccurrenceIds.has(occurrenceNodeId)
+				&& (
+					!reservedOwnerByOccurrenceId.has(occurrenceNodeId)
+					|| reservedOwnerByOccurrenceId.get(occurrenceNodeId) === bindingKey
+				)
+				&& resolveVisibleTaskGraphScopeOccurrenceSourceId(occurrenceNodeId)
+					=== sourceId
+			) {
+				return occurrenceNodeId;
+			}
+		}
+		return undefined;
+	};
+	const reconcileTaskGraphScopeOccurrences = (
+		bindings: readonly TaskGraphScopeBinding[],
+	): boolean => {
+		const activeKeys = new Set(bindings.map((binding) => (
+			createTaskGraphScopeBindingKey(
+				binding.taskId,
+				binding.nodeId,
+				binding.sourceId,
+			)
+		)));
+
+		for (const key of [...taskScopeOccurrenceByBinding.keys()]) {
+			if (!activeKeys.has(key)) {
+				taskScopeOccurrenceByBinding.delete(key);
+			}
+		}
+		const reservedOwnerByOccurrenceId = new Map<string, string>();
+
+		for (const binding of bindings) {
+			const key = createTaskGraphScopeBindingKey(
+				binding.taskId,
+				binding.nodeId,
+				binding.sourceId,
+			);
+			const occurrenceNodeId = taskScopeOccurrenceByBinding.get(key);
+
+			if (
+				!occurrenceNodeId
+				|| !isKnownTaskGraphScopeOccurrence(
+					occurrenceNodeId,
+					binding.sourceId,
+				)
+			) {
+				taskScopeOccurrenceByBinding.delete(key);
+				continue;
+			}
+			const reservedOwner = reservedOwnerByOccurrenceId.get(occurrenceNodeId);
+
+			if (reservedOwner && reservedOwner !== key) {
+				taskScopeOccurrenceByBinding.delete(key);
+				continue;
+			}
+			reservedOwnerByOccurrenceId.set(occurrenceNodeId, key);
+		}
+		const claimedOccurrenceIds = new Set<string>();
+
+		for (const binding of bindings) {
+			const key = createTaskGraphScopeBindingKey(
+				binding.taskId,
+				binding.nodeId,
+				binding.sourceId,
+			);
+			let occurrenceNodeId = taskScopeOccurrenceByBinding.get(key);
+
+			if (
+				occurrenceNodeId
+				&& (
+					claimedOccurrenceIds.has(occurrenceNodeId)
+					|| !isKnownTaskGraphScopeOccurrence(
+						occurrenceNodeId,
+						binding.sourceId,
+					)
+				)
+			) {
+				occurrenceNodeId = undefined;
+				taskScopeOccurrenceByBinding.delete(key);
+			}
+			if (!occurrenceNodeId && taskGraphTargetIndex.has(binding.sourceId)) {
+				occurrenceNodeId = findAvailableScopeOccurrence(
+					binding.sourceId,
+					claimedOccurrenceIds,
+					key,
+					reservedOwnerByOccurrenceId,
+				);
+			}
+			if (!occurrenceNodeId && taskGraphTargetIndex.has(binding.sourceId)) {
+				// 닫힌 ancestor 아래 Target과 grouped File Row도 현재 owning Root의
+				// occurrence 주소를 pin해 Layout 재생성에서 실제 Card로 복구한다.
+				const topologyOccurrenceNodeId =
+					resolveTaskGraphScopeTopologyOccurrenceId(binding.sourceId);
+
+				if (
+					topologyOccurrenceNodeId
+					&& !claimedOccurrenceIds.has(topologyOccurrenceNodeId)
+					&& !reservedOwnerByOccurrenceId.has(topologyOccurrenceNodeId)
+				) {
+					occurrenceNodeId = topologyOccurrenceNodeId;
+				}
+			}
+			if (occurrenceNodeId) {
+				taskScopeOccurrenceByBinding.set(key, occurrenceNodeId);
+				claimedOccurrenceIds.add(occurrenceNodeId);
+			}
+		}
+		const nextBoundaryNodeIds = new Set(taskScopeOccurrenceByBinding.values());
+		const scopeBoundariesChanged = (
+			nextBoundaryNodeIds.size !== currentTaskScopeBoundaryNodeIds.size
+			|| [...nextBoundaryNodeIds].some(
+				(nodeId) => !currentTaskScopeBoundaryNodeIds.has(nodeId),
+			)
+		);
+
+		currentTaskScopeBoundaryNodeIds = nextBoundaryNodeIds;
+		// Persisted Scope 좌표는 초기 arrangement 분류에서 manual로 보일 수 있다.
+		// 활성 Scope boundary가 provenance를 인수하되, 실제 Detached Root는
+		// binding이 사라져도 독립 occurrence여야 하므로 manual 상태를 보존한다.
+		for (const occurrenceNodeId of nextBoundaryNodeIds) {
+			const occurrenceRootId = getGraphLayoutRootId(occurrenceNodeId);
+
+			if (!occurrenceRootId || !isDetachedRootId(occurrenceRootId)) {
+				currentManualUnarrangedNodeIds.delete(occurrenceNodeId);
+			}
+		}
+		return scopeBoundariesChanged;
+	};
+	const createCurrentTaskGraphScopeLayouts = (
+		layout: TaskGraphLayout,
+		graphLayout: GraphLayout,
+		graphNodePositions: GraphStateSnapshot['nodePositions'],
+	): Map<string, TaskGraphScopeLayout> => {
+		const scopeLayouts = new Map<string, TaskGraphScopeLayout>();
+		const scopeBoundaryNodeIds = new Set(
+			taskScopeOccurrenceByBinding.values(),
+		);
+
+		for (const node of layout.nodes) {
+			if (node.kind !== 'work') {
+				continue;
+			}
+			for (const area of ['reference', 'work'] as const) {
+				const sourceIds = sortTaskGraphTargetIds(
+					taskGraphTargetIndex,
+					node.scopeAreas[area].sourceIds,
+				);
+				const inputs = sourceIds.flatMap((sourceId) => {
+					const occurrenceNodeId = taskScopeOccurrenceByBinding.get(
+						createTaskGraphScopeBindingKey(node.taskId, node.id, sourceId),
+					);
+
+					return occurrenceNodeId
+						? [{ sourceId, occurrenceNodeId }]
+						: [];
+				});
+
+				scopeLayouts.set(
+					createTaskGraphScopeAreaKey(node.taskId, node.id, area),
+					createTaskGraphScopeLayout(
+						graphLayout,
+						graphNodePositions,
+						inputs,
+						scopeBoundaryNodeIds,
+					),
+				);
+			}
+		}
+		return scopeLayouts;
+	};
+	const projectTaskGraphScopeNodePositions = (
+		graphLayout: GraphLayout,
+		graphNodePositions: GraphStateSnapshot['nodePositions'],
+		layout: TaskGraphLayout,
+		scopeLayouts: ReadonlyMap<string, TaskGraphScopeLayout>,
+	): {
+		readonly nodePositions: GraphStateSnapshot['nodePositions'];
+		readonly changed: boolean;
+	} => {
+		const nodePositions = { ...graphNodePositions };
+		const scopeBoundaryNodeIds = new Set(
+			taskScopeOccurrenceByBinding.values(),
+		);
+		let changed = false;
+
+		for (const node of layout.nodes) {
+			if (node.kind !== 'work') {
+				continue;
+			}
+			for (const area of ['reference', 'work'] as const) {
+				const scopeLayout = scopeLayouts.get(
+					createTaskGraphScopeAreaKey(node.taskId, node.id, area),
+				);
+
+				if (!scopeLayout) {
+					continue;
+				}
+				const targetPositions = new Map(createTaskGraphScopeNodePositions(
+					node.scopeAreas[area],
+					scopeLayout,
+				));
+
+				for (const occurrence of scopeLayout.occurrences) {
+					const targetRootPosition = targetPositions.get(
+						occurrence.occurrenceNodeId,
+					);
+
+					if (!targetRootPosition) {
+						continue;
+					}
+					translateScopeLogicalSubtreePositions(
+						graphLayout,
+						graphNodePositions,
+						targetPositions,
+						occurrence.occurrenceNodeId,
+						targetRootPosition,
+						scopeBoundaryNodeIds,
+					);
+				}
+
+				for (const [nodeId, position] of targetPositions) {
+					const previous = nodePositions[nodeId];
+
+					if (previous?.x === position.x && previous.y === position.y) {
+						continue;
+					}
+					nodePositions[nodeId] = position;
+					changed = true;
+				}
+			}
+		}
+		return { nodePositions, changed };
+	};
+	/**
+	 * Task Region geometry와 실제 Graph occurrence의 최종 World 좌표를 같은
+	 * 입력 Layout에서 계산한다. Graph DOM/Edge 생성은 계속 GraphRenderer 소유다.
+	 */
+	const applyTaskGraphScopeProjection = (
+		graphLayout: GraphLayout,
+		graphNodePositions: GraphStateSnapshot['nodePositions'],
+	): {
+		readonly nodePositions: GraphStateSnapshot['nodePositions'];
+		readonly changed: boolean;
+	} => {
+		let tasks = taskState.getSnapshot().tasks;
+		const provisionalLayout = createTaskGraphLayout(tasks);
+		const scopeLayouts = createCurrentTaskGraphScopeLayouts(
+			provisionalLayout,
+			graphLayout,
+			graphNodePositions,
+		);
+		const scopeSizeOptions = {
+			resolveGraphTargetAreaSize: (taskId, nodeId, area) => {
+				const scopeLayout = scopeLayouts.get(
+					createTaskGraphScopeAreaKey(taskId, nodeId, area),
+				);
+
+				return scopeLayout
+					? { width: scopeLayout.width, height: scopeLayout.height }
+					: undefined;
+			},
+		} satisfies Parameters<typeof createTaskGraphLayout>[1];
+		let nextLayout = createTaskGraphLayout(tasks, scopeSizeOptions);
+		const collisionResolvedTasks = resolveTaskGraphWorkVisualCollisions(
+			tasks,
+			nextLayout,
+		);
+
+		if (collisionResolvedTasks !== tasks) {
+			tasks = taskState.replaceTasks(collisionResolvedTasks).tasks;
+			nextLayout = createTaskGraphLayout(tasks, scopeSizeOptions);
+		}
+
+		const projection = projectTaskGraphScopeNodePositions(
+			graphLayout,
+			graphNodePositions,
+			nextLayout,
+			scopeLayouts,
+		);
+
+		currentTaskLayout = nextLayout;
 		taskRenderer.applyLayout(currentTaskLayout);
 		if (focusedTaskNode && !findFocusedTaskLayoutNode()) {
 			focusedTaskNode = undefined;
 		}
 		syncTaskInspector();
+		return projection;
+	};
+	const applyTaskState = (
+		{ animateGraphScopeNodes = true }: {
+			readonly animateGraphScopeNodes?: boolean;
+		} = {},
+	): void => {
+		if (disposed || applyingTaskState) {
+			return;
+		}
+		applyingTaskState = true;
+		try {
+			const bindings = collectTaskGraphScopeBindings();
+			const scopeBoundariesChanged = reconcileTaskGraphScopeOccurrences(bindings);
+			const snapshot = state.getState();
+			let graphNodePositions: Record<string, GraphLayoutPosition> = {
+				...snapshot.nodePositions,
+			};
+
+			if (scopeBoundariesChanged) {
+				const previousLayout = currentLayout;
+				const nextLayout = createLayout(
+					currentGraph,
+					snapshot,
+					currentManualUnarrangedNodeIds,
+				);
+				graphNodePositions = rebaseNodePositions(
+					previousLayout,
+					nextLayout,
+					snapshot.nodePositions,
+					{ logicalParentByChild: currentLogicalParentByChild },
+				);
+				const nextNodeIds = new Set(nextLayout.nodes.map((node) => node.id));
+
+				for (const previousNode of previousLayout.nodes) {
+					if (
+						!nextNodeIds.has(previousNode.id)
+						&& !currentManualUnarrangedNodeIds.has(previousNode.id)
+						&& !currentTaskScopeBoundaryNodeIds.has(previousNode.id)
+					) {
+						// Scope를 떠난 standalone File은 원래 grouped Row로 돌아가며
+						// 더 이상 독립 World 좌표를 소유하지 않는다.
+						delete graphNodePositions[previousNode.id];
+					}
+				}
+				currentLayout = nextLayout;
+			}
+			const projection = applyTaskGraphScopeProjection(
+				currentLayout,
+				graphNodePositions,
+			);
+
+			if (scopeBoundariesChanged || projection.changed) {
+				// Discrete Scope 변경은 기존 GraphRenderer의 220ms Layout
+				// transition을 그대로 사용한다. State를 먼저 쓰면 Renderer의
+				// stored-position 구독이 transition을 즉시 완료한다.
+				if (scopeBoundariesChanged) {
+					applyGraphLayout(
+						renderer,
+						navigator,
+						currentLayout,
+						projection.nodePositions,
+						{ animate: animateGraphScopeNodes },
+					);
+				} else if (animateGraphScopeNodes) {
+					renderer.applyLayout(currentLayout, projection.nodePositions);
+				}
+				state.setState({
+					camera: snapshot.camera,
+					nodePositions: projection.nodePositions,
+				});
+			}
+		} finally {
+			applyingTaskState = false;
+		}
+	};
+	const updateWorkGraphTargetBinding = (
+		taskId: string,
+		nodeId: string,
+		sourceId: string,
+		area: TaskGraphTargetAreaKind | undefined,
+	): boolean => taskState.updateTask(taskId, (current) => ({
+		...current,
+		nodes: current.nodes.map((node) => {
+			if (node.id !== nodeId || node.kind !== 'work') {
+				return node;
+			}
+			return {
+				...node,
+				graphTargets: {
+					reference: area === 'reference'
+						? sortTaskGraphTargetIds(taskGraphTargetIndex, [
+							...node.graphTargets.reference,
+							sourceId,
+						])
+						: node.graphTargets.reference.filter(
+							(targetId) => targetId !== sourceId,
+						),
+					work: area === 'work'
+						? sortTaskGraphTargetIds(taskGraphTargetIndex, [
+							...node.graphTargets.work,
+							sourceId,
+						])
+						: node.graphTargets.work.filter(
+							(targetId) => targetId !== sourceId,
+						),
+				},
+			};
+		}),
+	})) !== undefined;
+	function removeTaskGraphScopeBindingsForOccurrence(
+		occurrenceNodeId: string,
+	): void {
+		const bindingByKey = new Map(collectTaskGraphScopeBindings().map((binding) => [
+			createTaskGraphScopeBindingKey(
+				binding.taskId,
+				binding.nodeId,
+				binding.sourceId,
+			),
+			binding,
+		]));
+
+		for (const [bindingKey, mappedOccurrenceNodeId] of [
+			...taskScopeOccurrenceByBinding.entries(),
+		]) {
+			if (mappedOccurrenceNodeId !== occurrenceNodeId) {
+				continue;
+			}
+			const binding = bindingByKey.get(bindingKey);
+
+			if (binding) {
+				updateWorkGraphTargetBinding(
+					binding.taskId,
+					binding.nodeId,
+					binding.sourceId,
+					undefined,
+				);
+			}
+			taskScopeOccurrenceByBinding.delete(bindingKey);
+		}
+	}
+	const translateScopeLogicalSubtreePositions = (
+		graphLayout: GraphLayout,
+		snapshotPositions: Readonly<Record<string, GraphLayoutPosition | undefined>>,
+		outputPositions: Map<string, GraphLayoutPosition>,
+		occurrenceNodeId: string,
+		targetRootPosition: GraphLayoutPosition,
+		scopeBoundaryNodeIds: ReadonlySet<string> = new Set(),
+	): void => {
+		const rootNode = graphLayout.nodes.find(
+			(node) => node.id === occurrenceNodeId,
+		);
+
+		if (!rootNode) {
+			return;
+		}
+		const currentRootPosition = resolveGraphLayoutNodePosition(
+			rootNode,
+			snapshotPositions,
+		);
+		const delta = {
+			x: targetRootPosition.x - currentRootPosition.x,
+			y: targetRootPosition.y - currentRootPosition.y,
+		};
+
+		const subtreeNodeIds = collectGraphLogicalSubtreeNodeIds(
+			occurrenceNodeId,
+			currentLogicalParentByChild,
+		);
+		const excludedNodeIds = new Set<string>();
+
+		for (const boundaryNodeId of scopeBoundaryNodeIds) {
+			if (
+				boundaryNodeId === occurrenceNodeId
+				|| !subtreeNodeIds.has(boundaryNodeId)
+			) {
+				continue;
+			}
+			for (const nodeId of collectGraphLogicalSubtreeNodeIds(
+				boundaryNodeId,
+				currentLogicalParentByChild,
+			)) {
+				excludedNodeIds.add(nodeId);
+			}
+		}
+
+		for (const nodeId of subtreeNodeIds) {
+			if (excludedNodeIds.has(nodeId)) {
+				continue;
+			}
+			if (outputPositions.has(nodeId)) {
+				continue;
+			}
+			const node = graphLayout.nodes.find((candidate) => candidate.id === nodeId);
+			const currentPosition = snapshotPositions[nodeId]
+				?? (node
+					? resolveGraphLayoutNodePosition(node, snapshotPositions)
+					: undefined);
+
+			if (currentPosition) {
+				outputPositions.set(nodeId, {
+					x: currentPosition.x + delta.x,
+					y: currentPosition.y + delta.y,
+				});
+			}
+		}
+	};
+	const translateScopeOccurrenceTo = (
+		occurrenceNodeId: string,
+		targetPosition: GraphLayoutPosition,
+		scopeBoundaryNodeIds: ReadonlySet<string> = new Set(),
+	): void => {
+		const snapshot = state.getState();
+		const nodePositions = { ...snapshot.nodePositions };
+		const translatedPositions = new Map<string, GraphLayoutPosition>();
+
+		translateScopeLogicalSubtreePositions(
+			currentLayout,
+			snapshot.nodePositions,
+			translatedPositions,
+			occurrenceNodeId,
+			targetPosition,
+			scopeBoundaryNodeIds,
+		);
+		for (const [nodeId, position] of translatedPositions) {
+			nodePositions[nodeId] = position;
+		}
+		state.setState({ camera: snapshot.camera, nodePositions });
+	};
+	handleGraphSourceDragMove = ({
+		sourceNodeId,
+		clientX,
+		clientY,
+	}): void => {
+		if (disposed || !taskGraphTargetIndex.has(sourceNodeId)) {
+			taskRenderer.clearGraphTargetDrag();
+			return;
+		}
+		taskRenderer.updateGraphTargetDrag({ x: clientX, y: clientY });
+	};
+	handleGraphSourceDrop = (request): GraphSourceDropResult | false => {
+		const {
+			sourceNodeId,
+			clientX,
+			clientY,
+		} = request;
+		const source = taskGraphTargetIndex.get(sourceNodeId);
+		const dropTarget = source
+			? taskRenderer.updateGraphTargetDrag({ x: clientX, y: clientY })
+			: undefined;
+
+		taskRenderer.clearGraphTargetDrag();
+		if (disposed) {
+			return false;
+		}
+		if (!dropTarget) {
+			const boundEntry = [...taskScopeOccurrenceByBinding.entries()].find(
+				([, occurrenceNodeId]) => (
+					occurrenceNodeId === request.occurrenceNodeId
+				),
+			);
+
+			if (boundEntry) {
+				if (
+					request.reattachTargetRootId
+					&& request.occurrenceRootId === request.reattachTargetRootId
+				) {
+					return false;
+				}
+				const binding = collectTaskGraphScopeBindings().find((candidate) => (
+					createTaskGraphScopeBindingKey(
+						candidate.taskId,
+						candidate.nodeId,
+						candidate.sourceId,
+					) === boundEntry[0]
+				));
+
+				if (binding) {
+					// Region 밖 실제 Drag는 semantic binding을 해제하면서 그
+					// occurrence의 현재 World 위치를 사용자 manual arrangement로
+					// 넘긴다. Task/Work 삭제에 의한 해제와 이 경로를 구분한다.
+					currentManualUnarrangedNodeIds = new Set(
+						currentManualUnarrangedNodeIds,
+					);
+					currentManualUnarrangedNodeIds.add(request.occurrenceNodeId);
+					updateWorkGraphTargetBinding(
+						binding.taskId,
+						binding.nodeId,
+						binding.sourceId,
+						undefined,
+					);
+					taskScopeOccurrenceByBinding.delete(boundEntry[0]);
+					if (request.currentPosition) {
+						translateScopeOccurrenceTo(
+							request.occurrenceNodeId,
+							request.currentPosition,
+							new Set(taskScopeOccurrenceByBinding.values()),
+						);
+					}
+					applyTaskState();
+					return {};
+				}
+			}
+			return false;
+		}
+		if (!source) {
+			return false;
+		}
+
+		const task = taskState.getTask(dropTarget.taskId);
+		const workNode = task?.nodes.find((node) => (
+			node.id === dropTarget.nodeId && node.kind === 'work'
+		));
+
+		if (!task || workNode?.kind !== 'work') {
+			return false;
+		}
+
+		const bindingKey = createTaskGraphScopeBindingKey(
+			dropTarget.taskId,
+			dropTarget.nodeId,
+			sourceNodeId,
+		);
+		const previousOccurrenceId = taskScopeOccurrenceByBinding.get(bindingKey);
+
+		const draggedOccurrenceIsActual = isKnownTaskGraphScopeOccurrence(
+			request.occurrenceNodeId,
+			sourceNodeId,
+		);
+
+		if (draggedOccurrenceIsActual) {
+			const displacedEntry = [...taskScopeOccurrenceByBinding.entries()].find(
+				([key, occurrenceNodeId]) => (
+					key !== bindingKey
+					&& occurrenceNodeId === request.occurrenceNodeId
+				),
+			);
+
+			if (displacedEntry) {
+				if (previousOccurrenceId) {
+					taskScopeOccurrenceByBinding.set(
+						displacedEntry[0],
+						previousOccurrenceId,
+					);
+				} else {
+					taskScopeOccurrenceByBinding.delete(displacedEntry[0]);
+				}
+			}
+			if (
+				previousOccurrenceId
+				&& previousOccurrenceId !== request.occurrenceNodeId
+				&& !displacedEntry
+				&& request.startPosition
+			) {
+				translateScopeOccurrenceTo(
+					previousOccurrenceId,
+					request.startPosition,
+					new Set(taskScopeOccurrenceByBinding.values()),
+				);
+			}
+			taskScopeOccurrenceByBinding.set(
+				bindingKey,
+				request.occurrenceNodeId,
+			);
+		}
+		if (!updateWorkGraphTargetBinding(
+			dropTarget.taskId,
+			dropTarget.nodeId,
+			sourceNodeId,
+			dropTarget.area,
+		)) {
+			return false;
+		}
+		applyTaskState();
+		const occurrenceNodeId = taskScopeOccurrenceByBinding.get(bindingKey);
+
+		if (!occurrenceNodeId) {
+			return false;
+		}
+		// applyTaskState가 Scope boundary를 반영한 실제 occurrence 좌표와 Edge를
+		// 기존 GraphRenderer transition에 전달했다. Renderer drag-end가 목표
+		// 좌표를 즉시 덮어쓰지 않도록 consumed 신호만 반환한다.
+		return {};
+	};
+	handleGraphSourceDragCancel = (): void => {
+		taskRenderer.clearGraphTargetDrag();
 	};
 	const handleTaskInspectorFieldInput = (
 		input: TaskInspectorFieldInput,
@@ -1690,7 +2564,7 @@ export function initializeGraphView(
 		});
 
 		if (updated) {
-			applyTaskState();
+			applyTaskState({ animateGraphScopeNodes: false });
 		}
 	};
 	const handleTaskOriginChange = (taskId: string, origin: TaskOrigin): void => {
@@ -1700,7 +2574,7 @@ export function initializeGraphView(
 		}));
 
 		if (updated) {
-			applyTaskState();
+			applyTaskState({ animateGraphScopeNodes: false });
 		}
 	};
 	const handleTaskNodePositionChange = (
@@ -1709,7 +2583,7 @@ export function initializeGraphView(
 		position: TaskNodePosition,
 	): void => {
 		if (taskState.setNodePosition(taskId, nodeId, position)) {
-			applyTaskState();
+			applyTaskState({ animateGraphScopeNodes: false });
 		}
 	};
 	const handleTaskNodeFocus = (node: TaskLayoutNode): void => {
@@ -1816,6 +2690,22 @@ export function initializeGraphView(
 			onWorkAdd: handleTaskWorkAdd,
 			onTaskRemove: handleTaskRemove,
 			onWorkRemove: handleTaskWorkRemove,
+			resolveGraphTargetRegionStatus: (
+				taskId,
+				nodeId,
+				_area,
+				sourceIds,
+			) => ({
+				unavailableCount: [...new Set(sourceIds)].filter((sourceId) => {
+					const occurrenceNodeId = taskScopeOccurrenceByBinding.get(
+						createTaskGraphScopeBindingKey(taskId, nodeId, sourceId),
+					);
+
+					return !occurrenceNodeId
+						|| resolveVisibleTaskGraphScopeOccurrenceSourceId(occurrenceNodeId)
+							!== sourceId;
+				}).length,
+			}),
 			canConnectNodes: (...connection) => taskState.canConnect(...connection),
 			onNodesConnect: handleTaskConnect,
 			onEdgeDisconnect: handleTaskEdgeDisconnect,
@@ -1840,6 +2730,10 @@ export function initializeGraphView(
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
+	let renderedTaskScopeFileGroupPages = state.getState().fileGroupPages;
+	let renderedTaskScopeOpenedFolders = state.getState().openedFolders;
+	let renderedTaskScopeHiddenNodeIds = state.getState().hiddenNodeIds;
+	let renderedTaskScopeDetachedRootNodeIds = state.getState().detachedRootNodeIds;
 	const unsubscribeLayout = initializeGraphLayoutReflow(
 		state,
 		renderer,
@@ -1849,7 +2743,58 @@ export function initializeGraphView(
 		() => currentLogicalParentByChild,
 		syncNavigatorRoots,
 		() => skipGraphLayoutReflow,
+		(nextLayout, rebasedNodePositions, snapshot) => {
+			if (
+				disposed
+				|| applyingTaskState
+				|| snapshot.detachedRootNodeIds
+					!== renderedTaskScopeDetachedRootNodeIds
+			) {
+				// Detached topology가 바뀐 경우에는 먼저 canonical binding을 새
+				// occurrence 주소로 reconcile해야 한다. 뒤 Scope subscriber가 그
+				// 기존 전용 경로를 수행하도록 이 reflow에서는 Graph 좌표만 쓴다.
+				return rebasedNodePositions;
+			}
+
+			applyingTaskState = true;
+			try {
+				const projection = applyTaskGraphScopeProjection(
+					nextLayout,
+					rebasedNodePositions,
+				);
+
+				// 이 structural snapshot은 이미 단일 Graph layout transition에
+				// Scope 좌표까지 합성했다. 뒤 subscriber가 같은 Layout을 다시
+				// apply해 enter/exit animation을 취소하지 않도록 표시한다.
+				renderedTaskScopeFileGroupPages = snapshot.fileGroupPages;
+				renderedTaskScopeOpenedFolders = snapshot.openedFolders;
+				renderedTaskScopeHiddenNodeIds = snapshot.hiddenNodeIds;
+				renderedTaskScopeDetachedRootNodeIds = snapshot.detachedRootNodeIds;
+				return projection.nodePositions;
+			} finally {
+				applyingTaskState = false;
+			}
+		},
 	);
+	const unsubscribeTaskGraphScope = state.subscribe((snapshot) => {
+		const structureChanged = (
+			snapshot.fileGroupPages !== renderedTaskScopeFileGroupPages
+			|| snapshot.openedFolders !== renderedTaskScopeOpenedFolders
+			|| snapshot.hiddenNodeIds !== renderedTaskScopeHiddenNodeIds
+			|| snapshot.detachedRootNodeIds
+				!== renderedTaskScopeDetachedRootNodeIds
+		);
+		renderedTaskScopeFileGroupPages = snapshot.fileGroupPages;
+		renderedTaskScopeOpenedFolders = snapshot.openedFolders;
+		renderedTaskScopeHiddenNodeIds = snapshot.hiddenNodeIds;
+		renderedTaskScopeDetachedRootNodeIds = snapshot.detachedRootNodeIds;
+		if (applyingTaskState || !structureChanged) {
+			return;
+		}
+		applyTaskState();
+	});
+
+	applyTaskState({ animateGraphScopeNodes: false });
 
 	return {
 		state,
@@ -1869,6 +2814,7 @@ export function initializeGraphView(
 			const snapshot = state.getState();
 
 			workspaceGraph = graph;
+			taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
 			const nextGraph = applyDetachedGraphRoots(
 				workspaceGraph,
 				snapshot.detachedRootNodeIds,
@@ -1887,7 +2833,7 @@ export function initializeGraphView(
 				nextGraph,
 			);
 			const nextUnarrangedNodeIds = new Set([
-				...currentUnarrangedNodeIds,
+				...currentManualUnarrangedNodeIds,
 				...nextGraph.roots
 					.filter((root) => isDetachedRootId(root.id))
 					.map(getGraphRootLayoutNodeId),
@@ -1946,7 +2892,7 @@ export function initializeGraphView(
 
 				if (
 					!nextNodeIds.has(previousNode.id)
-					&& !currentUnarrangedNodeIds.has(previousNode.id)
+					&& !currentManualUnarrangedNodeIds.has(previousNode.id)
 					&& (
 						!previousInstanceRootId
 						|| !detachedRootNodeIds[previousInstanceRootId]
@@ -1958,7 +2904,7 @@ export function initializeGraphView(
 			}
 
 			currentGraph = nextGraph;
-			currentUnarrangedNodeIds = nextUnarrangedNodeIds;
+			currentManualUnarrangedNodeIds = nextUnarrangedNodeIds;
 			currentLogicalParentByChild = nextLogicalParentByChild;
 			currentLayout = nextLayout;
 			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
@@ -1972,6 +2918,7 @@ export function initializeGraphView(
 			});
 			syncNavigatorRoots();
 			navigator.setWorkspaceGraph(workspaceGraph);
+			applyTaskState();
 		},
 		updateTasks(tasks): void {
 			if (!disposed) {
@@ -1997,12 +2944,14 @@ export function initializeGraphView(
 			disposed = true;
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
+			unsubscribeTaskGraphScope();
 			unsubscribeLayout();
 			unsubscribeTaskInspectorCamera();
 			navigator.dispose();
 			taskInspector?.dispose();
 			taskInspector = undefined;
 			focusedTaskNode = undefined;
+			taskScopeOccurrenceByBinding.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
 			nodeEffects.dispose();

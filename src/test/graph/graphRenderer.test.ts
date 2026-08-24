@@ -36,6 +36,8 @@ import {
 	type GraphNodeArrangementRequest,
 	type GraphRendererInteractions,
 	type GraphRendererOptions,
+	type GraphSourceDropResult,
+	type GraphSourceDragRequest,
 } from '../../webview/graph/graphRenderer';
 import {
 	createGraphState,
@@ -610,6 +612,149 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(viewport.hasClass('is-panning'), false);
 
 		camera.dispose();
+		fixture.renderer.dispose();
+	});
+
+	test('Folder Source Drop만 기존 Node 이동보다 우선 소비하고 밖의 Drop/Cancel은 기존 lifecycle을 유지한다', () => {
+		const dragMoves: GraphSourceDragRequest[] = [];
+		const drops: typeof dragMoves = [];
+		let cancelCount = 0;
+		const scopePosition = { x: 620, y: 340 };
+		let dropResult: GraphSourceDropResult | false = {
+			targetPosition: scopePosition,
+		};
+		let applyStoredPositions: (() => void) | undefined;
+		const fixture = createRendererFixture(1, undefined, {
+			onSourceDragMove: (request) => dragMoves.push(request),
+			onSourceDrop: (request) => {
+				drops.push(request);
+				applyStoredPositions?.();
+				return dropResult;
+			},
+			onSourceDragCancel: () => {
+				cancelCount += 1;
+			},
+		});
+		const folderId = 'folder:app';
+		const childId = 'folder:app/src';
+		const folder = fixture.getNode(folderId);
+		const child = fixture.getNode(childId);
+		const edge = fixture.getEdge(`${folderId}->${childId}`);
+		const initialTransform = folder.style.transform;
+
+		folder.dispatch('pointerdown', createPointerEvent(folder, 10, 10));
+		folder.dispatch('pointermove', createPointerEvent(folder, 80, 65));
+		folder.dispatch('pointerup', createPointerEvent(folder, 90, 75));
+
+		assert.deepStrictEqual(
+			dragMoves.map(({ sourceNodeId, occurrenceNodeId, isIndependentOccurrence,
+				clientX, clientY }) => ({
+				sourceNodeId,
+				occurrenceNodeId,
+				isIndependentOccurrence,
+				clientX,
+				clientY,
+			})),
+			[{
+				sourceNodeId: folderId,
+				occurrenceNodeId: folderId,
+				isIndependentOccurrence: false,
+				clientX: 80,
+				clientY: 65,
+			}],
+		);
+		assert.deepStrictEqual(
+			drops.map(({ sourceNodeId, occurrenceNodeId, isIndependentOccurrence,
+				clientX, clientY }) => ({
+				sourceNodeId,
+				occurrenceNodeId,
+				isIndependentOccurrence,
+				clientX,
+				clientY,
+			})),
+			[{
+				sourceNodeId: folderId,
+				occurrenceNodeId: folderId,
+				isIndependentOccurrence: false,
+				clientX: 90,
+				clientY: 75,
+			}],
+		);
+		assert.notStrictEqual(folder.style.transform, initialTransform);
+		assert.deepStrictEqual(readTranslate(folder.style.transform), scopePosition);
+		assert.deepStrictEqual(
+			fixture.graphState.getState().nodePositions[folderId],
+			scopePosition,
+		);
+
+		const beforeRestoreTransform = folder.style.transform;
+		const beforeRestoreChildTransform = child.style.transform;
+		const beforeRestoreEdgePath = edge.getAttribute('d');
+		const beforeRestoreState = fixture.graphState.getState();
+
+		dropResult = { restoreStartPosition: true };
+		folder.dispatch('pointerdown', createPointerEvent(folder, 10, 10, 2));
+		folder.dispatch('pointermove', createPointerEvent(folder, 130, 95, 2));
+		folder.dispatch('pointerup', createPointerEvent(folder, 130, 95, 2));
+		assert.strictEqual(folder.style.transform, beforeRestoreTransform);
+		assert.strictEqual(child.style.transform, beforeRestoreChildTransform);
+		assert.strictEqual(edge.getAttribute('d'), beforeRestoreEdgePath);
+		assert.strictEqual(
+			fixture.graphState.getState(),
+			beforeRestoreState,
+		);
+
+		const storedRootPosition = { x: 740, y: 180 };
+		const storedChildPosition = { x: 180, y: 640 };
+
+		applyStoredPositions = () => {
+			const state = fixture.graphState.getState();
+
+			fixture.graphState.setState({
+				camera: state.camera,
+				nodePositions: {
+					...state.nodePositions,
+					[folderId]: storedRootPosition,
+					[childId]: storedChildPosition,
+				},
+			});
+		};
+		dropResult = { syncStoredPositions: true };
+		folder.dispatch('pointerdown', createPointerEvent(folder, 10, 10, 6));
+		folder.dispatch('pointermove', createPointerEvent(folder, 180, 145, 6));
+		folder.dispatch('pointerup', createPointerEvent(folder, 180, 145, 6));
+		assert.deepStrictEqual(readTranslate(folder.style.transform), storedRootPosition);
+		assert.deepStrictEqual(readTranslate(child.style.transform), storedChildPosition);
+		assert.deepStrictEqual(
+			fixture.graphState.getState().nodePositions[childId],
+			storedChildPosition,
+		);
+		applyStoredPositions = undefined;
+
+		dropResult = false;
+		folder.dispatch('pointerdown', createPointerEvent(folder, 10, 10, 5));
+		folder.dispatch('pointermove', createPointerEvent(folder, 130, 95, 5));
+		folder.dispatch('pointerup', createPointerEvent(folder, 130, 95, 5));
+		assert.notStrictEqual(folder.style.transform, beforeRestoreTransform);
+		assert.deepStrictEqual(
+			fixture.graphState.getState().nodePositions[folderId],
+			readTranslate(folder.style.transform),
+		);
+
+		folder.dispatch('pointerdown', createPointerEvent(folder, 10, 10, 3));
+		folder.dispatch('pointermove', createPointerEvent(folder, 70, 50, 3));
+		const cancelCountBeforePointerCancel = cancelCount;
+
+		folder.dispatch('pointercancel', createPointerEvent(folder, 70, 50, 3));
+		assert.strictEqual(cancelCount, cancelCountBeforePointerCancel + 1);
+
+		const project = fixture.getNode(GRAPH_MOCK_PROJECT.id);
+		const sourceEventCount = dragMoves.length + drops.length;
+
+		project.dispatch('pointerdown', createPointerEvent(project, 10, 10, 4));
+		project.dispatch('pointermove', createPointerEvent(project, 70, 50, 4));
+		project.dispatch('pointercancel', createPointerEvent(project, 70, 50, 4));
+		assert.strictEqual(dragMoves.length + drops.length, sourceEventCount);
 		fixture.renderer.dispose();
 	});
 

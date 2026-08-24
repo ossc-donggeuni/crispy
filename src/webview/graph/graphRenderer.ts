@@ -41,7 +41,10 @@ import {
 	type GraphStateSnapshot,
 	type GraphStateStore,
 } from './graphState';
-import { fitRelativePath } from './graphRootContext';
+import {
+	fitRelativePath,
+	GRAPH_ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER,
+} from './graphRootContext';
 import type { GraphNodeEffects } from './graphNodeEffects';
 
 interface FileGroupContentRenderer {
@@ -132,8 +135,51 @@ export interface GraphRendererInteractions {
 	) => GraphRootReattachResult;
 	/** 일반 Node Drag 결과를 정렬 flow 포함 여부로 반영하도록 상위 View에 요청한다. */
 	onNodeArrangementChange?: (request: GraphNodeArrangementRequest) => boolean;
-	/** 접힌 Node를 포함한 논리 subtree의 Visual ID를 Drag 이동 대상으로 복원한다. */
-	resolveNodeSubtreeIds?: (nodeId: string) => ReadonlySet<string>;
+	/**
+	 * 보이는 Layout subtree를 기준으로 접힌 Node와 외부 고정 경계를 반영한
+	 * 최종 Drag 이동 대상 Visual ID를 해석한다.
+	 */
+	resolveNodeSubtreeIds?: (
+		nodeId: string,
+		visibleSubtreeNodeIds: ReadonlySet<string>,
+	) => ReadonlySet<string>;
+	/** 실제 Folder/File Pointer drag의 Canonical Source와 최신 client 좌표를 전달한다. */
+	onSourceDragMove?: (request: GraphSourceDragRequest) => void;
+	/** Task Scope 등 우선 Drop 의미가 처리되면 실제 occurrence의 최종 좌표를 반환한다. */
+	onSourceDrop?: (
+		request: GraphSourceDragRequest,
+	) => GraphSourceDropResult | boolean;
+	/** Pointer cancel/capture 상실/dispose 시 외부 Drop feedback을 정리한다. */
+	onSourceDragCancel?: () => void;
+}
+
+/** 우선 Drop이 실제 이동 중인 occurrence를 유지할 때 사용할 완료 결과다. */
+export interface GraphSourceDropResult {
+	/** 없으면 promotion 등으로 새 occurrence가 Graph Layout에 들어온 경우다. */
+	readonly targetPosition?: GraphLayoutPosition;
+	/** 기존 occurrence가 남아 있으면 transient subtree를 저장 없이 시작점으로 되돌린다. */
+	readonly restoreStartPosition?: boolean;
+	/** 상위 View가 boundary-aware GraphState를 확정했으므로 transient DOM을 그 좌표로 맞춘다. */
+	readonly syncStoredPositions?: boolean;
+}
+
+/** Canonical Source와 실제 Graph visual occurrence를 함께 전달하는 drag 관찰 값이다. */
+export interface GraphSourceDragRequest {
+	readonly sourceNodeId: string;
+	/** GraphState/nodePositions 또는 grouped row를 식별하는 기존 visual ID다. */
+	readonly occurrenceNodeId: string;
+	/** Detached subtree 안의 occurrence면 기존 Graph Root Instance ID다. */
+	readonly occurrenceRootId?: string;
+	/** 현재 visual이 독립 Root여서 promotion 없이 그대로 Scope에 남을 수 있는지다. */
+	readonly isIndependentOccurrence: boolean;
+	/** Pointer가 현재 actual Root의 기존 Backlink reattach zone에 있으면 Root ID다. */
+	readonly reattachTargetRootId?: string;
+	/** 실제 Graph Node drag일 때 다른 bound occurrence를 꺼낼 수 있는 시작 World 위치다. */
+	readonly startPosition?: GraphLayoutPosition;
+	/** Pointer 종료 시 Renderer가 가진 transient actual occurrence World 위치다. */
+	readonly currentPosition?: GraphLayoutPosition;
+	readonly clientX: number;
+	readonly clientY: number;
 }
 
 /** Reattach가 확인된 Root와 실제 Node를 최신 Graph 변경 경로에 전달한다. */
@@ -164,6 +210,8 @@ export interface GraphRendererOptions {
 /** 특정 Layout 전환에서 새 Detached subtree가 출발할 기존 Instance를 지정한다. */
 export interface GraphLayoutApplyOptions {
 	readonly enteringSourceRootId?: string;
+	/** 이 전환만 즉시 적용한다. Renderer 전역 reduced-motion 설정은 그대로 우선한다. */
+	readonly animate?: boolean;
 }
 
 /** 단일 Layout transition에서 보간할 Node의 시작/목표 위치다. */
@@ -201,7 +249,6 @@ const REATTACH_TARGET_CLASS = 'is-reattach-target';
 const REATTACH_TARGET_MARGIN = 8;
 const ARRANGEMENT_TARGET_CLASS = 'is-arrangement-target';
 const ARRANGEMENT_TARGET_MARGIN = 10;
-const ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER = 1.5;
 const DEFAULT_LAYOUT_TRANSITION_DURATION = 220;
 const LAYOUT_NODE_MIN_SCALE = 0.96;
 const LAYOUT_TRANSITION_CLASS = 'is-layout-transitioning';
@@ -677,6 +724,7 @@ export function initializeGraphRenderer(
 			'enteringNodes' | 'exitingNodes' | 'enteringEdges' | 'exitingEdges'
 		>,
 		targetPositions: ReadonlyMap<string, GraphLayoutPosition>,
+		allowAnimation = true,
 	): void => {
 		const prefersReducedMotion = options.prefersReducedMotion
 			?? ownerDocument.defaultView?.matchMedia?.(
@@ -685,7 +733,8 @@ export function initializeGraphRenderer(
 				?? false;
 		const canAnimate = animationFrameScheduler !== undefined
 			&& transitionDuration > 0
-			&& !prefersReducedMotion;
+			&& !prefersReducedMotion
+			&& allowAnimation;
 
 		options.nodeEffects?.syncLayout?.(
 			renderedLayout,
@@ -941,14 +990,18 @@ export function initializeGraphRenderer(
 		}
 
 		if (!current) {
+			const bindingSourceId = getGraphBindingSourceId(layoutNode);
+
 			nodeDetachDrags.set(
 				layoutNode.id,
 				appendDetachHandle(
 					element,
 					detachNodeId,
+					layoutNode.id,
 					getGraphLayoutRootId(layoutNode.id),
 					ownerDocument,
 					interactions,
+					bindingSourceId,
 				),
 			);
 		}
@@ -960,6 +1013,7 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 		const effectTarget = getLayoutNodeEffectTarget(layoutNode);
+		const bindingSourceId = getGraphBindingSourceId(layoutNode);
 
 		if (effectTarget && options.nodeEffects) {
 			nodeEffectCleanups.set(
@@ -1016,11 +1070,11 @@ export function initializeGraphRenderer(
 				element,
 				layoutNode,
 				ownerDocument,
-				graphState,
-				interactions,
-				rootNodeIds,
-				initializeBacklink,
-				options.nodeEffects,
+					graphState,
+					interactions,
+					rootNodeIds,
+					initializeBacklink,
+					options.nodeEffects,
 				);
 
 			content.render(graphState.getFileGroupPage(
@@ -1055,25 +1109,22 @@ export function initializeGraphRenderer(
 				GraphLayoutPosition
 			> => {
 				const positions = new Map<string, GraphLayoutPosition>();
-
-				for (const nodeId of collectGraphLayoutSubtreeNodeIds(
+				const visibleSubtreeNodeIds = collectGraphLayoutSubtreeNodeIds(
 					renderedLayout,
 					layoutNode.id,
-				)) {
-					const position = renderedPositions.get(nodeId);
+				);
+				const subtreeNodeIds = new Set(
+					interactions.resolveNodeSubtreeIds?.(
+						layoutNode.id,
+						visibleSubtreeNodeIds,
+					) ?? visibleSubtreeNodeIds,
+				);
 
-					if (position) {
-						positions.set(nodeId, { ...position });
-					}
-				}
+				// Resolver가 잘못된 경계를 반환해도 직접 잡은 Node의 이동은 보장한다.
+				subtreeNodeIds.add(layoutNode.id);
 				const storedPositions = graphState.getState().nodePositions;
 
-				for (const nodeId of interactions.resolveNodeSubtreeIds?.(
-					layoutNode.id,
-				) ?? []) {
-					if (positions.has(nodeId)) {
-						continue;
-					}
+				for (const nodeId of subtreeNodeIds) {
 					const position = renderedPositions.get(nodeId)
 						?? storedPositions[nodeId];
 
@@ -1115,12 +1166,12 @@ export function initializeGraphRenderer(
 				}
 				options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
 			};
-				const commitSubtreeDragPositions = (): boolean => {
+			const commitSubtreeDragPositions = (): boolean => {
 				const startPositions = subtreeDragStartPositions;
 
 				subtreeDragStartPositions = undefined;
 
-					if (!startPositions || startPositions.size === 0) {
+				if (!startPositions || startPositions.size === 0) {
 					return false;
 				}
 
@@ -1141,6 +1192,34 @@ export function initializeGraphRenderer(
 				});
 				return true;
 			};
+			const syncSubtreeDragToStoredPositions = (): boolean => {
+				const startPositions = subtreeDragStartPositions;
+
+				subtreeDragStartPositions = undefined;
+				if (!startPositions || startPositions.size === 0) {
+					return false;
+				}
+				const storedPositions = graphState.getState().nodePositions;
+				const pendingEdges = new Map<string, GraphLayoutEdge>();
+
+				for (const nodeId of startPositions.keys()) {
+					const node = nodesById.get(nodeId);
+
+					if (!node) {
+						continue;
+					}
+					updateNodePosition(
+						nodeId,
+						resolveGraphLayoutNodePosition(node, storedPositions),
+						pendingEdges,
+					);
+				}
+				for (const edge of pendingEdges.values()) {
+					renderEdge(edge);
+				}
+				options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
+				return true;
+			};
 			const nodeClickHandler = createNodeClickHandler(
 				layoutNode,
 				interactions,
@@ -1155,6 +1234,9 @@ export function initializeGraphRenderer(
 					onDragStart: () => {
 						finishLayoutAnimation();
 						subtreeDragStartPositions = undefined;
+						if (bindingSourceId) {
+							interactions.onSourceDragCancel?.();
+						}
 					},
 					onDragActivate: () => {
 						const startPositions = captureSubtreeDragStartPositions();
@@ -1171,15 +1253,90 @@ export function initializeGraphRenderer(
 					onClick: nodeClickHandler,
 					onPositionChange: updateSubtreeDragPosition,
 					onDragMove: ({ clientX, clientY }) => {
+						if (bindingSourceId) {
+							const startPosition = subtreeDragStartPositions?.get(
+								layoutNode.id,
+							);
+							interactions.onSourceDragMove?.({
+								sourceNodeId: bindingSourceId,
+								occurrenceNodeId: layoutNode.id,
+								...(getGraphLayoutRootId(layoutNode.id)
+									? { occurrenceRootId: getGraphLayoutRootId(layoutNode.id) }
+									: {}),
+								isIndependentOccurrence: rootNodeIds.has(layoutNode.id),
+								...(startPosition ? { startPosition } : {}),
+								clientX,
+								clientY,
+							});
+						}
 						updateReattachTarget(layoutNode.id, clientX, clientY);
 						updateArrangementTarget(clientX, clientY);
 					},
 					onDragEnd: ({ clientX, clientY }) => {
-						const rootId = updateReattachTarget(
+						const startPosition = subtreeDragStartPositions?.get(
+							layoutNode.id,
+						);
+						const currentPosition = renderedPositions.get(layoutNode.id);
+						const reattachTargetRootId = updateReattachTarget(
 							layoutNode.id,
 							clientX,
 							clientY,
 						);
+						const bindingDropResult = bindingSourceId
+							? interactions.onSourceDrop?.({
+								sourceNodeId: bindingSourceId,
+								occurrenceNodeId: layoutNode.id,
+								...(getGraphLayoutRootId(layoutNode.id)
+									? { occurrenceRootId: getGraphLayoutRootId(layoutNode.id) }
+									: {}),
+								isIndependentOccurrence: rootNodeIds.has(layoutNode.id),
+								...(reattachTargetRootId
+									? { reattachTargetRootId }
+									: {}),
+								...(startPosition ? { startPosition } : {}),
+								...(currentPosition ? { currentPosition } : {}),
+								clientX,
+								clientY,
+							})
+							: undefined;
+						const bindingConsumed = bindingDropResult === true
+							|| (
+								typeof bindingDropResult === 'object'
+								&& bindingDropResult !== null
+							);
+
+						if (bindingConsumed) {
+							const targetPosition = typeof bindingDropResult === 'object'
+								? bindingDropResult.targetPosition
+								: undefined;
+						const restoreStartPosition = typeof bindingDropResult === 'object'
+							&& bindingDropResult.restoreStartPosition === true;
+						const syncStoredPositions = typeof bindingDropResult === 'object'
+							&& bindingDropResult.syncStoredPositions === true;
+
+						if (syncStoredPositions) {
+							syncSubtreeDragToStoredPositions();
+						} else if (targetPosition) {
+								updateSubtreeDragPosition(targetPosition);
+								commitSubtreeDragPositions();
+							} else if (restoreStartPosition) {
+								const rootStartPosition = subtreeDragStartPositions?.get(
+									layoutNode.id,
+								);
+
+								if (rootStartPosition) {
+									updateSubtreeDragPosition(rootStartPosition);
+								}
+								subtreeDragStartPositions = undefined;
+							} else {
+								subtreeDragStartPositions = undefined;
+							}
+							clearReattachTarget();
+							clearArrangementDrag();
+							return true;
+						}
+
+						const rootId = reattachTargetRootId;
 
 						clearReattachTarget();
 						const reattachResult = rootId === undefined
@@ -1227,6 +1384,9 @@ export function initializeGraphRenderer(
 						return committed || arrangementChanged;
 					},
 					onDragCancel: () => {
+						if (bindingSourceId) {
+							interactions.onSourceDragCancel?.();
+						}
 						clearReattachTarget();
 						clearArrangementDrag();
 						subtreeDragStartPositions = undefined;
@@ -1402,8 +1562,8 @@ export function initializeGraphRenderer(
 			clearReattachTarget();
 			clearArrangementDrag();
 
-				const previousLayout = renderedLayout;
-				const previousNodesById = nodesById;
+			const previousLayout = renderedLayout;
+			const previousNodesById = nodesById;
 			const previousRenderedPositions = new Map(renderedPositions);
 			const previousEdgesById = new Map(
 				renderedLayout.edges.map((edge) => [edge.id, edge]),
@@ -1430,27 +1590,27 @@ export function initializeGraphRenderer(
 			const enteringEdges: SVGPathElement[] = [];
 			const exitingEdges: SVGPathElement[] = [];
 			const enteringNodeIds = new Set<string>();
-				const storedPositions = nodePositions;
-				const targetRegionPositions = new Map(
-					nextLayout.nodes.map((node) => [
-						node.id,
-						resolveGraphLayoutNodePosition(node, storedPositions),
-					]),
-				);
+			const storedPositions = nodePositions;
+			const targetRegionPositions = new Map(
+				nextLayout.nodes.map((node) => [
+					node.id,
+					resolveGraphLayoutNodePosition(node, storedPositions),
+				]),
+			);
 
 			rootNodeIds = nextLayout.rootNodeIds;
 
-				for (const nodeId of previousNodesById.keys()) {
-					if (!nextNodesById.has(nodeId)) {
-						const from = previousRenderedPositions.get(nodeId);
-						const detachedBacklinkPosition = findDetachedBacklinkPosition(
-							nodeId,
-							previousLayout,
-							previousParentByChild,
-							nextLayout,
-							storedPositions,
-						);
-						const retainedAncestorId = findNearestAncestorInMap(
+			for (const nodeId of previousNodesById.keys()) {
+				if (!nextNodesById.has(nodeId)) {
+					const from = previousRenderedPositions.get(nodeId);
+					const detachedBacklinkPosition = findDetachedBacklinkPosition(
+						nodeId,
+						previousLayout,
+						previousParentByChild,
+						nextLayout,
+						storedPositions,
+					);
+					const retainedAncestorId = findNearestAncestorInMap(
 						nodeId,
 						previousParentByChild,
 						nextNodesById,
@@ -1460,19 +1620,19 @@ export function initializeGraphRenderer(
 						: undefined;
 					const element = removeNode(nodeId, true);
 
-						const exitTarget = detachedBacklinkPosition
-							?? (retainedAncestor
-								? resolveGraphLayoutNodePosition(
-									retainedAncestor,
-									storedPositions,
-								)
-								: undefined);
+					const exitTarget = detachedBacklinkPosition
+						?? (retainedAncestor
+							? resolveGraphLayoutNodePosition(
+								retainedAncestor,
+								storedPositions,
+							)
+							: undefined);
 
-						if (element && from && exitTarget && !element.hidden) {
-							exitingNodes.push({
-								element,
-								from,
-								to: exitTarget,
+					if (element && from && exitTarget && !element.hidden) {
+						exitingNodes.push({
+							element,
+							from,
+							to: exitTarget,
 						});
 					} else {
 						element?.remove();
@@ -1678,12 +1838,12 @@ export function initializeGraphRenderer(
 				renderEdge(edge);
 			}
 
-				startLayoutAnimation(positionTransitions, {
+			startLayoutAnimation(positionTransitions, {
 				enteringNodes,
 				exitingNodes,
 				enteringEdges,
-					exitingEdges,
-				}, targetRegionPositions);
+				exitingEdges,
+			}, targetRegionPositions, applyOptions.animate !== false);
 		},
 		getBacklinkClientRect(targetRootId) {
 			if (disposed) {
@@ -1714,9 +1874,9 @@ export function initializeGraphRenderer(
 			}
 
 			disposed = true;
-				cancelLayoutAnimation();
-				clearReattachTarget();
-				clearArrangementDrag();
+			cancelLayoutAnimation();
+			clearReattachTarget();
+			clearArrangementDrag();
 			unsubscribeState();
 
 			for (const nodeId of [...nodeElements.keys()]) {
@@ -2063,7 +2223,7 @@ function initializeRootContextLabel(
 		render(context, rootNodeWidth): void {
 			const maxWidth = Math.max(
 				0,
-				rootNodeWidth * ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER,
+				rootNodeWidth * GRAPH_ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER,
 			);
 
 			label.style.maxWidth = 'none';
@@ -2499,10 +2659,36 @@ function createFileRow(
 		: appendDetachHandle(
 			item,
 			getGraphLayoutSourceId(file.id),
+			file.id,
 			getGraphLayoutRootId(file.id),
 			ownerDocument,
 			interactions,
+			file.presentation === 'normal' ? sourceNodeId : undefined,
 		);
+	let suppressNextFileClick = false;
+	const sourceRowDrag = file.presentation === 'normal'
+		&& !rootNodeIds.has(file.id)
+		&& Boolean(
+			interactions.onSourceDragMove
+			|| interactions.onSourceDrop
+			|| interactions.onSourceDragCancel,
+		)
+		? initializeSourceDetachDrag(
+			item,
+			sourceNodeId,
+			file.id,
+			rootId,
+			interactions,
+			sourceNodeId,
+			{
+				consumeClick: false,
+				detachOnUnhandledDrop: false,
+				onDragComplete: () => {
+					suppressNextFileClick = true;
+				},
+			},
+		)
+		: undefined;
 	/** File Group이 아닌 현재 Row에만 Click feedback을 다시 시작한다. */
 	const animateFileClick = (): void => {
 		item.classList.remove(FILE_CLICK_ANIMATION_CLASS);
@@ -2511,6 +2697,11 @@ function createFileRow(
 	};
 	const handleFileClick = (event: MouseEvent): void => {
 		event.stopPropagation();
+		if (suppressNextFileClick) {
+			suppressNextFileClick = false;
+			event.preventDefault();
+			return;
+		}
 
 		if (file.presentation === 'backlink') {
 			return;
@@ -2539,6 +2730,7 @@ function createFileRow(
 			disposeNodeEffect?.();
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
+			sourceRowDrag?.dispose();
 			disposeFileOpenRequest();
 			item.removeEventListener('click', handleFileClick);
 			item.removeEventListener('animationend', handleFileClickAnimationEnd);
@@ -2648,20 +2840,44 @@ function getDetachNodeId(
 		: undefined;
 }
 
+/** 실제 Folder 또는 normal standalone File visual만 Work Scope binding 대상으로 해석한다. */
+function getGraphBindingSourceId(node: GraphLayoutNode): string | undefined {
+	if (node.kind === 'folder') {
+		return getGraphLayoutSourceId(node.id);
+	}
+	if (node.kind !== 'file-group' || node.presentation !== 'standalone') {
+		return undefined;
+	}
+
+	const file = node.children[0];
+
+	return file?.presentation === 'normal'
+		? getGraphLayoutSourceId(file.id)
+		: undefined;
+}
+
 /** 대상 끝에 고정 공간의 Handle을 추가하고 독립 Detach Drag를 초기화한다. */
 function appendDetachHandle(
 	target: HTMLElement,
 	nodeId: string,
+	occurrenceNodeId: string,
 	instanceRootId: string | undefined,
 	ownerDocument: Document,
 	interactions: GraphRendererInteractions,
+	bindingSourceId?: string,
 ): GraphDetachDrag {
 	const handle = createDetachHandle(ownerDocument);
 
 	target.append(handle);
-	const detachDrag = initializeGraphDetachDrag(handle, nodeId, {
-		onDetachDrop: interactions.onDetachDrop,
-	}, instanceRootId);
+	const detachDrag = initializeSourceDetachDrag(
+		handle,
+		nodeId,
+		occurrenceNodeId,
+		instanceRootId,
+		interactions,
+		bindingSourceId,
+		{},
+	);
 
 	return {
 		dispose(): void {
@@ -2669,6 +2885,58 @@ function appendDetachHandle(
 			handle.remove();
 		},
 	};
+}
+
+/** Handle과 grouped File Row가 같은 지연 Detach/Scope Drop lifecycle을 공유한다. */
+function initializeSourceDetachDrag(
+	target: HTMLElement,
+	nodeId: string,
+	occurrenceNodeId: string,
+	instanceRootId: string | undefined,
+	interactions: GraphRendererInteractions,
+	bindingSourceId: string | undefined,
+	options: {
+		readonly consumeClick?: boolean;
+		readonly detachOnUnhandledDrop?: boolean;
+		readonly onDragComplete?: () => void;
+	},
+): GraphDetachDrag {
+	return initializeGraphDetachDrag(target, nodeId, {
+		onDetachDrop: options.detachOnUnhandledDrop === false
+			? undefined
+			: interactions.onDetachDrop,
+		onDragMove: bindingSourceId
+			? ({ clientX, clientY }) => interactions.onSourceDragMove?.({
+				sourceNodeId: bindingSourceId,
+				occurrenceNodeId,
+				...(instanceRootId ? { occurrenceRootId: instanceRootId } : {}),
+				isIndependentOccurrence: false,
+				clientX,
+				clientY,
+			})
+			: undefined,
+		onDrop: bindingSourceId
+			? ({ clientX, clientY }) => {
+				const result = interactions.onSourceDrop?.({
+					sourceNodeId: bindingSourceId,
+					occurrenceNodeId,
+					...(instanceRootId ? { occurrenceRootId: instanceRootId } : {}),
+					isIndependentOccurrence: false,
+					clientX,
+					clientY,
+				});
+
+				return result === true || (
+					typeof result === 'object' && result !== null
+				);
+			}
+			: undefined,
+		onDragCancel: bindingSourceId
+			? interactions.onSourceDragCancel
+			: undefined,
+		onDragComplete: options.onDragComplete,
+		consumeClick: options.consumeClick,
+	}, instanceRootId);
 }
 
 /** 현재 Node 스타일에 맞는 북동쪽 화살표 inline SVG Handle을 만든다. */

@@ -2,9 +2,12 @@ import {
 	createTaskEdgeGeometry,
 	getTaskPortCenter,
 	type TaskGraphLayout,
+	type TaskGraphTargetAreaKind,
+	type TaskGraphTargetAreaLayout,
 	type TaskLayoutEdge,
 	type TaskLayoutNode,
 	type TaskLayoutPosition,
+	type TaskWorkLayoutNode,
 } from './taskLayout';
 import type { TaskNodePosition, TaskOrigin } from '../../task';
 import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
@@ -32,11 +35,33 @@ export const TASK_PORT_DIRECTION_ATTRIBUTE = 'data-task-port-direction';
 export const TASK_FLOW_STATE_ATTRIBUTE = 'data-task-flow-state';
 /** START/END의 Work Edge 연결 파생 상태를 DOM에 전달하는 attribute다. */
 export const TASK_CONNECTION_STATE_ATTRIBUTE = 'data-task-connection-state';
+/** Work 부속 Scope Area의 reference/work 역할을 식별한다. */
+export const TASK_GRAPH_TARGET_AREA_ATTRIBUTE = 'data-task-graph-target-area';
+/** Scope Area를 소유한 실제 Work Node ID를 Task Node 선택과 분리해 저장한다. */
+export const TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE = 'data-task-graph-target-work-node-id';
+/** Region에서 실제 occurrence로 resolve하지 못한 semantic binding 개수다. */
+export const TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE = 'data-task-graph-target-unavailable-count';
+
+/** Graph Pointer Drop이 적중한 Work Scope Area의 Domain 주소다. */
+export interface TaskGraphTargetDropTarget {
+	readonly taskId: string;
+	readonly nodeId: string;
+	readonly area: TaskGraphTargetAreaKind;
+}
+
+/** TaskRenderer가 실제 Graph Node를 만들지 않고 Region 안내만 결정할 상태다. */
+export interface TaskGraphTargetRegionStatus {
+	readonly unavailableCount: number;
+}
 
 /** Task Node/Edge DOM을 ID 기반으로 갱신하고 정리하는 lifecycle 경계다. */
 export interface TaskRenderer {
 	/** 기존 DOM을 재사용하며 최신 Task Layout을 적용한다. */
 	applyLayout(layout: TaskGraphLayout): void;
+	/** client pointer로 Scope Area를 hit-test하고 단 하나의 hover를 동기화한다. */
+	updateGraphTargetDrag(point: TaskLayoutPosition): TaskGraphTargetDropTarget | undefined;
+	/** Drag cancel/focus 전환/dispose 때 남은 Scope hover를 즉시 지운다. */
+	clearGraphTargetDrag(): void;
 	/** Task Renderer가 만든 Node와 Edge DOM을 모두 정리한다. */
 	dispose(): void;
 }
@@ -79,6 +104,13 @@ export interface TaskRendererInteractions {
 	) => boolean;
 	/** 정확한 Task Edge 하나를 연결 해제한다. */
 	onEdgeDisconnect?: (taskId: string, edgeId: string) => void;
+	/** 실제 Graph occurrence resolve 결과를 Region-level 안내로만 전달한다. */
+	resolveGraphTargetRegionStatus?: (
+		taskId: string,
+		nodeId: string,
+		area: TaskGraphTargetAreaKind,
+		sourceIds: readonly string[],
+	) => TaskGraphTargetRegionStatus;
 	/** Pointer client 좌표를 Graph World 좌표로 변환한다. */
 	clientToWorld?: (point: TaskLayoutPosition) => TaskLayoutPosition;
 }
@@ -140,6 +172,8 @@ export function initializeTaskRenderer(
 ): TaskRenderer {
 	const ownerDocument = nodeLayer.ownerDocument;
 	const nodeElements = new Map<string, HTMLElement>();
+	const scopeAreaElements = new Map<string, HTMLElement>();
+	const scopeAreaTargets = new Map<string, TaskGraphTargetDropTarget>();
 	const edgeElements = new Map<string, SVGPathElement>();
 	const edgeActionElements = new Map<string, HTMLElement>();
 	let nodesByRenderKey = new Map<string, TaskLayoutNode>();
@@ -149,6 +183,7 @@ export function initializeTaskRenderer(
 	let previewEdgeElement: SVGPathElement | undefined;
 	let suppressClickKey: string | undefined;
 	let suppressDoubleClickKey: string | undefined;
+	let hoveredScopeAreaKey: string | undefined;
 	let disposed = false;
 
 	const resolveTaskNodeElement = (
@@ -241,6 +276,49 @@ export function initializeTaskRenderer(
 	).find((child) => (
 		(child as HTMLElement).getAttribute(TASK_PORT_DIRECTION_ATTRIBUTE) === direction
 	)) as HTMLElement | undefined;
+
+	const clearGraphTargetDrag = (): void => {
+		if (!hoveredScopeAreaKey) {
+			return;
+		}
+
+		scopeAreaElements.get(hoveredScopeAreaKey)?.classList.remove(
+			'is-drag-hover',
+		);
+		hoveredScopeAreaKey = undefined;
+	};
+
+	const updateGraphTargetDrag = (
+		point: TaskLayoutPosition,
+	): TaskGraphTargetDropTarget | undefined => {
+		let nextKey: string | undefined;
+
+		for (const [renderKey, element] of scopeAreaElements) {
+			const bounds = element.getBoundingClientRect();
+
+			if (
+				point.x >= bounds.left
+				&& point.x < bounds.right
+				&& point.y >= bounds.top
+				&& point.y < bounds.bottom
+			) {
+				nextKey = renderKey;
+				break;
+			}
+		}
+
+		if (hoveredScopeAreaKey !== nextKey) {
+			clearGraphTargetDrag();
+			hoveredScopeAreaKey = nextKey;
+		}
+		if (hoveredScopeAreaKey) {
+			scopeAreaElements.get(hoveredScopeAreaKey)?.classList.add(
+				'is-drag-hover',
+			);
+		}
+
+		return nextKey ? scopeAreaTargets.get(nextKey) : undefined;
+	};
 
 	const clearTaskNodeSelection = (): void => {
 		if (!selectedNodeKey) {
@@ -750,13 +828,20 @@ export function initializeTaskRenderer(
 	};
 
 	const handleDocumentKeyDown = (event: KeyboardEvent): void => {
-		if (!connectionSession || event.key !== 'Escape') {
+		if (event.key !== 'Escape') {
+			return;
+		}
+		clearGraphTargetDrag();
+		if (!connectionSession) {
 			return;
 		}
 
 		event.preventDefault();
 		event.stopPropagation();
 		cancelTaskConnection();
+	};
+	const handleFocusChange = (): void => {
+		clearGraphTargetDrag();
 	};
 
 	const applyLayout = (layout: TaskGraphLayout): void => {
@@ -770,6 +855,13 @@ export function initializeTaskRenderer(
 		const nextEdgeKeys = new Set(layout.edges.map((edge) => (
 			createTaskEdgeRenderKey(edge.taskId, edge.id)
 		)));
+		const nextScopeAreaKeys = new Set(layout.nodes.flatMap((node) => (
+			node.kind === 'work'
+				? (['reference', 'work'] as const).map((area) => (
+					createTaskScopeAreaRenderKey(node.taskId, node.id, area)
+				))
+				: []
+		)));
 
 		if (dragSession && !nextNodeKeys.has(dragSession.renderKey)) {
 			stopTaskDrag(true);
@@ -780,6 +872,9 @@ export function initializeTaskRenderer(
 		}
 		if (connectionSession && !nextNodeKeys.has(connectionSession.renderKey)) {
 			cancelTaskConnection();
+		}
+		if (hoveredScopeAreaKey && !nextScopeAreaKeys.has(hoveredScopeAreaKey)) {
+			clearGraphTargetDrag();
 		}
 
 		for (const [renderKey, element] of nodeElements) {
@@ -800,11 +895,61 @@ export function initializeTaskRenderer(
 				edgeActionElements.delete(renderKey);
 			}
 		}
+		for (const [renderKey, element] of scopeAreaElements) {
+			if (!nextScopeAreaKeys.has(renderKey)) {
+				element.remove();
+				scopeAreaElements.delete(renderKey);
+				scopeAreaTargets.delete(renderKey);
+			}
+		}
 
 		nodesByRenderKey = new Map(layout.nodes.map((node) => [
 			createTaskNodeRenderKey(node.taskId, node.id),
 			node,
 		]));
+		scopeAreaTargets.clear();
+
+		for (const node of layout.nodes) {
+			if (node.kind !== 'work') {
+				continue;
+			}
+			for (const areaKind of ['reference', 'work'] as const) {
+				const area = node.scopeAreas[areaKind];
+				const renderKey = createTaskScopeAreaRenderKey(
+					node.taskId,
+					node.id,
+					areaKind,
+				);
+				let element = scopeAreaElements.get(renderKey);
+
+				if (!element) {
+					element = ownerDocument.createElement('section');
+					nodeLayer.append(element);
+					scopeAreaElements.set(renderKey, element);
+				}
+				scopeAreaTargets.set(renderKey, {
+					taskId: node.taskId,
+					nodeId: node.id,
+					area: areaKind,
+				});
+				syncTaskScopeAreaElement(
+					element,
+					node,
+					area,
+					interactions.resolveGraphTargetRegionStatus?.(
+						node.taskId,
+						node.id,
+						area.kind,
+						area.sourceIds,
+					) ?? { unavailableCount: area.sourceIds.length },
+					ownerDocument,
+				);
+				element.classList.toggle(
+					'is-drag-hover',
+					hoveredScopeAreaKey === renderKey,
+				);
+			}
+		}
 
 		for (const node of layout.nodes) {
 			const renderKey = createTaskNodeRenderKey(node.taskId, node.id);
@@ -865,9 +1010,13 @@ export function initializeTaskRenderer(
 	viewport.addEventListener('pointermove', handleViewportPointerMove);
 	viewport.addEventListener('click', handleViewportBlankInteraction);
 	ownerDocument.addEventListener?.('keydown', handleDocumentKeyDown);
+	ownerDocument.addEventListener?.('visibilitychange', handleFocusChange);
+	ownerDocument.defaultView?.addEventListener('blur', handleFocusChange);
 
 	return {
 		applyLayout,
+		updateGraphTargetDrag,
+		clearGraphTargetDrag,
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -888,8 +1037,11 @@ export function initializeTaskRenderer(
 			viewport.removeEventListener('pointermove', handleViewportPointerMove);
 			viewport.removeEventListener('click', handleViewportBlankInteraction);
 			ownerDocument.removeEventListener?.('keydown', handleDocumentKeyDown);
+			ownerDocument.removeEventListener?.('visibilitychange', handleFocusChange);
+			ownerDocument.defaultView?.removeEventListener('blur', handleFocusChange);
 			stopTaskDrag(true);
 			cancelTaskConnection();
+			clearGraphTargetDrag();
 			selectedNodeKey = undefined;
 			nodesByRenderKey.clear();
 			for (const element of nodeElements.values()) {
@@ -901,9 +1053,14 @@ export function initializeTaskRenderer(
 			for (const element of edgeActionElements.values()) {
 				element.remove();
 			}
+			for (const element of scopeAreaElements.values()) {
+				element.remove();
+			}
 			nodeElements.clear();
 			edgeElements.clear();
 			edgeActionElements.clear();
+			scopeAreaElements.clear();
+			scopeAreaTargets.clear();
 		},
 	};
 }
@@ -914,6 +1071,75 @@ function createTaskNodeRenderKey(taskId: string, nodeId: string): string {
 
 function createTaskEdgeRenderKey(taskId: string, edgeId: string): string {
 	return `${taskId}:${edgeId}`;
+}
+
+function createTaskScopeAreaRenderKey(
+	taskId: string,
+	nodeId: string,
+	area: TaskGraphTargetAreaKind,
+): string {
+	return `${createTaskNodeRenderKey(taskId, nodeId)}:scope:${area}`;
+}
+
+/** Work Card와 별도 sibling인 World Scope Region DOM을 최신 geometry/상태로 동기화한다. */
+function syncTaskScopeAreaElement(
+	element: HTMLElement,
+	node: TaskWorkLayoutNode,
+	area: TaskGraphTargetAreaLayout,
+	status: TaskGraphTargetRegionStatus,
+	ownerDocument: Document,
+): void {
+	const isReference = area.kind === 'reference';
+	const titleText = isReference ? '참조 영역' : '작업 영역';
+	const header = ownerDocument.createElement('header');
+	const title = ownerDocument.createElement('strong');
+	const body = ownerDocument.createElement('div');
+	const dropHint = ownerDocument.createElement('span');
+
+	element.className = [
+		'task-scope-area',
+		isReference ? 'task-reference-area' : 'task-work-area',
+	].join(' ');
+	element.setAttribute(TASK_ID_ATTRIBUTE, node.taskId);
+	element.setAttribute(TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE, node.id);
+	element.setAttribute(TASK_GRAPH_TARGET_AREA_ATTRIBUTE, area.kind);
+	element.setAttribute(
+		TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE,
+		String(status.unavailableCount),
+	);
+	element.setAttribute('role', 'region');
+	element.setAttribute('aria-label', `${node.title} ${titleText}`);
+	element.style.width = `${area.width}px`;
+	element.style.height = `${area.height}px`;
+	element.style.transform = `translate(${area.position.x}px, ${area.position.y}px)`;
+	header.className = 'task-scope-header';
+	title.className = 'task-scope-title';
+	title.textContent = titleText;
+	header.append(title);
+	body.className = 'task-scope-body';
+	dropHint.className = 'task-scope-drop-hint';
+	dropHint.textContent = '여기에 놓아 추가';
+	dropHint.setAttribute('aria-hidden', 'true');
+
+	if (area.sourceIds.length === 0) {
+		const empty = ownerDocument.createElement('div');
+		const instruction = ownerDocument.createElement('span');
+		const detail = ownerDocument.createElement('span');
+
+		empty.className = 'task-scope-empty';
+		instruction.textContent = '폴더 또는 파일을';
+		detail.textContent = '이곳으로 끌어오세요';
+		empty.append(instruction, detail);
+		body.append(empty);
+	} else if (status.unavailableCount > 0) {
+		const unavailable = ownerDocument.createElement('span');
+
+		unavailable.className = 'task-scope-unavailable-summary';
+		unavailable.textContent = `${status.unavailableCount}개의 대상을 현재 찾을 수 없음`;
+		body.append(unavailable);
+	}
+
+	element.replaceChildren(header, body, dropHint);
 }
 
 function syncTaskNodeElement(

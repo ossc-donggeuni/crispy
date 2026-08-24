@@ -2,14 +2,19 @@ import * as assert from 'assert';
 import {
 	createDefaultTaskBlueprint,
 	TASK_BLUEPRINT_VERSION,
+	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	type TaskBlueprint,
 } from '../../task';
 import {
 	createTaskEdgeGeometry,
 	createTaskGraphLayout,
 	getCubicBezierPoint,
+	resolveTaskGraphWorkVisualCollisions,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
+	TASK_SCOPE_AREA_GAP,
+	TASK_SCOPE_AREA_MIN_HEIGHT,
+	TASK_WORK_VISUAL_COLLISION_GAP,
 } from '../../webview/task/taskLayout';
 
 suite('Task Layout', () => {
@@ -77,6 +82,289 @@ suite('Task Layout', () => {
 			start: { x: 720, y: -12 },
 			end: { x: 760, y: -12 },
 		}]);
+	});
+
+	test('모든 Work의 Reference → Work → Card geometry와 전체 visual bounds를 파생한다', () => {
+		const task = createReadyTask('task:scope-empty', { x: 120, y: -40 });
+		const layout = createTaskGraphLayout([task]);
+		const work = layout.nodes.find((node) => node.kind === 'work');
+		const start = layout.nodes.find((node) => node.kind === 'start');
+		const end = layout.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(work?.kind === 'work' && start && end);
+		assert.deepStrictEqual(work.graphTargets, { reference: [], work: [] });
+		assert.strictEqual(work.scopeAreas.reference.height, TASK_SCOPE_AREA_MIN_HEIGHT);
+		assert.strictEqual(work.scopeAreas.work.height, TASK_SCOPE_AREA_MIN_HEIGHT);
+		assert.strictEqual(
+			work.scopeAreas.reference.position.y + work.scopeAreas.reference.height
+				+ TASK_SCOPE_AREA_GAP,
+			work.scopeAreas.work.position.y,
+		);
+		assert.strictEqual(
+			work.scopeAreas.work.position.y + work.scopeAreas.work.height
+				+ TASK_SCOPE_AREA_GAP,
+			work.position.y,
+		);
+		assert.deepStrictEqual(work.visualBounds, {
+			position: work.scopeAreas.reference.position,
+			width: TASK_NODE_WIDTH,
+			height: TASK_SCOPE_AREA_MIN_HEIGHT * 2
+				+ TASK_SCOPE_AREA_GAP * 2
+				+ TASK_NODE_HEIGHT,
+		});
+		assert.strictEqual('scopeAreas' in start, false);
+		assert.strictEqual('scopeAreas' in end, false);
+	});
+
+	test('Reference/Work/WORK 폭을 가장 넓은 actual footprint로 동기화한다', () => {
+		const task = createReadyTask('task:scope-sized', { x: 100, y: 200 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const targetTask: TaskBlueprint = {
+			...task,
+			nodes: task.nodes.map((node) => node.id === work.id && node.kind === 'work'
+				? {
+					...node,
+					graphTargets: {
+						reference: ['folder:src'],
+						work: Array.from({ length: 8 }, (_, index) => `file:${index}`),
+					},
+				}
+				: node),
+		};
+		const scopeOptions = {
+			resolveGraphTargetAreaSize: (
+				_taskId: string,
+				_nodeId: string,
+				area: 'reference' | 'work',
+			) => area === 'reference'
+				? { width: 420, height: 112 }
+				: { width: 600, height: 196 },
+		};
+		const initial = createTaskGraphLayout([targetTask], scopeOptions).nodes.find(
+			(node) => node.id === work.id,
+		);
+		const movedTask: TaskBlueprint = {
+			...targetTask,
+			nodePositions: {
+				...targetTask.nodePositions,
+				[work.id]: { x: 720, y: 430 },
+			},
+		};
+		const moved = createTaskGraphLayout([movedTask], scopeOptions).nodes.find(
+			(node) => node.id === work.id,
+		);
+
+		assert.ok(initial?.kind === 'work' && moved?.kind === 'work');
+		assert.deepStrictEqual({
+			width: initial.scopeAreas.reference.width,
+			height: initial.scopeAreas.reference.height,
+		}, { width: 600, height: 112 });
+		assert.deepStrictEqual({
+			width: initial.scopeAreas.work.width,
+			height: initial.scopeAreas.work.height,
+		}, { width: 600, height: 196 });
+		assert.strictEqual(initial.width, 600);
+		assert.strictEqual(moved.width, 600);
+		assert.strictEqual(
+			initial.scopeAreas.work.position.x,
+			initial.position.x,
+		);
+		assert.strictEqual(
+			initial.scopeAreas.reference.position.x,
+			initial.position.x,
+		);
+		assert.strictEqual(initial.visualBounds.width, 600);
+		assert.deepStrictEqual(initial.visualBounds.position, {
+			x: initial.position.x,
+			y: initial.scopeAreas.reference.position.y,
+		});
+		const delta = {
+			x: moved.position.x - initial.position.x,
+			y: moved.position.y - initial.position.y,
+		};
+
+		assert.deepStrictEqual(delta, { x: 400, y: 430 });
+		for (const area of ['reference', 'work'] as const) {
+			assert.deepStrictEqual({
+				x: moved.scopeAreas[area].position.x
+					- initial.scopeAreas[area].position.x,
+				y: moved.scopeAreas[area].position.y
+					- initial.scopeAreas[area].position.y,
+			}, delta);
+		}
+		assert.deepStrictEqual({
+			x: moved.visualBounds.position.x - initial.visualBounds.position.x,
+			y: moved.visualBounds.position.y - initial.visualBounds.position.y,
+		}, delta);
+		assertLayoutEdgesUsePortCenters(createTaskGraphLayout([movedTask], scopeOptions));
+	});
+
+	test('동적 Scope footprint가 기본 stride를 넘으면 immutable Work 위치를 밀어 충돌을 해소한다', () => {
+		const task = createReadyTask('task:scope-footprint', { x: 0, y: 0 });
+		const originalWork = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(originalWork?.kind === 'work');
+		const createScopedWork = (id: string, title: string) => ({
+			...originalWork,
+			id,
+			title,
+			graphTargets: {
+				reference: Array.from({ length: 4 }, (_, index) => `folder:${id}:${index}`),
+				work: Array.from({ length: 4 }, (_, index) => `file:${id}:${index}`),
+			},
+		});
+		const upper = createScopedWork('task-node:upper', 'Upper');
+		const lower = createScopedWork('task-node:lower', 'Lower');
+		const {
+			[originalWork.id]: _removedWorkPosition,
+			...remainingPositions
+		} = task.nodePositions;
+		const footprintTask: TaskBlueprint = {
+			...task,
+			nodes: task.nodes.flatMap((node) => node.id === originalWork.id
+				? [upper, lower]
+				: [node]),
+			nodePositions: {
+				...remainingPositions,
+				[upper.id]: { x: 320, y: 0 },
+				[lower.id]: { x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE },
+			},
+			edges: [],
+		};
+		const areaHeight = 240;
+		const scopeOptions = {
+			resolveGraphTargetAreaSize: () => ({
+				width: TASK_NODE_WIDTH,
+				height: areaHeight,
+			}),
+		};
+		const initialLayout = createTaskGraphLayout([footprintTask], scopeOptions);
+		const initialWorks = initialLayout.nodes.filter(
+			(node) => node.kind === 'work',
+		);
+		const [initialUpper, initialLower] = initialWorks;
+
+		assert.ok(initialUpper?.kind === 'work' && initialLower?.kind === 'work');
+		const expectedHeight = areaHeight * 2
+			+ TASK_SCOPE_AREA_GAP * 2
+			+ TASK_NODE_HEIGHT;
+
+		assert.strictEqual(initialUpper.visualBounds.height, expectedHeight);
+		assert.strictEqual(initialLower.visualBounds.height, expectedHeight);
+		assert.ok(
+			initialUpper.visualBounds.position.y + initialUpper.visualBounds.height
+				> initialLower.visualBounds.position.y,
+		);
+		const resolvedTasks = resolveTaskGraphWorkVisualCollisions(
+			[footprintTask],
+			initialLayout,
+		);
+		const resolvedTask = resolvedTasks[0];
+
+		assert.ok(resolvedTask);
+		assert.notStrictEqual(resolvedTask, footprintTask);
+		assert.deepStrictEqual(
+			resolvedTask.nodePositions[upper.id],
+			footprintTask.nodePositions[upper.id],
+		);
+		assert.ok(
+			(resolvedTask.nodePositions[lower.id]?.y ?? 0)
+				> TASK_DEFAULT_WORK_VERTICAL_STRIDE,
+		);
+		const resolvedLayout = createTaskGraphLayout(resolvedTasks, scopeOptions);
+		const resolvedWorks = resolvedLayout.nodes.filter(
+			(node) => node.kind === 'work',
+		);
+		const [resolvedUpper, resolvedLower] = resolvedWorks;
+
+		assert.ok(resolvedUpper?.kind === 'work' && resolvedLower?.kind === 'work');
+		assert.ok(
+			resolvedUpper.visualBounds.position.y + resolvedUpper.visualBounds.height
+				+ TASK_WORK_VISUAL_COLLISION_GAP
+				<= resolvedLower.visualBounds.position.y,
+		);
+		assert.strictEqual(
+			resolveTaskGraphWorkVisualCollisions(resolvedTasks, resolvedLayout),
+			resolvedTasks,
+		);
+	});
+
+	test('넓어진 actual Scope만 고정 START/END를 피해 Work를 이동하고 Anchor는 보존한다', () => {
+		const task = createReadyTask('task:wide-scope', { x: 40, y: 60 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const normalLayout = createTaskGraphLayout([task]);
+
+		assert.strictEqual(
+			resolveTaskGraphWorkVisualCollisions([task], normalLayout)[0],
+			task,
+		);
+		const scopeOptions = {
+			resolveGraphTargetAreaSize: () => ({ width: 1_000, height: 120 }),
+		};
+		const wideLayout = createTaskGraphLayout([task], scopeOptions);
+		const resolvedTasks = resolveTaskGraphWorkVisualCollisions([task], wideLayout);
+		const resolvedTask = resolvedTasks[0];
+
+		assert.ok(resolvedTask);
+		assert.deepStrictEqual(resolvedTask.origin, task.origin);
+		assert.deepStrictEqual(
+			resolvedTask.nodePositions[task.nodes[2]?.id ?? ''],
+			task.nodePositions[task.nodes[2]?.id ?? ''],
+		);
+		assert.ok(
+			(resolvedTask.nodePositions[work.id]?.y ?? 0)
+				> (task.nodePositions[work.id]?.y ?? 0),
+		);
+		const resolvedLayout = createTaskGraphLayout(resolvedTasks, scopeOptions);
+		const resolvedWork = resolvedLayout.nodes.find((node) => node.id === work.id);
+		const fixedNodes = resolvedLayout.nodes.filter((node) => node.kind !== 'work');
+
+		assert.ok(resolvedWork?.kind === 'work');
+		assert.ok(fixedNodes.every((node) => (
+			resolvedWork.visualBounds.position.y
+				>= node.position.y + node.height + TASK_WORK_VISUAL_COLLISION_GAP
+		)));
+		assertLayoutEdgesUsePortCenters(resolvedLayout);
+	});
+
+	test('역순 Y의 START/END obstacle도 한 번의 Scope 충돌 계산으로 안정화한다', () => {
+		const baseTask = createReadyTask('task:reverse-obstacles', { x: 40, y: 200 });
+		const work = baseTask.nodes.find((node) => node.kind === 'work');
+		const end = baseTask.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(work?.kind === 'work' && end?.kind === 'end');
+		const task: TaskBlueprint = {
+			...baseTask,
+			nodePositions: {
+				...baseTask.nodePositions,
+				// 동적 공통 폭은 WORK의 left anchor에서 오른쪽으로 확장하므로
+				// 두 fixed obstacle과 실제로 겹치는 lane을 명시한다.
+				[work.id]: { x: 0, y: -180 },
+				[end.id]: { x: 640, y: -200 },
+			},
+		};
+		const scopeOptions = {
+			resolveGraphTargetAreaSize: () => ({ width: 1_000, height: 120 }),
+		};
+		const firstLayout = createTaskGraphLayout([task], scopeOptions);
+		const resolvedTasks = resolveTaskGraphWorkVisualCollisions([task], firstLayout);
+		const resolvedLayout = createTaskGraphLayout(resolvedTasks, scopeOptions);
+		const resolvedWork = resolvedLayout.nodes.find((node) => node.id === work.id);
+		const fixedNodes = resolvedLayout.nodes.filter((node) => node.kind !== 'work');
+
+		assert.ok(resolvedWork?.kind === 'work');
+		assert.ok(fixedNodes.every((node) => (
+			resolvedWork.visualBounds.position.y
+				>= node.position.y + node.height + TASK_WORK_VISUAL_COLLISION_GAP
+		)));
+		assert.strictEqual(
+			resolveTaskGraphWorkVisualCollisions(resolvedTasks, resolvedLayout),
+			resolvedTasks,
+		);
 	});
 
 	test('연결되지 않은 기본 Start/End를 incomplete flow로 표시한다', () => {
@@ -236,7 +524,7 @@ suite('Task Layout', () => {
 			nodes: [...readyWithOrphan.nodes, orphanWork],
 			nodePositions: {
 				...readyWithOrphan.nodePositions,
-				[orphanWork.id]: { x: 320, y: 104 },
+				[orphanWork.id]: { x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE },
 			},
 		};
 
@@ -482,12 +770,13 @@ function createReadyTask(
 	origin: { readonly x: number; readonly y: number },
 ): TaskBlueprint {
 	const start = { id: 'task-node:same-start', kind: 'start' as const };
-	const work = {
+		const work = {
 		id: 'task-node:same-work',
 		kind: 'work' as const,
 		title: 'Work',
 		description: 'Work description',
-		prompt: 'Run the work.\nKeep the result concise.',
+			prompt: 'Run the work.\nKeep the result concise.',
+			graphTargets: { reference: [], work: [] },
 	};
 	const end = { id: 'task-node:same-end', kind: 'end' as const };
 
@@ -533,12 +822,12 @@ function createBranchTask(
 		description: '',
 		origin,
 		nodePositions: {
-			[workA.id]: { x: 320, y: -104 },
+			[workA.id]: { x: 320, y: -TASK_DEFAULT_WORK_VERTICAL_STRIDE },
 			[workB.id]: { x: 320, y: 0 },
-			[workC.id]: { x: 320, y: 104 },
+			[workC.id]: { x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE },
 			[join.id]: { x: 640, y: 0 },
-			[workD.id]: { x: 960, y: -52 },
-			[workE.id]: { x: 960, y: 52 },
+			[workD.id]: { x: 960, y: -TASK_DEFAULT_WORK_VERTICAL_STRIDE / 2 },
+			[workE.id]: { x: 960, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE / 2 },
 			[end.id]: { x: 1280, y: 0 },
 		},
 		nodes: [start, workA, workB, workC, join, workD, workE, end],
@@ -634,6 +923,7 @@ function createWorkNode(id: string, title: string) {
 		kind: 'work' as const,
 		title,
 		description: '',
-		prompt: '',
-	};
+			prompt: '',
+			graphTargets: { reference: [], work: [] },
+		};
 }

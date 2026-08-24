@@ -7,6 +7,7 @@ import {
 	getTaskFlowStatus,
 	TASK_BLUEPRINT_VERSION,
 	TASK_DEFAULT_END_POSITION,
+	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	validateTaskBlueprint,
 	type TaskBlueprint,
 	type TaskIdSource,
@@ -112,14 +113,97 @@ suite('Task Domain', () => {
 		assert.strictEqual(works[1]?.title, 'New Work');
 		assert.deepStrictEqual(works.map((node) => fourth.nodePositions[node.id]), [
 			{ x: 320, y: 0 },
-			{ x: 320, y: 104 },
-			{ x: 320, y: 208 },
-			{ x: 320, y: 312 },
+			{ x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE },
+			{ x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE * 2 },
+			{ x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE * 3 },
+		]);
+		assert.deepStrictEqual(works.map((node) => node.graphTargets), [
+			{ reference: [], work: [] },
+			{ reference: [], work: [] },
+			{ reference: [], work: [] },
+			{ reference: [], work: [] },
 		]);
 		assert.deepStrictEqual(fourth.edges, []);
 		assert.deepStrictEqual(validateTaskBlueprint(fourth), []);
 		assert.strictEqual(getTaskFlowStatus(fourth), 'incomplete');
 		assert.strictEqual(state.addWork('task:missing'), undefined);
+	});
+
+	test('Work Graph Target은 immutable snapshot으로 교체하고 legacy 누락은 빈 배열로 정규화한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({ title: 'Target Snapshot' });
+		const withWork = state.addWork(task.id);
+		const work = withWork?.nodes.find((node) => node.kind === 'work');
+		const reference = ['folder:file:///workspace/src'];
+		const workTargets = ['file:file:///workspace/src/main.ts'];
+
+		assert.ok(withWork && work);
+		const updated = state.updateTask(task.id, (current) => ({
+			...current,
+			nodes: current.nodes.map((node) => node.id === work.id && node.kind === 'work'
+				? {
+					...node,
+					graphTargets: { reference, work: workTargets },
+				}
+				: node),
+		}));
+		const updatedWork = updated?.nodes.find((node) => node.id === work.id);
+
+		assert.ok(updatedWork?.kind === 'work');
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: ['folder:file:///workspace/src'],
+			work: ['file:file:///workspace/src/main.ts'],
+		});
+		assert.strictEqual(Object.isFrozen(updatedWork.graphTargets), true);
+		assert.strictEqual(Object.isFrozen(updatedWork.graphTargets.reference), true);
+		assert.strictEqual(Object.isFrozen(updatedWork.graphTargets.work), true);
+		reference.push('folder:file:///workspace/docs');
+		workTargets.length = 0;
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: ['folder:file:///workspace/src'],
+			work: ['file:file:///workspace/src/main.ts'],
+		});
+
+		const legacyWork = {
+			...work,
+			graphTargets: undefined,
+		};
+		const legacyTask = {
+			...withWork,
+			nodes: withWork.nodes.map((node) => node.id === work.id ? legacyWork : node),
+		} as unknown as TaskBlueprint;
+		const legacyState = createTaskState([legacyTask]);
+		const normalized = legacyState.getTask(legacyTask.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+
+		assert.ok(normalized?.kind === 'work');
+		assert.deepStrictEqual(normalized.graphTargets, { reference: [], work: [] });
+	});
+
+	test('Work Graph Target validation은 배열 shape와 Area 내부/교차 중복을 거부한다', () => {
+		const base = addWorks(createTask(), ['Target Work']);
+		const work = base.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work);
+		const replaceTargets = (graphTargets: unknown): TaskBlueprint => ({
+			...base,
+			nodes: base.nodes.map((node) => node.id === work.id
+				? { ...node, graphTargets }
+				: node),
+		} as TaskBlueprint);
+
+		assertIssueCodes(replaceTargets({ reference: 'src', work: [] }), [
+			'invalid_graph_targets',
+		]);
+		assertIssueCodes(replaceTargets({
+			reference: ['folder:src', 'folder:src'],
+			work: [],
+		}), ['duplicate_graph_target']);
+		assertIssueCodes(replaceTargets({
+			reference: ['folder:src'],
+			work: ['folder:src'],
+		}), ['graph_target_area_conflict']);
 	});
 
 	test('삭제로 빈 Work 기본 위치를 다음 추가에서 재사용한다', () => {

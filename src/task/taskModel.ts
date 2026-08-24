@@ -19,6 +19,9 @@ export const TASK_DEFAULT_END_POSITION: TaskNodePosition = Object.freeze({
 	y: 0,
 });
 
+/** 빈 Scope Area를 포함한 Work visual group 사이의 기본 lane 간격이다. */
+export const TASK_DEFAULT_WORK_VERTICAL_STRIDE = 376;
+
 /** 모든 Task Node가 공통으로 가지는 식별 정보다. */
 interface TaskNodeBase {
 	readonly id: string;
@@ -30,11 +33,20 @@ export interface StartNode extends TaskNodeBase {
 }
 
 /** 실제 작업 지시와 표시 정보를 가지는 Task 단계다. */
+export interface WorkGraphTargets {
+	/** Work가 의미상 읽기 대상으로 참고하는 Workspace Graph Source ID다. */
+	readonly reference: readonly string[];
+	/** Work가 의미상 수정 대상으로 사용하는 Workspace Graph Source ID다. */
+	readonly work: readonly string[];
+}
+
+/** 실제 작업 지시와 표시 정보 및 Workspace Graph 범위를 가지는 Task 단계다. */
 export interface WorkNode extends TaskNodeBase {
 	readonly kind: 'work';
 	readonly title: string;
 	readonly description: string;
 	readonly prompt: string;
+	readonly graphTargets: WorkGraphTargets;
 }
 
 /** Task의 유일한 종료점이다. */

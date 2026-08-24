@@ -5,6 +5,9 @@ export type TaskValidationIssueCode =
 	| 'start_node_count'
 	| 'end_node_count'
 	| 'duplicate_node_id'
+	| 'invalid_graph_targets'
+	| 'duplicate_graph_target'
+	| 'graph_target_area_conflict'
 	| 'node_position_missing'
 	| 'node_position_extra'
 	| 'start_node_position'
@@ -75,6 +78,10 @@ export function validateTaskBlueprint(
 			});
 		}
 		nodeIds.add(node.id);
+
+		if (node.kind === 'work') {
+			validateWorkGraphTargets(node, issues);
+		}
 	}
 
 	const nodePositions = blueprint.nodePositions ?? {};
@@ -207,6 +214,74 @@ export function validateTaskBlueprint(
 	}
 
 	return issues;
+}
+
+/** legacy 누락은 허용하되 저장된 Work Graph Target의 배열/중복 불변성은 검사한다. */
+function validateWorkGraphTargets(
+	node: TaskBlueprint['nodes'][number] & { readonly kind: 'work' },
+	issues: TaskValidationIssue[],
+): void {
+	const graphTargets: unknown = (
+		node as typeof node & { readonly graphTargets?: unknown }
+	).graphTargets;
+
+	if (graphTargets === undefined) {
+		return;
+	}
+	if (
+		typeof graphTargets !== 'object'
+		|| graphTargets === null
+		|| !Array.isArray((graphTargets as { readonly reference?: unknown }).reference)
+		|| !Array.isArray((graphTargets as { readonly work?: unknown }).work)
+	) {
+		issues.push({
+			code: 'invalid_graph_targets',
+			message: `Work graphTargets must contain reference/work arrays: ${node.id}.`,
+			nodeId: node.id,
+		});
+		return;
+	}
+
+	const reference = (graphTargets as { readonly reference: readonly unknown[] }).reference;
+	const work = (graphTargets as { readonly work: readonly unknown[] }).work;
+	const invalidTarget = [...reference, ...work].some((target) => (
+		typeof target !== 'string' || target.length === 0
+	));
+
+	if (invalidTarget) {
+		issues.push({
+			code: 'invalid_graph_targets',
+			message: `Work graphTargets must contain non-empty Source IDs: ${node.id}.`,
+			nodeId: node.id,
+		});
+	}
+
+	for (const targets of [reference, work]) {
+		const sourceIds = targets.filter((target): target is string => (
+			typeof target === 'string'
+		));
+
+		if (new Set(sourceIds).size !== sourceIds.length) {
+			issues.push({
+				code: 'duplicate_graph_target',
+				message: `Work graph target must be unique inside an area: ${node.id}.`,
+				nodeId: node.id,
+			});
+			break;
+		}
+	}
+
+	const referenceIds = new Set(reference.filter((target): target is string => (
+		typeof target === 'string'
+	)));
+
+	if (work.some((target) => typeof target === 'string' && referenceIds.has(target))) {
+		issues.push({
+			code: 'graph_target_area_conflict',
+			message: `Work graph target cannot exist in both areas: ${node.id}.`,
+			nodeId: node.id,
+		});
+	}
 }
 
 /** Source와 target 문자열 경계를 보존하는 Edge 연결 identity다. */

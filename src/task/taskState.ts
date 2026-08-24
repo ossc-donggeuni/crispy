@@ -2,6 +2,7 @@ import {
 	createDefaultTaskBlueprint,
 	createTaskEdgeId,
 	createTaskNodeId,
+	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	type CreateTaskBlueprintInput,
 	type CreateWorkNodeInput,
 	type TaskBlueprint,
@@ -261,6 +262,10 @@ function createWorkNode(
 		title: work?.title ?? 'New Work',
 		description: work?.description ?? '',
 		prompt: work?.prompt ?? '',
+		graphTargets: {
+			reference: [],
+			work: [],
+		},
 	};
 }
 
@@ -283,16 +288,17 @@ function addWorkNode(
 	};
 }
 
-/** x=320 lane에서 0부터 104 간격의 첫 빈 위치를 찾는다. */
+/** x=320 lane에서 기본 Work visual group 간격의 첫 빈 위치를 찾는다. */
 function findNextWorkPosition(
 	nodePositions: Readonly<Record<string, TaskNodePosition>>,
 ): TaskNodePosition {
 	let y = 0;
 
 	while (Object.values(nodePositions).some((position) => (
-		position.x === 320 && position.y === y
+		position.x === 320
+		&& Math.abs(position.y - y) < TASK_DEFAULT_WORK_VERTICAL_STRIDE
 	))) {
-		y += 104;
+		y += TASK_DEFAULT_WORK_VERTICAL_STRIDE;
 	}
 
 	return { x: 320, y };
@@ -469,12 +475,21 @@ function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 /** kind별 필드만 복사해 Task Node snapshot을 생성한다. */
 function createNodeSnapshot(node: TaskNode): TaskNode {
 	if (node.kind === 'work') {
+		const graphTargets = node.graphTargets ?? {
+			reference: [],
+			work: [],
+		};
+
 		return Object.freeze({
 			id: node.id,
 			kind: node.kind,
 			title: node.title,
 			description: node.description,
 			prompt: node.prompt,
+			graphTargets: Object.freeze({
+				reference: Object.freeze([...graphTargets.reference]),
+				work: Object.freeze([...graphTargets.work]),
+			}),
 		});
 	}
 
