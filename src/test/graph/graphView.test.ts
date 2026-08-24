@@ -70,7 +70,11 @@ import {
 	TASK_NODE_ACTION_ATTRIBUTE,
 	TASK_PORT_DIRECTION_ATTRIBUTE,
 } from '../../webview/task/taskRenderer';
-import { createTaskGraphLayout } from '../../webview/task/taskLayout';
+import {
+	createTaskGraphLayout,
+	TASK_BOUNDARY_NODE_HEIGHT,
+	TASK_NODE_WIDTH,
+} from '../../webview/task/taskLayout';
 
 suite('Graph View', () => {
 	test('Navigator Task 추가는 viewport 중심에 incomplete Start/End를 생성한다', () => {
@@ -120,6 +124,18 @@ suite('Graph View', () => {
 
 		assert.strictEqual(startElement.getAttribute(TASK_FLOW_STATE_ATTRIBUTE), 'incomplete');
 		assert.strictEqual(endElement.getAttribute(TASK_FLOW_STATE_ATTRIBUTE), 'incomplete');
+		assert.strictEqual(startElement.style.width, `${TASK_NODE_WIDTH}px`);
+		assert.strictEqual(endElement.style.width, startElement.style.width);
+		assert.strictEqual(startElement.style.height, `${TASK_BOUNDARY_NODE_HEIGHT}px`);
+		assert.strictEqual(endElement.style.height, startElement.style.height);
+		assert.strictEqual(
+			getDescendantByClass(startElement, 'task-node-title').textContent,
+			firstTask.title,
+		);
+		assert.strictEqual(
+			getDescendantByClass(endElement, 'task-node-title').textContent,
+			firstTask.title,
+		);
 		assert.ok(nodeLayer.children.includes(workspaceRoot));
 		assert.ok(nodeLayer.children.includes(startElement));
 		assert.deepStrictEqual(
@@ -128,6 +144,17 @@ suite('Graph View', () => {
 				x: firstTask.origin.x + firstTask.nodePositions[firstEnd.id].x,
 				y: firstTask.origin.y + firstTask.nodePositions[firstEnd.id].y,
 			},
+		);
+		const renamedTask = { ...firstTask, title: 'Renamed Task' };
+
+		graphView.updateTasks([renamedTask]);
+		assert.strictEqual(
+			getDescendantByClass(startElement, 'task-node-title').textContent,
+			renamedTask.title,
+		);
+		assert.strictEqual(
+			getDescendantByClass(endElement, 'task-node-title').textContent,
+			renamedTask.title,
 		);
 
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
@@ -202,6 +229,14 @@ suite('Graph View', () => {
 			findTaskPort(root, task.id, end.id, 'output'),
 			undefined,
 		);
+		const directSource = getTaskPort(root, task.id, start.id, 'output');
+		const directTarget = getTaskPort(root, task.id, end.id, 'input');
+
+		directSource.dispatch('click', createClickEvent(directSource));
+		assert.strictEqual(directTarget.hasClass('is-invalid-target'), true);
+		directTarget.dispatch('click', createClickEvent(directTarget));
+		assert.deepStrictEqual(graphView.taskState.getTask(task.id)?.edges, []);
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
 		for (const work of works) {
 			const input = getTaskPort(root, task.id, work.id, 'input');
 			const output = getTaskPort(root, task.id, work.id, 'output');
@@ -617,7 +652,7 @@ suite('Graph View', () => {
 
 		assert.ok(updated);
 		assert.deepStrictEqual(updated.origin, task.origin);
-		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: 6 });
+		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: -18 });
 		assert.deepStrictEqual(updated.nodePositions[endNode.id], task.nodePositions[endNode.id]);
 		assertRenderedTaskGeometry(root, updated);
 
@@ -626,7 +661,7 @@ suite('Graph View', () => {
 
 		assert.ok(updated);
 		assert.deepStrictEqual(updated.origin, task.origin);
-		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 68 });
+		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 40 });
 		assertRenderedTaskGeometry(root, updated);
 
 		performTaskDrag(start, { x: 10, y: 10 }, { x: 30, y: 40 });
@@ -634,8 +669,8 @@ suite('Graph View', () => {
 
 		assert.ok(updated);
 		assert.deepStrictEqual(updated.origin, { x: 120, y: 80 });
-		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: 6 });
-		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 68 });
+		assert.deepStrictEqual(updated.nodePositions[workNode.id], { x: 360, y: -18 });
+		assert.deepStrictEqual(updated.nodePositions[endNode.id], { x: 610, y: 40 });
 		assertRenderedTaskGeometry(root, updated);
 
 		graphView.dispose();
@@ -700,7 +735,7 @@ suite('Graph View', () => {
 		performTaskDrag(workA, { x: 10, y: 10 }, { x: 40, y: 25 });
 		assert.deepStrictEqual(
 			graphView.taskState.getTask(taskA.id)?.nodePositions[workId],
-			{ x: 350, y: 1 },
+			{ x: 350, y: -23 },
 		);
 		assert.deepStrictEqual(
 			graphView.taskState.getTask(taskB.id)?.nodePositions[workId],
@@ -768,8 +803,8 @@ suite('Graph View', () => {
 		taskAWork.dispatch('dblclick', createClickEvent(taskAWork));
 		taskAEnd.dispatch('dblclick', createClickEvent(taskAEnd));
 		assert.deepStrictEqual(focusPoints, [
-			{ x: 240, y: 102 },
-			{ x: 560, y: 102 },
+			{ x: 240, y: 78 },
+			{ x: 560, y: 78 },
 		]);
 
 		performTaskDrag(taskAWork, { x: 10, y: 10 }, { x: 40, y: 30 });
@@ -8175,9 +8210,9 @@ function createSerialRenderingTask(
 		nodePositions: {
 			...Object.fromEntries(works.map((work, index) => [
 				work.id,
-				{ x: 320 * (index + 1), y: -14 },
+				{ x: 320 * (index + 1), y: -38 },
 			])),
-			[end.id]: { x: 320 * (workCount + 1), y: 28 },
+			[end.id]: { x: 320 * (workCount + 1), y: 0 },
 		},
 		nodes,
 		edges: nodes.slice(0, -1).map((node, index) => ({
@@ -8266,7 +8301,7 @@ function createCollidingRenderingTask(
 		id: taskId,
 		nodePositions: {
 			...task.nodePositions,
-			[work.id]: { x: 320, y: -14 },
+			[work.id]: { x: 320, y: -38 },
 		},
 		nodes: [start, work, end],
 		edges: [{

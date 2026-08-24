@@ -8,10 +8,8 @@ import {
 	createTaskEdgeGeometry,
 	createTaskGraphLayout,
 	getCubicBezierPoint,
-	TASK_END_NODE_HEIGHT,
-	TASK_END_NODE_WIDTH,
+	TASK_BOUNDARY_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
-	TASK_START_NODE_HEIGHT,
 	TASK_WORK_NODE_HEIGHT,
 } from '../../webview/task/taskLayout';
 
@@ -28,19 +26,24 @@ suite('Task Layout', () => {
 
 		assert.ok(startLayout && workLayout?.kind === 'work' && endLayout);
 		assert.deepStrictEqual(startLayout.localPosition, { x: 0, y: 0 });
-		assert.deepStrictEqual(workLayout.localPosition, { x: 320, y: -14 });
-		assert.deepStrictEqual(endLayout.localPosition, { x: 640, y: 28 });
+		assert.deepStrictEqual(workLayout.localPosition, { x: 320, y: -38 });
+		assert.deepStrictEqual(endLayout.localPosition, { x: 640, y: 0 });
 		assert.deepStrictEqual(startLayout.position, { x: 120, y: -40 });
-		assert.deepStrictEqual(workLayout.position, { x: 440, y: -54 });
-		assert.deepStrictEqual(endLayout.position, { x: 760, y: -12 });
+		assert.deepStrictEqual(workLayout.position, { x: 440, y: -78 });
+		assert.deepStrictEqual(endLayout.position, { x: 760, y: -40 });
 		assert.ok(layout.nodes.every((node) => node.flowState === 'ready'));
 		assert.strictEqual(startLayout.width, TASK_NODE_WIDTH);
-		assert.strictEqual(startLayout.height, TASK_START_NODE_HEIGHT);
+		assert.strictEqual(startLayout.height, TASK_BOUNDARY_NODE_HEIGHT);
 		assert.strictEqual(workLayout.width, TASK_NODE_WIDTH);
 		assert.strictEqual(workLayout.height, TASK_WORK_NODE_HEIGHT);
 		assert.strictEqual(workLayout.canRemove, true);
-		assert.strictEqual(endLayout.width, TASK_END_NODE_WIDTH);
-		assert.strictEqual(endLayout.height, TASK_END_NODE_HEIGHT);
+		assert.strictEqual(endLayout.width, TASK_NODE_WIDTH);
+		assert.strictEqual(endLayout.height, TASK_BOUNDARY_NODE_HEIGHT);
+		assert.strictEqual(startLayout.width, endLayout.width);
+		assert.strictEqual(startLayout.height, endLayout.height);
+		assert.ok(startLayout.height < workLayout.height / 2);
+		assert.strictEqual(startLayout.title, 'Ready Task');
+		assert.strictEqual(endLayout.title, startLayout.title);
 		assert.deepStrictEqual(layout.edges.map((edge) => ({
 			id: edge.id,
 			taskId: edge.taskId,
@@ -57,11 +60,11 @@ suite('Task Layout', () => {
 			start: edge.geometry.start,
 			end: edge.geometry.end,
 		})), [{
-			start: { x: 400, y: 12 },
-			end: { x: 440, y: 12 },
+			start: { x: 400, y: -12 },
+			end: { x: 440, y: -12 },
 		}, {
-			start: { x: 720, y: 12 },
-			end: { x: 760, y: 12 },
+			start: { x: 720, y: -12 },
+			end: { x: 760, y: -12 },
 		}]);
 	});
 
@@ -79,9 +82,11 @@ suite('Task Layout', () => {
 		assert.strictEqual(layout.edges.length, 0);
 		assert.ok(layout.nodes.every((node) => node.flowState === 'incomplete'));
 		assert.deepStrictEqual(start.localPosition, { x: 0, y: 0 });
-		assert.deepStrictEqual(end.localPosition, { x: 640, y: 28 });
+		assert.deepStrictEqual(end.localPosition, { x: 640, y: 0 });
 		assert.deepStrictEqual(start.position, { x: 30, y: 40 });
-		assert.deepStrictEqual(end.position, { x: 670, y: 68 });
+		assert.deepStrictEqual(end.position, { x: 670, y: 40 });
+		assert.strictEqual(start.title, 'Incomplete Task');
+		assert.strictEqual(end.title, start.title);
 	});
 
 	test('두 Anchor의 horizontal cubic geometry와 실제 t=0.5 midpoint를 계산한다', () => {
@@ -195,19 +200,19 @@ suite('Task Layout', () => {
 		assert.ok(endJoinEdges.every(Boolean));
 		assert.deepStrictEqual(
 			startBranchEdges.map((edge) => edge?.geometry.start),
-			Array.from({ length: 3 }, () => ({ x: 380, y: 252 })),
+			Array.from({ length: 3 }, () => ({ x: 380, y: 228 })),
 		);
 		assert.deepStrictEqual(
 			workJoinEdges.map((edge) => edge?.geometry.end),
-			Array.from({ length: 3 }, () => ({ x: 740, y: 252 })),
+			Array.from({ length: 3 }, () => ({ x: 740, y: 228 })),
 		);
 		assert.deepStrictEqual(
 			workBranchEdges.map((edge) => edge?.geometry.start),
-			Array.from({ length: 2 }, () => ({ x: 1020, y: 252 })),
+			Array.from({ length: 2 }, () => ({ x: 1020, y: 228 })),
 		);
 		assert.deepStrictEqual(
 			endJoinEdges.map((edge) => edge?.geometry.end),
-			Array.from({ length: 2 }, () => ({ x: 1380, y: 252 })),
+			Array.from({ length: 2 }, () => ({ x: 1380, y: 228 })),
 		);
 		assertLayoutEdgesUsePortCenters(layout);
 		for (const edge of layout.edges) {
@@ -254,7 +259,7 @@ suite('Task Layout', () => {
 		);
 		assert.deepStrictEqual(
 			endIncoming.map((edge) => edge.geometry.end),
-			Array.from({ length: 2 }, () => ({ x: 1440, y: 312 })),
+			Array.from({ length: 2 }, () => ({ x: 1440, y: 316 })),
 		);
 		assertLayoutEdgesUsePortCenters(layout);
 	});
@@ -365,8 +370,8 @@ function createReadyTask(
 		description: '',
 		origin,
 		nodePositions: {
-			[work.id]: { x: 320, y: -14 },
-			[end.id]: { x: 640, y: 28 },
+			[work.id]: { x: 320, y: -38 },
+			[end.id]: { x: 640, y: 0 },
 		},
 		nodes: [start, work, end],
 		edges: [{
@@ -400,13 +405,13 @@ function createBranchTask(
 		description: '',
 		origin,
 		nodePositions: {
-			[workA.id]: { x: 320, y: -194 },
-			[workB.id]: { x: 320, y: -14 },
-			[workC.id]: { x: 320, y: 166 },
-			[join.id]: { x: 640, y: -14 },
-			[workD.id]: { x: 960, y: -104 },
-			[workE.id]: { x: 960, y: 76 },
-			[end.id]: { x: 1280, y: 28 },
+			[workA.id]: { x: 320, y: -218 },
+			[workB.id]: { x: 320, y: -38 },
+			[workC.id]: { x: 320, y: 142 },
+			[join.id]: { x: 640, y: -38 },
+			[workD.id]: { x: 960, y: -128 },
+			[workE.id]: { x: 960, y: 52 },
+			[end.id]: { x: 1280, y: 0 },
 		},
 		nodes: [start, workA, workB, workC, join, workD, workE, end],
 		edges: [{

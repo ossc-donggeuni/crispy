@@ -25,11 +25,10 @@ interface TaskLayoutNodeBase {
 	readonly height: number;
 }
 
-/** TaskBlueprint 제목과 설명을 표시하는 시작 Layout Node다. */
+/** TaskBlueprint 제목을 표시하는 시작 Layout Node다. */
 export interface TaskStartLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'start';
 	readonly title: string;
-	readonly description: string;
 }
 
 /** Work Node의 표시 정보와 prompt를 제공하는 Layout Node다. */
@@ -41,9 +40,10 @@ export interface TaskWorkLayoutNode extends TaskLayoutNodeBase {
 	readonly canRemove: boolean;
 }
 
-/** Task 종료점을 표시하는 Layout Node다. */
+/** TaskBlueprint 제목을 표시하는 종료 Layout Node다. */
 export interface TaskEndLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'end';
+	readonly title: string;
 }
 
 /** Task Renderer가 처리하는 Start, Work, End Layout Node다. */
@@ -77,16 +77,12 @@ export interface TaskGraphLayout {
 	readonly edges: readonly TaskLayoutEdge[];
 }
 
-/** Start와 Work Card의 고정 폭이다. */
+/** 모든 Task Card의 고정 폭이다. */
 export const TASK_NODE_WIDTH = 280;
-/** Start Card의 고정 높이다. */
-export const TASK_START_NODE_HEIGHT = 104;
+/** Start와 End 경계 Card가 공유하는 컴팩트한 고정 높이다. */
+export const TASK_BOUNDARY_NODE_HEIGHT = 56;
 /** Work Card의 고정 높이다. */
 export const TASK_WORK_NODE_HEIGHT = 132;
-/** End Card의 고정 폭이다. */
-export const TASK_END_NODE_WIDTH = 140;
-/** End Card의 고정 높이다. */
-export const TASK_END_NODE_HEIGHT = 48;
 const TASK_EDGE_MIN_CONTROL_OFFSET = 32;
 
 /**
@@ -143,7 +139,6 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				...base,
 				kind: node.kind,
 				title: task.title,
-				description: task.description,
 			};
 		} else if (node.kind === 'work') {
 			return {
@@ -155,7 +150,7 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				canRemove: true,
 			};
 		} else {
-			return { ...base, kind: node.kind };
+			return { ...base, kind: node.kind, title: task.title };
 		}
 	});
 	const nodesById = new Map(nodes.map((node) => [node.id, node]));
@@ -254,12 +249,9 @@ function getTaskNodeGeometry(node: TaskNode): {
 	readonly width: number;
 	readonly height: number;
 } {
-	if (node.kind === 'start') {
-		return { width: TASK_NODE_WIDTH, height: TASK_START_NODE_HEIGHT };
-	}
 	if (node.kind === 'work') {
 		return { width: TASK_NODE_WIDTH, height: TASK_WORK_NODE_HEIGHT };
 	}
 
-	return { width: TASK_END_NODE_WIDTH, height: TASK_END_NODE_HEIGHT };
+	return { width: TASK_NODE_WIDTH, height: TASK_BOUNDARY_NODE_HEIGHT };
 }

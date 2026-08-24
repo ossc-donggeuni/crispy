@@ -16,6 +16,12 @@
 	cursor: grabbing;
 }
 
+.task-start-node,
+.task-end-node {
+	gap: 3px;
+	padding: 7px 16px;
+}
+
 .task-start-node {
 	--graph-node-outline-color: color-mix(
 		in srgb,
@@ -41,9 +47,6 @@
 		transparent
 	);
 	--graph-node-border-color: var(--graph-node-outline-color);
-
-	align-items: center;
-	padding: 10px 16px;
 }
 
 /* Incomplete feedback는 Card surface/body만 낮추고 Port와 Action은 선명하게 유지한다. */
@@ -59,8 +62,8 @@
 
 .task-start-node[data-task-flow-state='incomplete'] > .task-node-kind,
 .task-start-node[data-task-flow-state='incomplete'] > .task-node-title,
-.task-start-node[data-task-flow-state='incomplete'] > .task-node-description,
-.task-end-node[data-task-flow-state='incomplete'] > .task-node-kind {
+.task-end-node[data-task-flow-state='incomplete'] > .task-node-kind,
+.task-end-node[data-task-flow-state='incomplete'] > .task-node-title {
 	opacity: 0.62;
 }
 

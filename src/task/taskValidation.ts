@@ -15,6 +15,7 @@ export type TaskValidationIssueCode =
 	| 'edge_target_missing'
 	| 'start_node_incoming'
 	| 'end_node_outgoing'
+	| 'start_end_direct_edge'
 	| 'self_edge'
 	| 'cycle';
 
@@ -168,6 +169,17 @@ export function validateTaskBlueprint(
 				message: `Task end node cannot have an outgoing edge: ${edge.id}.`,
 				edgeId: edge.id,
 				nodeId: edge.source,
+			});
+		}
+
+		if (
+			nodesById.get(edge.source)?.kind === 'start'
+			&& nodesById.get(edge.target)?.kind === 'end'
+		) {
+			issues.push({
+				code: 'start_end_direct_edge',
+				message: `Task start node cannot connect directly to end node: ${edge.id}.`,
+				edgeId: edge.id,
 			});
 		}
 

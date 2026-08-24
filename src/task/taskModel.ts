@@ -13,10 +13,10 @@ export interface TaskNodePosition {
 	readonly y: number;
 }
 
-/** Start와 수평으로 떨어진 기본 End의 task-local 위치다. */
+/** Start와 수평으로 떨어지고 수직 정렬된 기본 End의 task-local 위치다. */
 export const TASK_DEFAULT_END_POSITION: TaskNodePosition = Object.freeze({
 	x: 640,
-	y: 28,
+	y: 0,
 });
 
 /** 모든 Task Node가 공통으로 가지는 식별 정보다. */
@@ -104,7 +104,7 @@ export function createTaskEdgeId(
 }
 
 /**
- * 직접 연결을 시작할 Start와 End만 가진 Task Blueprint를 생성한다.
+ * Work 연결을 시작할 Start와 End만 가진 Task Blueprint를 생성한다.
  * Start는 Task 제목과 설명을 중복하지 않고 Blueprint 자체를 대표한다.
  *
  * @param input Task 표시 정보와 Start world origin

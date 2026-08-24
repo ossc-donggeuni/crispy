@@ -68,8 +68,8 @@ import {
 } from '../../task';
 import {
 	createTaskGraphLayout,
-	TASK_END_NODE_WIDTH,
-	TASK_START_NODE_HEIGHT,
+	TASK_BOUNDARY_NODE_HEIGHT,
+	TASK_NODE_WIDTH,
 	type TaskLayoutNode,
 } from '../task/taskLayout';
 import { initializeTaskRenderer } from '../task/taskRenderer';
@@ -98,7 +98,7 @@ export interface GraphView {
 
 const TASK_CREATION_OFFSET = 32;
 const DEFAULT_TASK_LAYOUT_WIDTH = TASK_DEFAULT_END_POSITION.x
-	+ TASK_END_NODE_WIDTH;
+	+ TASK_NODE_WIDTH;
 
 /** 현재 Visible Graph 중심을 기본 Task 전체 중심으로 사용하고 겹친 origin은 비켜 놓는다. */
 function createTaskOriginInVisibleArea(
@@ -109,7 +109,7 @@ function createTaskOriginInVisibleArea(
 	const center = camera.viewportToWorld(visibleArea.center);
 	const baseOrigin = {
 		x: center.x - DEFAULT_TASK_LAYOUT_WIDTH / 2,
-		y: center.y - TASK_START_NODE_HEIGHT / 2,
+		y: center.y - TASK_BOUNDARY_NODE_HEIGHT / 2,
 	};
 
 	for (let slot = 0; slot <= tasks.length; slot += 1) {

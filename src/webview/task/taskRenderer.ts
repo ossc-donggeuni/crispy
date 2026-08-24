@@ -919,27 +919,27 @@ function createTaskNodeContents(
 		? 'Start'
 		: node.kind === 'work' ? 'Work' : 'End';
 
-	if (node.kind === 'end') {
-		return [kind, createTaskPort(ownerDocument, node, 'input')];
-	}
-
 	const title = ownerDocument.createElement('strong');
-	const description = ownerDocument.createElement('span');
 
 	title.className = 'task-node-title';
 	title.textContent = node.title;
-	description.className = 'task-node-description';
-	description.textContent = node.description;
 
 	if (node.kind === 'start') {
 		return [
 			kind,
 			title,
-			description,
 			createTaskNodeAction(ownerDocument, 'add-work'),
 			createTaskPort(ownerDocument, node, 'output'),
 		];
 	}
+	if (node.kind === 'end') {
+		return [kind, title, createTaskPort(ownerDocument, node, 'input')];
+	}
+
+	const description = ownerDocument.createElement('span');
+
+	description.className = 'task-node-description';
+	description.textContent = node.description;
 
 	const contents = [
 		kind,
@@ -1016,11 +1016,11 @@ function createTaskNodeAction(
 }
 
 function createTaskNodeAriaLabel(node: TaskLayoutNode): string {
-	if (node.kind === 'end') {
-		return 'Task End';
-	}
+	const kind = node.kind === 'start'
+		? 'Start'
+		: node.kind === 'work' ? 'Work' : 'End';
 
-	return `Task ${node.kind === 'start' ? 'Start' : 'Work'}: ${node.title}`;
+	return `Task ${kind}: ${node.title}`;
 }
 
 function syncTaskEdgeElement(
