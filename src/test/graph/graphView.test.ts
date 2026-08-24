@@ -910,7 +910,7 @@ suite('Graph View', () => {
 		assert.strictEqual(workA.hasPointerCapture(1), false);
 	});
 
-	test('Task 선택과 Focus는 (taskId,nodeId) 기준이며 Drag 직후 Focus를 억제한다', () => {
+	test('Task 선택은 빈 Viewport와 Port 연결에서 해제되고 Drag 직후 Focus를 억제한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const taskA = createCollidingRenderingTask(
@@ -939,6 +939,8 @@ suite('Graph View', () => {
 		const taskBWork = getTaskElement(root, 'data-task-node-id', workId, taskB.id);
 		const taskAStart = getTaskElement(root, 'data-task-node-id', startId, taskA.id);
 		const taskAEnd = getTaskElement(root, 'data-task-node-id', endId, taskA.id);
+		const taskAOutput = getTaskPort(root, taskA.id, workId, 'output');
+		const viewport = getDescendantByClass(root, 'graph-viewport');
 		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
 
 		graphView.camera.focusOn = (point) => focusPoints.push(point);
@@ -947,6 +949,14 @@ suite('Graph View', () => {
 		taskBWork.dispatch('click', createClickEvent(taskBWork));
 		assert.strictEqual(taskAWork.hasClass('is-selected'), false);
 		assert.strictEqual(taskBWork.hasClass('is-selected'), true);
+		viewport.dispatch('click', createClickEvent(viewport));
+		assert.strictEqual(taskBWork.hasClass('is-selected'), false);
+
+		taskAWork.dispatch('click', createClickEvent(taskAWork));
+		assert.strictEqual(taskAWork.hasClass('is-selected'), true);
+		taskAOutput.dispatch('click', createClickEvent(taskAOutput));
+		assert.strictEqual(taskAWork.hasClass('is-selected'), false);
+		ownerDocument.dispatch('keydown', createKeyboardEvent('Escape'));
 
 		taskAStart.dispatch('dblclick', createClickEvent(taskAStart));
 		taskAWork.dispatch('dblclick', createClickEvent(taskAWork));

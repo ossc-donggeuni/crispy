@@ -237,14 +237,21 @@ export function initializeTaskRenderer(
 		(child as HTMLElement).getAttribute(TASK_PORT_DIRECTION_ATTRIBUTE) === direction
 	)) as HTMLElement | undefined;
 
+	const clearTaskNodeSelection = (): void => {
+		if (!selectedNodeKey) {
+			return;
+		}
+
+		nodeElements.get(selectedNodeKey)?.classList.remove('is-selected');
+		selectedNodeKey = undefined;
+	};
+
 	const selectTaskNode = (renderKey: string): void => {
 		if (selectedNodeKey === renderKey) {
 			return;
 		}
 
-		if (selectedNodeKey) {
-			nodeElements.get(selectedNodeKey)?.classList.remove('is-selected');
-		}
+		clearTaskNodeSelection();
 		selectedNodeKey = renderKey;
 		nodeElements.get(renderKey)?.classList.add('is-selected');
 	};
@@ -554,6 +561,7 @@ export function initializeTaskRenderer(
 	): void => {
 		event.preventDefault();
 		event.stopPropagation();
+		clearTaskNodeSelection();
 		if (port.direction === 'output') {
 			if (connectionSession?.renderKey === port.renderKey) {
 				cancelTaskConnection();
@@ -610,6 +618,7 @@ export function initializeTaskRenderer(
 
 			event.preventDefault();
 			event.stopPropagation();
+			clearTaskNodeSelection();
 			cancelTaskConnection();
 			if (
 				taskId
@@ -714,15 +723,17 @@ export function initializeTaskRenderer(
 		event: MouseEvent | PointerEvent,
 	): void => {
 		if (
-			!connectionSession
-			|| resolveTaskPort(event.target)
+			resolveTaskPort(event.target)
 			|| resolveTaskNodeElement(event.target)
 			|| isTaskActionTarget(event.target)
 		) {
 			return;
 		}
 
-		cancelTaskConnection();
+		clearTaskNodeSelection();
+		if (connectionSession) {
+			cancelTaskConnection();
+		}
 	};
 
 	const handleDocumentKeyDown = (event: KeyboardEvent): void => {
