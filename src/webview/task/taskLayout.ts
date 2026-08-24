@@ -133,8 +133,6 @@ export const TASK_NODE_HEIGHT = 56;
 export const TASK_SCOPE_AREA_MIN_HEIGHT = 72;
 /** Reference → Work → Work Card 사이의 world 간격이다. */
 export const TASK_SCOPE_AREA_GAP = 8;
-/** 실제 Scope footprint가 겹칠 때 다음 Work를 아래로 미는 최소 간격이다. */
-export const TASK_WORK_VISUAL_COLLISION_GAP = 16;
 const TASK_EDGE_MIN_CONTROL_OFFSET = 32;
 
 /**
@@ -159,119 +157,6 @@ export function createTaskGraphLayout(
 
 	return { nodes, edges };
 }
-
-/**
- * 실제 Scope 크기를 포함한 Work visual bounds가 겹치면 뒤쪽 Work의 Domain 위치를
- * 아래로 이동할 immutable Blueprint 목록을 계산한다. x/lane과 기존 순서는 보존한다.
- */
-export function resolveTaskGraphWorkVisualCollisions(
-	tasks: readonly TaskBlueprint[],
-	layout: TaskGraphLayout,
-): readonly TaskBlueprint[] {
-	const orderedWorks = layout.nodes
-		.map((node, index) => ({ node, index }))
-		.filter((entry): entry is {
-			readonly node: TaskWorkLayoutNode;
-			readonly index: number;
-		} => entry.node.kind === 'work')
-		.sort((left, right) => (
-			left.node.position.y - right.node.position.y
-			|| left.node.position.x - right.node.position.x
-			|| left.index - right.index
-		));
-	const fixedNodeBounds: TaskLayoutBounds[] = layout.nodes
-		.filter((node) => node.kind !== 'work')
-		.map((node) => ({
-			position: node.position,
-			width: node.width,
-			height: node.height,
-		}));
-	const placedBounds: TaskLayoutBounds[] = [];
-	const shiftByNodeKey = new Map<string, number>();
-
-	for (const { node } of orderedWorks) {
-		let shiftY = 0;
-
-		// 동적으로 넓어진 WORK는 visualBounds와 node.width가 동일하므로 기본
-		// 최소 폭과 비교해 START/END fixed bounds 충돌 검사를 유지한다.
-		const collisionBounds = (node.width > TASK_NODE_WIDTH
-			? [...fixedNodeBounds, ...placedBounds]
-			: [...placedBounds])
-			.sort((left, right) => (
-				left.position.y - right.position.y
-				|| left.position.x - right.position.x
-			));
-
-		for (const placed of collisionBounds) {
-			if (!haveHorizontalOverlap(node.visualBounds, placed)) {
-				continue;
-			}
-			const shiftedTop = node.visualBounds.position.y + shiftY;
-			const shiftedBottom = shiftedTop + node.visualBounds.height;
-			const placedTop = placed.position.y;
-			const placedBottom = placedTop + placed.height;
-
-			if (
-				shiftedBottom > placedTop - TASK_WORK_VISUAL_COLLISION_GAP
-				&& shiftedTop < placedBottom + TASK_WORK_VISUAL_COLLISION_GAP
-			) {
-				shiftY = Math.max(
-					shiftY,
-					placedBottom
-						+ TASK_WORK_VISUAL_COLLISION_GAP
-						- node.visualBounds.position.y,
-				);
-			}
-		}
-
-		placedBounds.push({
-			...node.visualBounds,
-			position: {
-				x: node.visualBounds.position.x,
-				y: node.visualBounds.position.y + shiftY,
-			},
-		});
-		if (shiftY > 0) {
-			shiftByNodeKey.set(createTaskLayoutNodeKey(node.taskId, node.id), shiftY);
-		}
-	}
-
-	if (shiftByNodeKey.size === 0) {
-		return tasks;
-	}
-	return tasks.map((task) => {
-		const nodePositions = { ...task.nodePositions };
-		let changed = false;
-
-		for (const node of task.nodes) {
-			if (node.kind !== 'work') {
-				continue;
-			}
-			const shiftY = shiftByNodeKey.get(createTaskLayoutNodeKey(task.id, node.id));
-			const position = nodePositions[node.id];
-
-			if (!shiftY || !position) {
-				continue;
-			}
-			nodePositions[node.id] = { x: position.x, y: position.y + shiftY };
-			changed = true;
-		}
-		return changed ? { ...task, nodePositions } : task;
-	});
-}
-
-function haveHorizontalOverlap(
-	left: TaskLayoutBounds,
-	right: TaskLayoutBounds,
-): boolean {
-	return left.position.x < right.position.x + right.width
-		&& left.position.x + left.width > right.position.x;
-}
-
-function createTaskLayoutNodeKey(taskId: string, nodeId: string): string {
-	return `${taskId}\u0000${nodeId}`;
-}
-
 /** 내부 Node/Edge ID lookup이 다른 Task와 섞이지 않도록 한 Task만 Layout한다. */
 function createTaskLayout(
 	task: TaskBlueprint,

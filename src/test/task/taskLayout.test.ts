@@ -9,12 +9,10 @@ import {
 	createTaskEdgeGeometry,
 	createTaskGraphLayout,
 	getCubicBezierPoint,
-	resolveTaskGraphWorkVisualCollisions,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
 	TASK_SCOPE_AREA_GAP,
 	TASK_SCOPE_AREA_MIN_HEIGHT,
-	TASK_WORK_VISUAL_COLLISION_GAP,
 } from '../../webview/task/taskLayout';
 
 suite('Task Layout', () => {
@@ -201,7 +199,7 @@ suite('Task Layout', () => {
 		assertLayoutEdgesUsePortCenters(createTaskGraphLayout([movedTask], scopeOptions));
 	});
 
-	test('동적 Scope footprint가 기본 stride를 넘으면 immutable Work 위치를 밀어 충돌을 해소한다', () => {
+	test('동적 Scope footprint가 기본 stride를 넘어도 명시한 Work 위치와 겹침을 보존한다', () => {
 		const task = createReadyTask('task:scope-footprint', { x: 0, y: 0 });
 		const originalWork = task.nodes.find((node) => node.kind === 'work');
 
@@ -240,131 +238,34 @@ suite('Task Layout', () => {
 				height: areaHeight,
 			}),
 		};
-		const initialLayout = createTaskGraphLayout([footprintTask], scopeOptions);
-		const initialWorks = initialLayout.nodes.filter(
+		const layout = createTaskGraphLayout([footprintTask], scopeOptions);
+		const works = layout.nodes.filter(
 			(node) => node.kind === 'work',
 		);
-		const [initialUpper, initialLower] = initialWorks;
+		const [upperLayout, lowerLayout] = works;
 
-		assert.ok(initialUpper?.kind === 'work' && initialLower?.kind === 'work');
+		assert.ok(upperLayout?.kind === 'work' && lowerLayout?.kind === 'work');
 		const expectedHeight = areaHeight * 2
 			+ TASK_SCOPE_AREA_GAP * 2
 			+ TASK_NODE_HEIGHT;
 
-		assert.strictEqual(initialUpper.visualBounds.height, expectedHeight);
-		assert.strictEqual(initialLower.visualBounds.height, expectedHeight);
+		assert.strictEqual(upperLayout.visualBounds.height, expectedHeight);
+		assert.strictEqual(lowerLayout.visualBounds.height, expectedHeight);
+		assert.deepStrictEqual(upperLayout.localPosition, { x: 320, y: 0 });
+		assert.deepStrictEqual(lowerLayout.localPosition, {
+			x: 320,
+			y: TASK_DEFAULT_WORK_VERTICAL_STRIDE,
+		});
 		assert.ok(
-			initialUpper.visualBounds.position.y + initialUpper.visualBounds.height
-				> initialLower.visualBounds.position.y,
+			upperLayout.visualBounds.position.y + upperLayout.visualBounds.height
+				> lowerLayout.visualBounds.position.y,
 		);
-		const resolvedTasks = resolveTaskGraphWorkVisualCollisions(
-			[footprintTask],
-			initialLayout,
-		);
-		const resolvedTask = resolvedTasks[0];
-
-		assert.ok(resolvedTask);
-		assert.notStrictEqual(resolvedTask, footprintTask);
-		assert.deepStrictEqual(
-			resolvedTask.nodePositions[upper.id],
-			footprintTask.nodePositions[upper.id],
-		);
-		assert.ok(
-			(resolvedTask.nodePositions[lower.id]?.y ?? 0)
-				> TASK_DEFAULT_WORK_VERTICAL_STRIDE,
-		);
-		const resolvedLayout = createTaskGraphLayout(resolvedTasks, scopeOptions);
-		const resolvedWorks = resolvedLayout.nodes.filter(
-			(node) => node.kind === 'work',
-		);
-		const [resolvedUpper, resolvedLower] = resolvedWorks;
-
-		assert.ok(resolvedUpper?.kind === 'work' && resolvedLower?.kind === 'work');
-		assert.ok(
-			resolvedUpper.visualBounds.position.y + resolvedUpper.visualBounds.height
-				+ TASK_WORK_VISUAL_COLLISION_GAP
-				<= resolvedLower.visualBounds.position.y,
-		);
-		assert.strictEqual(
-			resolveTaskGraphWorkVisualCollisions(resolvedTasks, resolvedLayout),
-			resolvedTasks,
-		);
-	});
-
-	test('넓어진 actual Scope만 고정 START/END를 피해 Work를 이동하고 Anchor는 보존한다', () => {
-		const task = createReadyTask('task:wide-scope', { x: 40, y: 60 });
-		const work = task.nodes.find((node) => node.kind === 'work');
-
-		assert.ok(work?.kind === 'work');
-		const normalLayout = createTaskGraphLayout([task]);
-
-		assert.strictEqual(
-			resolveTaskGraphWorkVisualCollisions([task], normalLayout)[0],
-			task,
-		);
-		const scopeOptions = {
-			resolveGraphTargetAreaSize: () => ({ width: 1_000, height: 120 }),
-		};
-		const wideLayout = createTaskGraphLayout([task], scopeOptions);
-		const resolvedTasks = resolveTaskGraphWorkVisualCollisions([task], wideLayout);
-		const resolvedTask = resolvedTasks[0];
-
-		assert.ok(resolvedTask);
-		assert.deepStrictEqual(resolvedTask.origin, task.origin);
-		assert.deepStrictEqual(
-			resolvedTask.nodePositions[task.nodes[2]?.id ?? ''],
-			task.nodePositions[task.nodes[2]?.id ?? ''],
-		);
-		assert.ok(
-			(resolvedTask.nodePositions[work.id]?.y ?? 0)
-				> (task.nodePositions[work.id]?.y ?? 0),
-		);
-		const resolvedLayout = createTaskGraphLayout(resolvedTasks, scopeOptions);
-		const resolvedWork = resolvedLayout.nodes.find((node) => node.id === work.id);
-		const fixedNodes = resolvedLayout.nodes.filter((node) => node.kind !== 'work');
-
-		assert.ok(resolvedWork?.kind === 'work');
-		assert.ok(fixedNodes.every((node) => (
-			resolvedWork.visualBounds.position.y
-				>= node.position.y + node.height + TASK_WORK_VISUAL_COLLISION_GAP
-		)));
-		assertLayoutEdgesUsePortCenters(resolvedLayout);
-	});
-
-	test('역순 Y의 START/END obstacle도 한 번의 Scope 충돌 계산으로 안정화한다', () => {
-		const baseTask = createReadyTask('task:reverse-obstacles', { x: 40, y: 200 });
-		const work = baseTask.nodes.find((node) => node.kind === 'work');
-		const end = baseTask.nodes.find((node) => node.kind === 'end');
-
-		assert.ok(work?.kind === 'work' && end?.kind === 'end');
-		const task: TaskBlueprint = {
-			...baseTask,
-			nodePositions: {
-				...baseTask.nodePositions,
-				// 동적 공통 폭은 WORK의 left anchor에서 오른쪽으로 확장하므로
-				// 두 fixed obstacle과 실제로 겹치는 lane을 명시한다.
-				[work.id]: { x: 0, y: -180 },
-				[end.id]: { x: 640, y: -200 },
-			},
-		};
-		const scopeOptions = {
-			resolveGraphTargetAreaSize: () => ({ width: 1_000, height: 120 }),
-		};
-		const firstLayout = createTaskGraphLayout([task], scopeOptions);
-		const resolvedTasks = resolveTaskGraphWorkVisualCollisions([task], firstLayout);
-		const resolvedLayout = createTaskGraphLayout(resolvedTasks, scopeOptions);
-		const resolvedWork = resolvedLayout.nodes.find((node) => node.id === work.id);
-		const fixedNodes = resolvedLayout.nodes.filter((node) => node.kind !== 'work');
-
-		assert.ok(resolvedWork?.kind === 'work');
-		assert.ok(fixedNodes.every((node) => (
-			resolvedWork.visualBounds.position.y
-				>= node.position.y + node.height + TASK_WORK_VISUAL_COLLISION_GAP
-		)));
-		assert.strictEqual(
-			resolveTaskGraphWorkVisualCollisions(resolvedTasks, resolvedLayout),
-			resolvedTasks,
-		);
+		assert.deepStrictEqual(footprintTask.nodePositions[upper.id], { x: 320, y: 0 });
+		assert.deepStrictEqual(footprintTask.nodePositions[lower.id], {
+			x: 320,
+			y: TASK_DEFAULT_WORK_VERTICAL_STRIDE,
+		});
+		assertLayoutEdgesUsePortCenters(layout);
 	});
 
 	test('연결되지 않은 기본 Start/End를 incomplete flow로 표시한다', () => {

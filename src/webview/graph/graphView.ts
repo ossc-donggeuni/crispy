@@ -74,7 +74,6 @@ import {
 } from '../../task';
 import {
 	createTaskGraphLayout,
-	resolveTaskGraphWorkVisualCollisions,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
 	type TaskGraphLayout,
@@ -121,7 +120,7 @@ const TASK_CREATION_OFFSET = 32;
 const DEFAULT_TASK_LAYOUT_WIDTH = TASK_DEFAULT_END_POSITION.x
 	+ TASK_NODE_WIDTH;
 
-/** 현재 Visible Graph 중심을 기본 Task 전체 중심으로 사용하고 겹친 origin은 비켜 놓는다. */
+/** 새 Task만 처음 식별 가능하게 두며, 생성 이후 좌표에는 충돌 제약을 적용하지 않는다. */
 function createTaskOriginInVisibleArea(
 	camera: GraphCamera,
 	visibleArea: GraphVisibleArea,
@@ -2121,7 +2120,7 @@ export function initializeGraphView(
 		readonly nodePositions: GraphStateSnapshot['nodePositions'];
 		readonly changed: boolean;
 	} => {
-		let tasks = taskState.getSnapshot().tasks;
+		const tasks = taskState.getSnapshot().tasks;
 		const provisionalLayout = createTaskGraphLayout(tasks);
 		const scopeLayouts = createCurrentTaskGraphScopeLayouts(
 			provisionalLayout,
@@ -2139,16 +2138,7 @@ export function initializeGraphView(
 					: undefined;
 			},
 		} satisfies Parameters<typeof createTaskGraphLayout>[1];
-		let nextLayout = createTaskGraphLayout(tasks, scopeSizeOptions);
-		const collisionResolvedTasks = resolveTaskGraphWorkVisualCollisions(
-			tasks,
-			nextLayout,
-		);
-
-		if (collisionResolvedTasks !== tasks) {
-			tasks = taskState.replaceTasks(collisionResolvedTasks).tasks;
-			nextLayout = createTaskGraphLayout(tasks, scopeSizeOptions);
-		}
+		const nextLayout = createTaskGraphLayout(tasks, scopeSizeOptions);
 
 		const projection = projectTaskGraphScopeNodePositions(
 			graphLayout,

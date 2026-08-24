@@ -82,7 +82,6 @@ import {
 	createTaskGraphLayout,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
-	TASK_WORK_VISUAL_COLLISION_GAP,
 } from '../../webview/task/taskLayout';
 import {
 	TASK_INSPECTOR_ATTRIBUTE,
@@ -93,7 +92,7 @@ import {
 } from '../../webview/task/taskInspector';
 
 suite('Graph View', () => {
-	test('Navigator Task 추가는 viewport 중심에 incomplete Start/End를 생성한다', () => {
+	test('Navigator Task 추가는 viewport 중심에 식별 가능한 incomplete Start/End를 생성한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
@@ -220,6 +219,81 @@ suite('Graph View', () => {
 		assert.strictEqual(getDescendantsByClass(root, 'task-start-node').length, 2);
 		assert.strictEqual(getDescendantsByClass(root, 'task-end-node').length, 2);
 
+		graphView.dispose();
+	});
+
+	test('동일 World 좌표의 서로 다른 Task를 보정 없이 겹쳐 렌더링하고 독립 Drag한다', () => {
+		const sharedOrigin = { x: 120, y: 160 };
+		const firstTask = createCollidingRenderingTask(
+			'task:overlap-first',
+			'Overlap First',
+			sharedOrigin,
+		);
+		const secondTask = createCollidingRenderingTask(
+			'task:overlap-second',
+			'Overlap Second',
+			sharedOrigin,
+		);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[firstTask, secondTask],
+		);
+		const firstStart = firstTask.nodes.find((node) => node.kind === 'start');
+		const secondStart = secondTask.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(firstStart && secondStart);
+		const firstStartElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			firstStart.id,
+			firstTask.id,
+		);
+		const secondStartElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			secondStart.id,
+			secondTask.id,
+		);
+
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(firstTask.id)?.origin,
+			sharedOrigin,
+		);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(secondTask.id)?.origin,
+			sharedOrigin,
+		);
+		assert.deepStrictEqual(
+			readTranslate(firstStartElement.style.transform),
+			readTranslate(secondStartElement.style.transform),
+		);
+
+		performTaskDrag(
+			secondStartElement,
+			{ x: 10, y: 10 },
+			{ x: 50, y: 70 },
+		);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(firstTask.id)?.origin,
+			sharedOrigin,
+		);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(secondTask.id)?.origin,
+			{ x: sharedOrigin.x + 40, y: sharedOrigin.y + 60 },
+		);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(firstTask.id)?.nodePositions,
+			firstTask.nodePositions,
+		);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(secondTask.id)?.nodePositions,
+			secondTask.nodePositions,
+		);
 		graphView.dispose();
 	});
 
@@ -3839,7 +3913,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('actual Folder subtree footprint로 병렬 WORK와 Region/Edge를 함께 재배치한다', () => {
+	test('actual Folder subtree footprint가 커져도 병렬 WORK 좌표와 시각적 겹침을 보존한다', () => {
 		const scopeRoot = {
 			kind: 'folder' as const,
 			id: 'folder:file:///workspace/large-scope',
@@ -3965,28 +4039,20 @@ suite('Graph View', () => {
 		const firstWorkBounds = readEffectRegionBounds(firstWorkElement);
 		const secondWorkBounds = readEffectRegionBounds(secondWorkElement);
 		const firstWorkPosition = readTranslate(firstWorkElement.style.transform);
+		const secondWorkPosition = readTranslate(secondWorkElement.style.transform);
 
 		assert.ok(resolvedTask);
 		assert.deepStrictEqual(resolvedTask.origin, branchTask.origin);
-		assert.deepStrictEqual(
-			resolvedTask.nodePositions[end.id],
-			branchTask.nodePositions[end.id],
-		);
-		assert.ok(
-			(resolvedTask.nodePositions[firstWork.id]?.y ?? 0)
-				> (branchTask.nodePositions[firstWork.id]?.y ?? 0),
-		);
-		assert.ok(
-			(resolvedTask.nodePositions[secondWork.id]?.y ?? 0)
-				> TASK_DEFAULT_WORK_VERTICAL_STRIDE,
-		);
+		assert.deepStrictEqual(resolvedTask.nodePositions, branchTask.nodePositions);
+		assert.deepStrictEqual(firstWorkPosition, {
+			x: branchTask.origin.x + 320,
+			y: branchTask.origin.y,
+		});
+		assert.deepStrictEqual(secondWorkPosition, {
+			x: branchTask.origin.x + 320,
+			y: branchTask.origin.y + TASK_DEFAULT_WORK_VERTICAL_STRIDE,
+		});
 		assert.ok(firstAreaBounds.height > TASK_DEFAULT_WORK_VERTICAL_STRIDE);
-		assert.ok(
-			firstAreaBounds.y
-				>= branchTask.origin.y
-					+ TASK_NODE_HEIGHT
-					+ TASK_WORK_VISUAL_COLLISION_GAP,
-		);
 		assert.ok(firstAreaBounds.width > TASK_NODE_WIDTH);
 		assert.ok(secondAreaBounds.width > TASK_NODE_WIDTH);
 		assert.strictEqual(firstWorkAreaBounds.width, firstAreaBounds.width);
@@ -4001,10 +4067,8 @@ suite('Graph View', () => {
 			secondAreaBounds.x,
 			readTranslate(secondWorkElement.style.transform).x,
 		);
-		assert.ok(
-			firstWorkPosition.y + TASK_NODE_HEIGHT + TASK_WORK_VISUAL_COLLISION_GAP
-				<= secondAreaBounds.y,
-		);
+		assert.ok(firstWorkBounds.y + firstWorkBounds.height > secondAreaBounds.y);
+		assert.ok(secondWorkBounds.y + secondWorkBounds.height > firstAreaBounds.y);
 		const firstOccurrenceId = scopeRoot.id;
 		const secondOccurrenceId = secondScopeRoot.id;
 
