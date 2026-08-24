@@ -101,6 +101,7 @@
 .task-work-icon {
 	mask-image: url('../graph/assets/ui-icons/task-work.svg');
 	-webkit-mask-image: url('../graph/assets/ui-icons/task-work.svg');
+	transform: scale(0.8);
 }
 
 .task-end-icon {

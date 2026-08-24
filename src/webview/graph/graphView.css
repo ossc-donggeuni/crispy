@@ -2103,6 +2103,7 @@ body.vscode-high-contrast-light .graph-viewport {
 .graph-navigator-action-icon[data-navigator-icon='task-add.svg'] {
 	mask-image: url('./assets/ui-icons/task-add.svg');
 	-webkit-mask-image: url('./assets/ui-icons/task-add.svg');
+	transform: scale(1.4);
 }
 
 .graph-navigator-coordinate {

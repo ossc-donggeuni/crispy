@@ -1649,7 +1649,7 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			taskViewCss,
-			/\.task-work-icon\s*\{[^}]*task-work\.svg[^}]*\}/s,
+			/\.task-work-icon\s*\{[^}]*task-work\.svg[^}]*transform:\s*scale\(0\.8\)[^}]*\}/s,
 		);
 		assert.match(
 			taskViewCss,
@@ -1681,6 +1681,10 @@ suite('Graph View', () => {
 		assert.match(
 			graphViewCss,
 			/\.graph-reattach-confirm-overlay,[^{]*\.graph-arrange-all-confirm-overlay\s*\{[^}]*z-index:\s*10;/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.graph-navigator-action-icon\[data-navigator-icon=['"]task-add\.svg['"]\]\s*\{[^}]*task-add\.svg[^}]*transform:\s*scale\(1\.4\)[^}]*\}/s,
 		);
 	});
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
