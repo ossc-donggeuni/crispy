@@ -1,7 +1,9 @@
 import * as assert from 'assert';
 import { parseHostToWebviewMessage } from '../../agent/protocol/validator';
 import {
+	mapWorkspaceFailureToMcpRestartRejected,
 	mapWorkspaceFailureToTerminalError,
+	type WorkspaceMcpRestartRejectedMessage,
 	type WorkspaceTerminalErrorMessage,
 } from '../../agent/host/workspace/workspaceErrorMessage';
 import type {
@@ -111,6 +113,26 @@ suite('Workspace terminal.error mapper', () => {
 			);
 
 			assert.deepStrictEqual(Object.keys(message).sort(), expectedFields);
+		}
+	});
+
+	test('같은 고정 정책으로 mcp.restartRejected를 만들고 protocol parser를 통과한다', () => {
+		for (const expected of expectedMessages) {
+			const message: WorkspaceMcpRestartRejectedMessage =
+				mapWorkspaceFailureToMcpRestartRejected(
+					{ ok: false, code: expected.code },
+					tabId,
+					'session-existing',
+				);
+
+			assert.deepStrictEqual(message, {
+				type: 'mcp.restartRejected',
+				tabId,
+				sessionId: 'session-existing',
+				code: expected.code,
+				message: expected.message,
+			});
+			assert.strictEqual(parseHostToWebviewMessage(message).ok, true);
 		}
 	});
 

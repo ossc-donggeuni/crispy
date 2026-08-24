@@ -17,6 +17,7 @@ import { FakePtyAdapter } from './support/fakePtyAdapter';
 import { createCaptureFailureProcessTreeController } from './support/fakeProcessTreeController';
 import { FakeProcessTreeController } from './support/fakeProcessTreeController';
 import type { ProcessTreeController } from '../../agent/host/terminal/processTreeController';
+import type { ValidatedWorkspaceFsPath } from '../../agent/host/workspace/types';
 
 const shellPolicy: ShellLaunchPolicy = {
 	executable: '/host/shell',
@@ -349,6 +350,31 @@ suite('Codex direct PTY and MCP transaction', () => {
 		);
 	});
 
+	test('structured Codex는 preparation cwd 대신 final preflight의 latest cwd를 사용한다', async () => {
+		let workspaceCalls = 0;
+		const fixture = createFixture({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return {
+					ok: true,
+					root: {
+						...workspaceRoot,
+						fsPath: (workspaceCalls === 1
+							? '/switch/preflight'
+							: '/structured/final') as ValidatedWorkspaceFsPath,
+					},
+				};
+			},
+		});
+
+		await beginCodex(fixture.host, 'tab-structured-final-cwd');
+
+		assert.strictEqual(workspaceCalls, 2);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.spawnCalls[0].cwd, '/structured/final');
+		assert.strictEqual(fixture.adapter.spawnCalls[0].args.includes('--config'), true);
+	});
+
 	test('MCP prepare 실패는 정리 후 credential 없는 bare Codex를 한 번 시작한다', async () => {
 		const supervisor = new FakeCodexSupervisor();
 		supervisor.prepareFailure = {
@@ -401,6 +427,67 @@ suite('Codex direct PTY and MCP transaction', () => {
 		assert.strictEqual(fixture.messages.filter(
 			(message) => message.type === 'terminal.started',
 		).length, 1);
+	});
+
+	test('authenticated spawn fallback은 bare spawn 직전 fresh Workspace cwd를 다시 적용한다', async () => {
+		let workspaceCalls = 0;
+		const fixture = createFixture({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return {
+					ok: true,
+					root: {
+						...workspaceRoot,
+						fsPath: (workspaceCalls === 3
+							? '/bare/fresh-final'
+							: `/workspace/preflight-${workspaceCalls}`) as ValidatedWorkspaceFsPath,
+					},
+				};
+			},
+		});
+		fixture.adapter.spawnFailuresRemaining = 1;
+
+		await beginCodex(fixture.host, 'tab-bare-final-cwd');
+
+		assert.strictEqual(workspaceCalls, 3);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 2);
+		assert.strictEqual(fixture.adapter.spawnCalls[0].cwd, '/workspace/preflight-2');
+		assert.strictEqual(fixture.adapter.spawnCalls[1].cwd, '/bare/fresh-final');
+		assert.deepStrictEqual(fixture.adapter.spawnCalls[1].args, []);
+	});
+
+	test('authenticated spawn 뒤 Workspace 실패는 bare fallback spawn으로 진입하지 않는다', async () => {
+		let workspaceCalls = 0;
+		const fixture = createFixture({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return workspaceCalls < 3
+					? { ok: true, root: workspaceRoot }
+					: { ok: false, code: 'workspace_untrusted' };
+			},
+		});
+		fixture.adapter.spawnFailuresRemaining = 1;
+
+		await beginCodex(fixture.host, 'tab-workspace-blocks-bare-fallback');
+
+		const session = fixture.host.getActiveSession(
+			'tab-workspace-blocks-bare-fallback',
+		);
+		assert.ok(session !== undefined);
+		assert.strictEqual(workspaceCalls, 3);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'terminal.error',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: true,
+		});
 	});
 
 	test('authenticated와 bare PTY spawn이 모두 실패해도 세 번째 spawn을 시도하지 않는다', async () => {
@@ -650,6 +737,212 @@ suite('Codex stale attempt and cleanup', () => {
 				&& message.sessionId === second.sessionId
 				&& message.status === 'connected',
 		), true);
+	});
+
+	test('MCP restart 최초 Workspace preflight 실패는 CLI/MCP/status를 그대로 보존한다', async () => {
+		let workspaceAvailable = true;
+		const fixture = createFixture({
+			workspaceResolver: () => workspaceAvailable
+				? { ok: true, root: workspaceRoot }
+				: { ok: false, code: 'workspace_root_unavailable' },
+		});
+		await beginCodex(fixture.host, 'tab-mcp-preflight-rejected');
+		const session = fixture.host.getActiveSession('tab-mcp-preflight-rejected');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		const stopCount = fixture.supervisor.stopCalls.length;
+		workspaceAvailable = false;
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.strictEqual(
+			fixture.host.getActiveSession('tab-mcp-preflight-rejected'),
+			session,
+		);
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.strictEqual(fixture.supervisor.stopCalls.length, stopCount);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId)?.status, 'failed');
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+		});
+	});
+
+	test('MCP cleanup 중 Workspace가 사라지면 CLI와 failed status를 유지하고 거부한다', async () => {
+		let releaseMcpCleanup!: () => void;
+		const mcpCleanupGate = new Promise<void>((resolve) => {
+			releaseMcpCleanup = resolve;
+		});
+		let workspaceAvailable = true;
+		const supervisor = new FakeCodexSupervisor();
+		const originalStopSession = supervisor.stopSession.bind(supervisor);
+		let cleanupStarted = false;
+		supervisor.stopSession = async (sessionId) => {
+			cleanupStarted = true;
+			await mcpCleanupGate;
+			await originalStopSession(sessionId);
+		};
+		const fixture = createFixture({
+			supervisor,
+			workspaceResolver: () => workspaceAvailable
+				? { ok: true, root: workspaceRoot }
+				: { ok: false, code: 'workspace_path_invalid' },
+		});
+		await beginCodex(fixture.host, 'tab-mcp-post-cleanup-rejected');
+		const session = fixture.host.getActiveSession('tab-mcp-post-cleanup-rejected');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(supervisor.crash(session.sessionId));
+
+		const restarting = fixture.host.restartMcpSession(
+			session.tabId,
+			session.sessionId,
+		);
+		await waitUntil(() => cleanupStarted);
+		workspaceAvailable = false;
+		releaseMcpCleanup();
+		await restarting;
+
+		assert.strictEqual(
+			fixture.host.getActiveSession('tab-mcp-post-cleanup-rejected'),
+			session,
+		);
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId)?.status, 'failed');
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'workspace_path_invalid',
+			message: '유효한 로컬 작업공간 폴더를 연 후 다시 시도하세요.',
+		});
+	});
+
+	test('MCP restart 최초 Workspace 조회 예외는 live CLI를 정리하고 retry 오류로 전이한다', async () => {
+		let throwWorkspaceError = false;
+		const fixture = createFixture({
+			workspaceResolver: () => {
+				if (throwWorkspaceError) {
+					throw new Error('workspace read failed');
+				}
+				return { ok: true, root: workspaceRoot };
+			},
+		});
+		await beginCodex(fixture.host, 'tab-mcp-preflight-exception');
+		const session = fixture.host.getActiveSession('tab-mcp-preflight-exception');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		throwWorkspaceError = true;
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'internal_error',
+		});
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId), undefined);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'terminal.error',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'internal_error',
+			message: 'Terminal launch policy could not be prepared.',
+			canRestart: true,
+		});
+	});
+
+	test('MCP cleanup 이후 Workspace 조회 예외도 live CLI를 정리하고 retry 오류로 전이한다', async () => {
+		let workspaceCalls = 0;
+		const fixture = createFixture({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				if (workspaceCalls === 4) {
+					throw new Error('workspace read failed');
+				}
+				return { ok: true, root: workspaceRoot };
+			},
+		});
+		await beginCodex(fixture.host, 'tab-mcp-post-cleanup-exception');
+		const session = fixture.host.getActiveSession('tab-mcp-post-cleanup-exception');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.strictEqual(workspaceCalls, 4);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'internal_error',
+		});
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId), undefined);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'terminal.error',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'internal_error',
+			message: 'Terminal launch policy could not be prepared.',
+			canRestart: true,
+		});
+	});
+
+	test('MCP 내부 실패 cleanup 중 Host terminate는 detached CLI tree 종료를 기다린다', async () => {
+		let releaseTermination!: () => void;
+		const terminationGate = new Promise<void>((resolve) => {
+			releaseTermination = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => terminationGate,
+		});
+		let throwWorkspaceError = false;
+		const fixture = createFixture({
+			processTreeController: controller,
+			workspaceResolver: () => {
+				if (throwWorkspaceError) {
+					throw new Error('workspace read failed');
+				}
+				return { ok: true, root: workspaceRoot };
+			},
+		});
+		await beginCodex(fixture.host, 'tab-mcp-exception-terminate');
+		const session = fixture.host.getActiveSession('tab-mcp-exception-terminate');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		throwWorkspaceError = true;
+
+		const restarting = fixture.host.restartMcpSession(
+			session.tabId,
+			session.sessionId,
+		);
+		await waitUntil(() => controller.calls.includes('terminate:7201'));
+		fixture.host.detach();
+		let terminationSettled = false;
+		const terminating = fixture.host.terminate().then(() => {
+			terminationSettled = true;
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		assert.strictEqual(terminationSettled, false);
+		releaseTermination();
+		await Promise.all([restarting, terminating]);
+		assert.strictEqual(terminationSettled, true);
 	});
 
 	test('restart cleanup 중 tab close는 fresh child와 PTY spawn을 취소한다', async () => {

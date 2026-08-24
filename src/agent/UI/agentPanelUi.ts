@@ -432,6 +432,13 @@ export function initializeAgentPanelUi(
 				}
 				case 'terminal.error': {
 					if (message.switchAttemptId === undefined) {
+						if (message.sessionId !== null) {
+							model.setMcpRestartPending(
+								message.tabId,
+								message.sessionId,
+								false,
+							);
+						}
 						return true;
 					}
 					const resetBarrier = resetBarrierAttemptByTab.get(message.tabId) ?? 0;
@@ -467,6 +474,14 @@ export function initializeAgentPanelUi(
 					return true;
 				case 'mcp.statusCleared':
 					model.clearMcpStatus(message.tabId, message.sessionId);
+					return true;
+				case 'mcp.restartRejected':
+					/** Host가 기존 CLI/MCP를 보존했으므로 failed 표시만 유지하고 pending을 끝낸다. */
+					model.setMcpRestartPending(
+						message.tabId,
+						message.sessionId,
+						false,
+					);
 					return true;
 				default:
 					return true;

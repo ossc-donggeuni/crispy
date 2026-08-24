@@ -66,7 +66,10 @@ import {
 	type PrepareTerminalLaunch,
 } from './prepareTerminalLaunch';
 import { WORKSPACE_EXECUTION_ERROR_CODES } from '../../protocol/errors';
-import { mapWorkspaceFailureToTerminalError } from '../workspace/workspaceErrorMessage';
+import {
+	mapWorkspaceFailureToMcpRestartRejected,
+	mapWorkspaceFailureToTerminalError,
+} from '../workspace/workspaceErrorMessage';
 import {
 	resolveWorkspaceForExecution,
 	type WorkspaceResolver,
@@ -997,6 +1000,9 @@ export class TerminalHost {
 				);
 				return;
 			}
+			if (!this.isCurrentAssignmentSession(session, capturedAssignment)) {
+				return;
+			}
 			finalPolicy = {
 				...preparation.policy,
 				cwd: finalWorkspace.root.fsPath,
@@ -1377,6 +1383,19 @@ export class TerminalHost {
 			await this.failWorkspaceStart(session, assignment, finalWorkspace);
 			return;
 		}
+		if (
+			!this.isCurrentProviderSession(session, options.providerId)
+			|| (generation !== undefined && !this.isCurrentMcpRuntime(
+				session,
+				options.providerId,
+				generation,
+			))
+		) {
+			if (generation !== undefined) {
+				await this.cleanupMcpSession(session.sessionId);
+			}
+			return;
+		}
 		const finalRequest = Object.freeze({
 			...request,
 			cwd: finalWorkspace.root.fsPath,
@@ -1446,6 +1465,9 @@ export class TerminalHost {
 							assignment,
 							fallbackWorkspace,
 						);
+						return;
+					}
+					if (!this.isCurrentProviderSession(session, options.providerId)) {
 						return;
 					}
 					const finalBareRequest = Object.freeze({
@@ -1649,8 +1671,37 @@ export class TerminalHost {
 			return;
 		}
 
-		const registeredAtRestart = this.registeredTabs.has(tabId);
 		const assignmentAtRestart = this.assignmentByTab.get(tabId);
+		if (assignmentAtRestart !== undefined) {
+			let workspace: WorkspaceValidationResult;
+			try {
+				workspace = this.workspaceResolver(
+					assignmentAtRestart.workspaceRootId,
+				);
+			} catch {
+				this.failWithoutTransition(
+					tabId,
+					session,
+					'internal_error',
+					START_ERROR_MESSAGES.preparation,
+					true,
+				);
+				return;
+			}
+			if (!workspace.ok) {
+				this.publish(mapWorkspaceFailureToTerminalError(
+					workspace,
+					tabId,
+					sessionId,
+				));
+				return;
+			}
+			if (this.assignmentByTab.get(tabId) !== assignmentAtRestart) {
+				return;
+			}
+		}
+
+		const registeredAtRestart = this.registeredTabs.has(tabId);
 		const pendingCleanup = this.cleanupSessionProcessTree(session);
 		this.removeSession(sessionId);
 		await pendingCleanup;
@@ -1728,8 +1779,61 @@ export class TerminalHost {
 			return;
 		}
 		const assignment = this.assignmentByTab.get(tabId);
-		const providerId = assignment?.providerId;
-		if (!isMcpProviderId(providerId)) {
+		if (assignment === undefined || !isMcpProviderId(assignment.providerId)) {
+			return;
+		}
+		let workspace: WorkspaceValidationResult;
+		try {
+			workspace = this.workspaceResolver(assignment.workspaceRootId);
+		} catch {
+			await this.failMcpRestartInternally(session, assignment);
+			return;
+		}
+		if (!workspace.ok) {
+			this.publish(mapWorkspaceFailureToMcpRestartRejected(
+				workspace,
+				tabId,
+				sessionId,
+			));
+			return;
+		}
+		if (
+			!this.canRestartMcpSession(tabId, sessionId)
+			|| this.assignmentByTab.get(tabId) !== assignment
+			|| this.sessionsById.get(sessionId) !== session
+		) {
+			return;
+		}
+
+		/**
+		 * 실패한 adapter/runtime을 먼저 폐기하되 CLI process와 visible failure는 유지한다.
+		 * 이 await 중 Workspace가 바뀌면 Agent process를 종료하지 않고 거부할 수 있다.
+		 */
+		await this.cleanupMcpSession(sessionId);
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| this.assignmentByTab.get(tabId) !== assignment
+			|| this.sessionsById.get(sessionId) !== session
+			|| !this.ownsSession(tabId, sessionId)
+			|| session.state.kind !== 'running'
+			|| !this.mcpRestartByTab.has(tabId)
+		) {
+			return;
+		}
+
+		try {
+			workspace = this.workspaceResolver(assignment.workspaceRootId);
+		} catch {
+			await this.failMcpRestartInternally(session, assignment);
+			return;
+		}
+		if (!workspace.ok) {
+			this.publish(mapWorkspaceFailureToMcpRestartRejected(
+				workspace,
+				tabId,
+				sessionId,
+			));
 			return;
 		}
 
@@ -2373,13 +2477,15 @@ export class TerminalHost {
 	handleMcpRuntimeEvent(event: McpSessionRuntimeEvent): void {
 		const session = this.sessionsById.get(event.sessionId);
 		const ownership = this.mcpRuntimeBySession.get(event.sessionId);
+		const assignment = this.assignmentBySession.get(event.sessionId);
 		if (
 			!this.lifecycleActive
 			|| session === undefined
 			|| ownership === undefined
+			|| assignment === undefined
 			|| !this.isCurrentSession(session)
-			|| this.assignmentByTab.get(session.tabId)?.providerId
-				!== ownership.providerId
+			|| this.assignmentByTab.get(session.tabId) !== assignment
+			|| assignment.providerId !== ownership.providerId
 			|| ownership.generation !== event.generation
 		) {
 			return;
@@ -2459,7 +2565,12 @@ export class TerminalHost {
 
 	/** terminal.started 이후의 current session에만 visible status를 한 번 발행한다. */
 	private publishCurrentMcpStatus(session: TerminalSession): void {
-		if (!this.isCurrentSession(session) || session.state.kind !== 'running') {
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment === undefined
+			|| !this.isCurrentAssignmentSession(session, assignment)
+			|| session.state.kind !== 'running'
+		) {
 			return;
 		}
 		const record = this.mcpStatusBySession.get(session.sessionId);
@@ -2719,6 +2830,53 @@ export class TerminalHost {
 			code,
 			message,
 			canRestart,
+		);
+	}
+
+	/** MCP restart 내부 실패를 live PTY 없이 retry 가능한 terminal 오류로 수렴한다. */
+	private async failMcpRestartInternally(
+		session: TerminalSession,
+		assignment: AgentAssignment,
+	): Promise<void> {
+		this.providerAutoRunInputBySession.delete(session.sessionId);
+		this.clearMcpStatus(session);
+
+		let process: PtyProcessHandle | undefined;
+		try {
+			process = session.detachProcess();
+		} catch {
+			/** listener 분리 실패도 MCP/runtime과 process-tree 정리를 막지 않는다. */
+		}
+
+		const cleanup = Promise.all([
+			this.cleanupMcpSession(session.sessionId),
+			process === undefined
+				? Promise.resolve()
+				: this.terminateProcessTree(process),
+		]).then(() => undefined, () => undefined);
+		this.processCleanupBySession.set(session.sessionId, cleanup);
+		const barrier = this.registerTabCleanup(session.tabId, cleanup);
+		void cleanup.then(() => {
+			if (this.processCleanupBySession.get(session.sessionId) === cleanup) {
+				this.processCleanupBySession.delete(session.sessionId);
+			}
+		});
+		await barrier;
+
+		if (!this.isCurrentAssignmentSession(session, assignment)) {
+			return;
+		}
+		try {
+			session.markError('internal_error');
+		} catch {
+			return;
+		}
+		this.failWithoutTransition(
+			session.tabId,
+			session,
+			'internal_error',
+			START_ERROR_MESSAGES.preparation,
+			true,
 		);
 	}
 

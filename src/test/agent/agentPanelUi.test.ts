@@ -633,6 +633,46 @@ suite('Agent Panel UI', () => {
 		);
 	});
 
+	test('mcp.restartRejected는 failed 표시를 유지하고 restart pending만 끝낸다', async () => {
+		const fixture = createFixture({
+			onMcpRestartRequested: () => undefined,
+		});
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId, sessionId: 'session-rejected',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-rejected',
+			status: 'failed',
+			reason: 'adapter_exited',
+			retryable: true,
+		});
+		const restart = requireElement(fixture.topBar, 'agent-mcp-restart');
+		restart.click();
+		fixture.dialog.answer(true);
+		await flushMicrotasks();
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs[0].mcpRestartPending,
+			true,
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'mcp.restartRejected',
+			tabId,
+			sessionId: 'session-rejected',
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+		});
+
+		const tab = fixture.controller.getSnapshot().tabs[0];
+		assert.strictEqual(tab.mcpRestartPending, false);
+		assert.strictEqual(tab.mcpStatus.kind, 'failed');
+		assert.strictEqual(restart.disabled, false);
+	});
+
 	test('여러 탭의 우측 점을 동시에 표시하고 old clear는 fresh session status를 바꾸지 않는다', () => {
 		const fixture = createFixture();
 		selectProvider(fixture.providerPicker, 'codex');

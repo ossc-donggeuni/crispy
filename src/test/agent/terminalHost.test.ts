@@ -1375,6 +1375,147 @@ suite('TerminalHost PTY output and exit routing', () => {
 });
 
 suite('TerminalHost restart orchestration', () => {
+	test('cleanup 전 Workspace preflight 실패는 기존 session과 process를 보존한다', async () => {
+		let workspaceAvailable = true;
+		const adapter = new FakePtyAdapter(4313);
+		const controller = new FakeProcessTreeController();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+			workspaceResolver: () => workspaceAvailable
+				? { ok: true, root }
+				: { ok: false, code: 'workspace_root_unavailable' },
+		});
+		host.createTab('tab-restart-preflight');
+		await host.handleTerminalReady('tab-restart-preflight', 80, 24);
+		await host.switchAgent(
+			'tab-restart-preflight',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const session = host.getActiveSession('tab-restart-preflight');
+		assert.ok(session);
+		adapter.handles[0].emitExit({ exitCode: 1 });
+		workspaceAvailable = false;
+
+		await host.restartSession('tab-restart-preflight', session.sessionId);
+
+		assert.strictEqual(host.getActiveSession('tab-restart-preflight'), session);
+		assert.deepStrictEqual(session.state, {
+			kind: 'exited',
+			exitCode: 1,
+			signal: null,
+		});
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(controller.calls, []);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-restart-preflight',
+			sessionId: session.sessionId,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			canRestart: true,
+		});
+	});
+
+	test('cleanup 이후 Workspace 실패는 새 retry session을 error로 보존한다', async () => {
+		let workspaceAvailable = true;
+		let releaseTermination!: () => void;
+		const terminationPending = new Promise<void>((resolve) => {
+			releaseTermination = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => terminationPending,
+		});
+		const adapter = new FakePtyAdapter(4312);
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+			workspaceResolver: () => workspaceAvailable
+				? { ok: true, root }
+				: { ok: false, code: 'workspace_path_invalid' },
+		});
+		host.createTab('tab-restart-post-cleanup');
+		await host.handleTerminalReady('tab-restart-post-cleanup', 80, 24);
+		await host.switchAgent(
+			'tab-restart-post-cleanup',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const first = host.getActiveSession('tab-restart-post-cleanup');
+		assert.ok(first);
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		const restarting = host.restartSession(
+			'tab-restart-post-cleanup',
+			first.sessionId,
+		);
+		await waitUntil(() => controller.calls.includes('terminate:4312'));
+		workspaceAvailable = false;
+		releaseTermination();
+		await restarting;
+
+		const second = host.getActiveSession('tab-restart-post-cleanup');
+		assert.ok(second);
+		assert.notStrictEqual(second.sessionId, first.sessionId);
+		assert.deepStrictEqual(second.state, {
+			kind: 'error',
+			code: 'workspace_path_invalid',
+		});
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-restart-post-cleanup',
+			sessionId: second.sessionId,
+			code: 'workspace_path_invalid',
+			message: '유효한 로컬 작업공간 폴더를 연 후 다시 시도하세요.',
+			canRestart: true,
+		});
+	});
+
+	test('restart final preflight의 latest fsPath를 새 PTY cwd로 사용한다', async () => {
+		let workspaceCalls = 0;
+		const adapter = new FakePtyAdapter(4311);
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: async () => ({
+				ok: true,
+				policy: { ...launchPolicy, cwd: '/stale/preparation/path' },
+			}),
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return {
+					ok: true,
+					root: {
+						...root,
+						fsPath: `/fresh/workspace-${workspaceCalls}` as ValidatedWorkspaceFsPath,
+					},
+				};
+			},
+		});
+		host.createTab('tab-restart-fresh-cwd');
+		await host.handleTerminalReady('tab-restart-fresh-cwd', 80, 24);
+		await host.switchAgent(
+			'tab-restart-fresh-cwd',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const first = host.getActiveSession('tab-restart-fresh-cwd');
+		assert.ok(first);
+		adapter.handles[0].emitExit({ exitCode: 0 });
+
+		await host.restartSession('tab-restart-fresh-cwd', first.sessionId);
+
+		assert.strictEqual(workspaceCalls, 4);
+		assert.strictEqual(adapter.spawnCalls[0].cwd, '/fresh/workspace-2');
+		assert.strictEqual(adapter.spawnCalls[1].cwd, '/fresh/workspace-4');
+	});
+
 	test('재시작은 이전 process tree 종료 전 새 PTY를 만들지 않는다', async () => {
 		const adapter = new FakePtyAdapter(4314);
 		let releaseTermination!: () => void;
