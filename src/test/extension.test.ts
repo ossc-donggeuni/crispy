@@ -55,6 +55,7 @@ import {
 import * as vscode from 'vscode';
 
 const COMMAND_ID = OPEN_CANVAS_COMMAND_ID;
+const HOST_MESSAGE_RELAY_BOUNDARY_TYPE = 'test.hostMessageRelay.boundary';
 
 /** handleWebviewMessage가 호출하는 Host 경계를 그대로 만족하는 테스트 대역이다. */
 interface TerminalHostStub extends TerminalMessageHost {
@@ -555,14 +556,15 @@ suite('Crispy Extension Host', () => {
 		), false);
 	});
 
-	test('Agent Activity Debug/Clear Command는 Canvas를 열고 reserved clear 뒤 public set 메시지만 전송한다', async () => {
+	test('Agent Activity Debug Command는 Canvas를 연다', async () => {
 		await vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID);
-		const openedByDebugCommand = await openCanvas();
-
-		await extensionModule.deactivate();
 		const panel = await openCanvas();
 
-		assert.notStrictEqual(panel, openedByDebugCommand);
+		assert.strictEqual(panel.visible, true);
+	});
+
+	test('Agent Activity Debug/Clear Command는 reserved clear 뒤 public set 메시지만 전송한다', async () => {
+		const panel = await openCanvas();
 		const graph = getInitialWorkspacePresentation(panel).graph;
 		const initialState = parseWebviewState(JSON.parse(decodeURIComponent(
 			getSerializedInitialWebviewState(panel),
@@ -576,13 +578,10 @@ suite('Crispy Extension Host', () => {
 			initialState.graph,
 		);
 
-		const debugMessagesPromise = collectRelayedHostMessages(
+		const debugMessages = await collectRelayedHostMessages(
 			panel.webview,
-			clearMessages.length + setMessages.length,
+			() => vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID),
 		);
-
-		await vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID);
-		const debugMessages = await debugMessagesPromise;
 
 		assert.deepStrictEqual(
 			debugMessages.slice(0, clearMessages.length),
@@ -593,13 +592,12 @@ suite('Crispy Extension Host', () => {
 			setMessages,
 		);
 
-		const clearOnlyMessagesPromise = collectRelayedHostMessages(
+		const clearOnlyMessages = await collectRelayedHostMessages(
 			panel.webview,
-			clearMessages.length,
+			() => vscode.commands.executeCommand(CLEAR_AGENT_ACTIVITIES_COMMAND_ID),
 		);
 
-		await vscode.commands.executeCommand(CLEAR_AGENT_ACTIVITIES_COMMAND_ID);
-		assert.deepStrictEqual(await clearOnlyMessagesPromise, clearMessages);
+		assert.deepStrictEqual(clearOnlyMessages, clearMessages);
 		assert.ok(clearMessages.every(({ sessionId }) => (
 			sessionId.startsWith('debug-g12-')
 		)));
@@ -1859,25 +1857,39 @@ async function installHostMessageRelay(panel: vscode.WebviewPanel): Promise<void
 	await ready;
 }
 
-/** Relay가 전달한 Host 메시지를 지정 개수만큼 순서대로 수집한다. */
-function collectRelayedHostMessages(
+/** Command 완료 뒤 relay boundary까지 전달된 Host 메시지를 순서대로 수집한다. */
+async function collectRelayedHostMessages(
 	webview: vscode.Webview,
-	expectedCount: number,
+	sendMessages: () => PromiseLike<unknown>,
 ): Promise<ExtensionToWebviewMessage[]> {
-	return new Promise((resolve) => {
-		const messages: ExtensionToWebviewMessage[] = [];
-		const subscription = webview.onDidReceiveMessage((value: unknown) => {
-			if (!isRecordWithType(value, 'test.hostMessageRelay.message')) {
-				return;
-			}
-			messages.push(value.message as ExtensionToWebviewMessage);
-
-			if (messages.length >= expectedCount) {
-				subscription.dispose();
-				resolve(messages);
-			}
-		});
+	const messages: ExtensionToWebviewMessage[] = [];
+	let resolveBoundary!: () => void;
+	const boundaryReceived = new Promise<void>((resolve) => {
+		resolveBoundary = resolve;
 	});
+	const subscription = webview.onDidReceiveMessage((value: unknown) => {
+		if (!isRecordWithType(value, 'test.hostMessageRelay.message')) {
+			return;
+		}
+		if (isRecordWithType(value.message, HOST_MESSAGE_RELAY_BOUNDARY_TYPE)) {
+			resolveBoundary();
+			return;
+		}
+		messages.push(value.message as ExtensionToWebviewMessage);
+	});
+
+	try {
+		await sendMessages();
+		assert.strictEqual(
+			await webview.postMessage({ type: HOST_MESSAGE_RELAY_BOUNDARY_TYPE }),
+			true,
+			'Host message relay boundary가 live Webview에 전달되어야 한다.',
+		);
+		await boundaryReceived;
+		return messages;
+	} finally {
+		subscription.dispose();
+	}
 }
 
 function isRecordWithType(
