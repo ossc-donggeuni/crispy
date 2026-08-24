@@ -3,8 +3,10 @@ import {
 	type AgentPanelUiController,
 } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
+import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
+	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
 	type WebviewToExtensionMessage,
@@ -14,6 +16,7 @@ import {
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
 import { deserializeWorkspacePresentationFromWebview } from '../workspace/workspacePresentation';
+import { createAgentActivityEffectReconciler } from './graph/agentActivityEffects';
 import { initializeGraphView } from './graph/graphView';
 import type { GraphStateSnapshot } from './graph/graphState';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
@@ -74,6 +77,8 @@ const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
+/** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
+const agentActivityStore = createAgentActivityStore();
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
@@ -92,6 +97,12 @@ const graphView = initializeGraphView(
 			panelState.collapsed,
 		),
 	},
+	agentActivityStore,
+);
+
+const agentActivityEffects = createAgentActivityEffectReconciler(
+	agentActivityStore,
+	graphView.createNodeEffectOwner(),
 );
 
 let agentPanelUi: AgentPanelUiController | undefined;
@@ -327,6 +338,7 @@ const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
 
 window.addEventListener('unload', () => {
 	unsubscribeGraphState();
+	agentActivityEffects.dispose();
 	graphView.dispose();
 	terminalPool.dispose();
 	agentPanelUi?.dispose();
@@ -351,6 +363,28 @@ function handleHostMessage(message: unknown): void {
 			graphView.clearNodeEffect(
 				graphEffectMessage.target,
 				graphEffectMessage.kind,
+			);
+		}
+		return;
+	}
+
+	const agentActivityMessage = parseAgentActivityToWebviewMessage(message);
+
+	if (agentActivityMessage) {
+		if (agentActivityMessage.type === 'agent.activity.set') {
+			agentActivityStore.setAgentActivity(
+				agentActivityMessage.sessionId,
+				agentActivityMessage.target,
+				agentActivityMessage.activity,
+			);
+		} else if (agentActivityMessage.type === 'agent.activity.clear') {
+			agentActivityStore.clearAgentActivity(
+				agentActivityMessage.sessionId,
+				agentActivityMessage.target,
+			);
+		} else {
+			agentActivityStore.clearAgentActivitiesBySession(
+				agentActivityMessage.sessionId,
 			);
 		}
 		return;

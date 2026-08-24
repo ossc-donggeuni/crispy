@@ -40,6 +40,14 @@
       {
         "command": "crispy.clearNodeEffects",
         "title": "Crispy: Clear Node Effects"
+      },
+      {
+        "command": "crispy.debugAgentActivities",
+        "title": "Crispy: Debug Agent Activities"
+      },
+      {
+        "command": "crispy.clearAgentActivities",
+        "title": "Crispy: Clear Agent Activities"
       }
     ],
     "configuration": {

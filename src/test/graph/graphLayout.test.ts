@@ -32,6 +32,14 @@ import {
 	createFolderBacklinkId,
 } from '../../webview/graph/graphRootPromotion';
 import { FILE_GROUP_PAGE_SIZE } from '../../webview/graph/graphState';
+import {
+	AGENT_ACTIVITY_BINDING_ROW_GAP,
+	AGENT_ACTIVITY_BINDING_ROW_HEIGHT,
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	createAgentActivityBindings,
+	getAgentActivityBindingBlockHeight,
+} from '../../webview/graph/agentActivityBindings';
+import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
 
 const ALL_OPENED_FOLDERS = openAllFolders(GRAPH_MOCK_PROJECT);
 const SECOND_PROJECT: Project = {
@@ -1395,6 +1403,243 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(fileGroup.children.length, 7);
 		assert.strictEqual(fileGroup.height, expectedHeight);
 		assert.strictEqual(fileGroup.height, 198);
+	});
+
+	test('Agent Binding Block 높이를 고정 Row와 gap으로 결정한다', () => {
+		assert.strictEqual(getAgentActivityBindingBlockHeight(0), 0);
+		assert.strictEqual(
+			getAgentActivityBindingBlockHeight(1),
+			AGENT_ACTIVITY_BINDING_TOP_GAP + AGENT_ACTIVITY_BINDING_ROW_HEIGHT,
+		);
+		assert.strictEqual(
+			getAgentActivityBindingBlockHeight(2),
+			AGENT_ACTIVITY_BINDING_TOP_GAP
+				+ AGENT_ACTIVITY_BINDING_ROW_HEIGHT * 2
+				+ AGENT_ACTIVITY_BINDING_ROW_GAP,
+		);
+	});
+
+	test('Standalone File Binding은 Card height를 유지하고 다음 Root만 footprint만큼 이동시킨다', () => {
+		const first = { kind: 'file' as const, id: 'file:binding-a', name: 'a.ts' };
+		const second = { kind: 'file' as const, id: 'file:binding-b', name: 'b.ts' };
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:binding-a', nodeId: first.id },
+				{ id: 'root:binding-b', nodeId: second.id },
+			],
+			rootNodes: { [first.id]: first, [second.id]: second },
+		};
+		const createLayoutWithCount = (count: number) => createBaseGraphLayout(
+			graph,
+			{
+				getAgentActivityBindingCount: (target) => (
+					target.nodeId === first.id ? count : 0
+				),
+			},
+		);
+		const baseline = createLayoutWithCount(0);
+		const oneBinding = createLayoutWithCount(1);
+		const twoBindings = createLayoutWithCount(2);
+		const baselineFirst = getLayoutNode(baseline.nodes, first.id);
+		const baselineSecond = getLayoutNode(baseline.nodes, second.id);
+		const oneFirst = getLayoutNode(oneBinding.nodes, first.id);
+		const oneSecond = getLayoutNode(oneBinding.nodes, second.id);
+		const twoSecond = getLayoutNode(twoBindings.nodes, second.id);
+
+		assert.strictEqual(oneFirst.height, baselineFirst.height);
+		assert.strictEqual(oneFirst.renderedHeight, undefined);
+		assert.strictEqual(
+			oneFirst.agentActivityBindingTop,
+			GRAPH_FILE_GROUP_STANDALONE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP,
+		);
+		assert.strictEqual(
+			oneSecond.position.y - baselineSecond.position.y,
+			getAgentActivityBindingBlockHeight(1),
+		);
+		assert.strictEqual(
+			twoSecond.position.y - baselineSecond.position.y,
+			getAgentActivityBindingBlockHeight(2),
+		);
+	});
+
+	test('Folder Binding은 열린 visible subtree 아래에 놓고 닫으면 Card 아래로 복원한다', () => {
+		const bindingCount = 2;
+		const options = {
+			getAgentActivityBindingCount: (target: { readonly nodeId: string }) => (
+				target.nodeId === 'folder:secondary/src' ? bindingCount : 0
+			),
+		};
+		const openLayout = createBaseGraphLayout(createSingleRootGraph(SECOND_PROJECT), {
+			...options,
+			openedFolders: {
+				[SECOND_PROJECT.id]: true,
+				'folder:secondary/src': true,
+			},
+		});
+		const closedLayout = createBaseGraphLayout(createSingleRootGraph(SECOND_PROJECT), {
+			...options,
+			openedFolders: { [SECOND_PROJECT.id]: true },
+		});
+		const openFolder = getLayoutNode(openLayout.nodes, 'folder:secondary/src');
+		const closedFolder = getLayoutNode(closedLayout.nodes, 'folder:secondary/src');
+		const openChild = getLayoutNode(
+			openLayout.nodes,
+			'file:secondary/src/index.ts',
+		);
+		const nextSibling = getLayoutNode(
+			openLayout.nodes,
+			'file:secondary/package.json',
+		);
+		const bindingRowsHeight = getAgentActivityBindingBlockHeight(bindingCount)
+			- AGENT_ACTIVITY_BINDING_TOP_GAP;
+		const bindingBottom = openFolder.position.y
+			+ (openFolder.agentActivityBindingTop ?? 0)
+			+ bindingRowsHeight;
+
+		assert.ok(
+			(openFolder.agentActivityBindingTop ?? 0)
+				> openChild.position.y + openChild.height - openFolder.position.y,
+		);
+		assert.ok(nextSibling.position.y > bindingBottom);
+		assert.strictEqual(
+			closedFolder.agentActivityBindingTop,
+			GRAPH_FOLDER_NODE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP,
+		);
+		assert.strictEqual(openFolder.height, GRAPH_FOLDER_NODE_HEIGHT);
+		assert.strictEqual(closedFolder.height, GRAPH_FOLDER_NODE_HEIGHT);
+	});
+
+	test('Grouped File Row Binding은 visible page의 renderedHeight만 늘리고 pagination count를 유지한다', () => {
+		const parentId = 'folder:app/src';
+		const fileGroupId = createFileGroupId(parentId);
+		const baseline = createGraphLayout(GRAPH_MOCK_PROJECT);
+		const baselineGroup = getFileGroup(baseline.nodes, parentId);
+		const hiddenPageFile = baselineGroup.children[6];
+
+		assert.ok(hiddenPageFile);
+		const resolver = (target: { readonly nodeId: string }) => (
+			target.nodeId === hiddenPageFile.id ? 2 : 0
+		);
+		const collapsed = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			getAgentActivityBindingCount: resolver,
+		});
+		const expanded = createGraphLayout(GRAPH_MOCK_PROJECT, {
+			fileGroupPages: { [fileGroupId]: 2 },
+			getAgentActivityBindingCount: resolver,
+		});
+		const collapsedGroup = getFileGroup(collapsed.nodes, parentId);
+		const expandedGroup = getFileGroup(expanded.nodes, parentId);
+		const expandedFile = expandedGroup.children[6];
+
+		assert.strictEqual(collapsedGroup.children.length, 7);
+		assert.strictEqual(collapsedGroup.renderedHeight, undefined);
+		assert.strictEqual(expandedGroup.children.length, 7);
+		assert.strictEqual(expandedFile?.agentActivityBindingCount, 2);
+		assert.strictEqual(
+			expandedGroup.renderedHeight,
+			expandedGroup.height + getAgentActivityBindingBlockHeight(2),
+		);
+		assert.strictEqual(
+			expandedGroup.graphContentHeight,
+			expandedGroup.renderedHeight,
+		);
+		assert.strictEqual(
+			expandedGroup.height,
+			getFileGroupHeight(7, true),
+		);
+	});
+
+	test('Grouped File의 graphContentHeight는 Binding 뒤 실제 Graph Content까지만 확장한다', () => {
+		const files = ['a', 'b', 'c', 'd'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:content-extent/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const folder: Folder = {
+			kind: 'folder',
+			id: 'folder:content-extent/src',
+			name: 'src',
+			status: 'loaded',
+			children: files,
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:content-extent',
+			name: 'content-extent',
+			status: 'loaded',
+			children: [folder],
+		};
+		const bindingHeight = getAgentActivityBindingBlockHeight(1);
+		const createGroup = (bindingFileId: string): GraphFileGroupNode => {
+			const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+				openedFolders: {
+					[project.id]: true,
+					[folder.id]: true,
+				},
+				getAgentActivityBindingCount: (target) => (
+					target.nodeId === bindingFileId ? 1 : 0
+				),
+			});
+
+			return getFileGroup(layout.nodes, folder.id);
+		};
+		const middleBindingGroup = createGroup(files[1]?.id ?? '');
+		const lastBindingGroup = createGroup(files[3]?.id ?? '');
+
+		assert.strictEqual(
+			middleBindingGroup.renderedHeight,
+			middleBindingGroup.height + bindingHeight,
+		);
+		assert.strictEqual(
+			middleBindingGroup.graphContentHeight,
+			middleBindingGroup.height + bindingHeight,
+		);
+		assert.strictEqual(
+			lastBindingGroup.renderedHeight,
+			lastBindingGroup.height + bindingHeight,
+		);
+		assert.strictEqual(lastBindingGroup.graphContentHeight, undefined);
+	});
+
+	test('Detached occurrence Layout은 G-12.5 source merge와 Session override 개수를 재사용한다', () => {
+		const graph = createSingleRootGraph(SECOND_PROJECT, 'root:binding-project');
+		const first = addGraphRoot(graph, 'folder:secondary/src');
+
+		assert.ok(first);
+		const second = addGraphRoot(first.graph, 'folder:secondary/src');
+
+		assert.ok(second);
+		const store = createAgentActivityStore();
+		const bindings = createAgentActivityBindings(store);
+		const sourceTarget = { nodeId: 'folder:secondary/src' };
+
+		store.setAgentActivity('session-A', sourceTarget, 'planned');
+		store.setAgentActivity(
+			'session-A',
+			{ ...sourceTarget, rootId: first.root.id },
+			'editing',
+		);
+		store.setAgentActivity(
+			'session-B',
+			{ ...sourceTarget, rootId: first.root.id },
+			'active',
+		);
+		const layout = createBaseGraphLayout(second.graph, {
+			openedFolders: { [SECOND_PROJECT.id]: true },
+			getAgentActivityBindingCount: bindings.getBindingCount,
+		});
+		const firstOccurrence = getLayoutNode(
+			layout.nodes,
+			getGraphRootLayoutNodeId(first.root),
+		);
+		const secondOccurrence = getLayoutNode(
+			layout.nodes,
+			getGraphRootLayoutNodeId(second.root),
+		);
+
+		assert.strictEqual(firstOccurrence.agentActivityBindingCount, 2);
+		assert.strictEqual(secondOccurrence.agentActivityBindingCount, 1);
+		bindings.dispose();
 	});
 });
 
