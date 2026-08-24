@@ -14,6 +14,7 @@ import {
 
 const TAB_ID = 'tab:one';
 const SESSION_ID = 'session-1';
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///workspace/one';
 
 suite('Host↔Webview protocol runtime validator', () => {
 	suite('Webview→Host', () => {
@@ -68,6 +69,13 @@ suite('Host↔Webview protocol runtime validator', () => {
 					sessionId: SESSION_ID,
 				},
 				{ type: 'terminal.visible', tabId: TAB_ID, visible: false },
+				{
+					type: 'agent.switch',
+					tabId: TAB_ID,
+					providerId: 'codex',
+					workspaceRootId: WORKSPACE_ROOT_ID,
+					switchAttemptId: 1,
+				},
 			];
 
 			for (const message of messages) {
@@ -99,10 +107,13 @@ suite('Host↔Webview protocol runtime validator', () => {
 
 		test('Host 소유 실행 필드는 unexpected_field보다 먼저 forbidden_field로 거부한다', () => {
 			const forbiddenFields = [
+				'cwd',
+				'path',
+				'uri',
+				'fsPath',
 				'workspaceRoot',
 				'workspace',
 				'root',
-				'cwd',
 				'executable',
 				'command',
 				'args',
@@ -235,7 +246,11 @@ suite('Host↔Webview protocol runtime validator', () => {
 		test('ready handshake와 모든 terminal 메시지를 검증해 새 객체로 복사한다', () => {
 			const messages = [
 				{ type: 'extension.ready' },
-				{ type: 'terminal.starting', tabId: TAB_ID },
+				{
+					type: 'terminal.starting',
+					tabId: TAB_ID,
+					sessionId: SESSION_ID,
+				},
 				{ type: 'terminal.started', tabId: TAB_ID, sessionId: SESSION_ID },
 				{
 					type: 'terminal.output',

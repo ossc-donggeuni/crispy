@@ -130,7 +130,7 @@ suite('Canonical Workspace resolver', () => {
 		assert.strictEqual(startResult.ok, true);
 		assert.deepStrictEqual(restartResult, {
 			ok: false,
-			code: 'workspace_multi_root_unsupported',
+			code: 'workspace_root_unavailable',
 		});
 	});
 

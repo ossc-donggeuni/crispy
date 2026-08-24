@@ -718,7 +718,11 @@ export class TerminalHost {
 				published: false,
 			});
 		}
-		this.publish({ type: 'terminal.starting', tabId });
+		this.publish({
+			type: 'terminal.starting',
+			tabId,
+			sessionId: session.sessionId,
+		});
 
 		if (
 			providerId === 'codex'
@@ -1897,7 +1901,11 @@ export class TerminalHost {
 			return;
 		}
 		this.recordMcpFailure(session, reason);
-		this.publish({ type: 'terminal.starting', tabId });
+		this.publish({
+			type: 'terminal.starting',
+			tabId,
+			sessionId: session.sessionId,
+		});
 
 		let request: AgentProcessSpawnRequest | undefined;
 		try {

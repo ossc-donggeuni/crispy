@@ -61,6 +61,7 @@ const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
 let workspacePresentation = deserializeWorkspacePresentationFromWebview(
 	serializedWorkspacePresentation,
 );
+let lastIssuedSwitchAttemptId = 0;
 const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
@@ -201,8 +202,23 @@ try {
 				activateTab(tabId);
 			},
 
-			onProviderSelected(tabId, providerId): void {
-				postAgentMessage({ type: 'agent.switch', tabId, providerId });
+			onProviderSelected(tabId, providerId): boolean {
+				const selectableRoots = workspacePresentation.rootCatalog.filter(
+					(entry) => entry.selectable,
+				);
+				if (selectableRoots.length !== 1) {
+					/** Phase 8 picker가 명시적인 root를 제공하기 전에는 유일한 root만 자동 선택한다. */
+					return false;
+				}
+
+				lastIssuedSwitchAttemptId += 1;
+				return postAgentMessage({
+					type: 'agent.switch',
+					tabId,
+					providerId,
+					workspaceRootId: selectableRoots[0]!.id,
+					switchAttemptId: lastIssuedSwitchAttemptId,
+				});
 			},
 
 			onAgentReselectionRequested(tabId): void {

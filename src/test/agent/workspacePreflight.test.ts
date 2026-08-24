@@ -75,7 +75,7 @@ suite('Workspace preflight contract', () => {
 			resolverCalls += 1;
 			return resolverCalls === 1
 				? { ok: true, root }
-				: { ok: false, code: 'workspace_multi_root_unsupported' };
+				: { ok: false, code: 'workspace_root_unavailable' };
 		});
 
 		const startResult = preflight('tab-one', null);
@@ -87,7 +87,7 @@ suite('Workspace preflight contract', () => {
 		if (!restartResult.ok) {
 			assert.strictEqual(
 				restartResult.error.code,
-				'workspace_multi_root_unsupported',
+				'workspace_root_unavailable',
 			);
 			assert.strictEqual(restartResult.error.sessionId, 'session-two');
 			assert.strictEqual(

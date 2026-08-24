@@ -68,7 +68,7 @@ suite('Workspace policy validator', () => {
 
 		assert.deepStrictEqual(result, {
 			ok: false,
-			code: 'workspace_not_found',
+			code: 'workspace_root_unavailable',
 		});
 	});
 
@@ -78,7 +78,7 @@ suite('Workspace policy validator', () => {
 
 		assert.deepStrictEqual(result, {
 			ok: false,
-			code: 'workspace_multi_root_unsupported',
+			code: 'workspace_root_unavailable',
 		});
 	});
 
@@ -145,7 +145,7 @@ suite('Workspace policy validator', () => {
 		);
 		assert.deepStrictEqual(
 			validateWorkspacePolicy(snapshot(true, invalidFolders)),
-			{ ok: false, code: 'workspace_multi_root_unsupported' },
+			{ ok: false, code: 'workspace_root_unavailable' },
 		);
 		assert.deepStrictEqual(
 			validateWorkspacePolicy(snapshot(true, [invalidFolders[0]])),

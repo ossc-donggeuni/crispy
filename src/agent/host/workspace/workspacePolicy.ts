@@ -33,11 +33,12 @@ export function validateWorkspacePolicy(
 	}
 
 	if (snapshot.workspaceFolders.length === 0) {
-		return validationFailure('workspace_not_found');
+		return validationFailure('workspace_root_unavailable');
 	}
 
 	if (snapshot.workspaceFolders.length > 1) {
-		return validationFailure('workspace_multi_root_unsupported');
+		/** Phase 4의 ID 기반 resolver가 root를 exact lookup하기 전에는 모호한 root를 실행하지 않는다. */
+		return validationFailure('workspace_root_unavailable');
 	}
 
 	const folder = snapshot.workspaceFolders[0];

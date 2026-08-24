@@ -25,16 +25,12 @@ interface WorkspaceErrorMessagePolicy {
  * 입력값이나 내부 예외 문자열을 사용하지 않는 완전한 code allowlist다.
  */
 const WORKSPACE_ERROR_MESSAGE_POLICIES = {
-	workspace_not_found: {
-		message: '작업공간 폴더를 연 후 다시 시도하세요.',
-		canRestart: true,
-	},
 	workspace_untrusted: {
 		message: '작업공간을 신뢰한 후 다시 시도하세요.',
 		canRestart: true,
 	},
-	workspace_multi_root_unsupported: {
-		message: '하나의 작업공간 폴더만 연 후 다시 시도하세요.',
+	workspace_root_unavailable: {
+		message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
 		canRestart: true,
 	},
 	workspace_virtual_unsupported: {

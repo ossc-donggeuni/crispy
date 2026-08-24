@@ -332,7 +332,11 @@ suite('TerminalHost start orchestration', () => {
 		}]);
 		assert.deepStrictEqual(session.state, { kind: 'running', pid: 9201 });
 		assert.deepStrictEqual(messages, [
-			{ type: 'terminal.starting', tabId: 'tab-start-success' },
+			{
+				type: 'terminal.starting',
+				tabId: 'tab-start-success',
+				sessionId: session.sessionId,
+			},
 			{
 				type: 'terminal.started',
 				tabId: 'tab-start-success',

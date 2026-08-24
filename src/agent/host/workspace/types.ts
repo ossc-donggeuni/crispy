@@ -1,4 +1,4 @@
-import type { TerminalErrorCode } from '../../protocol/errors';
+import type { WorkspaceExecutionErrorCode } from '../../protocol/errors';
 
 /** 일반 문자열과 검증된 작업공간 파일 경로를 구분하는 컴파일 타임 표식이다. */
 declare const validatedWorkspaceFsPathBrand: unique symbol;
@@ -26,11 +26,8 @@ export type ValidatedWorkspaceRoot = ValidatedWorkspaceUri & {
 	readonly [validatedWorkspaceRootBrand]: true;
 };
 
-/** Workspace 정책에 해당하는 기존 terminal protocol 오류 code 부분집합이다. */
-export type WorkspaceValidationErrorCode = Extract<
-	TerminalErrorCode,
-	`workspace_${string}`
->;
+/** Workspace 정책에 해당하는 execution protocol 오류 code다. */
+export type WorkspaceValidationErrorCode = WorkspaceExecutionErrorCode;
 
 /** Workspace 검증이 성공했을 때만 검증된 root를 노출한다. */
 export interface WorkspaceValidationSuccess {

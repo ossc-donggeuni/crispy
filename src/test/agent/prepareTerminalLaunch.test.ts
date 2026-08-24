@@ -100,9 +100,8 @@ suite('Terminal launch Host preparation', () => {
 	});
 
 	for (const code of [
-		'workspace_not_found',
 		'workspace_untrusted',
-		'workspace_multi_root_unsupported',
+		'workspace_root_unavailable',
 		'workspace_virtual_unsupported',
 		'workspace_path_invalid',
 	] satisfies readonly WorkspaceValidationErrorCode[]) {

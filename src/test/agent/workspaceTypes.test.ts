@@ -19,9 +19,8 @@ type Assert<Condition extends true> = Condition;
 
 /** 작업공간 검증에서 허용해야 하는 오류 코드의 전체 목록이다. */
 type ExpectedWorkspaceErrorCode =
-	| 'workspace_not_found'
+	| 'workspace_root_unavailable'
 	| 'workspace_untrusted'
-	| 'workspace_multi_root_unsupported'
 	| 'workspace_virtual_unsupported'
 	| 'workspace_path_invalid';
 
@@ -52,7 +51,7 @@ suite('Workspace Host type contract', () => {
 	test('성공 결과에서만 terminal cwd용 fsPath를 얻는다', () => {
 		const failure = {
 			ok: false,
-			code: 'workspace_not_found',
+			code: 'workspace_root_unavailable',
 		} satisfies WorkspaceValidationResult;
 		const fsPath = '/validated/workspace' as ValidatedWorkspaceFsPath;
 		const root = {

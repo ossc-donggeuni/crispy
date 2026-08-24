@@ -44,7 +44,7 @@ export interface AgentPanelUiElements {
 }
 
 /**
- * UI 동작이 확정된 뒤 상위 계층으로 전달되는 알림이다.
+ * UI 요청과 확정된 동작을 상위 계층으로 전달하는 callback 경계다.
  *
  * 이 단계에서는 어떤 콜백도 실제 세션을 시작하거나 종료하지 않는다.
  * Phase 2에서 각 콜백을 대응하는 Host 메시지로 연결한다.
@@ -56,8 +56,11 @@ export interface AgentPanelUiCallbacks {
 	/** 활성 탭이 다른 탭으로 바뀌었다. */
 	onTabActivated?(tabId: AgentTabId): void;
 
-	/** 중앙 선택기로 탭의 provider가 정해졌다. */
-	onProviderSelected?(tabId: AgentTabId, providerId: ProviderId): void;
+	/** 중앙 선택기의 provider 요청을 상위 계층이 수락했는지 반환한다. */
+	onProviderSelected?(
+		tabId: AgentTabId,
+		providerId: ProviderId,
+	): boolean | void;
 
 	/**
 	 * 재시작 버튼으로 현재 CLI를 종료하고 provider 재선택을 요청했다.
@@ -164,8 +167,20 @@ export function initializeAgentPanelUi(
 					return;
 				}
 
+				let accepted = true;
+				try {
+					accepted = callbacks.onProviderSelected?.(
+						activeTab.id,
+						providerId,
+					) !== false;
+				} catch {
+					accepted = false;
+				}
+				if (!accepted) {
+					return;
+				}
+
 				model.assignProvider(activeTab.id, providerId);
-				notify(() => callbacks.onProviderSelected?.(activeTab.id, providerId));
 			},
 		},
 		dependencies,

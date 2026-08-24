@@ -184,11 +184,12 @@ suite('Agent Panel UI', () => {
 		assert.deepStrictEqual(options.map((option) => option.focusCount), [0, 0, 0]);
 	});
 
-	test('provider 선택은 탭에 배정한 뒤 중앙 선택기를 숨긴다', () => {
+	test('provider 요청이 수락되면 탭에 배정하고 중앙 선택기를 숨긴다', () => {
 		const selections: Array<{ tabId: string; providerId: string }> = [];
 		const fixture = createFixture({
-			onProviderSelected: (tabId, providerId) =>
-				selections.push({ tabId, providerId }),
+			onProviderSelected: (tabId, providerId) => {
+				selections.push({ tabId, providerId });
+			},
 		});
 
 		selectProvider(fixture.providerPicker, 'claude');
@@ -198,6 +199,24 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(tab.providerId, 'claude');
 		assert.strictEqual(tab.label, 'Claude Code #1');
 		assert.deepStrictEqual(selections, [{ tabId: tab.id, providerId: 'claude' }]);
+	});
+
+	test('provider 요청 거부 또는 실패 시 미선택 상태와 picker를 유지한다', () => {
+		for (const onProviderSelected of [
+			() => false,
+			() => {
+				throw new Error('selection transport failed');
+			},
+		]) {
+			const fixture = createFixture({ onProviderSelected });
+
+			selectProvider(fixture.providerPicker, 'codex');
+
+			const tab = fixture.controller.getSnapshot().tabs[0];
+			assert.strictEqual(tab.providerId, undefined);
+			assert.strictEqual(tab.label, UNSELECTED_TAB_LABEL);
+			assert.strictEqual(fixture.providerPicker.hidden, false);
+		}
 	});
 
 	test('+ 버튼은 미선택 탭과 선택기를 다시 표시한다', () => {
@@ -239,8 +258,9 @@ suite('Agent Panel UI', () => {
 		const reselections: string[] = [];
 		const providerSelections: string[] = [];
 		const fixture = createFixture({
-			onProviderSelected: (_tabId, providerId) =>
-				providerSelections.push(providerId),
+			onProviderSelected: (_tabId, providerId) => {
+				providerSelections.push(providerId);
+			},
 			onAgentReselectionRequested: (tabId) => reselections.push(tabId),
 		});
 

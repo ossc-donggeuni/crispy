@@ -1342,7 +1342,13 @@ suite('Crispy Extension Host', () => {
 		const messages = [
 			{ type: 'tab.create', tabId: 'tab-lifecycle' },
 			{ type: 'tab.switch', tabId: 'tab-lifecycle' },
-			{ type: 'agent.switch', tabId: 'tab-lifecycle', providerId: 'codex' },
+			{
+				type: 'agent.switch',
+				tabId: 'tab-lifecycle',
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///workspace/lifecycle',
+				switchAttemptId: 1,
+			},
 			{ type: 'agent.reset', tabId: 'tab-lifecycle' },
 			{ type: 'tab.close', tabId: 'tab-lifecycle' },
 		];
@@ -1374,6 +1380,8 @@ suite('Crispy Extension Host', () => {
 				type: 'agent.switch',
 				tabId: 'tab-unknown-provider',
 				providerId: 'unlisted-provider',
+				workspaceRootId: 'workspace-root:file:///workspace/provider',
+				switchAttemptId: 1,
 			},
 			host,
 		);

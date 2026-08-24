@@ -320,7 +320,7 @@ pnpm run verify:linux-abi
 | lockfile 또는 dependency 불일치 | `pnpm --version`이 `11.18.0`인지 확인하고 `pnpm install --frozen-lockfile`을 다시 실행한다 |
 | `CRISPY_VSIX_TARGET is required` | 직접 `vsce package`를 실행하지 말고 `pnpm run package:vsix -- --target <target>`을 사용한다 |
 | `cross packaging is not supported` | 현재 host와 같은 target을 지정한다 |
-| `workspace_untrusted` 또는 workspace 오류 | trusted single-root local folder를 연다 |
+| `workspace_untrusted` 또는 workspace 오류 | trusted local folder를 선택한다 |
 | `codex: command not found` | 일반 Terminal과 VS Code Extension Host가 같은 `PATH`에서 Codex CLI를 찾는지 확인한다 |
 | Windows에서 `codex.ps1` 또는 `claude.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy가 `.cmd`와 `.exe` 후보를 차례로 검사한다 |
 | `claude: command not found` 또는 Windows의 `not recognized` | VS Code Extension Host의 `PATH`에서 native Claude Code를 찾는지 확인한다 |

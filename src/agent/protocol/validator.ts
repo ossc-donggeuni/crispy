@@ -25,10 +25,13 @@ export type {
  * 일반적인 추가 필드와 보안 경계 위반을 구분하기 위해 별도 집합으로 관리한다.
  */
 const WEBVIEW_FORBIDDEN_FIELDS = new Set([
+	'cwd',
+	'path',
+	'uri',
+	'fsPath',
 	'workspaceRoot',
 	'workspace',
 	'root',
-	'cwd',
 	'executable',
 	'command',
 	'args',
