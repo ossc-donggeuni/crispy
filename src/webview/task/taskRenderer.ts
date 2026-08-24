@@ -57,6 +57,8 @@ export interface TaskRendererInteractions {
 	onNodeFocus?: (node: TaskLayoutNode) => void;
 	/** Start Action으로 연결 전 Work 하나를 추가한다. */
 	onWorkAdd?: (taskId: string) => void;
+	/** Start Action으로 Task 전체를 제거한다. */
+	onTaskRemove?: (taskId: string) => void;
 	/** Work Node와 incident Edge를 제거한다. */
 	onWorkRemove?: (taskId: string, nodeId: string) => void;
 	/** 두 Task Port의 연결 가능성을 Domain DAG 기준으로 판정한다. */
@@ -102,6 +104,7 @@ interface TaskNodePositionDragSession extends TaskDragSessionBase {
 
 type TaskDragSession = TaskOriginDragSession | TaskNodePositionDragSession;
 type TaskPortDirection = 'input' | 'output';
+type TaskNodeAction = 'add-work' | 'remove-work' | 'remove-task';
 
 interface TaskPortTarget {
 	readonly node: TaskLayoutNode;
@@ -647,6 +650,8 @@ export function initializeTaskRenderer(
 			cancelTaskConnection();
 			if (node?.kind === 'start' && action === 'add-work') {
 				interactions.onWorkAdd?.(node.taskId);
+			} else if (node?.kind === 'start' && action === 'remove-task') {
+				interactions.onTaskRemove?.(node.taskId);
 			} else if (node?.kind === 'work' && action === 'remove-work') {
 				interactions.onWorkRemove?.(node.taskId, node.id);
 			}
@@ -945,7 +950,11 @@ function createTaskNodeContents(
 		return [
 			icon,
 			content,
-			createTaskNodeAction(ownerDocument, 'add-work'),
+			createTaskNodeActions(
+				ownerDocument,
+				'start',
+				['add-work', 'remove-task'],
+			),
 			createTaskPort(ownerDocument, node, 'output'),
 		];
 	}
@@ -968,7 +977,11 @@ function createTaskNodeContents(
 		content.append(prompt);
 	}
 	if (node.canRemove) {
-		contents.push(createTaskNodeAction(ownerDocument, 'remove-work'));
+		contents.push(createTaskNodeActions(
+			ownerDocument,
+			'work',
+			['remove-work'],
+		));
 	}
 	return contents;
 }
@@ -991,38 +1004,46 @@ function createTaskPort(
 	return port;
 }
 
-function createTaskNodeAction(
+function createTaskNodeActions(
 	ownerDocument: Document,
-	action: 'add-work' | 'remove-work',
+	nodeKind: 'start' | 'work',
+	actionTypes: readonly TaskNodeAction[],
 ): HTMLElement {
 	const actions = ownerDocument.createElement('div');
-	const button = ownerDocument.createElement('button');
-	const icon = ownerDocument.createElement('span');
-	const isAdd = action === 'add-work';
-	const label = isAdd ? 'Work 추가' : 'Work 삭제';
 
-	actions.className = `task-node-actions task-${isAdd ? 'start' : 'work'}-actions`;
+	actions.className = `task-node-actions task-${nodeKind}-actions`;
 	actions.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	actions.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-	button.className = `graph-detached-root-action task-node-action task-${
-		isAdd ? 'start' : 'work'
-	}-action`;
-	button.type = 'button';
-	button.title = label;
-	button.setAttribute('aria-label', label);
-	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, action);
-	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
-	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-	icon.setAttribute('aria-hidden', 'true');
-	if (isAdd) {
-		icon.className = 'task-node-action-symbol';
-		icon.textContent = '+';
-	} else {
-		icon.className = 'graph-detached-root-action-icon';
-		icon.setAttribute('data-ui-icon', 'delete.svg');
+	for (const action of actionTypes) {
+		const button = ownerDocument.createElement('button');
+		const icon = ownerDocument.createElement('span');
+		const label = action === 'add-work'
+			? 'Work 추가'
+			: action === 'remove-work' ? 'Work 삭제' : 'Task 삭제';
+
+		button.className = [
+			'graph-detached-root-action',
+			'task-node-action',
+			`task-${nodeKind}-action`,
+			`task-${action}-action`,
+		].join(' ');
+		button.type = 'button';
+		button.title = label;
+		button.setAttribute('aria-label', label);
+		button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, action);
+		button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+		button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+		icon.setAttribute('aria-hidden', 'true');
+		if (action === 'add-work') {
+			icon.className = 'task-node-action-symbol';
+			icon.textContent = '+';
+		} else {
+			icon.className = 'graph-detached-root-action-icon';
+			icon.setAttribute('data-ui-icon', 'delete.svg');
+		}
+		button.append(icon);
+		actions.append(button);
 	}
-	button.append(icon);
-	actions.append(button);
 	return actions;
 }
 

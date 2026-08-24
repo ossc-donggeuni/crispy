@@ -141,6 +141,7 @@
 	right: 8px;
 	z-index: 3;
 	display: flex;
+	gap: 4px;
 	opacity: 0;
 	visibility: hidden;
 	pointer-events: none;
@@ -154,6 +155,31 @@
 	opacity: 1;
 	visibility: visible;
 	pointer-events: auto;
+}
+
+.task-remove-task-action {
+	color: var(--vscode-errorForeground, #f14c4c);
+	background: color-mix(
+		in srgb,
+		var(--vscode-errorForeground, #f14c4c) 14%,
+		var(--graph-floating-control-background)
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--vscode-errorForeground, #f14c4c) 42%,
+		var(--graph-secondary-control-border)
+	);
+}
+
+.task-remove-task-action:hover,
+.task-remove-task-action:focus-visible {
+	color: var(--vscode-errorForeground, #f14c4c);
+	background: color-mix(
+		in srgb,
+		var(--vscode-errorForeground, #f14c4c) 22%,
+		var(--graph-floating-control-hover-background)
+	);
+	border-color: var(--vscode-errorForeground, #f14c4c);
 }
 
 .task-node-action-symbol {

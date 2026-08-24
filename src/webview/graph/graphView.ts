@@ -1632,6 +1632,11 @@ export function initializeGraphView(
 			applyTaskState();
 		}
 	};
+	const handleTaskRemove = (taskId: string): void => {
+		if (taskState.removeTask(taskId)) {
+			applyTaskState();
+		}
+	};
 	const handleTaskConnect = (
 		sourceTaskId: string,
 		sourceNodeId: string,
@@ -1692,6 +1697,7 @@ export function initializeGraphView(
 			onTaskNodePositionChange: handleTaskNodePositionChange,
 			onNodeFocus: handleTaskNodeFocus,
 			onWorkAdd: handleTaskWorkAdd,
+			onTaskRemove: handleTaskRemove,
 			onWorkRemove: handleTaskWorkRemove,
 			canConnectNodes: (...connection) => taskState.canConnect(...connection),
 			onNodesConnect: handleTaskConnect,

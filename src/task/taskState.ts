@@ -36,6 +36,9 @@ export interface TaskStateStore {
 	/** Start와 End만 가진 기본 Task를 생성해 상태에 추가한다. */
 	createTask(input: CreateTaskBlueprintInput): TaskBlueprint;
 
+	/** ID가 일치하는 Task 전체를 상태에서 제거한다. */
+	removeTask(taskId: string): TaskBlueprint | undefined;
+
 	/** 연결하지 않은 Work를 다음 기본 위치에 추가한다. */
 	addWork(
 		taskId: string,
@@ -144,6 +147,22 @@ export function createTaskState(
 
 			snapshot = Object.freeze({
 				tasks: Object.freeze([...snapshot.tasks, task]),
+			});
+			return task;
+		},
+
+		removeTask(taskId): TaskBlueprint | undefined {
+			const taskIndex = snapshot.tasks.findIndex((task) => task.id === taskId);
+
+			if (taskIndex < 0) {
+				return undefined;
+			}
+			const task = snapshot.tasks[taskIndex];
+
+			snapshot = Object.freeze({
+				tasks: Object.freeze(snapshot.tasks.filter((_, index) => (
+					index !== taskIndex
+				))),
 			});
 			return task;
 		},

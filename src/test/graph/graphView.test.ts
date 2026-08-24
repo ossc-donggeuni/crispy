@@ -208,6 +208,73 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Start Task 삭제 Action은 Task의 Node와 Edge 전체만 제거한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const target = createCollidingRenderingTask(
+			'task:remove-target',
+			'Remove Target',
+			{ x: 100, y: 80 },
+		);
+		const preserved = createCollidingRenderingTask(
+			'task:preserved',
+			'Preserved',
+			{ x: 100, y: 240 },
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[target, preserved],
+		);
+		const targetStart = target.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(targetStart);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			targetStart.id,
+			target.id,
+		);
+		const removeTask = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'remove-task',
+		);
+
+		assert.strictEqual(removeTask.title, 'Task 삭제');
+		assert.strictEqual(
+			getDescendantByClass(
+				removeTask,
+				'graph-detached-root-action-icon',
+			).getAttribute('data-ui-icon'),
+			'delete.svg',
+		);
+		assert.strictEqual(
+			removeTask.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
+			true,
+		);
+		removeTask.dispatch('click', createClickEvent(removeTask));
+		assert.strictEqual(graphView.taskState.getTask(target.id), undefined);
+		assert.deepStrictEqual(
+			graphView.taskState.getSnapshot().tasks.map((task) => task.id),
+			[preserved.id],
+		);
+		assert.strictEqual(getTaskElements(root, 'data-task-id', target.id).length, 0);
+		assert.strictEqual(
+			getTaskElements(
+				root,
+				TASK_EDGE_ACTION_TASK_ID_ATTRIBUTE,
+				target.id,
+			).length,
+			0,
+		);
+		assert.ok(getTaskElements(root, 'data-task-id', preserved.id).length > 0);
+
+		graphView.dispose();
+	});
+
 	test('Start Action은 겹치지 않는 Work를 추가하고 Node kind별 Port를 노출한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -1091,6 +1158,10 @@ suite('Graph View', () => {
 		assert.match(
 			taskViewCss,
 			/\.task-end-icon\s*\{[^}]*task-end\.svg[^}]*\}/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-remove-task-action\s*\{[^}]*--vscode-errorForeground[^}]*14%[^}]*--graph-floating-control-background/s,
 		);
 		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);
 		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);

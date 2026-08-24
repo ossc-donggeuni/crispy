@@ -75,6 +75,22 @@ suite('Task Domain', () => {
 		assert.strictEqual(state.getTask(replacement.id), replacementSnapshot.tasks[0]);
 	});
 
+	test('removeTask는 대상 Task 전체만 제거하고 다른 Task를 보존한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const first = state.createTask({ title: 'First Task' });
+		const second = state.createTask({ title: 'Second Task' });
+		const removed = state.removeTask(first.id);
+
+		assert.strictEqual(removed, first);
+		assert.strictEqual(state.getTask(first.id), undefined);
+		assert.strictEqual(state.getTask(second.id), second);
+		assert.deepStrictEqual(state.getSnapshot().tasks, [second]);
+		const snapshot = state.getSnapshot();
+
+		assert.strictEqual(state.removeTask('task:missing'), undefined);
+		assert.strictEqual(state.getSnapshot(), snapshot);
+	});
+
 	test('Work를 Edge 없이 deterministic vertical lane에 추가한다', () => {
 		const state = createTaskState([], createSequentialIdSource());
 		const task = state.createTask({ title: 'Placement Task' });
