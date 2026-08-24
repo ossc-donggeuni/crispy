@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as vscode from 'vscode';
 import type { WorkspaceToWebviewMessage } from '../../messages';
 import type { Graph } from '../../webview/graph/graphModel';
 import {
@@ -6,6 +7,7 @@ import {
 	createWorkspaceRefreshCoordinator,
 } from '../../workspace/workspaceRefresh';
 import type { WorkspaceSnapshot } from '../../workspace/workspaceModel';
+import { createWorkspaceRootId } from '../../workspace/workspaceRootId';
 
 suite('Workspace Refresh Coordinator', () => {
 	test('Idle dispose는 멱등하며 이후 요청을 안전한 no-op으로 처리한다', async () => {
@@ -409,11 +411,13 @@ suite('Workspace Refresh Coordinator', () => {
 });
 
 function createSnapshot(name: string): WorkspaceSnapshot {
+	const uri = vscode.Uri.file(`/workspace/${name}`);
+
 	return {
 		roots: [{
-			id: `workspace:${name}`,
+			id: createWorkspaceRootId(uri),
 			name,
-			uri: {} as WorkspaceSnapshot['roots'][number]['uri'],
+			uri,
 			status: 'loaded',
 			children: [],
 		}],

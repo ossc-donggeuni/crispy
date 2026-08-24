@@ -29,6 +29,28 @@ suite('Workspace policy validator', () => {
 		}
 	});
 
+	test('주입한 platform 규칙으로 공용 root policy를 적용한다', () => {
+		const windowsPath = 'C:\\workspace\\validated-root';
+
+		const windowsResult = validateWorkspacePolicy(snapshot(true, [{
+			scheme: 'file',
+			fsPath: windowsPath,
+		}]), 'win32');
+		const posixResult = validateWorkspacePolicy(snapshot(true, [{
+			scheme: 'file',
+			fsPath: windowsPath,
+		}]), 'linux');
+
+		assert.strictEqual(windowsResult.ok, true);
+		if (windowsResult.ok) {
+			assert.strictEqual(windowsResult.root.fsPath, windowsPath);
+		}
+		assert.deepStrictEqual(posixResult, {
+			ok: false,
+			code: 'workspace_path_invalid',
+		});
+	});
+
 	test('untrusted workspace를 거부한다', () => {
 		const result = validateWorkspacePolicy(snapshot(false, [{
 			scheme: 'file',

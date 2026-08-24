@@ -3,6 +3,10 @@ import * as vscode from 'vscode';
 import type { WorkspaceFilterRule } from '../../workspace/workspaceFilter';
 import type { WorkspaceRootFilter } from '../../workspace/workspaceFilterPersistence';
 import { createWorkspaceSnapshot } from '../../workspace/workspaceSnapshot';
+import {
+	createWorkspaceRootId,
+	validateWorkspaceRootId,
+} from '../../workspace/workspaceRootId';
 
 type FakeDirectoryEntry = readonly [string, vscode.FileType];
 type FakeDirectory = readonly FakeDirectoryEntry[] | Error;
@@ -218,6 +222,32 @@ suite('Workspace Snapshot', () => {
 			name: 'server.ts',
 			uri: serverUri,
 		}]);
+	});
+
+	test('매우 긴 URI Root가 sibling Root의 ID 생성을 방해하지 않는다', async () => {
+		const longUri = vscode.Uri.parse(
+			`vscode-remote://ssh-remote+dev/${'nested/'.repeat(3_000)}`,
+		);
+		const siblingUri = vscode.Uri.file('/workspace/sibling');
+		const fake = createFakeFileSystem({
+			[longUri.toString()]: [],
+			[siblingUri.toString()]: [],
+		});
+
+		const snapshot = await createWorkspaceSnapshot({
+			workspaceFolders: [
+				createWorkspaceFolder('long', longUri, 0),
+				createWorkspaceFolder('sibling', siblingUri, 1),
+			],
+		}, fake.fileSystem);
+
+		assert.deepStrictEqual(
+			snapshot.roots.map(({ id }) => id),
+			[createWorkspaceRootId(longUri), createWorkspaceRootId(siblingUri)],
+		);
+		assert.ok(snapshot.roots[0] && snapshot.roots[0].id.length > 16_384);
+		assert.strictEqual(validateWorkspaceRootId(snapshot.roots[0]?.id).ok, true);
+		assert.strictEqual(validateWorkspaceRootId(snapshot.roots[1]?.id).ok, true);
 	});
 
 	test('여러 단계로 중첩된 Folder를 끝까지 탐색한다', async () => {

@@ -4,6 +4,7 @@ import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from './workspaceMetadata';
+import { WORKSPACE_ROOT_ID_PREFIX } from './workspaceRootId';
 
 type WorkspacePersistenceFileSystem = Pick<
 	typeof vscode.workspace.fs,
@@ -251,7 +252,7 @@ function findOwningRootIndex(
 
 /** 알려진 Workspace/Graph Node ID prefix 뒤의 URI를 복원한다. */
 function parseNodeUri(id: string): vscode.Uri | undefined {
-	const prefixes = ['workspace-root:', 'folder:', 'file:'] as const;
+	const prefixes = [WORKSPACE_ROOT_ID_PREFIX, 'folder:', 'file:'] as const;
 	const prefix = prefixes.find((candidate) => id.startsWith(candidate));
 
 	if (!prefix) {
