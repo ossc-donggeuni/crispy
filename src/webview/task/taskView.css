@@ -31,6 +31,10 @@
 	--graph-node-outline-color: var(--vscode-focusBorder, #007fd4);
 }
 
+.task-work-node[data-task-connection-state='connected']:not(.is-selected) {
+	--graph-node-border-color: var(--vscode-foreground);
+}
+
 .task-start-node,
 .task-end-node {
 	--graph-node-border-color: var(--graph-node-outline-color);

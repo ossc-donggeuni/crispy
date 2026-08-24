@@ -1625,6 +1625,14 @@ suite('Graph View', () => {
 			taskViewCss,
 			/\.task-work-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-focusBorder/s,
 		);
+		assert.match(
+			taskViewCss,
+			/\.task-work-node\[data-task-connection-state=['"]connected['"]\]:not\(\.is-selected\)\s*\{[^}]*--graph-node-border-color:\s*var\(--vscode-foreground\)/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.is-selected\s*\{[^}]*--graph-node-border-color:\s*var\(--graph-viewport-accent-color\)/s,
+		);
 		assert.match(taskViewCss, /\.task-node\s*\{[^}]*align-items:\s*center;/s);
 		assert.match(taskViewCss, /\.task-node-content\s*\{[^}]*flex-direction:\s*column;/s);
 		assert.match(
