@@ -15,6 +15,8 @@ export interface GraphDetachDrag {
 
 /** Detach Drag가 완료됐을 때 요청을 전달하는 선택적 callback이다. */
 export interface GraphDetachDragOptions {
+	/** Detach lifecycle을 Node body source drag에 재사용할 때 시작 가능 여부를 확인한다. */
+	canStart?: () => boolean;
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 	/** Threshold 이후 최신 Pointer client 좌표를 관찰한다. */
 	onDragMove?: (request: GraphDetachDropRequest) => void;
@@ -82,6 +84,7 @@ export function initializeGraphDetachDrag(
 			|| session
 			|| !event.isPrimary
 			|| event.button !== 0
+			|| options.canStart?.() === false
 		) {
 			return;
 		}

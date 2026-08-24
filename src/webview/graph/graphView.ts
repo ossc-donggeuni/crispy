@@ -1666,6 +1666,25 @@ export function initializeGraphView(
 		return true;
 	};
 	/**
+	 * Task Scope boundary의 엄격한 논리 descendant인지 판별한다.
+	 * Scope가 subtree 배치를 소유하는 동안 descendant Node body는 위치/정렬
+	 * ownership을 별도로 가져갈 수 없다. Root 자신의 Drag와 Detach/Backlink는
+	 * 이 판별 경계 밖에 둔다.
+	 */
+	const isTaskScopeOwnedDescendantOccurrence = (nodeId: string): boolean => {
+		const visited = new Set<string>();
+		let parentId = currentLogicalParentByChild.get(nodeId);
+
+		while (parentId && !visited.has(parentId)) {
+			if (currentTaskScopeBoundaryNodeIds.has(parentId)) {
+				return true;
+			}
+			visited.add(parentId);
+			parentId = currentLogicalParentByChild.get(parentId);
+		}
+		return false;
+	};
+	/**
 	 * Graph parent drag는 기존 visible/logical subtree를 유지하되, 다른 Task
 	 * Scope가 위치를 소유한 descendant occurrence부터는 이동 경계를 끊는다.
 	 * 잡은 Root 자체가 Scope-bound인 경우에는 Root와 자신의 일반 subtree를
@@ -1725,6 +1744,9 @@ export function initializeGraphView(
 			onDetachedRootDelete: handleDetachedRootDelete,
 			onRootReattach: handleRootReattach,
 			onNodeArrangementChange: handleNodeArrangementChange,
+			canStartNodeBodyDrag: (nodeId) => (
+				!isTaskScopeOwnedDescendantOccurrence(nodeId)
+			),
 			resolveNodeSubtreeIds: resolveGraphDragSubtreeNodeIds,
 			resolveRootId: (rootNodeId) => currentGraph.roots.find(
 				(root) => getGraphRootLayoutNodeId(root) === rootNodeId,

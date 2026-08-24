@@ -136,6 +136,11 @@ export interface GraphRendererInteractions {
 	/** 일반 Node Drag 결과를 정렬 flow 포함 여부로 반영하도록 상위 View에 요청한다. */
 	onNodeArrangementChange?: (request: GraphNodeArrangementRequest) => boolean;
 	/**
+	 * Node body에서 위치/Scope source Drag를 시작할 수 있는지 판별한다.
+	 * Detach Handle과 Backlink interaction에는 적용하지 않는다.
+	 */
+	canStartNodeBodyDrag?: (nodeId: string) => boolean;
+	/**
 	 * 보이는 Layout subtree를 기준으로 접힌 Node와 외부 고정 경계를 반영한
 	 * 최종 Drag 이동 대상 Visual ID를 해석한다.
 	 */
@@ -1231,6 +1236,9 @@ export function initializeGraphRenderer(
 				layoutNode.position,
 				graphState,
 				{
+					canStart: () => interactions.canStartNodeBodyDrag?.(
+						layoutNode.id,
+					) !== false,
 					onDragStart: () => {
 						finishLayoutAnimation();
 						subtreeDragStartPositions = undefined;
@@ -2681,6 +2689,8 @@ function createFileRow(
 			interactions,
 			sourceNodeId,
 			{
+				canStart: () => interactions.canStartNodeBodyDrag?.(file.id)
+					!== false,
 				consumeClick: false,
 				detachOnUnhandledDrop: false,
 				onDragComplete: () => {
@@ -2896,12 +2906,14 @@ function initializeSourceDetachDrag(
 	interactions: GraphRendererInteractions,
 	bindingSourceId: string | undefined,
 	options: {
+		readonly canStart?: () => boolean;
 		readonly consumeClick?: boolean;
 		readonly detachOnUnhandledDrop?: boolean;
 		readonly onDragComplete?: () => void;
 	},
 ): GraphDetachDrag {
 	return initializeGraphDetachDrag(target, nodeId, {
+		canStart: options.canStart,
 		onDetachDrop: options.detachOnUnhandledDrop === false
 			? undefined
 			: interactions.onDetachDrop,

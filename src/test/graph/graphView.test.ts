@@ -1198,6 +1198,7 @@ suite('Graph View', () => {
 				[GRAPH_MOCK_PROJECT.id]: true,
 				'folder:app': true,
 				'folder:app/src': true,
+				'folder:app/docs': true,
 			},
 		}, GRAPH_MOCK, {}, [task]);
 		const referenceArea = getTaskScopeArea(root, task.id, work.id, 'reference');
@@ -1213,7 +1214,8 @@ suite('Graph View', () => {
 		setClientBounds(referenceArea, 100, 100, 280, 72);
 		setClientBounds(workArea, 100, 200, 280, 72);
 		const folderId = 'folder:app/src';
-		const fileId = 'file:app/src/graphView.ts';
+		const fileParentId = 'folder:app/docs';
+		const fileId = 'file:app/docs/architecture.md';
 		const folder = getDescendantByAttribute(root, 'data-graph-node-id', folderId);
 		const initialFolderTransform = folder.style.transform;
 		const incomingFolderEdgeId = `folder:app->${folderId}`;
@@ -1351,7 +1353,7 @@ suite('Graph View', () => {
 		assert.ok(getDescendantByAttribute(
 			root,
 			'data-graph-edge-id',
-			`${folderId}->${fileId}`,
+			`${fileParentId}->${fileId}`,
 		));
 		assert.deepStrictEqual(
 			readTranslate(scopedFile.style.transform),
@@ -2801,6 +2803,254 @@ suite('Graph View', () => {
 			'0',
 		);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+		graphView.dispose();
+	});
+
+	test('Scope-owned Folder의 descendant body drag는 막고 Detach와 Backlink는 유지한다', () => {
+		const child = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-owned/child',
+			name: 'child',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-owned',
+			name: 'scope-owned',
+			status: 'loaded' as const,
+			children: [child],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:scope-owned-descendant-lock',
+			name: 'workspace',
+			status: 'loaded',
+			children: [parent],
+		};
+		const task = createRenderingTask({ x: 100, y: 520 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const boundTask: TaskBlueprint = {
+			...task,
+			nodes: task.nodes.map((node) => node.id === work.id
+				? {
+					...node,
+					graphTargets: { reference: [parent.id], work: [] },
+				}
+				: node),
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				openedFolders: {
+					[project.id]: true,
+					[parent.id]: true,
+				},
+			},
+			createSingleRootGraph(project),
+			{},
+			[boundTask],
+		);
+		const referenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			work.id,
+			'reference',
+		);
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const childOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			child.id,
+		);
+		const childBefore = readTranslate(childOccurrence.style.transform);
+		const childStateBefore = graphView.state.getState().nodePositions[child.id];
+
+		assert.ok(childStateBefore);
+		setClientBounds(referenceArea, 0, 0, 0, 0);
+		setClientBounds(workArea, 0, 0, 0, 0);
+		performNodeDrop(childOccurrence, 980, 720);
+
+		assert.strictEqual(childOccurrence.hasClass('is-dragging'), false);
+		assert.deepStrictEqual(
+			readTranslate(childOccurrence.style.transform),
+			childBefore,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[child.id],
+			childStateBefore,
+		);
+		assert.deepStrictEqual(
+			(graphView.taskState.getTask(task.id)?.nodes.find(
+				(node) => node.id === work.id,
+			) as typeof work | undefined)?.graphTargets,
+			{ reference: [parent.id], work: [] },
+		);
+
+		const detachHandle = getDescendantByClass(
+			childOccurrence,
+			'graph-detach-handle',
+		);
+
+		detachHandle.dispatch(
+			'pointerdown',
+			createPointerEvent(detachHandle, 10, 10),
+		);
+		detachHandle.dispatch(
+			'pointermove',
+			createPointerEvent(detachHandle, 30, 30),
+		);
+		detachHandle.dispatch(
+			'pointerup',
+			createPointerEvent(detachHandle, 900, 700),
+		);
+		const detachedRootId = createDetachedRootId(child.id, 1);
+		const detachedOccurrenceId = createGraphLayoutNodeId(
+			detachedRootId,
+			child.id,
+		);
+		const detachedOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedOccurrenceId,
+		);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFolderBacklinkId(child.id),
+		);
+		const detachedPosition = readTranslate(detachedOccurrence.style.transform);
+		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[detachedRootId]: true,
+		});
+		assert.strictEqual(backlink.hasClass('graph-folder-backlink-node'), true);
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		backlink.dispatch('click', createClickEvent(backlink));
+		assert.deepStrictEqual(focusPoints, [{
+			x: detachedPosition.x + GRAPH_FOLDER_NODE_WIDTH / 2,
+			y: detachedPosition.y + GRAPH_FOLDER_NODE_HEIGHT / 2,
+		}]);
+		graphView.dispose();
+	});
+
+	test('Scope-owned Folder의 grouped File Row body drag는 막고 Detach Handle은 유지한다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:file:///workspace/scope-owned/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-owned-files',
+			name: 'scope-owned-files',
+			status: 'loaded' as const,
+			children: files,
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:scope-owned-file-lock',
+			name: 'workspace',
+			status: 'loaded',
+			children: [parent],
+		};
+		const task = createRenderingTask({ x: 100, y: 520 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const file = files[1];
+
+		assert.ok(work?.kind === 'work' && file);
+		const boundTask: TaskBlueprint = {
+			...task,
+			nodes: task.nodes.map((node) => node.id === work.id
+				? {
+					...node,
+					graphTargets: { reference: [parent.id], work: [] },
+				}
+				: node),
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				openedFolders: {
+					[project.id]: true,
+					[parent.id]: true,
+				},
+			},
+			createSingleRootGraph(project),
+			{},
+			[boundTask],
+		);
+		const referenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			work.id,
+			'reference',
+		);
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const fileGroupId = createFileGroupId(parent.id);
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const row = getDescendantByAttribute(fileGroup, 'data-file-id', file.id);
+
+		setClientBounds(referenceArea, 0, 0, 0, 0);
+		setClientBounds(workArea, 420, 100, 280, 90);
+		row.dispatch('pointerdown', createPointerEvent(row, 10, 10));
+		row.dispatch('pointermove', createPointerEvent(row, 460, 130));
+		row.dispatch('pointerup', createPointerEvent(row, 460, 130));
+
+		assert.strictEqual(workArea.hasClass('is-drag-hover'), false);
+		assert.deepStrictEqual(
+			(graphView.taskState.getTask(task.id)?.nodes.find(
+				(node) => node.id === work.id,
+			) as typeof work | undefined)?.graphTargets,
+			{ reference: [parent.id], work: [] },
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(root, 'data-graph-node-id', file.id),
+			undefined,
+		);
+
+		setClientBounds(workArea, 0, 0, 0, 0);
+		const detachHandle = getDescendantByClass(row, 'graph-detach-handle');
+
+		detachHandle.dispatch(
+			'pointerdown',
+			createPointerEvent(detachHandle, 10, 10),
+		);
+		detachHandle.dispatch(
+			'pointermove',
+			createPointerEvent(detachHandle, 30, 30),
+		);
+		detachHandle.dispatch(
+			'pointerup',
+			createPointerEvent(detachHandle, 900, 700),
+		);
+		const detachedRootId = createDetachedRootId(file.id, 1);
+		const detachedOccurrenceId = createGraphLayoutNodeId(
+			detachedRootId,
+			file.id,
+		);
+
+		assert.ok(getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedOccurrenceId,
+		));
+		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {
+			[detachedRootId]: true,
+		});
 		graphView.dispose();
 	});
 
