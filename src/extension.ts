@@ -313,6 +313,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			vscode.workspace
 				.getConfiguration('crispy')
 				.get<string>(`${providerId}CliPath`);
+		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,
@@ -321,6 +322,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		});
 		terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
+			readWorkspaceTrust: () => vscode.workspace.isTrusted,
+			onWorkspaceTrustRevoked: () => requestWorkspaceTrustRefresh(),
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
 				getCliPath: readProviderCliPath,
 			}),
@@ -372,6 +375,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				panel.webview.postMessage(message)
 			),
 		});
+		requestWorkspaceTrustRefresh = () => {
+			void workspaceRefresh.requestWorkspaceRefresh();
+		};
 		runtime = createCanvasRuntime(
 			panel,
 			terminalHost,

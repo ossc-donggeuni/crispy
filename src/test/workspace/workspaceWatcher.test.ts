@@ -238,6 +238,19 @@ suite('Workspace Watcher', () => {
 		disposable.dispose();
 	});
 
+	test('Workspace Trust grant는 같은 refresh callback으로 전달된다', () => {
+		const fake = createFakeWorkspace([]);
+		let changes = 0;
+		const disposable = watchWorkspaceChanges(() => changes += 1, fake.source);
+
+		fake.fireWorkspaceTrustGrant();
+
+		assert.strictEqual(changes, 1);
+		disposable.dispose();
+		fake.fireWorkspaceTrustGrant();
+		assert.strictEqual(changes, 1);
+	});
+
 	test('Workspace가 없어도 Root 추가를 감지한다', () => {
 		const root = createWorkspaceFolder(
 			'app',
@@ -315,6 +328,7 @@ function createFakeWorkspace(initialFolders: readonly vscode.WorkspaceFolder[]) 
 	const workspaceFoldersEmitter = new vscode.EventEmitter<
 		vscode.WorkspaceFoldersChangeEvent
 	>();
+	const workspaceTrustEmitter = new vscode.EventEmitter<void>();
 	const createWatcherCalls: CreateWatcherCall[] = [];
 	let workspaceFolders = [...initialFolders];
 	const source = {
@@ -338,6 +352,7 @@ function createFakeWorkspace(initialFolders: readonly vscode.WorkspaceFolder[]) 
 				.sort((left, right) => right.uri.path.length - left.uri.path.length)[0];
 		},
 		onDidChangeWorkspaceFolders: workspaceFoldersEmitter.event,
+		onDidGrantWorkspaceTrust: workspaceTrustEmitter.event,
 	};
 
 	return {
@@ -353,6 +368,9 @@ function createFakeWorkspace(initialFolders: readonly vscode.WorkspaceFolder[]) 
 				.filter(({ uri }) => !removedUris.has(uri.toString()))
 				.concat(added);
 			workspaceFoldersEmitter.fire({ added, removed });
+		},
+		fireWorkspaceTrustGrant(): void {
+			workspaceTrustEmitter.fire();
 		},
 	};
 }

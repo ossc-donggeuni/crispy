@@ -105,4 +105,44 @@ suite('Codex config compatibility', () => {
 			controller.calls[0].replace('capture:', 'terminate:'),
 		);
 	});
+
+	test('AbortSignal은 timeout 전에 version process tree를 종료한다', async () => {
+		class RecordingController implements ProcessTreeController {
+			readonly calls: string[] = [];
+
+			async capture(rootPid: number): Promise<ProcessTreeCaptureResult> {
+				this.calls.push(`capture:${rootPid}`);
+				return {
+					status: 'captured',
+					snapshot: { rootPid, descendants: [] },
+				};
+			}
+
+			async terminate(snapshot: ProcessTreeSnapshot): Promise<CleanupResult> {
+				this.calls.push(`terminate:${snapshot.rootPid}`);
+				return { outcome: 'force_terminated' };
+			}
+		}
+		const processController = new RecordingController();
+		const abortController = new AbortController();
+		const probing = probeCodexConfigStyle({
+			executable: { executable: process.execPath, launcherKind: 'direct' },
+			cwd: process.cwd(),
+			platform: process.platform,
+			environment: process.env,
+			processTreeController: processController,
+			versionProbeTimeoutMs: 10_000,
+			signal: abortController.signal,
+		});
+
+		abortController.abort();
+
+		assert.deepStrictEqual(await probing, { ok: false, reason: 'signal' });
+		assert.strictEqual(processController.calls.length, 2);
+		assert.match(processController.calls[0], /^capture:\d+$/u);
+		assert.strictEqual(
+			processController.calls[1],
+			processController.calls[0].replace('capture:', 'terminate:'),
+		);
+	});
 });

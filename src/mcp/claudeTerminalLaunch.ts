@@ -28,6 +28,7 @@ export type PrepareClaudeTerminalLaunch = (
 	tabId: TabId,
 	sessionId: SessionId,
 	workspaceRootId: WorkspaceRootId,
+	signal?: AbortSignal,
 ) => Promise<
 	| { readonly ok: true; readonly preparation: PreparedClaudeTerminalLaunch }
 	| Awaited<ReturnType<PrepareTerminalLaunch>> & { readonly ok: false }
@@ -63,7 +64,10 @@ export function createPrepareClaudeTerminalLaunch(
 	const resolveCompatibility = dependencies.resolveCompatibility
 		?? resolveClaudeMcpCompatibility;
 
-	return async (tabId, sessionId, workspaceRootId) => {
+	return async (tabId, sessionId, workspaceRootId, signal) => {
+		if (signal?.aborted) {
+			return providerStartFailure(tabId, sessionId);
+		}
 		const workspace = dependencies.workspaceResolver(workspaceRootId);
 		if (!workspace.ok) {
 			return {
@@ -119,6 +123,9 @@ export function createPrepareClaudeTerminalLaunch(
 			}
 			return providerStartFailure(tabId, sessionId);
 		}
+		if (signal?.aborted) {
+			return providerStartFailure(tabId, sessionId);
+		}
 
 		let mcpCompatible = false;
 		try {
@@ -127,6 +134,7 @@ export function createPrepareClaudeTerminalLaunch(
 				cwd: workspace.root.fsPath,
 				platform,
 				environment,
+				signal,
 			});
 			mcpCompatible = compatibility?.compatible === true;
 		} catch {

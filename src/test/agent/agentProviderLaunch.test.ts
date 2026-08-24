@@ -228,6 +228,37 @@ suite('Agent provider CLI 자동 탐색', () => {
 		assert.strictEqual(probeCount, 1);
 	});
 
+	test('취소된 Windows 탐색은 현재 probe를 끝내고 다음 후보를 실행하지 않는다', async () => {
+		const probes: string[] = [];
+		const resolver = createAgentAutoRunInputResolver({
+			platform: 'win32',
+			probeWindowsCommand: (command, _policy, signal) => {
+				probes.push(command);
+				return new Promise((resolve) => {
+					if (signal?.aborted) {
+						resolve(false);
+						return;
+					}
+					signal?.addEventListener('abort', () => resolve(false), {
+						once: true,
+					});
+				});
+			},
+		});
+		const controller = new AbortController();
+
+		const resolution = resolver(
+			'antigravity',
+			windowsPolicy,
+			controller.signal,
+		);
+		await Promise.resolve();
+		controller.abort();
+
+		assert.strictEqual(await resolution, undefined);
+		assert.deepStrictEqual(probes, ['agy']);
+	});
+
 	test('Windows launch 환경이나 Antigravity override가 바뀌면 별도로 탐색한다', async () => {
 		let override = 'C:\\Antigravity\\agy.exe';
 		const probes: string[] = [];

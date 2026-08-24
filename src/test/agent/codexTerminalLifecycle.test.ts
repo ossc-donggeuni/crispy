@@ -169,6 +169,15 @@ function createFixture(options: {
 	readonly workspaceResolver?: ConstructorParameters<typeof TerminalHost>[0][
 		'workspaceResolver'
 	];
+	readonly readWorkspaceTrust?: ConstructorParameters<typeof TerminalHost>[0][
+		'readWorkspaceTrust'
+	];
+	readonly onWorkspaceTrustRevoked?: ConstructorParameters<typeof TerminalHost>[0][
+		'onWorkspaceTrustRevoked'
+	];
+	readonly prepareCodexLaunch?: ConstructorParameters<typeof TerminalHost>[0][
+		'prepareCodexLaunch'
+	];
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -183,9 +192,11 @@ function createFixture(options: {
 		prepareLaunch: successfulShellPrepare,
 		workspaceResolver: options.workspaceResolver
 			?? (() => ({ ok: true, root: workspaceRoot })),
+		readWorkspaceTrust: options.readWorkspaceTrust ?? (() => true),
+		onWorkspaceTrustRevoked: options.onWorkspaceTrustRevoked,
 		resolveAgentAutoRunInput: async (providerId) =>
 			providerId === 'claude' ? 'claude\r' : 'agy\r',
-		prepareCodexLaunch: async () => ({
+		prepareCodexLaunch: options.prepareCodexLaunch ?? (async () => ({
 			ok: true,
 			preparation: {
 				executable: {
@@ -206,7 +217,7 @@ function createFixture(options: {
 							options.configStyle ?? 'keyed-filters',
 					}),
 			},
-		}),
+		})),
 		mcpSupervisor: supervisor,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
@@ -228,6 +239,112 @@ async function beginCodex(
 }
 
 suite('Codex direct PTY and MCP transaction', () => {
+	test('Trust revoke는 in-flight provider preparation을 취소하고 cleanup 완료를 기다린다', async () => {
+		let trusted = true;
+		let preparationStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			preparationStarted = resolve;
+		});
+		let preparationAborted = false;
+		const fixture = createFixture({
+			workspaceResolver: () => trusted
+				? { ok: true, root: workspaceRoot }
+				: { ok: false, code: 'workspace_untrusted' },
+			readWorkspaceTrust: () => trusted,
+			prepareCodexLaunch: (_tabId, _sessionId, _workspaceRootId, signal) =>
+				new Promise((resolve) => {
+					preparationStarted();
+					const finish = (): void => {
+						preparationAborted = true;
+						resolve({
+							ok: true,
+							preparation: {
+								executable: {
+									executable: '/resolved/codex',
+									launcherKind: 'direct',
+								},
+								cwd: '/trusted/workspace',
+								environment: { PATH: '/bin' },
+								platform: 'linux',
+								shellEnvironmentPolicyStyle: 'keyed-filters',
+							},
+						});
+					};
+					if (signal?.aborted) {
+						finish();
+						return;
+					}
+					signal?.addEventListener('abort', finish, { once: true });
+				}),
+		});
+		fixture.host.createTab('tab-preparation-trust-revoke');
+		await fixture.host.handleTerminalReady(
+			'tab-preparation-trust-revoke',
+			100,
+			30,
+		);
+		const starting = fixture.host.switchAgent(
+			'tab-preparation-trust-revoke',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		await started;
+		const session = fixture.host.getActiveSession(
+			'tab-preparation-trust-revoke',
+		);
+		assert.ok(session !== undefined);
+
+		trusted = false;
+		await fixture.host.switchAgent(
+			'tab-preparation-trust-revoke',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		await starting;
+
+		assert.strictEqual(preparationAborted, true);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(
+			fixture.host.getActiveSession(session.tabId),
+			session,
+		);
+		assert.deepStrictEqual(fixture.supervisor.prepareCalls, []);
+		assert.deepStrictEqual(fixture.adapter.spawnCalls, []);
+	});
+
+	test('MCP spawn 경계의 Trust revoke는 adapter와 Agent spawn을 모두 차단한다', async () => {
+		let refreshCalls = 0;
+		const fixture = createFixture({
+			readWorkspaceTrust: () => false,
+			onWorkspaceTrustRevoked: () => refreshCalls += 1,
+		});
+
+		await beginCodex(fixture.host, 'tab-mcp-spawn-trust-revoke');
+
+		const session = fixture.host.getActiveSession('tab-mcp-spawn-trust-revoke');
+		assert.ok(session !== undefined);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(refreshCalls, 1);
+		assert.deepStrictEqual(fixture.supervisor.prepareCalls, []);
+		assert.deepStrictEqual(fixture.adapter.spawnCalls, []);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'terminal.error',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: true,
+		});
+	});
+
 	test('final Workspace 실패는 MCP를 정리하고 bare fallback 없이 retry session을 남긴다', async () => {
 		let workspaceCalls = 0;
 		const fixture = createFixture({
@@ -559,6 +676,56 @@ suite('Codex direct PTY and MCP transaction', () => {
 });
 
 suite('Codex stale attempt and cleanup', () => {
+	test('MCP status 경계의 Trust revoke는 Agent와 adapter를 종료하고 retry session을 보존한다', async () => {
+		let trusted = true;
+		let refreshCalls = 0;
+		const controller = new FakeProcessTreeController();
+		const fixture = createFixture({
+			fakePid: 7311,
+			readWorkspaceTrust: () => trusted,
+			onWorkspaceTrustRevoked: () => refreshCalls += 1,
+			processTreeController: controller,
+		});
+		await beginCodex(fixture.host, 'tab-mcp-trust-revoke');
+		const session = fixture.host.getActiveSession('tab-mcp-trust-revoke');
+		const assignment = fixture.host.getTabAssignment('tab-mcp-trust-revoke');
+		assert.ok(session !== undefined);
+		assert.ok(assignment !== undefined);
+		const activity = fixture.supervisor.activity(session.sessionId);
+
+		trusted = false;
+		fixture.host.handleMcpRuntimeEvent(activity);
+		fixture.host.handleMcpRuntimeEvent(activity);
+
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), session);
+		assert.strictEqual(fixture.host.getTabAssignment(session.tabId), assignment);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(refreshCalls, 1);
+		assert.strictEqual(
+			fixture.supervisor.stopCalls.filter(
+				(sessionId) => sessionId === session.sessionId,
+			).length,
+			1,
+		);
+		assert.strictEqual(fixture.adapter.handles[0].dataListenerCount, 0);
+		assert.strictEqual(fixture.adapter.handles[0].exitListenerCount, 0);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.statusChanged',
+		), false);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'terminal.error',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: true,
+		});
+		await waitUntil(() => controller.calls.includes('terminate:7311'));
+	});
+
 	test('두 Codex 탭의 session, token, config와 cleanup을 end-to-end 격리한다', async () => {
 		const fixture = createFixture();
 		await beginCodex(fixture.host, 'tab-isolated-a');

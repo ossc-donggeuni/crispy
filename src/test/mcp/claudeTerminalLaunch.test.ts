@@ -14,6 +14,7 @@ const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
 suite('Claude terminal launch preparation', () => {
 	test('resolved executable 뒤 bounded compatibility 결과를 구조화한다', async () => {
 		let compatibilityCalls = 0;
+		const abortController = new AbortController();
 		const prepare = createPrepareClaudeTerminalLaunch({
 			workspaceResolver: (workspaceRootId) => {
 				assert.strictEqual(workspaceRootId, WORKSPACE_ROOT_ID);
@@ -36,6 +37,7 @@ suite('Claude terminal launch preparation', () => {
 			resolveCompatibility: async (options) => {
 				compatibilityCalls += 1;
 				assert.strictEqual(options.executable.executable, '/opt/custom claude');
+				assert.strictEqual(options.signal, abortController.signal);
 				return {
 					version: { major: 2, minor: 1, patch: 121 },
 					compatible: true,
@@ -47,6 +49,7 @@ suite('Claude terminal launch preparation', () => {
 			'tab-claude',
 			'session-claude',
 			WORKSPACE_ROOT_ID,
+			abortController.signal,
 		);
 
 		assert.strictEqual(result.ok, true);

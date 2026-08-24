@@ -1,4 +1,6 @@
 import * as assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 interface InspectVsixModule {
 	findUnresolvedMcpRuntimeSpecifiers(source: string): readonly string[];
@@ -13,6 +15,31 @@ const {
 ) as InspectVsixModule;
 
 suite('MCP VSIX bundle dependency inspection', () => {
+	test('extension manifest는 limited Workspace capability와 restricted CLI 설정을 선언한다', () => {
+		const manifest = JSON.parse(
+			readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
+		) as {
+			readonly capabilities?: {
+				readonly untrustedWorkspaces?: unknown;
+				readonly virtualWorkspaces?: unknown;
+			};
+		};
+
+		assert.deepStrictEqual(manifest.capabilities, {
+			untrustedWorkspaces: {
+				supported: 'limited',
+				restrictedConfigurations: [
+					'crispy.codexCliPath',
+					'crispy.claudeCliPath',
+					'crispy.antigravityCliPath',
+				],
+			},
+			virtualWorkspaces: {
+				supported: 'limited',
+			},
+		});
+	});
+
 	test('실제 import와 require에서 Node builtin만 허용한다', () => {
 		const source = [
 			'import fs from "node:fs";',

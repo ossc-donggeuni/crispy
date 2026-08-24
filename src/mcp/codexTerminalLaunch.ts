@@ -29,6 +29,7 @@ export type PrepareCodexTerminalLaunch = (
 	tabId: TabId,
 	sessionId: SessionId,
 	workspaceRootId: WorkspaceRootId,
+	signal?: AbortSignal,
 ) => Promise<
 	| { readonly ok: true; readonly preparation: PreparedCodexTerminalLaunch }
 	| Awaited<ReturnType<PrepareTerminalLaunch>> & { readonly ok: false }
@@ -63,7 +64,10 @@ export function createPrepareCodexTerminalLaunch(
 	const resolveConfigStyle = dependencies.resolveConfigStyle
 		?? resolveCodexConfigStyle;
 
-	return async (tabId, sessionId, workspaceRootId) => {
+	return async (tabId, sessionId, workspaceRootId, signal) => {
+		if (signal?.aborted) {
+			return providerStartFailure(tabId, sessionId);
+		}
 		const workspace = dependencies.workspaceResolver(workspaceRootId);
 		if (!workspace.ok) {
 			return {
@@ -119,6 +123,9 @@ export function createPrepareCodexTerminalLaunch(
 			}
 			return providerStartFailure(tabId, sessionId);
 		}
+		if (signal?.aborted) {
+			return providerStartFailure(tabId, sessionId);
+		}
 
 		let shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle | undefined;
 		try {
@@ -127,6 +134,7 @@ export function createPrepareCodexTerminalLaunch(
 				cwd: workspace.root.fsPath,
 				platform,
 				environment,
+				signal,
 			});
 		} catch {
 			/** An unreadable Codex version disables MCP but leaves bare Codex available. */

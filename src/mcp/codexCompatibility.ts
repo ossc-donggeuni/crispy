@@ -26,6 +26,8 @@ export interface ResolveCodexConfigStyleOptions {
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
 	readonly environment: NodeJS.ProcessEnv;
+	/** Session cleanup과 Workspace Trust revoke가 version child tree를 취소하는 신호다. */
+	readonly signal?: AbortSignal;
 	/** Test seam; production creates the same bounded Host controller lazily on failure. */
 	readonly processTreeController?: ProcessTreeController;
 	readonly versionProbeTimeoutMs?: number;
@@ -71,6 +73,9 @@ export const resolveCodexConfigStyle: CodexConfigStyleResolver = async (
 export async function probeCodexConfigStyle(
 	options: ResolveCodexConfigStyleOptions,
 ): Promise<CodexConfigStyleProbeResult> {
+	if (options.signal?.aborted) {
+		return failure('signal');
+	}
 	let request: ReturnType<typeof createAgentProcessSpawnRequest>;
 	try {
 		const plan = buildCodexBareLaunchPlan({
@@ -123,6 +128,9 @@ async function readVersionOutput(
 	| Readonly<{ readonly ok: true; readonly output: string }>
 	| Readonly<{ readonly ok: false; readonly reason: CodexVersionProbeFailureReason }>
 > {
+	if (options.signal?.aborted) {
+		return failure('signal');
+	}
 	let child: ChildProcess;
 	try {
 		child = spawn(
@@ -157,6 +165,7 @@ async function readVersionOutput(
 			if (timer !== undefined) {
 				clearTimeout(timer);
 			}
+			options.signal?.removeEventListener('abort', handleAbort);
 			resolve(value);
 		};
 		const append = (chunk: unknown): void => {
@@ -170,7 +179,7 @@ async function readVersionOutput(
 			}
 		};
 		const terminateAndSettle = async (
-			reason: 'timeout' | 'output_limit',
+			reason: 'timeout' | 'output_limit' | 'signal',
 		): Promise<void> => {
 			if (settled || terminationStarted) {
 				return;
@@ -182,9 +191,16 @@ async function readVersionOutput(
 			await terminateVersionProcessTree(child, options);
 			settle(failure(reason));
 		};
+		const handleAbort = (): void => {
+			void terminateAndSettle('signal');
+		};
 		timer = setTimeout(() => {
 			void terminateAndSettle('timeout');
 		}, options.versionProbeTimeoutMs ?? CODEX_VERSION_PROBE_TIMEOUT_MS);
+		options.signal?.addEventListener('abort', handleAbort, { once: true });
+		if (options.signal?.aborted) {
+			handleAbort();
+		}
 
 		child.stdout?.on('data', append);
 		child.stderr?.on('data', append);

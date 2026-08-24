@@ -16,6 +16,7 @@ suite('Codex terminal launch preparation', () => {
 		let workspaceCalls = 0;
 		let executableCalls = 0;
 		let configStyleCalls = 0;
+		const abortController = new AbortController();
 		const prepare = createPrepareCodexTerminalLaunch({
 			workspaceResolver: (workspaceRootId) => {
 				workspaceCalls += 1;
@@ -40,6 +41,7 @@ suite('Codex terminal launch preparation', () => {
 			resolveConfigStyle: async (options) => {
 				configStyleCalls += 1;
 				assert.strictEqual(options.executable.executable, '/opt/custom codex');
+				assert.strictEqual(options.signal, abortController.signal);
 				return 'keyed-filters';
 			},
 		});
@@ -48,6 +50,7 @@ suite('Codex terminal launch preparation', () => {
 			'tab-codex',
 			'session-codex',
 			WORKSPACE_ROOT_ID,
+			abortController.signal,
 		);
 
 		assert.strictEqual(result.ok, true);

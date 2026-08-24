@@ -116,3 +116,17 @@ export function collectWorkspaceContext(
 export function readVsCodeWorkspaceContext(): WorkspaceContextSnapshot {
 	return collectWorkspaceContext(workspace);
 }
+
+/**
+ * Terminal I/O와 active-session monitor가 현재 Workspace Trust만 fresh하게 읽는다.
+ * Workspace folder 목록이나 URI를 함께 수집하지 않아 root removal과 Trust revoke를
+ * 서로 다른 실행 정책으로 유지한다. VS Code 판독 자체가 실패하면 실행을 계속하지
+ * 않도록 false로 수렴한다.
+ */
+export function readVsCodeWorkspaceTrust(): boolean {
+	try {
+		return workspace.isTrusted;
+	} catch {
+		return false;
+	}
+}

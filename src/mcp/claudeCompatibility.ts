@@ -32,6 +32,8 @@ export interface ResolveClaudeMcpCompatibilityOptions {
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
 	readonly environment: NodeJS.ProcessEnv;
+	/** Session cleanup과 Workspace Trust revoke가 version child tree를 취소하는 신호다. */
+	readonly signal?: AbortSignal;
 	readonly processTreeController?: ProcessTreeController;
 	readonly versionProbeTimeoutMs?: number;
 	readonly versionOutputLimit?: number;
@@ -77,6 +79,9 @@ export const resolveClaudeMcpCompatibility: ClaudeMcpCompatibilityResolver = asy
 export async function probeClaudeMcpCompatibility(
 	options: ResolveClaudeMcpCompatibilityOptions,
 ): Promise<ClaudeMcpCompatibilityProbeResult> {
+	if (options.signal?.aborted) {
+		return failure('signal');
+	}
 	let request: ReturnType<typeof createAgentProcessSpawnRequest>;
 	try {
 		request = createAgentProcessSpawnRequest(buildClaudeBareLaunchPlan({
@@ -148,6 +153,9 @@ async function readVersionOutput(
 	| Readonly<{ readonly ok: true; readonly output: string }>
 	| Readonly<{ readonly ok: false; readonly reason: ClaudeVersionProbeFailureReason }>
 > {
+	if (options.signal?.aborted) {
+		return failure('signal');
+	}
 	let child: ChildProcess;
 	try {
 		child = spawn(request.executable, [...request.args], {
@@ -178,10 +186,11 @@ async function readVersionOutput(
 			if (timer !== undefined) {
 				clearTimeout(timer);
 			}
+			options.signal?.removeEventListener('abort', handleAbort);
 			resolve(value);
 		};
 		const terminateAndSettle = async (
-			reason: 'timeout' | 'output_limit',
+			reason: 'timeout' | 'output_limit' | 'signal',
 		): Promise<void> => {
 			if (settled || terminationStarted) {
 				return;
@@ -192,6 +201,9 @@ async function readVersionOutput(
 			}
 			await terminateVersionProcessTree(child, options);
 			settle(failure(reason));
+		};
+		const handleAbort = (): void => {
+			void terminateAndSettle('signal');
 		};
 		const append = (chunk: unknown): void => {
 			if (settled || terminationStarted) {
@@ -207,6 +219,10 @@ async function readVersionOutput(
 		timer = setTimeout(() => {
 			void terminateAndSettle('timeout');
 		}, options.versionProbeTimeoutMs ?? CLAUDE_VERSION_PROBE_TIMEOUT_MS);
+		options.signal?.addEventListener('abort', handleAbort, { once: true });
+		if (options.signal?.aborted) {
+			handleAbort();
+		}
 		child.stdout?.on('data', append);
 		child.stderr?.on('data', append);
 		child.once('error', () => {

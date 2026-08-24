@@ -53,6 +53,42 @@ suite('Workspace Persistence', () => {
 			assert.deepStrictEqual(fake.getJson(getStateUri(rootUri)), state);
 		});
 
+		test('untrusted Workspace는 `.crispy/state.json` write를 시작하지 않는다', async () => {
+			const rootUri = vscode.Uri.file('/workspace/restricted');
+			const fake = createFakeFileSystem();
+
+			await writeWorkspacePersistentState(
+				rootUri,
+				createState(rootUri, 2),
+				fake.fileSystem,
+				() => false,
+			);
+
+			assert.deepStrictEqual(fake.createDirectoryCalls, []);
+			assert.deepStrictEqual(fake.writeFileCalls, []);
+			assert.strictEqual(fake.getJson(getStateUri(rootUri)), undefined);
+		});
+
+		test('Directory 생성 뒤 Trust가 revoke되면 state.json write를 중단한다', async () => {
+			const rootUri = vscode.Uri.file('/workspace/revoked-before-state-write');
+			const fake = createFakeFileSystem();
+			let trustReads = 0;
+
+			await writeWorkspacePersistentState(
+				rootUri,
+				createState(rootUri, 3),
+				fake.fileSystem,
+				() => {
+					trustReads += 1;
+					return trustReads === 1;
+				},
+			);
+
+			assert.strictEqual(fake.createDirectoryCalls.length, 1);
+			assert.deepStrictEqual(fake.writeFileCalls, []);
+			assert.strictEqual(fake.getJson(getStateUri(rootUri)), undefined);
+		});
+
 		test('잘못된 JSON, schema와 version은 Root 기본 상태로 fallback한다', async () => {
 			const roots = [
 				vscode.Uri.file('/workspace/invalid-json'),

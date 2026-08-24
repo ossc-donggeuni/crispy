@@ -2,7 +2,9 @@ import * as assert from 'assert';
 import type { ShellLaunchPolicy } from '../../agent/host/shell/types';
 import {
 	TerminalHost,
+	WORKSPACE_TRUST_MONITOR_INTERVAL_MS,
 	type TerminalHostOptions,
+	type WorkspaceTrustMonitorScheduler,
 } from '../../agent/host/terminal/terminalHost';
 import {
 	createPrepareTerminalLaunch,
@@ -79,6 +81,39 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 			throw new Error('test condition timed out');
 		}
 		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+}
+
+class FakeWorkspaceTrustMonitorScheduler
+	implements WorkspaceTrustMonitorScheduler {
+	readonly intervals: number[] = [];
+	readonly clearedHandles: number[] = [];
+	private nextHandle = 0;
+	private readonly callbacks = new Map<number, () => void>();
+
+	get activeCount(): number {
+		return this.callbacks.size;
+	}
+
+	setInterval(callback: () => void, intervalMs: number): number {
+		this.nextHandle += 1;
+		this.intervals.push(intervalMs);
+		this.callbacks.set(this.nextHandle, callback);
+		return this.nextHandle;
+	}
+
+	clearInterval(handle: unknown): void {
+		if (typeof handle !== 'number') {
+			return;
+		}
+		this.clearedHandles.push(handle);
+		this.callbacks.delete(handle);
+	}
+
+	fireAll(): void {
+		for (const callback of [...this.callbacks.values()]) {
+			callback();
+		}
 	}
 }
 
@@ -1773,6 +1808,257 @@ suite('TerminalHost restart orchestration', () => {
 		handle.emitData('late output');
 		await Promise.resolve();
 		assert.strictEqual(messages.length, messageCount);
+	});
+});
+
+suite('TerminalHost Workspace Trust revoke', () => {
+	test('input 경계의 revoke는 I/O를 즉시 차단하고 assignment와 retry session을 보존한다', async () => {
+		let trusted = true;
+		let refreshCalls = 0;
+		const scheduler = new FakeWorkspaceTrustMonitorScheduler();
+		const adapter = new FakePtyAdapter(9311);
+		const controller = new FakeProcessTreeController();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			readWorkspaceTrust: () => trusted,
+			workspaceTrustMonitorScheduler: scheduler,
+			onWorkspaceTrustRevoked: () => refreshCalls += 1,
+			processTreeController: controller,
+		});
+
+		host.createTab('tab-trust-input');
+		await host.handleTerminalReady('tab-trust-input', 80, 24);
+		await host.switchAgent(
+			'tab-trust-input',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const assignment = host.getTabAssignment('tab-trust-input');
+		const session = host.getActiveSession('tab-trust-input');
+		assert.ok(assignment !== undefined);
+		assert.ok(session !== undefined);
+		const writesBeforeRevoke = adapter.handles[0].writes.length;
+		const outputCountBeforeRevoke = messages.filter(
+			(message) => message.type === 'terminal.output',
+		).length;
+
+		trusted = false;
+		host.routeInput({
+			type: 'terminal.input',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			data: 'must-not-run',
+		});
+		host.routeResize({
+			type: 'terminal.resize',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			cols: 120,
+			rows: 40,
+		});
+		adapter.handles[0].emitData('must-not-publish');
+
+		assert.strictEqual(adapter.handles[0].writes.length, writesBeforeRevoke);
+		assert.strictEqual(adapter.handles[0].resizes.length, 0);
+		assert.strictEqual(adapter.handles[0].dataListenerCount, 0);
+		assert.strictEqual(adapter.handles[0].exitListenerCount, 0);
+		assert.strictEqual(
+			messages.filter((message) => message.type === 'terminal.output').length,
+			outputCountBeforeRevoke,
+		);
+		assert.strictEqual(host.getTabAssignment(session.tabId), assignment);
+		assert.strictEqual(host.getActiveSession(session.tabId), session);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(refreshCalls, 1);
+		assert.strictEqual(scheduler.activeCount, 0);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: true,
+		});
+
+		await waitUntil(() => controller.calls.includes('terminate:9311'));
+		assert.strictEqual(adapter.handles[0].killCallCount, 0);
+	});
+
+	test('bounded monitor는 출력 없는 CLI revoke를 감지하고 Trust 복구 뒤 같은 assignment를 재시작한다', async () => {
+		let trusted = true;
+		let refreshCalls = 0;
+		const scheduler = new FakeWorkspaceTrustMonitorScheduler();
+		const adapter = new FakePtyAdapter(9312);
+		const controller = new FakeProcessTreeController();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => trusted
+				? { ok: true, root }
+				: { ok: false, code: 'workspace_untrusted' },
+			readWorkspaceTrust: () => trusted,
+			workspaceTrustMonitorScheduler: scheduler,
+			onWorkspaceTrustRevoked: () => refreshCalls += 1,
+			processTreeController: controller,
+		});
+
+		host.createTab('tab-trust-monitor');
+		await host.handleTerminalReady('tab-trust-monitor', 100, 30);
+		await host.switchAgent(
+			'tab-trust-monitor',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const assignment = host.getTabAssignment('tab-trust-monitor');
+		const originalSession = host.getActiveSession('tab-trust-monitor');
+		assert.ok(assignment !== undefined);
+		assert.ok(originalSession !== undefined);
+		assert.strictEqual(scheduler.activeCount, 1);
+		assert.deepStrictEqual(scheduler.intervals, [
+			WORKSPACE_TRUST_MONITOR_INTERVAL_MS,
+		]);
+
+		trusted = false;
+		scheduler.fireAll();
+		scheduler.fireAll();
+
+		assert.deepStrictEqual(originalSession.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(refreshCalls, 1);
+		assert.strictEqual(scheduler.activeCount, 0);
+		await waitUntil(() => controller.calls.includes('terminate:9312'));
+
+		const spawnCountBeforeRejectedRestart = adapter.spawnCalls.length;
+		await host.restartSession(
+			originalSession.tabId,
+			originalSession.sessionId,
+		);
+		assert.strictEqual(
+			host.getActiveSession('tab-trust-monitor'),
+			originalSession,
+		);
+		assert.strictEqual(host.getTabAssignment('tab-trust-monitor'), assignment);
+		assert.deepStrictEqual(originalSession.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
+		assert.strictEqual(
+			adapter.spawnCalls.length,
+			spawnCountBeforeRejectedRestart,
+		);
+
+		trusted = true;
+		await host.restartSession(
+			originalSession.tabId,
+			originalSession.sessionId,
+		);
+		const restartedSession = host.getActiveSession('tab-trust-monitor');
+		assert.ok(restartedSession !== undefined);
+		assert.notStrictEqual(restartedSession, originalSession);
+		assert.strictEqual(host.getTabAssignment('tab-trust-monitor'), assignment);
+		assert.strictEqual(restartedSession.state.kind, 'running');
+		assert.strictEqual(scheduler.activeCount, 1);
+		assert.deepStrictEqual(scheduler.intervals, [
+			WORKSPACE_TRUST_MONITOR_INTERVAL_MS,
+			WORKSPACE_TRUST_MONITOR_INTERVAL_MS,
+		]);
+	});
+
+	test('root removal은 Trust gate를 닫지 않아 running CLI와 I/O를 유지한다', async () => {
+		let rootAvailable = true;
+		const scheduler = new FakeWorkspaceTrustMonitorScheduler();
+		const adapter = new FakePtyAdapter(9313);
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => rootAvailable
+				? { ok: true, root }
+				: { ok: false, code: 'workspace_root_unavailable' },
+			readWorkspaceTrust: () => true,
+			workspaceTrustMonitorScheduler: scheduler,
+		});
+
+		host.createTab('tab-root-removal-running');
+		await host.handleTerminalReady('tab-root-removal-running', 80, 24);
+		await host.switchAgent(
+			'tab-root-removal-running',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const session = host.getActiveSession('tab-root-removal-running');
+		assert.ok(session !== undefined);
+		const writesBefore = adapter.handles[0].writes.length;
+
+		rootAvailable = false;
+		scheduler.fireAll();
+		host.routeInput({
+			type: 'terminal.input',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			data: 'still-running',
+		});
+		adapter.handles[0].emitData('still-visible');
+		await Promise.resolve();
+
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(adapter.handles[0].writes.length, writesBefore + 1);
+		assert.strictEqual(adapter.handles[0].writes.at(-1), 'still-running');
+		assert.strictEqual(adapter.handles[0].killCallCount, 0);
+		assert.strictEqual(messages.some((message) => (
+			message.type === 'terminal.output'
+			&& message.data === 'still-visible'
+		)), true);
+	});
+
+	test('detach와 dispose는 active Trust monitor interval을 정확히 한 번 해제한다', async () => {
+		for (const lifecycle of ['detach', 'dispose'] as const) {
+			let trusted = true;
+			let refreshCalls = 0;
+			const scheduler = new FakeWorkspaceTrustMonitorScheduler();
+			const { host } = createHost({
+				ptyAdapter: new FakePtyAdapter(),
+				prepareLaunch: successfulPrepare,
+				readWorkspaceTrust: () => trusted,
+				workspaceTrustMonitorScheduler: scheduler,
+				onWorkspaceTrustRevoked: () => refreshCalls += 1,
+			});
+			const tabId = `tab-trust-monitor-${lifecycle}`;
+			host.createTab(tabId);
+			await host.handleTerminalReady(tabId, 80, 24);
+			await host.switchAgent(
+				tabId,
+				'antigravity',
+				WORKSPACE_ROOT_ID,
+				1,
+			);
+			assert.strictEqual(scheduler.activeCount, 1);
+
+			if (lifecycle === 'detach') {
+				host.detach();
+				host.detach();
+			} else {
+				host.dispose();
+				host.dispose();
+			}
+
+			assert.strictEqual(scheduler.activeCount, 0);
+			assert.deepStrictEqual(scheduler.clearedHandles, [1]);
+			trusted = false;
+			scheduler.fireAll();
+			assert.strictEqual(refreshCalls, 0);
+			if (lifecycle === 'detach') {
+				await host.terminate();
+			}
+		}
 	});
 });
 
