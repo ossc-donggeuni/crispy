@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { createAgentTabModel } from '../agent/UI/agentTabModel';
+import type { AgentPanelUiCallbacks } from '../agent/UI/agentPanelUi';
 import type {
 	AgentActivityKind,
 	GraphNodeEffect,
@@ -13,7 +14,7 @@ import {
 	type GraphStateSnapshot,
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
-import { serializeGraphForWebview } from '../webview/graph/graphTransport';
+import { serializeWorkspacePresentationForWebview } from '../workspace/workspacePresentation';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
@@ -521,6 +522,9 @@ suite('Webview State Wiring', () => {
 		let resizeRefresh: (() => void) | undefined;
 		let resizeFit: (() => void) | undefined;
 		let agentUiLayoutChange: (() => void) | undefined;
+		let agentProviderSelect: AgentPanelUiCallbacks['onProviderSelected'];
+		const agentWorkspaceCatalogUpdates: unknown[] = [];
+		let initialAgentWorkspaceCatalog: unknown;
 		let unloadHandler: (() => void) | undefined;
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
 		let graphInitializeCount = 0;
@@ -788,9 +792,11 @@ suite('Webview State Wiring', () => {
 		 * 실제 Agent DOM 대신 초기화 여부와 Webview로 전달되는 콜백만 노출한다.
 		 * 실제 구현과 같이 초기 탭을 만들고 `onTabCreated`를 호출해 wiring을 재현한다.
 		 */
-		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks) => {
+		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks, _deps, options) => {
 			agentPanelUiInitialized = true;
 			agentUiLayoutChange = callbacks?.onLayoutChange;
+			agentProviderSelect = callbacks?.onProviderSelected;
+			initialAgentWorkspaceCatalog = options?.initialWorkspaceRootCatalog;
 
 			const model = createAgentTabModel(() => agentTabId);
 			callbacks?.onTabCreated?.(model.createTab());
@@ -798,7 +804,14 @@ suite('Webview State Wiring', () => {
 			return {
 				model,
 				getSnapshot: () => model.getSnapshot(),
-				handleHostMessage: () => undefined,
+				getAssignmentState: () => undefined,
+				updateWorkspaceRootCatalog: (catalog) => {
+					agentWorkspaceCatalogUpdates.push(catalog);
+				},
+				handleHostMessage: (message) => (
+					message.type !== 'agent.switchAccepted'
+					|| message.switchAttemptId > 1
+				),
 				dispose(): void {
 					agentPanelUiDisposed = true;
 				},
@@ -822,9 +835,18 @@ suite('Webview State Wiring', () => {
 			style: { setProperty: () => undefined },
 			clientWidth: 1000,
 			clientHeight: 800,
+			getAttribute: (attribute: string) => (
+				attribute === 'data-workspace-presentation'
+					? serializeWorkspacePresentationForWebview({
+						graph: initialWorkspaceGraph,
+						rootCatalog: [],
+					})
+					: null
+			),
 		} as unknown as HTMLElement;
 		const elements = new Map<string, HTMLElement>([
 			['.crispy-layout', layoutElement],
+			['#app', layoutElement],
 			['#graph-area', {} as HTMLElement],
 			['#agent-chat-area', {} as HTMLElement],
 			['#chat-drag-handle', {} as HTMLElement],
@@ -837,16 +859,13 @@ suite('Webview State Wiring', () => {
 			['#agent-tab-strip', {} as HTMLElement],
 			['#agent-tab-menu-host', {} as HTMLElement],
 			['#agent-provider-picker-host', {} as HTMLElement],
+			['#agent-workspace-status-bar', {} as HTMLElement],
 			['#agent-dialog-host', {} as HTMLElement],
 			['#agent-rename-dialog-host', {} as HTMLElement],
 		]);
 		const documentMock = {
 			currentScript: {
-				getAttribute: (attribute: string) => (
-					attribute === 'data-workspace-graph'
-						? serializeGraphForWebview(initialWorkspaceGraph)
-						: null
-				),
+				getAttribute: () => null,
 			},
 			querySelector: (selector: string) => elements.get(selector) ?? null,
 		};
@@ -894,18 +913,107 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(graphAgentActivityStore, createdAgentActivityStore);
 			assert.strictEqual(graphVisibleRefreshCount, 1);
 			assert.ok(hostMessageHandler);
+			assert.ok(agentProviderSelect);
+
+			/** 초기 atomic Presentation의 Catalog를 Agent UI에도 같은 값으로 전달한다. */
+			assert.deepStrictEqual(initialAgentWorkspaceCatalog, []);
 
 			hostMessageHandler({
 				data: {
-					type: 'workspace.graphUpdated',
-					graph: refreshedWorkspaceGraph,
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: refreshedWorkspaceGraph,
+						rootCatalog: [{
+							id: 'workspace-root:file:///workspace/refreshed',
+							name: 'refreshed',
+							description: 'file:///workspace/refreshed',
+							selectable: true,
+						}],
+					},
 				},
 			} as MessageEvent);
 
 			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
+			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [[{
+				id: 'workspace-root:file:///workspace/refreshed',
+				name: 'refreshed',
+				description: 'file:///workspace/refreshed',
+				selectable: true,
+			}]]);
+			assert.strictEqual(agentProviderSelect(
+				agentTabId,
+				'claude',
+				'workspace-root:file:///workspace/refreshed',
+			), 1);
+			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages), [{
+				type: 'agent.switch',
+				tabId: agentTabId,
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///workspace/refreshed',
+				switchAttemptId: 1,
+			}]);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: refreshedWorkspaceGraph,
+						rootCatalog: [
+							{
+								id: 'workspace-root:file:///workspace/refreshed',
+								name: 'refreshed',
+								description: 'file:///workspace/refreshed',
+								selectable: true,
+							},
+							{
+								id: 'workspace-root:file:///workspace/sibling',
+								name: 'sibling',
+								description: 'file:///workspace/sibling',
+								selectable: true,
+							},
+						],
+					},
+				},
+			} as MessageEvent);
+
+			/** 여러 root에서는 UI가 명시적으로 고른 ID를 callback이 그대로 보낸다. */
+			assert.strictEqual(agentProviderSelect(
+				agentTabId,
+				'codex',
+				'workspace-root:file:///workspace/sibling',
+			), 2);
+			assert.strictEqual(getAgentSwitchMessages(postedMessages).length, 2);
+			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages)[1], {
+				type: 'agent.switch',
+				tabId: agentTabId,
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///workspace/sibling',
+				switchAttemptId: 2,
+			});
 			assert.deepStrictEqual(terminalHostMessages, []);
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphDisposed, false);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: initialWorkspaceGraph,
+						rootCatalog: [{
+							id: 'workspace-root:',
+							name: 'invalid',
+							description: 'invalid',
+							selectable: true,
+						}],
+					},
+				},
+			} as MessageEvent);
+
+			/** Catalog가 잘못되면 유효한 Graph도 부분 적용하지 않는다. */
+			assert.deepStrictEqual(graphUpdates, [
+				refreshedWorkspaceGraph,
+				refreshedWorkspaceGraph,
+			]);
 
 			hostMessageHandler({
 				data: {
@@ -990,11 +1098,37 @@ suite('Webview State Wiring', () => {
 			const terminalStartingMessage = {
 				type: 'terminal.starting',
 				tabId: agentTabId,
+				sessionId: 'session-starting',
 			} as const;
 
 			hostMessageHandler({ data: terminalStartingMessage } as MessageEvent);
 			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
-			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
+
+			const rejectedSwitchAccepted = {
+				type: 'agent.switchAccepted',
+				tabId: agentTabId,
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///workspace/refreshed',
+				switchAttemptId: 1,
+				assignmentRevision: 1,
+			} as const;
+			hostMessageHandler({ data: rejectedSwitchAccepted } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
+
+			const acceptedSwitchAccepted = {
+				...rejectedSwitchAccepted,
+				switchAttemptId: 2,
+				assignmentRevision: 3,
+			} as const;
+			hostMessageHandler({ data: acceptedSwitchAccepted } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [
+				terminalStartingMessage,
+				acceptedSwitchAccepted,
+			]);
+			assert.deepStrictEqual(graphUpdates, [
+				refreshedWorkspaceGraph,
+				refreshedWorkspaceGraph,
+			]);
 
 			const fitCountBeforeLayoutChange = terminalFitCount;
 			agentUiLayoutChange();
@@ -1358,6 +1492,17 @@ function getTabCreateMessages(
 			WebviewToExtensionMessage,
 			{ type: 'tab.create' }
 		> => message.type === 'tab.create',
+	);
+}
+
+function getAgentSwitchMessages(
+	messages: WebviewToExtensionMessage[],
+): Array<Extract<WebviewToExtensionMessage, { type: 'agent.switch' }>> {
+	return messages.filter(
+		(message): message is Extract<
+			WebviewToExtensionMessage,
+			{ type: 'agent.switch' }
+		> => message.type === 'agent.switch',
 	);
 }
 

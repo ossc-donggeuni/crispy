@@ -10,7 +10,8 @@ claude --version
 ```
 
 실기 smoke를 실행할 Codex와 Claude CLI는 미리 로그인되어 있어야 한다. Crispy Terminal은 신뢰된
-로컬 단일-root workspace에서만 실행된다. Claude MCP 자동 연결의 기술적 최소 기능 호환 버전은
+로컬 `file:` root에서 실행되며, multi-root Workspace에서는 탭별로 선택한 root 하나를 사용한다.
+Claude MCP 자동 연결의 기술적 최소 기능 호환 버전은
 `2.1.121`이며, 현재 설치 버전은 검증 환경일 뿐 runtime minimum으로 고정하지 않는다.
 실행 시 `codex --version`을 확인해 `0.149.0` 미만에는
 `shell_environment_policy.exclude=["CRISPY_MCP_TOKEN"]`을, `0.149.0` 이상에는
@@ -21,9 +22,9 @@ claude --version
 
 1. VS Code에서 `/Users/idonghyeon/crispy`를 연다.
 2. `F5`를 누르고 `Run Extension`을 실행한다.
-3. 새 Extension Development Host 창에서 테스트할 로컬 단일 폴더를 열고 Workspace Trust를 승인한다.
+3. 새 Extension Development Host 창에서 하나 이상의 로컬 폴더를 열고 Workspace Trust를 승인한다.
 4. Command Palette에서 `Crispy: Open Canvas`를 실행한다.
-5. Agent 영역에서 `Codex` 또는 `Claude`를 선택한다.
+5. Agent 영역에서 Workspace root와 `Codex` 또는 `Claude`를 선택한다.
 
 MCP 연결을 확인하려면 열린 provider CLI에 다음 프롬프트를 입력한다.
 
@@ -58,6 +59,14 @@ provider를 한 번 실행하므로 CLI 자체는 계속 사용할 수 있다.
 
 ## 보안 및 지원 경계
 
+- Webview는 MCP/Agent launch에 `cwd`, path 또는 URI를 제공하지 않는다. Host가 탭 assignment의
+  `WorkspaceRootId`를 현재 `workspaceFolders`에서 exact lookup하고, structured Codex/Claude와
+  credential-free bare plan 모두에 그 fresh path를 사용한다.
+- MCP 준비 전, cleanup 전후, fallback 전과 final spawn 직전에 Workspace/Trust를 다시 검증한다.
+  Workspace 오류는 structured launch의 실패로 분류해 bare fallback을 유발하지 않으며, 이미 만든
+  session runtime과 credential은 정리한다.
+- root removal은 실행 중 provider를 자동 종료하지 않지만 다음 MCP restart를 거부한다. Trust revoke는
+  Agent와 MCP runtime을 모두 종료하고 assignment와 retry 가능한 error session을 보존한다.
 - session마다 최소 256-bit CSPRNG bearer token, opaque route, random loopback port와 generation을
   따로 만들며 파일, settings, Webview state, argv, log와 telemetry에 영속화하지 않는다.
 - MCP server는 `127.0.0.1`의 exact random route에서만 요청을 받고 `crispy_ping`만 등록한다.
@@ -76,8 +85,8 @@ pnpm run package:vsix -- --target darwin-arm64
 code --install-extension /Users/idonghyeon/crispy/artifacts/vsix/crispy-0.0.1-darwin-arm64.vsix --force
 ```
 
-설치 후 VS Code에서 `Developer: Reload Window`를 실행한 다음, 신뢰된 로컬 단일 폴더에서
-`Crispy: Open Canvas`를 열고 `Codex` 또는 `Claude`를 선택한다.
+설치 후 VS Code에서 `Developer: Reload Window`를 실행한 다음, 신뢰된 로컬 Workspace에서
+`Crispy: Open Canvas`를 열고 root와 `Codex` 또는 `Claude`를 선택한다.
 
 ## 자동 smoke 실행
 

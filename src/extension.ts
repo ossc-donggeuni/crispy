@@ -23,6 +23,7 @@ import {
 	type AgentActivityClearSessionMessage,
 	type AgentActivityKind,
 	type AgentActivitySetMessage,
+	type AgentActivityToWebviewMessage,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffect,
 	type GraphNodeEffectKind,
@@ -42,7 +43,6 @@ import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from './workspace/workspaceMetadata';
-import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
 import {
 	createGraphLayout,
@@ -62,6 +62,8 @@ import {
 } from './webview/graph/graphRootPromotion';
 import {
 	createCurrentWorkspaceGraph,
+	createCurrentWorkspacePresentation,
+	createWorkspaceRootCatalog,
 	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
@@ -69,8 +71,10 @@ import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
+	serializeWorkspacePresentationForWebview,
 	watchWorkspaceChanges,
 	writeWorkspacePersistentState,
+	type WorkspacePresentation,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRootFilter,
 } from './workspace';
@@ -455,6 +459,29 @@ export function createAgentActivityDebugMessages(
 	return messages;
 }
 
+/** Agent Activity Debug 메시지를 실제 Command와 테스트가 공유하는 순서로 전달한다. */
+export async function postAgentActivityDebugMessages(
+	postMessage: (message: AgentActivityToWebviewMessage) => PromiseLike<unknown>,
+	graph: Graph,
+	graphState: AgentActivityDebugGraphState = {},
+): Promise<void> {
+	for (const message of createAgentActivityDebugClearMessages()) {
+		await postMessage(message);
+	}
+	for (const message of createAgentActivityDebugMessages(graph, graphState)) {
+		await postMessage(message);
+	}
+}
+
+/** Agent Activity Debug가 소유한 Session clear를 결정적인 순서로 전달한다. */
+export async function postAgentActivityDebugClearMessages(
+	postMessage: (message: AgentActivityClearSessionMessage) => PromiseLike<unknown>,
+): Promise<void> {
+	for (const message of createAgentActivityDebugClearMessages()) {
+		await postMessage(message);
+	}
+}
+
 function collectEffectKindsByTarget(
 	messages: readonly GraphNodeEffectSetMessage[],
 ): ReadonlyMap<string, ReadonlySet<GraphNodeEffectKind>> {
@@ -487,7 +514,15 @@ export interface TerminalMessageHost {
 	createTab(tabId: string): void;
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
-	switchAgent(tabId: string, providerId: ProviderId): Promise<unknown>;
+	switchAgent(
+		tabId: string,
+		providerId: ProviderId,
+		workspaceRootId: Extract<
+			WebviewToHostMessage,
+			{ type: 'agent.switch' }
+		>['workspaceRootId'],
+		switchAttemptId: number,
+	): Promise<unknown>;
 	resetAgent(tabId: string): void;
 	routeInput(
 		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
@@ -545,6 +580,14 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		),
 		convertWorkspaceSnapshotToGraph,
 	};
+	const workspacePresentationDependencies = {
+		...workspaceGraphDependencies,
+		readWorkspaceTrust: () => vscode.workspace.isTrusted,
+		createWorkspaceRootCatalog: (
+			snapshot: Parameters<typeof createWorkspaceRootCatalog>[0],
+			isTrusted: boolean,
+		) => createWorkspaceRootCatalog(snapshot, isTrusted, process.platform),
+	};
 	let debugEffectMessages: GraphNodeEffectSetMessage[] = [];
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
@@ -571,6 +614,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			vscode.workspace
 				.getConfiguration('crispy')
 				.get<string>(`${providerId}CliPath`);
+		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,
@@ -579,6 +623,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		});
 		terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
+			readWorkspaceTrust: () => vscode.workspace.isTrusted,
+			onWorkspaceTrustRevoked: () => requestWorkspaceTrustRefresh(),
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
 				getCliPath: readProviderCliPath,
 			}),
@@ -623,13 +669,16 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				);
 			},
 		);
-		
+
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({
-			...workspaceGraphDependencies,
+			...workspacePresentationDependencies,
 			postMessage: (message: WorkspaceToWebviewMessage) => (
 				panel.webview.postMessage(message)
 			),
 		});
+		requestWorkspaceTrustRefresh = () => {
+			void workspaceRefresh.requestWorkspaceRefresh();
+		};
 		runtime = createCanvasRuntime(
 			panel,
 			terminalHost,
@@ -649,8 +698,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		});
 
 		const rootUris = getCurrentWorkspaceRootUris();
-		const [graph, workspaceState] = await Promise.all([
-			createCurrentWorkspaceGraph(workspaceGraphDependencies),
+		const [workspacePresentation, workspaceState] = await Promise.all([
+			createCurrentWorkspacePresentation(workspacePresentationDependencies),
 			loadWorkspacePersistentStateForRoots(rootUris),
 		]);
 		if (panelDisposed) {
@@ -667,7 +716,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			stylesUri,
 			scriptUri,
 			initialWebviewState,
-			graph,
+			workspacePresentation,
 		);
 		currentRuntime = runtime;
 
@@ -754,15 +803,11 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			return;
 		}
 
-		for (const message of createAgentActivityDebugClearMessages()) {
-			await postDebugMessage(panel, message);
-		}
-		for (const message of createAgentActivityDebugMessages(
+		await postAgentActivityDebugMessages(
+			(message) => postDebugMessage(panel, message),
 			graph,
 			lastWebviewState?.graph,
-		)) {
-			await postDebugMessage(panel, message);
-		}
+		);
 	};
 	const clearAgentActivities = async (): Promise<void> => {
 		const panel = currentRuntime?.panel;
@@ -771,9 +816,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			return;
 		}
 
-		for (const message of createAgentActivityDebugClearMessages()) {
-			await postDebugMessage(panel, message);
-		}
+		await postAgentActivityDebugClearMessages(
+			(message) => postDebugMessage(panel, message),
+		);
 	};
 	const openCanvasDisposable = vscode.commands.registerCommand(
 		OPEN_CANVAS_COMMAND_ID,
@@ -1165,9 +1210,11 @@ function handleTerminalMessage(
 			break;
 		case 'agent.switch':
 			void terminalHost.switchAgent(
-				message.tabId,
-				message.providerId,
-			).catch(() => undefined);
+					message.tabId,
+					message.providerId,
+					message.workspaceRootId,
+					message.switchAttemptId,
+				).catch(() => undefined);
 			break;
 		case 'agent.reset':
 			terminalHost.resetAgent(message.tabId);
@@ -1240,7 +1287,7 @@ export async function deactivate(): Promise<void> {
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock, Resize 및 Collapse 동작을 실행하는 Webview 스크립트 URI
  * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
- * @param graph 실제 Workspace Snapshot에서 생성한 초기 Graph
+ * @param workspacePresentation 같은 Workspace Snapshot에서 생성한 초기 Graph와 Catalog
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
@@ -1248,10 +1295,11 @@ function getWebviewHtml(
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
 	initialWebviewState: PersistedWebviewState | undefined,
-	graph: Graph,
+	workspacePresentation: WorkspacePresentation,
 ): string {
 	const serializedWebviewState = serializeWebviewState(initialWebviewState);
-	const serializedGraph = serializeGraphForWebview(graph);
+	const serializedWorkspacePresentation =
+		serializeWorkspacePresentationForWebview(workspacePresentation);
 
 	/** xterm DOM renderer가 팔레트용 <style>과 truecolor용 style attribute를 생성한다. */
 	/** 두 style 경계만 inline을 허용하고 script와 외부 stylesheet는 Webview source로 제한한다. */
@@ -1265,7 +1313,7 @@ function getWebviewHtml(
 				<title>Crispy</title>
 			</head>
 			<body>
-				<main class="crispy-layout" data-dock="right">
+				<main id="app" class="crispy-layout" data-dock="right" data-workspace-presentation="${serializedWorkspacePresentation}">
 					<section id="graph-area"></section>
 					<div id="panel-resize-handle"></div>
 					<section id="agent-chat-area">
@@ -1278,6 +1326,7 @@ function getWebviewHtml(
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
+						<div id="agent-workspace-status-bar" hidden></div>
 						<div id="agent-tab-menu-host" hidden></div>
 						<div id="agent-dialog-host" hidden></div>
 						<div id="agent-rename-dialog-host" hidden></div>
@@ -1285,7 +1334,7 @@ function getWebviewHtml(
 					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}"></script>
 			</body>
 			</html>`;
 }

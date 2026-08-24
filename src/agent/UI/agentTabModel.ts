@@ -1,4 +1,8 @@
-import { type ProviderId, type SessionId } from '../protocol';
+import {
+	type ProviderId,
+	type SessionId,
+	type WorkspaceRootId,
+} from '../protocol';
 import type { McpFailureReason } from '../../mcp/failureReason';
 import {
 	UNSELECTED_TAB_LABEL,
@@ -41,6 +45,12 @@ export type RenameAgentTabResult =
 export interface AgentTabSnapshot {
 	readonly id: AgentTabId;
 	readonly providerId?: ProviderId;
+	/** Host가 commit한 Workspace assignment의 root 식별자다. */
+	readonly workspaceRootId?: WorkspaceRootId;
+	/** 탭 title과 접근성 이름에 사용하는 마지막 정상 Catalog metadata다. */
+	readonly workspaceName?: string;
+	readonly workspaceDescription?: string;
+	readonly assignmentRevision?: number;
 	readonly sequence?: number;
 	readonly baseLabel?: string;
 	readonly displayName: string;
@@ -69,7 +79,25 @@ export interface AgentTabModel {
 	subscribe(listener: AgentTabModelListener): () => void;
 	createTab(): AgentTabId;
 	selectTab(tabId: AgentTabId): void;
-	assignProvider(tabId: AgentTabId, providerId: ProviderId): void;
+	assignProvider(
+		tabId: AgentTabId,
+		providerId: ProviderId,
+		workspace?: Readonly<{
+			readonly id: WorkspaceRootId;
+			readonly name: string;
+			readonly description: string;
+			readonly assignmentRevision: number;
+		}>,
+	): void;
+	updateWorkspaceMetadata(
+		tabId: AgentTabId,
+		workspace: Readonly<{
+			readonly id: WorkspaceRootId;
+			readonly name: string;
+			readonly description: string;
+			readonly assignmentRevision: number;
+		}>,
+	): void;
 	clearProvider(tabId: AgentTabId): void;
 	setSession(tabId: AgentTabId, sessionId: SessionId): void;
 	setMcpStatus(
@@ -102,6 +130,10 @@ function createDefaultTabId(): AgentTabId {
 interface MutableAgentTab {
 	readonly id: AgentTabId;
 	providerId?: ProviderId;
+	workspaceRootId?: WorkspaceRootId;
+	workspaceName?: string;
+	workspaceDescription?: string;
+	assignmentRevision?: number;
 	sequence?: number;
 	baseLabel?: string;
 	displayName: string;
@@ -120,6 +152,18 @@ function toTabSnapshot(tab: MutableAgentTab): AgentTabSnapshot {
 	return Object.freeze({
 		id: tab.id,
 		...(tab.providerId === undefined ? {} : { providerId: tab.providerId }),
+		...(tab.workspaceRootId === undefined
+			? {}
+			: { workspaceRootId: tab.workspaceRootId }),
+		...(tab.workspaceName === undefined
+			? {}
+			: { workspaceName: tab.workspaceName }),
+		...(tab.workspaceDescription === undefined
+			? {}
+			: { workspaceDescription: tab.workspaceDescription }),
+		...(tab.assignmentRevision === undefined
+			? {}
+			: { assignmentRevision: tab.assignmentRevision }),
 		...(tab.sequence === undefined ? {} : { sequence: tab.sequence }),
 		...(tab.baseLabel === undefined ? {} : { baseLabel: tab.baseLabel }),
 		displayName: tab.displayName,
@@ -251,9 +295,28 @@ export function createAgentTabModel(
 			notify();
 		},
 
-		assignProvider(tabId, providerId): void {
+		assignProvider(tabId, providerId, workspace): void {
 			const tab = findTab(tabId);
-			if (tab === undefined || tab.providerId === providerId) {
+			if (tab === undefined) {
+				return;
+			}
+			if (tab.providerId === providerId) {
+				if (workspace !== undefined) {
+					tab.workspaceRootId = workspace.id;
+					tab.workspaceName = workspace.name;
+					tab.workspaceDescription = workspace.description;
+					tab.assignmentRevision = workspace.assignmentRevision;
+					delete tab.sessionId;
+					tab.hasStartedSession = false;
+					tab.autoTitleAttempted = false;
+					if (tab.titleSource !== 'manual') {
+						tab.displayName = tab.baseLabel ?? UNSELECTED_TAB_LABEL;
+						tab.titleSource = 'default';
+					}
+					tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+					tab.mcpRestartPending = false;
+					notify();
+				}
 				return;
 			}
 
@@ -266,6 +329,12 @@ export function createAgentTabModel(
 			sequenceCounters.set(providerId, nextSequence);
 
 			tab.providerId = providerId;
+			if (workspace !== undefined) {
+				tab.workspaceRootId = workspace.id;
+				tab.workspaceName = workspace.name;
+				tab.workspaceDescription = workspace.description;
+				tab.assignmentRevision = workspace.assignmentRevision;
+			}
 			tab.sequence = nextSequence;
 			tab.baseLabel = baseLabel;
 			if (tab.titleSource !== 'manual') {
@@ -281,6 +350,21 @@ export function createAgentTabModel(
 			notify();
 		},
 
+		updateWorkspaceMetadata(tabId, workspace): void {
+			const tab = findTab(tabId);
+			if (
+				tab === undefined
+				|| tab.providerId === undefined
+				|| tab.workspaceRootId !== workspace.id
+			) {
+				return;
+			}
+			tab.workspaceName = workspace.name;
+			tab.workspaceDescription = workspace.description;
+			tab.assignmentRevision = workspace.assignmentRevision;
+			notify();
+		},
+
 		clearProvider(tabId): void {
 			const tab = findTab(tabId);
 			if (tab === undefined || tab.providerId === undefined) {
@@ -288,6 +372,10 @@ export function createAgentTabModel(
 			}
 
 			delete tab.providerId;
+			delete tab.workspaceRootId;
+			delete tab.workspaceName;
+			delete tab.workspaceDescription;
+			delete tab.assignmentRevision;
 			delete tab.sequence;
 			delete tab.baseLabel;
 			delete tab.sessionId;

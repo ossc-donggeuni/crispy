@@ -15,9 +15,9 @@ import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
-import { initializeGraphView } from './graph/graphView';
+import { deserializeWorkspacePresentationFromWebview } from '../workspace/workspacePresentation';
 import { createAgentActivityEffectReconciler } from './graph/agentActivityEffects';
-import { deserializeGraphFromWebview } from './graph/graphTransport';
+import { initializeGraphView } from './graph/graphView';
 import type { GraphStateSnapshot } from './graph/graphState';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
 import { initializePanelCollapse } from './panel/panelCollapse';
@@ -56,10 +56,15 @@ const vscodeApi = acquireVsCodeApi();
 const currentScript = document.currentScript;
 const serializedInitialState = currentScript?.getAttribute('data-webview-state')
 	?? undefined;
-const serializedWorkspaceGraph = currentScript?.getAttribute('data-workspace-graph')
-	?? undefined;
+const app = getRequiredElement<HTMLElement>('#app');
+const serializedWorkspacePresentation = app.getAttribute(
+	'data-workspace-presentation',
+) ?? undefined;
 const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
-const workspaceGraph = deserializeGraphFromWebview(serializedWorkspaceGraph);
+let workspacePresentation = deserializeWorkspacePresentationFromWebview(
+	serializedWorkspacePresentation,
+);
+let lastIssuedSwitchAttemptId = 0;
 const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
@@ -77,7 +82,7 @@ const agentActivityStore = createAgentActivityStore();
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
-	workspaceGraph,
+	workspacePresentation.graph,
 	{
 		onFileOpenRequest: (fileId) => {
 			vscodeApi.postMessage({
@@ -191,6 +196,9 @@ try {
 			providerPicker: getRequiredElement<HTMLElement>(
 				'#agent-provider-picker-host',
 			),
+			workspaceStatusBar: getRequiredElement<HTMLElement>(
+				'#agent-workspace-status-bar',
+			),
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
 			renameDialogHost: getRequiredElement<HTMLElement>(
 				'#agent-rename-dialog-host',
@@ -208,14 +216,25 @@ try {
 				activateTab(tabId);
 			},
 
-			onProviderSelected(tabId, providerId): void {
-				postAgentMessage({ type: 'agent.switch', tabId, providerId });
+			onProviderSelected(tabId, providerId, workspaceRootId) {
+				lastIssuedSwitchAttemptId += 1;
+				const posted = postAgentMessage({
+					type: 'agent.switch',
+					tabId,
+					providerId,
+					workspaceRootId,
+					switchAttemptId: lastIssuedSwitchAttemptId,
+				});
+				return posted ? lastIssuedSwitchAttemptId : false;
 			},
 
-			onAgentReselectionRequested(tabId): void {
-				/** Host PTY와 기존 xterm을 정리한 뒤 같은 탭에 빈 표면을 다시 만든다. */
-				postAgentMessage({ type: 'agent.reset', tabId });
+			onAgentReselectionRequested(tabId): boolean {
+				if (!postAgentMessage({ type: 'agent.reset', tabId })) {
+					return false;
+				}
+				/** Reset 요청과 동시에 이전 xterm input을 끊고 logical commit을 기다린다. */
 				terminalPool.resetTab(tabId);
+				return true;
 			},
 
 			onMcpRestartRequested(tabId, sessionId): boolean {
@@ -236,6 +255,8 @@ try {
 			/** 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
 			onLayoutChange: () => terminalPool.scheduleActiveTerminalFit(),
 		},
+		undefined,
+		{ initialWorkspaceRootCatalog: workspacePresentation.rootCatalog },
 	);
 } catch {
 	agentPanelUi = undefined;
@@ -372,7 +393,11 @@ function handleHostMessage(message: unknown): void {
 	const workspaceMessage = parseWorkspaceToWebviewMessage(message);
 
 	if (workspaceMessage) {
-		graphView.updateGraph(workspaceMessage.graph);
+		graphView.updateGraph(workspaceMessage.presentation.graph);
+		workspacePresentation = workspaceMessage.presentation;
+		agentPanelUi?.updateWorkspaceRootCatalog(
+			workspaceMessage.presentation.rootCatalog,
+		);
 		return;
 	}
 
@@ -385,9 +410,14 @@ function handleHostMessage(message: unknown): void {
 		case 'extension.ready':
 			console.log('[Crispy] Extension ready');
 			break;
-		default:
-			agentPanelUi?.handleHostMessage(parseResult.value);
-			terminalPool.handleHostMessage(parseResult.value);
+		default: {
+			const shouldForwardToTerminal =
+				agentPanelUi?.handleHostMessage(parseResult.value) ?? true;
+			if (shouldForwardToTerminal) {
+				terminalPool.handleHostMessage(parseResult.value);
+			}
+			break;
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 import type {
 	SessionId,
 	TabId,
+	WorkspaceRootId,
 } from '../agent/protocol/messages';
 import { buildShellEnv } from '../agent/host/shell/shellResolver';
 import type { PrepareTerminalLaunch } from '../agent/host/terminal/prepareTerminalLaunch';
@@ -10,6 +11,7 @@ import type {
 	AgentExecutableResolver,
 	ResolvedAgentExecutable,
 } from './agentExecutableResolver';
+import type { WorkspaceValidationFailure } from '../agent/host/workspace/types';
 import {
 	resolveClaudeMcpCompatibility,
 	type ClaudeMcpCompatibilityResolver,
@@ -26,6 +28,8 @@ export interface PreparedClaudeTerminalLaunch {
 export type PrepareClaudeTerminalLaunch = (
 	tabId: TabId,
 	sessionId: SessionId,
+	workspaceRootId: WorkspaceRootId,
+	signal?: AbortSignal,
 ) => Promise<
 	| { readonly ok: true; readonly preparation: PreparedClaudeTerminalLaunch }
 	| Awaited<ReturnType<PrepareTerminalLaunch>> & { readonly ok: false }
@@ -61,8 +65,11 @@ export function createPrepareClaudeTerminalLaunch(
 	const resolveCompatibility = dependencies.resolveCompatibility
 		?? resolveClaudeMcpCompatibility;
 
-	return async (tabId, sessionId) => {
-		const workspace = dependencies.workspaceResolver();
+	return async (tabId, sessionId, workspaceRootId, signal) => {
+		if (signal?.aborted) {
+			return providerStartFailure(tabId, sessionId);
+		}
+		const workspace = dependencies.workspaceResolver(workspaceRootId);
 		if (!workspace.ok) {
 			return {
 				ok: false,
@@ -117,25 +124,62 @@ export function createPrepareClaudeTerminalLaunch(
 			}
 			return providerStartFailure(tabId, sessionId);
 		}
+		if (signal?.aborted) {
+			return providerStartFailure(tabId, sessionId);
+		}
 
 		let mcpCompatible = false;
+		let probeWorkspaceFailure: WorkspaceValidationFailure | undefined;
+		let probeWorkspaceReadFailed = false;
+		let probeWorkspaceCwd = workspace.root.fsPath;
 		try {
 			const compatibility = await resolveCompatibility({
 				executable: resolution.executable,
 				cwd: workspace.root.fsPath,
 				platform,
 				environment,
+				signal,
+				resolveWorkspaceCwdBeforeSpawn: () => {
+					if (signal?.aborted) {
+						return undefined;
+					}
+					try {
+						const freshWorkspace = dependencies.workspaceResolver(workspaceRootId);
+						if (!freshWorkspace.ok) {
+							probeWorkspaceFailure = freshWorkspace;
+							return undefined;
+						}
+						probeWorkspaceCwd = freshWorkspace.root.fsPath;
+						return probeWorkspaceCwd;
+					} catch {
+						probeWorkspaceReadFailed = true;
+						return undefined;
+					}
+				},
 			});
 			mcpCompatible = compatibility?.compatible === true;
 		} catch {
 			/** A failed or unreadable probe deliberately falls through to bare Claude. */
+		}
+		if (signal?.aborted || probeWorkspaceReadFailed) {
+			return providerStartFailure(tabId, sessionId);
+		}
+		if (probeWorkspaceFailure !== undefined) {
+			return {
+				ok: false,
+				error: mapWorkspaceFailureToTerminalError(
+					probeWorkspaceFailure,
+					tabId,
+					sessionId,
+				),
+			};
 		}
 
 		return {
 			ok: true,
 			preparation: Object.freeze({
 				executable: resolution.executable,
-				cwd: workspace.root.fsPath,
+				cwd: probeWorkspaceCwd,
 				environment: Object.freeze({ ...environment }),
 				platform,
 				mcpCompatible,

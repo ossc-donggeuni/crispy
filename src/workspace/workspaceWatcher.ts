@@ -19,6 +19,7 @@ interface WorkspaceWatchSource {
 	readonly onDidChangeWorkspaceFolders: vscode.Event<
 		vscode.WorkspaceFoldersChangeEvent
 	>;
+	readonly onDidGrantWorkspaceTrust?: vscode.Event<void>;
 }
 
 const CRISPY_DIRECTORY_NAME = '.crispy';
@@ -58,6 +59,13 @@ export function watchWorkspaceChanges(
 			}
 		}),
 	];
+	if (workspaceSource.onDidGrantWorkspaceTrust !== undefined) {
+		subscriptions.push(workspaceSource.onDidGrantWorkspaceTrust(() => {
+			if (!disposed) {
+				onChange();
+			}
+		}));
+	}
 
 	return {
 		dispose(): void {

@@ -1,7 +1,9 @@
 import * as assert from 'assert';
 import { parseHostToWebviewMessage } from '../../agent/protocol/validator';
 import {
+	mapWorkspaceFailureToMcpRestartRejected,
 	mapWorkspaceFailureToTerminalError,
+	type WorkspaceMcpRestartRejectedMessage,
 	type WorkspaceTerminalErrorMessage,
 } from '../../agent/host/workspace/workspaceErrorMessage';
 import type {
@@ -45,18 +47,13 @@ const expectedFields = [
 
 const expectedMessages = [
 	{
-		code: 'workspace_not_found',
-		message: '작업공간 폴더를 연 후 다시 시도하세요.',
-		canRestart: true,
-	},
-	{
 		code: 'workspace_untrusted',
 		message: '작업공간을 신뢰한 후 다시 시도하세요.',
 		canRestart: true,
 	},
 	{
-		code: 'workspace_multi_root_unsupported',
-		message: '하나의 작업공간 폴더만 연 후 다시 시도하세요.',
+		code: 'workspace_root_unavailable',
+		message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
 		canRestart: true,
 	},
 	{
@@ -119,6 +116,26 @@ suite('Workspace terminal.error mapper', () => {
 		}
 	});
 
+	test('같은 고정 정책으로 mcp.restartRejected를 만들고 protocol parser를 통과한다', () => {
+		for (const expected of expectedMessages) {
+			const message: WorkspaceMcpRestartRejectedMessage =
+				mapWorkspaceFailureToMcpRestartRejected(
+					{ ok: false, code: expected.code },
+					tabId,
+					'session-existing',
+				);
+
+			assert.deepStrictEqual(message, {
+				type: 'mcp.restartRejected',
+				tabId,
+				sessionId: 'session-existing',
+				code: expected.code,
+				message: expected.message,
+			});
+			assert.strictEqual(parseHostToWebviewMessage(message).ok, true);
+		}
+	});
+
 	test('시작 전 sessionId null과 기존 sessionId를 모두 지원한다', () => {
 		const failure = {
 			ok: false,
@@ -175,7 +192,7 @@ suite('Workspace terminal.error mapper', () => {
 		const exceptionMessage = 'authentication code and token should not leak';
 		const failureWithExceptions = {
 			ok: false,
-			code: 'workspace_not_found',
+			code: 'workspace_root_unavailable',
 			message: externalMessage,
 			error: new Error(exceptionMessage),
 		} satisfies WorkspaceValidationFailure & Record<string, unknown>;
@@ -192,7 +209,7 @@ suite('Workspace terminal.error mapper', () => {
 		assert.strictEqual(serialized.includes(exceptionMessage), false);
 		assert.strictEqual(
 			result.message,
-			'작업공간 폴더를 연 후 다시 시도하세요.',
+			'선택한 작업공간 폴더를 다시 연 후 시도하세요.',
 		);
 	});
 });

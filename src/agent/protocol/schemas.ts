@@ -1,4 +1,7 @@
-import { TERMINAL_ERROR_CODES } from './errors';
+import {
+	MCP_RESTART_REJECTION_CODES,
+	TERMINAL_ERROR_CODES,
+} from './errors';
 import { PROVIDER_IDS } from './providers';
 import { MCP_FAILURE_REASONS } from '../../mcp/failureReason';
 import {
@@ -16,6 +19,10 @@ import {
 	type MessageParseResult,
 	type MessageValidationErrorCode,
 } from './validation';
+import {
+	validateWorkspaceRootId,
+	type WorkspaceRootId,
+} from '../../workspace/workspaceRootId';
 
 /**
  * unknown 필드 값을 특정 protocol 값으로 변환하는 runtime schema다.
@@ -91,6 +98,30 @@ const terminalErrorCodeSchema = stringAllowlistSchema(
 const providerIdSchema = stringAllowlistSchema(
 	PROVIDER_IDS,
 	'provider_not_allowed',
+);
+/** Workspace ID는 URI payload 길이를 제한하지 않고 공용 leaf validator를 사용한다. */
+const workspaceRootIdSchema = defineFieldSchema<WorkspaceRootId>((value, field) => {
+	const result = validateWorkspaceRootId(value);
+
+	return result.ok
+		? validationSuccess(result.value)
+		: validationFailure('invalid_field', field);
+});
+/** switch attempt와 assignment revision은 ordering 가능한 양의 safe integer다. */
+const orderingRevisionSchema = defineFieldSchema<number>((value, field) => {
+	if (
+		typeof value !== 'number'
+		|| !Number.isSafeInteger(value)
+		|| value < 1
+	) {
+		return validationFailure('invalid_field', field);
+	}
+
+	return validationSuccess(value);
+});
+const mcpRestartRejectionCodeSchema = stringAllowlistSchema(
+	MCP_RESTART_REJECTION_CODES,
+	'invalid_field',
 );
 /** MCP 실패 reason은 공유 domain allowlist에서만 가져온다. */
 const mcpFailureReasonSchema = stringAllowlistSchema(
@@ -194,6 +225,8 @@ export const WEBVIEW_TO_HOST_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'agent.switch': {
 		tabId: idSchema,
 		providerId: providerIdSchema,
+		workspaceRootId: workspaceRootIdSchema,
+		switchAttemptId: orderingRevisionSchema,
 	},
 	/** 현재 탭은 유지하면서 provider와 실행 중 CLI를 초기화한다. */
 	'agent.reset': {
@@ -210,6 +243,18 @@ export const HOST_TO_WEBVIEW_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'extension.ready': {},
 	'terminal.starting': {
 		tabId: idSchema,
+		sessionId: idSchema,
+	},
+	'agent.switchAccepted': {
+		tabId: idSchema,
+		providerId: providerIdSchema,
+		workspaceRootId: workspaceRootIdSchema,
+		switchAttemptId: orderingRevisionSchema,
+		assignmentRevision: orderingRevisionSchema,
+	},
+	'agent.resetCompleted': {
+		tabId: idSchema,
+		assignmentRevision: orderingRevisionSchema,
 	},
 	'terminal.started': {
 		tabId: idSchema,
@@ -232,6 +277,7 @@ export const HOST_TO_WEBVIEW_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 		code: terminalErrorCodeSchema,
 		message: stringSchema,
 		canRestart: booleanSchema,
+		switchAttemptId: optionalFieldSchema(orderingRevisionSchema),
 	},
 	'terminal.cleanupFailed': {
 		tabId: idSchema,
@@ -248,6 +294,12 @@ export const HOST_TO_WEBVIEW_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'mcp.statusCleared': {
 		tabId: idSchema,
 		sessionId: idSchema,
+	},
+	'mcp.restartRejected': {
+		tabId: idSchema,
+		sessionId: idSchema,
+		code: mcpRestartRejectionCodeSchema,
+		message: stringSchema,
 	},
 });
 

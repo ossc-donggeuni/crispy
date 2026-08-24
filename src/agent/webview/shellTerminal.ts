@@ -24,6 +24,9 @@ export const TERMINAL_EXITED_OVERLAY_TITLE = 'Terminal exited';
 /** 시작 실패를 알리는 덮개 제목이며 실행 계약 정보를 포함하지 않는다. */
 export const TERMINAL_START_FAILED_OVERLAY_TITLE = 'Unable to start terminal';
 
+/** switchAccepted 직후부터 새 PTY가 started 될 때까지 표시하는 비대화형 상태다. */
+export const TERMINAL_STARTING_OVERLAY_TITLE = 'Starting agent…';
+
 /** 재시작 요청 버튼에 표시하는 고정 문구다. */
 export const TERMINAL_RESTART_BUTTON_LABEL = 'Restart';
 
@@ -73,6 +76,7 @@ interface XtermTerminal {
  * Host가 제공한 안전한 종료 정보와 고정 오류 메시지만 값으로 가진다.
  */
 export type TerminalOverlayState =
+	| { readonly kind: 'starting' }
 	| {
 		readonly kind: 'exited';
 		readonly exitCode?: number;
@@ -203,6 +207,9 @@ function describeTerminalOverlayState(state: TerminalOverlayState): string {
 	if (state.kind === 'error') {
 		return state.message;
 	}
+	if (state.kind === 'starting') {
+		return '';
+	}
 
 	const details: string[] = [];
 	if (state.exitCode !== undefined) {
@@ -248,10 +255,13 @@ function createDefaultOverlayView(
 		show(state): void {
 			title.textContent = state.kind === 'exited'
 				? TERMINAL_EXITED_OVERLAY_TITLE
-				: TERMINAL_START_FAILED_OVERLAY_TITLE;
+				: state.kind === 'starting'
+					? TERMINAL_STARTING_OVERLAY_TITLE
+					: TERMINAL_START_FAILED_OVERLAY_TITLE;
 			detail.textContent = describeTerminalOverlayState(state);
 			detail.hidden = detail.textContent.length === 0;
-			restartButton.hidden = state.kind === 'error' && !state.canRestart;
+			restartButton.hidden = state.kind === 'starting'
+				|| (state.kind === 'error' && !state.canRestart);
 			overlay.replaceChildren(panel);
 			overlay.setAttribute('role', state.kind === 'error' ? 'alert' : 'status');
 			overlay.hidden = false;
@@ -305,6 +315,7 @@ export function initializeShellTerminal(
 ): ShellTerminalController {
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
+	let startingSessionId: SessionId | undefined;
 	let sessionEverStarted = false;
 	let restartSessionId: SessionId | undefined;
 	let restartRequested = false;
@@ -444,7 +455,11 @@ export function initializeShellTerminal(
 		try {
 			overlayView?.show(state);
 			overlayVisible = true;
-			surface.dataset.state = state.kind === 'exited' ? 'exited' : 'error';
+			surface.dataset.state = state.kind === 'starting'
+				? 'starting'
+				: state.kind === 'exited'
+					? 'exited'
+					: 'error';
 		} catch {
 			/** 덮개 렌더링 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다. */
 		}
@@ -535,6 +550,36 @@ export function initializeShellTerminal(
 		dispose,
 		handleHostMessage(message): void {
 			switch (message.type) {
+				case 'agent.switchAccepted':
+					if (message.tabId !== tabId) {
+						return;
+					}
+					if (activeSessionId !== undefined) {
+						titleCollector?.endSession(activeSessionId);
+					}
+					activeSessionId = undefined;
+					startingSessionId = undefined;
+					restartSessionId = undefined;
+					restartRequested = false;
+					pendingKeyboardData = undefined;
+					sessionEverStarted = true;
+					try {
+						terminal?.reset();
+					} catch {
+						/** 이전 buffer 제거 실패와 무관하게 input session ownership은 해제된다. */
+					}
+					showOverlay({ kind: 'starting' });
+					break;
+				case 'terminal.starting':
+					if (message.tabId !== tabId) {
+						return;
+					}
+					activeSessionId = undefined;
+					startingSessionId = message.sessionId;
+					restartSessionId = undefined;
+					restartRequested = false;
+					showOverlay({ kind: 'starting' });
+					break;
 				case 'terminal.started':
 					if (
 						message.tabId === tabId
@@ -543,6 +588,7 @@ export function initializeShellTerminal(
 					) {
 						const replacedSessionId = activeSessionId;
 						activeSessionId = message.sessionId;
+						startingSessionId = undefined;
 						seenSessionIds.add(message.sessionId);
 						titleCollector?.startSession(message.sessionId);
 						restartSessionId = undefined;
@@ -612,6 +658,13 @@ export function initializeShellTerminal(
 					}
 					break;
 				case 'terminal.error':
+					if (
+						message.sessionId === null
+						&& message.switchAttemptId !== undefined
+					) {
+						/** pre-assignment 오류는 provider picker가 처리하며 Terminal overlay를 만들지 않는다. */
+						return;
+					}
 					/** 현재 세션이 없을 때만 Host가 새로 만든 세션의 시작 실패를 받아들인다. */
 					if (
 						message.tabId !== tabId
@@ -619,11 +672,18 @@ export function initializeShellTerminal(
 							activeSessionId !== undefined
 							&& message.sessionId !== activeSessionId
 						)
+						|| (
+							message.sessionId !== null
+							&& activeSessionId === undefined
+							&& startingSessionId !== undefined
+							&& message.sessionId !== startingSessionId
+						)
 					) {
 						return;
 					}
 
 					activeSessionId = undefined;
+					startingSessionId = undefined;
 					if (message.sessionId !== undefined && message.sessionId !== null) {
 						titleCollector?.endSession(message.sessionId);
 					}

@@ -24,6 +24,11 @@ const shellPolicy: ShellLaunchPolicy = {
 	cwd: '/trusted/workspace',
 	env: { PATH: '/bin' },
 };
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
+const workspaceRoot = {
+	scheme: 'file',
+	fsPath: '/trusted/workspace',
+} as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
 
 const successfulShellPrepare: PrepareTerminalLaunch = async () => ({
 	ok: true,
@@ -151,6 +156,7 @@ function createFixture(options: {
 	const host = new TerminalHost({
 		ptyAdapter: adapter,
 		prepareLaunch: successfulShellPrepare,
+		workspaceResolver: () => ({ ok: true, root: workspaceRoot }),
 		resolveAgentAutoRunInput: async (providerId) =>
 			providerId === 'antigravity' ? 'agy\r' : 'claude\r',
 		prepareClaudeLaunch: options.prepareClaudeLaunch ?? (async () => ({
@@ -201,7 +207,7 @@ function createFixture(options: {
 async function beginClaude(host: TerminalHost, tabId: string): Promise<void> {
 	host.createTab(tabId);
 	await host.handleTerminalReady(tabId, 100, 30);
-	return host.switchAgent(tabId, 'claude');
+	return host.switchAgent(tabId, 'claude', WORKSPACE_ROOT_ID, 1);
 }
 
 suite('Claude direct PTY and MCP transaction', () => {
@@ -361,10 +367,22 @@ suite('Claude direct PTY and MCP transaction', () => {
 		});
 		fixture.host.createTab('tab-stale-probe');
 		await fixture.host.handleTerminalReady('tab-stale-probe', 100, 30);
-		const claudeStart = fixture.host.switchAgent('tab-stale-probe', 'claude');
+		const claudeStart = fixture.host.switchAgent(
+			'tab-stale-probe',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 		await Promise.resolve();
 
-		await fixture.host.switchAgent('tab-stale-probe', 'antigravity');
+		const antigravityStart = fixture.host.switchAgent(
+			'tab-stale-probe',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		await Promise.resolve();
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 0);
 		release({
 			ok: true,
 			preparation: {
@@ -375,7 +393,7 @@ suite('Claude direct PTY and MCP transaction', () => {
 				mcpCompatible: true,
 			},
 		});
-		await claudeStart;
+		await Promise.all([claudeStart, antigravityStart]);
 
 		assert.strictEqual(fixture.supervisor.prepareCalls.length, 0);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
@@ -507,7 +525,12 @@ suite('Claude MCP status, restart, and multi-tab isolation', () => {
 		const fixture = createFixture({ withCodex: true });
 		fixture.host.createTab('tab-codex');
 		await fixture.host.handleTerminalReady('tab-codex', 100, 30);
-		await fixture.host.switchAgent('tab-codex', 'codex');
+		await fixture.host.switchAgent(
+			'tab-codex',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 		await beginClaude(fixture.host, 'tab-claude');
 		const codex = fixture.host.getActiveSession('tab-codex');
 		const claude = fixture.host.getActiveSession('tab-claude');

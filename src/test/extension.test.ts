@@ -17,10 +17,13 @@ import {
 	handleWebviewMessage as handleHostWebviewMessage,
 	loadWorkspacePersistentStateForRoots,
 	persistWorkspacePersistentStateForRoots,
+	postAgentActivityDebugClearMessages,
+	postAgentActivityDebugMessages,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
 	WebviewToExtensionMessage,
+	WorkspaceToWebviewMessage,
 } from '../messages';
 import { parseAgentActivityToWebviewMessage } from '../messages';
 import {
@@ -36,7 +39,10 @@ import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
-import { deserializeGraphFromWebview } from '../webview/graph/graphTransport';
+import {
+	deserializeWorkspacePresentationFromWebview,
+	type WorkspacePresentation,
+} from '../workspace/workspacePresentation';
 import { createGraphLayout } from '../webview/graph/graphLayout';
 import {
 	createSingleRootGraph,
@@ -67,6 +73,8 @@ interface TerminalHostStub extends TerminalMessageHost {
 	switchAgent(
 		tabId: string,
 		providerId: Parameters<TerminalMessageHost['switchAgent']>[1],
+		workspaceRootId: Parameters<TerminalMessageHost['switchAgent']>[2],
+		switchAttemptId: Parameters<TerminalMessageHost['switchAgent']>[3],
 	): Promise<unknown>;
 	resetAgent(tabId: string): void;
 	routeInput(message: unknown): void;
@@ -108,8 +116,14 @@ function createTerminalHostStub(): {
 			createTab: (tabId) => record('createTab', tabId),
 			switchTab: (tabId) => record('switchTab', tabId),
 			closeTab: (tabId) => record('closeTab', tabId),
-			async switchAgent(tabId, providerId) {
-				record('switchAgent', tabId, providerId);
+			async switchAgent(tabId, providerId, workspaceRootId, switchAttemptId) {
+				record(
+					'switchAgent',
+					tabId,
+					providerId,
+					workspaceRootId,
+					switchAttemptId,
+				);
 			},
 			resetAgent: (tabId) => record('resetAgent', tabId),
 			routeInput: (message) => record('routeInput', message),
@@ -543,51 +557,56 @@ suite('Crispy Extension Host', () => {
 		), false);
 	});
 
-	test('Agent Activity Debug/Clear Command는 Canvas를 열고 reserved clear 뒤 public set 메시지만 전송한다', async () => {
+	test('Agent Activity Debug Command는 Canvas를 연다', async () => {
 		await vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID);
-		const openedByDebugCommand = await openCanvas();
-
-		await extensionModule.deactivate();
 		const panel = await openCanvas();
 
-		assert.notStrictEqual(panel, openedByDebugCommand);
-		const graph = getInitialWorkspaceGraph(panel);
-		const initialState = parseWebviewState(JSON.parse(decodeURIComponent(
-			getSerializedInitialWebviewState(panel),
-		)));
+		assert.strictEqual(panel.visible, true);
+	});
 
-		assert.ok(initialState);
-		await installHostMessageRelay(panel);
+	test('Agent Activity Debug/Clear dispatch는 reserved clear 뒤 public set 메시지만 전송한다', async () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:debug-agent-command/index.ts',
+			name: 'index.ts',
+		};
+		const project = {
+			kind: 'project' as const,
+			id: 'project:debug-agent-command',
+			name: 'debug-agent-command',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const graph = createSingleRootGraph(project, 'root:debug-agent-command');
+		const graphState = { openedFolders: { [project.id]: true as const } };
 		const clearMessages = createAgentActivityDebugClearMessages();
 		const setMessages = createAgentActivityDebugMessages(
 			graph,
-			initialState.graph,
+			graphState,
+		);
+		const debugMessages: ExtensionToWebviewMessage[] = [];
+
+		await postAgentActivityDebugMessages(
+			(message) => {
+				debugMessages.push(message);
+				return Promise.resolve(true);
+			},
+			graph,
+			graphState,
 		);
 
-		const debugMessagesPromise = collectRelayedHostMessages(
-			panel.webview,
-			clearMessages.length + setMessages.length,
+		assert.deepStrictEqual(debugMessages, [...clearMessages, ...setMessages]);
+
+		const clearOnlyMessages: ExtensionToWebviewMessage[] = [];
+
+		await postAgentActivityDebugClearMessages(
+			(message) => {
+				clearOnlyMessages.push(message);
+				return Promise.resolve(true);
+			},
 		);
 
-		await vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID);
-		const debugMessages = await debugMessagesPromise;
-
-		assert.deepStrictEqual(
-			debugMessages.slice(0, clearMessages.length),
-			clearMessages,
-		);
-		assert.deepStrictEqual(
-			debugMessages.slice(clearMessages.length),
-			setMessages,
-		);
-
-		const clearOnlyMessagesPromise = collectRelayedHostMessages(
-			panel.webview,
-			clearMessages.length,
-		);
-
-		await vscode.commands.executeCommand(CLEAR_AGENT_ACTIVITIES_COMMAND_ID);
-		assert.deepStrictEqual(await clearOnlyMessagesPromise, clearMessages);
+		assert.deepStrictEqual(clearOnlyMessages, clearMessages);
 		assert.ok(clearMessages.every(({ sessionId }) => (
 			sessionId.startsWith('debug-g12-')
 		)));
@@ -776,8 +795,10 @@ suite('Crispy Extension Host', () => {
 				conversionCalls += 1;
 				return conversionCalls === 1 ? staleGraph : latestGraph;
 			},
-			async postMessage(message: { graph: Graph }) {
-				graphMessages.push(message.graph);
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
+			async postMessage(message: WorkspaceToWebviewMessage) {
+				graphMessages.push(message.presentation.graph);
 				return true;
 			},
 		};
@@ -878,8 +899,10 @@ suite('Crispy Extension Host', () => {
 				conversionCalls += 1;
 				return conversionCalls === 1 ? staleGraph : latestGraph;
 			},
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
 			async postMessage(message) {
-				graphMessages.push(message.graph);
+				graphMessages.push(message.presentation.graph);
 				return true;
 			},
 		});
@@ -925,6 +948,8 @@ suite('Crispy Extension Host', () => {
 				conversionCalls += 1;
 				return { roots: [], rootNodes: {} };
 			},
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
 			async postMessage() {
 				postMessageCalls += 1;
 				return true;
@@ -988,22 +1013,33 @@ suite('Crispy Extension Host', () => {
 		assert.ok(
 			panel.webview.html.includes('<div id="agent-provider-picker-host" hidden></div>'),
 		);
+		assert.ok(
+			panel.webview.html.includes('<div id="agent-workspace-status-bar" hidden></div>'),
+		);
 		assert.ok(!panel.webview.html.includes('agent-provider-bar'));
 		assert.ok(
 			panel.webview.html.includes(`img-src ${panel.webview.cspSource};`),
 		);
+		assert.strictEqual(
+			panel.webview.html.match(/data-workspace-presentation=/g)?.length,
+			1,
+		);
+		assert.doesNotMatch(panel.webview.html, /data-workspace-(?:graph|catalog)=/);
 	});
 
-	test('Canvas command가 현재 Workspace Root를 Graph 초기 데이터로 전달한다', async () => {
+	test('Canvas command가 같은 현재 Workspace Root를 Graph와 Catalog 초기 데이터로 전달한다', async () => {
 		const panel = await openCanvas();
-		const graph = getInitialWorkspaceGraph(panel);
+		const presentation = getInitialWorkspacePresentation(panel);
+		const graph = presentation.graph;
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 
 		assert.strictEqual(graph.roots.length, workspaceFolders.length);
+		assert.strictEqual(presentation.rootCatalog.length, workspaceFolders.length);
 		for (const [index, workspaceFolder] of workspaceFolders.entries()) {
 			const projectId = `workspace-root:${workspaceFolder.uri.toString()}`;
 			const graphRoot = graph.roots[index];
 			const project = graph.rootNodes[projectId];
+			const catalogEntry = presentation.rootCatalog[index];
 
 			assert.deepStrictEqual(graphRoot, {
 				id: `root:${projectId}`,
@@ -1012,6 +1048,9 @@ suite('Crispy Extension Host', () => {
 			assert.ok(project && project.kind === 'project');
 			assert.strictEqual(project.name, workspaceFolder.name);
 			assert.strictEqual(project.status, 'loaded');
+			assert.strictEqual(catalogEntry?.id, projectId);
+			assert.strictEqual(catalogEntry?.name, workspaceFolder.name);
+			assert.strictEqual(catalogEntry?.description, workspaceFolder.uri.toString());
 		}
 	});
 
@@ -1540,7 +1579,13 @@ suite('Crispy Extension Host', () => {
 		const messages = [
 			{ type: 'tab.create', tabId: 'tab-lifecycle' },
 			{ type: 'tab.switch', tabId: 'tab-lifecycle' },
-			{ type: 'agent.switch', tabId: 'tab-lifecycle', providerId: 'codex' },
+			{
+				type: 'agent.switch',
+				tabId: 'tab-lifecycle',
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///workspace/lifecycle',
+				switchAttemptId: 1,
+			},
 			{ type: 'agent.reset', tabId: 'tab-lifecycle' },
 			{ type: 'tab.close', tabId: 'tab-lifecycle' },
 		];
@@ -1557,7 +1602,15 @@ suite('Crispy Extension Host', () => {
 		assert.deepStrictEqual(calls, [
 			{ method: 'createTab', args: ['tab-lifecycle'] },
 			{ method: 'switchTab', args: ['tab-lifecycle'] },
-			{ method: 'switchAgent', args: ['tab-lifecycle', 'codex'] },
+			{
+				method: 'switchAgent',
+				args: [
+					'tab-lifecycle',
+					'codex',
+					'workspace-root:file:///workspace/lifecycle',
+					1,
+				],
+			},
 			{ method: 'resetAgent', args: ['tab-lifecycle'] },
 			{ method: 'closeTab', args: ['tab-lifecycle'] },
 		]);
@@ -1572,6 +1625,8 @@ suite('Crispy Extension Host', () => {
 				type: 'agent.switch',
 				tabId: 'tab-unknown-provider',
 				providerId: 'unlisted-provider',
+				workspaceRootId: 'workspace-root:file:///workspace/provider',
+				switchAttemptId: 1,
 			},
 			host,
 		);
@@ -1785,63 +1840,6 @@ async function sendWorkspaceState(
 	);
 }
 
-/** Host→Webview Debug 메시지를 test Webview가 다시 Host로 전달하도록 설치한다. */
-async function installHostMessageRelay(panel: vscode.WebviewPanel): Promise<void> {
-	const ready = onceWebviewMessage(
-		panel.webview,
-		(message) => isRecordWithType(message, 'test.hostMessageRelay.ready'),
-	);
-
-	panel.webview.html = `<!DOCTYPE html>
-		<html lang="en">
-		<body>
-			<script>
-				const vscode = acquireVsCodeApi();
-				window.addEventListener('message', (event) => {
-					vscode.postMessage({
-						type: 'test.hostMessageRelay.message',
-						message: event.data,
-					});
-				});
-				vscode.postMessage({ type: 'test.hostMessageRelay.ready' });
-			</script>
-		</body>
-		</html>`;
-
-	await ready;
-}
-
-/** Relay가 전달한 Host 메시지를 지정 개수만큼 순서대로 수집한다. */
-function collectRelayedHostMessages(
-	webview: vscode.Webview,
-	expectedCount: number,
-): Promise<ExtensionToWebviewMessage[]> {
-	return new Promise((resolve) => {
-		const messages: ExtensionToWebviewMessage[] = [];
-		const subscription = webview.onDidReceiveMessage((value: unknown) => {
-			if (!isRecordWithType(value, 'test.hostMessageRelay.message')) {
-				return;
-			}
-			messages.push(value.message as ExtensionToWebviewMessage);
-
-			if (messages.length >= expectedCount) {
-				subscription.dispose();
-				resolve(messages);
-			}
-		});
-	});
-}
-
-function isRecordWithType(
-	value: unknown,
-	type: string,
-): value is Record<string, unknown> & { readonly type: string } {
-	return typeof value === 'object'
-		&& value !== null
-		&& !Array.isArray(value)
-		&& (value as Record<string, unknown>).type === type;
-}
-
 function getWebviewStateFromMessage(
 	message: unknown,
 ): WebviewSessionState | undefined {
@@ -1983,8 +1981,10 @@ function getSerializedInitialWebviewState(panel: vscode.WebviewPanel): string {
 	return match[1];
 }
 
-function getInitialWorkspaceGraph(panel: vscode.WebviewPanel): Graph {
-	const match = panel.webview.html.match(/data-workspace-graph="([^"]*)"/);
-	assert.ok(match, 'Webview 초기 HTML에 serialized Workspace Graph가 있어야 한다.');
-	return deserializeGraphFromWebview(match[1]);
+function getInitialWorkspacePresentation(
+	panel: vscode.WebviewPanel,
+): WorkspacePresentation {
+	const match = panel.webview.html.match(/data-workspace-presentation="([^"]*)"/);
+	assert.ok(match, 'Webview 초기 HTML에 atomic Workspace Presentation이 있어야 한다.');
+	return deserializeWorkspacePresentationFromWebview(match[1]);
 }

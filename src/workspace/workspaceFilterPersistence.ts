@@ -10,6 +10,8 @@ type WorkspaceFilterFileSystem = Pick<
 	'createDirectory' | 'readFile' | 'writeFile'
 >;
 
+type WorkspaceTrustReader = () => boolean;
+
 /** Root URI와 해당 Root에서 로드된 Workspace Filter를 함께 유지한다. */
 export interface WorkspaceRootFilter {
 	readonly rootUri: vscode.Uri;
@@ -30,6 +32,7 @@ export async function loadOrCreateWorkspaceFilter(
 	rootUri: vscode.Uri,
 	extensionUri: vscode.Uri,
 	fileSystem: WorkspaceFilterFileSystem = vscode.workspace.fs,
+	readWorkspaceTrust: WorkspaceTrustReader = () => vscode.workspace.isTrusted,
 ): Promise<WorkspaceFilter | undefined> {
 	const filterUri = getWorkspaceFilterUri(rootUri);
 
@@ -51,9 +54,16 @@ export async function loadOrCreateWorkspaceFilter(
 	if (!defaultFilter) {
 		return undefined;
 	}
+	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
+		/** Restricted Mode에서도 default filter를 메모리에서 적용하되 Workspace는 쓰지 않는다. */
+		return defaultFilter;
+	}
 
 	try {
 		await fileSystem.createDirectory(getCrispyDirectoryUri(rootUri));
+		if (!isWorkspaceTrusted(readWorkspaceTrust)) {
+			return defaultFilter;
+		}
 		await fileSystem.writeFile(
 			filterUri,
 			textEncoder.encode(JSON.stringify(defaultFilter)),
@@ -70,6 +80,7 @@ export async function loadOrCreateWorkspaceFilters(
 	rootUris: readonly vscode.Uri[],
 	extensionUri: vscode.Uri,
 	fileSystem: WorkspaceFilterFileSystem = vscode.workspace.fs,
+	readWorkspaceTrust: WorkspaceTrustReader = () => vscode.workspace.isTrusted,
 ): Promise<WorkspaceRootFilter[]> {
 	return Promise.all(rootUris.map(async (rootUri) => ({
 		rootUri,
@@ -77,8 +88,18 @@ export async function loadOrCreateWorkspaceFilters(
 			rootUri,
 			extensionUri,
 			fileSystem,
+			readWorkspaceTrust,
 		),
-	})));
+})));
+}
+
+/** Trust 판독 실패를 Workspace write 허용으로 해석하지 않는다. */
+function isWorkspaceTrusted(readWorkspaceTrust: WorkspaceTrustReader): boolean {
+	try {
+		return readWorkspaceTrust() === true;
+	} catch {
+		return false;
+	}
 }
 
 /** Workspace Root의 Crispy metadata Directory URI를 계산한다. */

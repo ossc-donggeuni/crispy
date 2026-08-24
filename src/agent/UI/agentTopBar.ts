@@ -4,17 +4,13 @@ import {
 	type AgentUiDependencies,
 } from './agentUiDom';
 
-/** 새 탭 생성 버튼에 표시하는 고정 문구다. */
-export const AGENT_CREATE_TAB_LABEL = '+';
-
-/** 세션 재시작 버튼에 표시하는 고정 문구다. */
-export const AGENT_RESTART_LABEL = '⟳';
-
 /** 새 탭 생성 버튼의 접근성 이름이다. */
 export const AGENT_CREATE_TAB_TITLE = 'New agent tab';
 
 /** 재시작 버튼의 접근성 이름이며 Agent 선택 화면으로 돌아가는 동작임을 밝힌다. */
 export const AGENT_RESTART_TITLE = 'Restart and choose an agent';
+
+export const AGENT_CHANGE_PROVIDER_TITLE = 'Choose another agent';
 
 export const MCP_RESTART_LABEL = 'MCP와 Agent 다시 시작';
 
@@ -25,6 +21,9 @@ export const MCP_RESTART_LABEL = 'MCP와 Agent 다시 시작';
  * 활성 탭의 provider 선택은 xterm 중앙 선택기가 별도로 담당한다.
  */
 export interface AgentTopBarCallbacks {
+	/** 현재 Workspace assignment를 유지한 채 provider 선택기를 연다. */
+	onChangeProvider(): void;
+
 	/** `+` 버튼으로 provider 미선택 상태의 새 탭을 요청한 경우다. */
 	onCreateTab(): void;
 
@@ -35,10 +34,16 @@ export interface AgentTopBarCallbacks {
 	onRestartMcpActiveTab(): void;
 }
 
+/** 상단 액션의 활성화 여부에 필요한 assignment lifecycle 상태다. */
+export interface AgentTopBarState {
+	readonly pending: boolean;
+	readonly resetting: boolean;
+}
+
 /** 상단 bar를 상태 변화에 맞춰 갱신하는 표시 경계다. */
 export interface AgentTopBarView {
 	/** 주어진 탭 상태를 버튼의 활성/비활성 상태에 반영한다. */
-	render(snapshot: AgentTabModelSnapshot): void;
+	render(snapshot: AgentTabModelSnapshot, state?: AgentTopBarState): void;
 
 	/** 상단 bar DOM을 제거한다. */
 	dispose(): void;
@@ -65,7 +70,6 @@ export function initializeAgentTopBar(
 	const createTabButton = dependencies.createElement('button');
 	createTabButton.type = 'button';
 	createTabButton.className = 'agent-create-tab';
-	createTabButton.textContent = AGENT_CREATE_TAB_LABEL;
 	createTabButton.title = AGENT_CREATE_TAB_TITLE;
 	createTabButton.setAttribute('aria-label', AGENT_CREATE_TAB_TITLE);
 	createTabButton.addEventListener('click', () => callbacks.onCreateTab());
@@ -73,10 +77,16 @@ export function initializeAgentTopBar(
 	const restartButton = dependencies.createElement('button');
 	restartButton.type = 'button';
 	restartButton.className = 'agent-restart-session';
-	restartButton.textContent = AGENT_RESTART_LABEL;
 	restartButton.title = AGENT_RESTART_TITLE;
 	restartButton.setAttribute('aria-label', AGENT_RESTART_TITLE);
 	restartButton.addEventListener('click', () => callbacks.onRestartActiveTab());
+
+	const changeProviderButton = dependencies.createElement('button');
+	changeProviderButton.type = 'button';
+	changeProviderButton.className = 'agent-change-provider';
+	changeProviderButton.title = AGENT_CHANGE_PROVIDER_TITLE;
+	changeProviderButton.setAttribute('aria-label', AGENT_CHANGE_PROVIDER_TITLE);
+	changeProviderButton.addEventListener('click', () => callbacks.onChangeProvider());
 
 	const mcpStatus = dependencies.createElement('div');
 	mcpStatus.className = 'agent-mcp-status';
@@ -93,17 +103,24 @@ export function initializeAgentTopBar(
 	mcpRestartButton.addEventListener('click', () => callbacks.onRestartMcpActiveTab());
 	mcpStatus.append(mcpStatusText, mcpRestartButton);
 
-	actions.append(createTabButton, restartButton);
+	actions.append(createTabButton, changeProviderButton, restartButton);
 	container.replaceChildren(mcpStatus, actions);
 
 	return {
-		render(snapshot): void {
+		render(snapshot, state): void {
 			const activeTab = snapshot.tabs.find(
 				(tab) => tab.id === snapshot.activeTabId,
 			);
 
-			/** 재시작은 이미 provider가 정해진 탭에서만 의미가 있다. */
-			restartButton.disabled = activeTab?.providerId === undefined;
+			/** Pending 시작도 취소할 수 있게 하되 Reset 중 연타는 막는다. */
+			restartButton.disabled = (
+				activeTab?.providerId === undefined
+				&& state?.pending !== true
+			) || state?.resetting === true;
+			changeProviderButton.disabled = activeTab?.providerId === undefined
+				|| state?.pending === true
+				|| state?.resetting === true
+				|| activeTab.mcpRestartPending;
 
 			const visibleStatus = activeTab?.mcpStatus;
 			if (visibleStatus === undefined || visibleStatus.kind !== 'failed') {

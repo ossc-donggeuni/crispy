@@ -25,7 +25,17 @@ export function formatAgentTabAccessibleName(tab: AgentTabSnapshot): string {
 	const providerLabel = tab.providerId === undefined
 		? 'provider 미선택'
 		: AGENT_PROVIDER_LABELS[tab.providerId];
-	return `${providerLabel}, ${tab.displayName}${tab.isPinned ? ', 고정됨' : ''}`;
+	const workspace = tab.workspaceDescription === undefined
+		? ''
+		: `, Workspace ${tab.workspaceDescription}`;
+	return `${providerLabel}, ${tab.displayName}${workspace}${tab.isPinned ? ', 고정됨' : ''}`;
+}
+
+/** 짧은 visible label은 유지하되 hover title에서는 중복 Workspace 이름을 구별한다. */
+export function formatAgentTabTitle(tab: AgentTabSnapshot): string {
+	return tab.workspaceDescription === undefined
+		? tab.displayName
+		: `${tab.displayName} — ${tab.workspaceDescription}`;
 }
 
 export interface AgentTabStripCallbacks {
@@ -114,7 +124,7 @@ export function initializeAgentTabStrip(
 				selectButton.type = 'button';
 				selectButton.className = 'agent-tab-select';
 				selectButton.textContent = tab.displayName;
-				selectButton.title = tab.displayName;
+				selectButton.title = formatAgentTabTitle(tab);
 				selectButton.setAttribute('role', 'tab');
 				selectButton.setAttribute('aria-selected', isActive ? 'true' : 'false');
 				selectButton.setAttribute('aria-label', formatAgentTabAccessibleName(tab));

@@ -9,12 +9,23 @@ const root = {
 	scheme: 'file',
 	fsPath: '/trusted/workspace' as ValidatedWorkspaceFsPath,
 } as ValidatedWorkspaceRoot;
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
 
 suite('Claude terminal launch preparation', () => {
 	test('resolved executable 뒤 bounded compatibility 결과를 구조화한다', async () => {
 		let compatibilityCalls = 0;
+		let workspaceCalls = 0;
+		const abortController = new AbortController();
+		const freshRoot = {
+			...root,
+			fsPath: '/trusted/workspace-after-probe' as ValidatedWorkspaceFsPath,
+		} as ValidatedWorkspaceRoot;
 		const prepare = createPrepareClaudeTerminalLaunch({
-			workspaceResolver: () => ({ ok: true, root }),
+			workspaceResolver: (workspaceRootId) => {
+				workspaceCalls += 1;
+				assert.strictEqual(workspaceRootId, WORKSPACE_ROOT_ID);
+				return { ok: true, root: workspaceCalls === 1 ? root : freshRoot };
+			},
 			resolveExecutable: async (providerId, options) => {
 				assert.strictEqual(providerId, 'claude');
 				assert.strictEqual(options?.override, '/opt/custom claude');
@@ -32,6 +43,11 @@ suite('Claude terminal launch preparation', () => {
 			resolveCompatibility: async (options) => {
 				compatibilityCalls += 1;
 				assert.strictEqual(options.executable.executable, '/opt/custom claude');
+				assert.strictEqual(options.signal, abortController.signal);
+				assert.strictEqual(
+					options.resolveWorkspaceCwdBeforeSpawn(),
+					freshRoot.fsPath,
+				);
 				return {
 					version: { major: 2, minor: 1, patch: 121 },
 					compatible: true,
@@ -39,18 +55,24 @@ suite('Claude terminal launch preparation', () => {
 			},
 		});
 
-		const result = await prepare('tab-claude', 'session-claude');
+		const result = await prepare(
+			'tab-claude',
+			'session-claude',
+			WORKSPACE_ROOT_ID,
+			abortController.signal,
+		);
 
 		assert.strictEqual(result.ok, true);
 		if (!result.ok) {
 			return;
 		}
 		assert.strictEqual(compatibilityCalls, 1);
+		assert.strictEqual(workspaceCalls, 2);
 		assert.deepStrictEqual(result.preparation.executable, {
 			executable: '/opt/custom claude',
 			launcherKind: 'direct',
 		});
-		assert.strictEqual(result.preparation.cwd, root.fsPath);
+		assert.strictEqual(result.preparation.cwd, freshRoot.fsPath);
 		assert.strictEqual(result.preparation.environment.TERM, 'xterm-256color');
 		assert.strictEqual(result.preparation.environment.TERM_PROGRAM, undefined);
 		assert.strictEqual(result.preparation.mcpCompatible, true);
@@ -78,7 +100,11 @@ suite('Claude terminal launch preparation', () => {
 				resolveCompatibility: async () => compatibility,
 			});
 
-			const result = await prepare('tab-bare', 'session-bare');
+			const result = await prepare(
+				'tab-bare',
+				'session-bare',
+				WORKSPACE_ROOT_ID,
+			);
 			assert.strictEqual(result.ok, true);
 			if (result.ok) {
 				assert.strictEqual(result.preparation.mcpCompatible, false);
@@ -103,10 +129,58 @@ suite('Claude terminal launch preparation', () => {
 			},
 		});
 
-		const result = await prepare('tab-claude', 'session-claude');
+		const result = await prepare(
+			'tab-claude',
+			'session-claude',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(result.ok, false);
 		assert.strictEqual(compatibilityCalls, 0);
+		if (!result.ok) {
+			assert.strictEqual(result.error.code, 'workspace_untrusted');
+		}
+	});
+
+	test('executable 탐색 중 Trust가 revoke되면 version child 직전 fresh 오류로 중단한다', async () => {
+		let trusted = true;
+		let workspaceCalls = 0;
+		let releaseExecutable!: () => void;
+		const executableGate = new Promise<void>((resolve) => {
+			releaseExecutable = resolve;
+		});
+		const prepare = createPrepareClaudeTerminalLaunch({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return trusted
+					? { ok: true, root }
+					: { ok: false, code: 'workspace_untrusted' };
+			},
+			resolveExecutable: async () => {
+				await executableGate;
+				return {
+					ok: true,
+					executable: {
+						executable: process.execPath,
+						launcherKind: 'direct',
+					},
+				};
+			},
+			readPlatform: () => process.platform,
+			readEnvironment: () => ({ ...process.env }),
+		});
+
+		const pending = prepare(
+			'tab-revoked',
+			'session-revoked',
+			WORKSPACE_ROOT_ID,
+		);
+		trusted = false;
+		releaseExecutable();
+
+		const result = await pending;
+		assert.strictEqual(result.ok, false);
+		assert.strictEqual(workspaceCalls, 2);
 		if (!result.ok) {
 			assert.strictEqual(result.error.code, 'workspace_untrusted');
 		}
@@ -137,10 +211,16 @@ suite('Claude terminal launch preparation', () => {
 			}),
 		});
 
-		assert.strictEqual((await prepare('tab-one', 'session-one')).ok, false);
+		assert.strictEqual((await prepare(
+			'tab-one', 'session-one', WORKSPACE_ROOT_ID,
+		)).ok, false);
 		available = true;
-		assert.strictEqual((await prepare('tab-two', 'session-two')).ok, true);
-		assert.strictEqual((await prepare('tab-three', 'session-three')).ok, true);
+		assert.strictEqual((await prepare(
+			'tab-two', 'session-two', WORKSPACE_ROOT_ID,
+		)).ok, true);
+		assert.strictEqual((await prepare(
+			'tab-three', 'session-three', WORKSPACE_ROOT_ID,
+		)).ok, true);
 		assert.strictEqual(calls, 2);
 	});
 });

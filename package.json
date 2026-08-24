@@ -14,6 +14,19 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "crispy.codexCliPath",
+        "crispy.claudeCliPath",
+        "crispy.antigravityCliPath"
+      ]
+    },
+    "virtualWorkspaces": {
+      "supported": "limited"
+    }
+  },
   "contributes": {
     "commands": [
       {

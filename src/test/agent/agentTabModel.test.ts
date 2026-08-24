@@ -40,7 +40,7 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(snapshot.tabs[0].mcpRestartPending, false);
 	});
 
-	test('MCP status는 정확한 current tab/session에만 적용되고 clear가 pending도 제거한다', () => {
+	test('MCP status는 current session에만 적용되고 connected/clear가 pending을 제거한다', () => {
 		const model = createModel();
 		const first = model.createTab();
 		const second = model.createTab();
@@ -70,6 +70,20 @@ suite('Agent Tab Model', () => {
 
 		model.clearMcpStatus(first, 'session-old');
 		assert.strictEqual(model.getSnapshot().tabs[0].mcpRestartPending, true);
+		model.setMcpStatus(first, 'session-first', { kind: 'connected' });
+		assert.deepStrictEqual(
+			model.getSnapshot().tabs[0].mcpStatus,
+			{ kind: 'connected' },
+		);
+		assert.strictEqual(model.getSnapshot().tabs[0].mcpRestartPending, false);
+
+		model.setMcpStatus(first, 'session-first', {
+			kind: 'failed',
+			reason: 'adapter_exited',
+			message: 'safe failure',
+			retryable: true,
+		});
+		model.setMcpRestartPending(first, 'session-first', true);
 		model.clearMcpStatus(first, 'session-first');
 		snapshot = model.getSnapshot();
 		assert.deepStrictEqual(snapshot.tabs[0].mcpStatus, { kind: 'none' });

@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import {
 	ID_MAX_LENGTH,
+	MCP_RESTART_REJECTION_CODES,
 	PROVIDER_IDS,
 	TERMINAL_COLS_MAX,
 	TERMINAL_COLS_MIN,
@@ -8,6 +9,7 @@ import {
 	TERMINAL_INPUT_MAX_BYTES,
 	TERMINAL_ROWS_MAX,
 	TERMINAL_ROWS_MIN,
+	WORKSPACE_EXECUTION_ERROR_CODES,
 	parseHostToWebviewMessage,
 	parseWebviewToHostMessage,
 	type MessageParseResult,
@@ -22,6 +24,9 @@ import { MCP_FAILURE_REASONS } from '../mcp/failureReason';
 
 const TAB_ID = 'tab:contract';
 const SESSION_ID = 'session-contract';
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///workspace/contract';
+const SWITCH_ATTEMPT_ID = 1;
+const ASSIGNMENT_REVISION = 2;
 
 type Parser = (value: unknown) => MessageParseResult<unknown>;
 
@@ -100,8 +105,15 @@ const WEBVIEW_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 			type: 'agent.switch',
 			tabId: TAB_ID,
 			providerId: PROVIDER_IDS[0],
+			workspaceRootId: WORKSPACE_ROOT_ID,
+			switchAttemptId: SWITCH_ATTEMPT_ID,
 		},
-		requiredFields: ['tabId', 'providerId'],
+		requiredFields: [
+			'tabId',
+			'providerId',
+			'workspaceRootId',
+			'switchAttemptId',
+		],
 	},
 	{
 		message: { type: 'agent.reset', tabId: TAB_ID },
@@ -115,8 +127,37 @@ const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 		requiredFields: [],
 	},
 	{
-		message: { type: 'terminal.starting', tabId: TAB_ID },
-		requiredFields: ['tabId'],
+		message: {
+			type: 'terminal.starting',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		},
+		requiredFields: ['tabId', 'sessionId'],
+	},
+	{
+		message: {
+			type: 'agent.switchAccepted',
+			tabId: TAB_ID,
+			providerId: PROVIDER_IDS[0],
+			workspaceRootId: WORKSPACE_ROOT_ID,
+			switchAttemptId: SWITCH_ATTEMPT_ID,
+			assignmentRevision: ASSIGNMENT_REVISION,
+		},
+		requiredFields: [
+			'tabId',
+			'providerId',
+			'workspaceRootId',
+			'switchAttemptId',
+			'assignmentRevision',
+		],
+	},
+	{
+		message: {
+			type: 'agent.resetCompleted',
+			tabId: TAB_ID,
+			assignmentRevision: ASSIGNMENT_REVISION,
+		},
+		requiredFields: ['tabId', 'assignmentRevision'],
 	},
 	{
 		message: {
@@ -182,6 +223,16 @@ const HOST_MESSAGE_FIXTURES: readonly MessageFixture[] = [
 		},
 		requiredFields: ['tabId', 'sessionId'],
 	},
+	{
+		message: {
+			type: 'mcp.restartRejected',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			code: 'workspace_root_unavailable',
+			message: 'Workspace root is unavailable.',
+		},
+		requiredFields: ['tabId', 'sessionId', 'code', 'message'],
+	},
 ];
 
 suite('Host↔Webview protocol completion contract', () => {
@@ -223,6 +274,50 @@ suite('Host↔Webview protocol completion contract', () => {
 				message: 'Unable to start terminal.',
 				canRestart: true,
 			}));
+		});
+
+		test('pre-assignment terminal.error의 switch attempt correlation을 허용한다', () => {
+			assertSuccess(parseHostToWebviewMessage({
+				type: 'terminal.error',
+				tabId: TAB_ID,
+				sessionId: null,
+				code: 'workspace_root_unavailable',
+				message: 'Workspace root is unavailable.',
+				canRestart: false,
+				switchAttemptId: SWITCH_ATTEMPT_ID,
+			}));
+		});
+
+		test('Workspace root ID를 임의 길이 제한 없이 양방향으로 round-trip한다', () => {
+			const longWorkspaceRootId = `workspace-root:file:///${'nested/'.repeat(3_000)}`;
+
+			assertSuccess(parseWebviewToHostMessage({
+				type: 'agent.switch',
+				tabId: TAB_ID,
+				providerId: PROVIDER_IDS[0],
+				workspaceRootId: longWorkspaceRootId,
+				switchAttemptId: SWITCH_ATTEMPT_ID,
+			}));
+			assertSuccess(parseHostToWebviewMessage({
+				type: 'agent.switchAccepted',
+				tabId: TAB_ID,
+				providerId: PROVIDER_IDS[0],
+				workspaceRootId: longWorkspaceRootId,
+				switchAttemptId: SWITCH_ATTEMPT_ID,
+				assignmentRevision: ASSIGNMENT_REVISION,
+			}));
+		});
+
+		test('mcp.restartRejected는 Workspace 오류와 stale session 상태만 허용한다', () => {
+			for (const code of MCP_RESTART_REJECTION_CODES) {
+				assertSuccess(parseHostToWebviewMessage({
+					type: 'mcp.restartRejected',
+					tabId: TAB_ID,
+					sessionId: SESSION_ID,
+					code,
+					message: 'Workspace execution is unavailable.',
+				}));
+			}
 		});
 
 		test('failed MCP status는 allowlist reason과 공유 retryability만 허용한다', () => {
@@ -318,6 +413,8 @@ suite('Host↔Webview protocol completion contract', () => {
 					type: 'agent.switch',
 					tabId: TAB_ID,
 					providerId,
+					workspaceRootId: WORKSPACE_ROOT_ID,
+					switchAttemptId: SWITCH_ATTEMPT_ID,
 				}), 'provider_not_allowed', 'providerId');
 			}
 
@@ -325,7 +422,74 @@ suite('Host↔Webview protocol completion contract', () => {
 				type: 'agent.switch',
 				tabId: TAB_ID,
 				providerId: 42,
+				workspaceRootId: WORKSPACE_ROOT_ID,
+				switchAttemptId: SWITCH_ATTEMPT_ID,
 			}), 'invalid_field', 'providerId');
+		});
+
+		test('WorkspaceRootId prefix-only 값과 일반 문자열을 양방향에서 거부한다', () => {
+			for (const workspaceRootId of [
+				'workspace-root:',
+				'file:///workspace/contract',
+				42,
+			]) {
+				assertFailure(parseWebviewToHostMessage({
+					type: 'agent.switch',
+					tabId: TAB_ID,
+					providerId: PROVIDER_IDS[0],
+					workspaceRootId,
+					switchAttemptId: SWITCH_ATTEMPT_ID,
+				}), 'invalid_field', 'workspaceRootId');
+				assertFailure(parseHostToWebviewMessage({
+					type: 'agent.switchAccepted',
+					tabId: TAB_ID,
+					providerId: PROVIDER_IDS[0],
+					workspaceRootId,
+					switchAttemptId: SWITCH_ATTEMPT_ID,
+					assignmentRevision: ASSIGNMENT_REVISION,
+				}), 'invalid_field', 'workspaceRootId');
+			}
+		});
+
+		test('switch attempt와 assignment revision은 양의 safe integer만 허용한다', () => {
+			for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+				assertFailure(parseWebviewToHostMessage({
+					type: 'agent.switch',
+					tabId: TAB_ID,
+					providerId: PROVIDER_IDS[0],
+					workspaceRootId: WORKSPACE_ROOT_ID,
+					switchAttemptId: value,
+				}), 'invalid_field', 'switchAttemptId');
+				assertFailure(parseHostToWebviewMessage({
+					type: 'agent.resetCompleted',
+					tabId: TAB_ID,
+					assignmentRevision: value,
+				}), 'invalid_field', 'assignmentRevision');
+			}
+		});
+
+		test('제거된 Workspace 오류와 MCP 비실행 오류를 거부한다', () => {
+			for (const code of [
+				'workspace_not_found',
+				'workspace_multi_root_unsupported',
+			]) {
+				assertFailure(parseHostToWebviewMessage({
+					type: 'terminal.error',
+					tabId: TAB_ID,
+					sessionId: null,
+					code,
+					message: 'Workspace error.',
+					canRestart: false,
+				}), 'invalid_field', 'code');
+			}
+
+			assertFailure(parseHostToWebviewMessage({
+				type: 'mcp.restartRejected',
+				tabId: TAB_ID,
+				sessionId: SESSION_ID,
+				code: 'workspace_change_requires_reset',
+				message: 'Reset is required.',
+			}), 'invalid_field', 'code');
 		});
 
 		test('tab 메시지는 tabId만 받고 Host 실행 계약 지정을 거부한다', () => {
@@ -346,6 +510,8 @@ suite('Host↔Webview protocol completion contract', () => {
 				type: 'agent.switch',
 				tabId: TAB_ID,
 				providerId: PROVIDER_IDS[0],
+				workspaceRootId: WORKSPACE_ROOT_ID,
+				switchAttemptId: SWITCH_ATTEMPT_ID,
 				args: ['--webview-owned'],
 			}), 'forbidden_field', 'args');
 		});
@@ -493,10 +659,13 @@ suite('Host↔Webview protocol completion contract', () => {
 	suite('Host 실행 계약 소유권', () => {
 		test('모든 Host 전용 필드를 forbidden_field로 거부한다', () => {
 			const forbiddenFields = [
+				'cwd',
+				'path',
+				'uri',
+				'fsPath',
 				'workspaceRoot',
 				'workspace',
 				'root',
-				'cwd',
 				'executable',
 				'command',
 				'args',
@@ -607,6 +776,7 @@ suite('Host↔Webview protocol completion contract', () => {
 		test('input, output 및 인증 관련 원본 값을 parser 오류에 포함하지 않는다', () => {
 			const authorizationUrl = 'https://auth.example/callback?code=authorization-code';
 			const token = 'secret-access-token';
+			const workspaceRootId = 'file:///private/workspace/secret-root';
 			const inputPayload = {
 				type: 'terminal.input',
 				tabId: TAB_ID,
@@ -628,6 +798,13 @@ suite('Host↔Webview protocol completion contract', () => {
 					...WEBVIEW_MESSAGE_FIXTURES[1].message,
 					cwd: authorizationUrl,
 				}),
+				parseWebviewToHostMessage({
+					type: 'agent.switch',
+					tabId: TAB_ID,
+					providerId: PROVIDER_IDS[0],
+					workspaceRootId,
+					switchAttemptId: SWITCH_ATTEMPT_ID,
+				}),
 			];
 
 			for (const result of results) {
@@ -635,7 +812,7 @@ suite('Host↔Webview protocol completion contract', () => {
 				const serialized = JSON.stringify(result);
 				assert.doesNotMatch(
 					serialized,
-					/auth\.example|authorization-code|secret-access-token|providerResponse/i,
+					/auth\.example|authorization-code|secret-access-token|providerResponse|secret-root/i,
 				);
 				assert.notStrictEqual(serialized, JSON.stringify(inputPayload));
 				assert.notStrictEqual(serialized, JSON.stringify(outputPayload));
@@ -666,7 +843,7 @@ suite('Host↔Webview protocol completion contract', () => {
 			for (const field of ['sessionId', 'data'] as const) {
 				assertFailure(
 					parseHostToWebviewMessage(withoutField(
-						HOST_MESSAGE_FIXTURES[3].message,
+						HOST_MESSAGE_FIXTURES[5].message,
 						field,
 					)),
 					'missing_field',

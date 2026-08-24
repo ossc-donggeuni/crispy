@@ -4,11 +4,14 @@ import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from './workspaceMetadata';
+import { WORKSPACE_ROOT_ID_PREFIX } from './workspaceRootId';
 
 type WorkspacePersistenceFileSystem = Pick<
 	typeof vscode.workspace.fs,
 	'createDirectory' | 'readFile' | 'writeFile'
 >;
+
+type WorkspaceTrustReader = () => boolean;
 
 /** Root URI와 해당 Root가 소유하는 Persistent State를 함께 유지한다. */
 export interface WorkspaceRootPersistentState {
@@ -49,6 +52,7 @@ export function writeWorkspacePersistentState(
 	rootUri: vscode.Uri,
 	state: WorkspacePersistentState,
 	fileSystem: WorkspacePersistenceFileSystem = vscode.workspace.fs,
+	readWorkspaceTrust: WorkspaceTrustReader = () => vscode.workspace.isTrusted,
 ): Promise<void> {
 	const snapshot = parseWorkspacePersistentState(state);
 
@@ -59,8 +63,18 @@ export function writeWorkspacePersistentState(
 	const rootKey = rootUri.toString();
 	const previousWrite = writeChains.get(rootKey) ?? Promise.resolve();
 	const currentWrite = previousWrite.then(
-		() => persistWorkspaceState(rootUri, snapshot, fileSystem),
-		() => persistWorkspaceState(rootUri, snapshot, fileSystem),
+		() => persistWorkspaceState(
+			rootUri,
+			snapshot,
+			fileSystem,
+			readWorkspaceTrust,
+		),
+		() => persistWorkspaceState(
+			rootUri,
+			snapshot,
+			fileSystem,
+			readWorkspaceTrust,
+		),
 	);
 
 	writeChains.set(rootKey, currentWrite);
@@ -152,17 +166,33 @@ async function persistWorkspaceState(
 	rootUri: vscode.Uri,
 	state: WorkspacePersistentState,
 	fileSystem: WorkspacePersistenceFileSystem,
+	readWorkspaceTrust: WorkspaceTrustReader,
 ): Promise<void> {
+	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
+		return;
+	}
 	const crispyDirectoryUri = vscode.Uri.joinPath(
 		rootUri,
 		CRISPY_DIRECTORY_NAME,
 	);
 
 	await fileSystem.createDirectory(crispyDirectoryUri);
+	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
+		return;
+	}
 	await fileSystem.writeFile(
 		vscode.Uri.joinPath(crispyDirectoryUri, WORKSPACE_STATE_FILE_NAME),
 		textEncoder.encode(JSON.stringify(state)),
 	);
+}
+
+/** Trust 판독 실패를 Workspace write 허용으로 해석하지 않는다. */
+function isWorkspaceTrusted(readWorkspaceTrust: WorkspaceTrustReader): boolean {
+	try {
+		return readWorkspaceTrust() === true;
+	} catch {
+		return false;
+	}
 }
 
 /** 완료된 write가 아직 Root의 최신 chain일 때만 Map에서 제거한다. */
@@ -251,7 +281,7 @@ function findOwningRootIndex(
 
 /** 알려진 Workspace/Graph Node ID prefix 뒤의 URI를 복원한다. */
 function parseNodeUri(id: string): vscode.Uri | undefined {
-	const prefixes = ['workspace-root:', 'folder:', 'file:'] as const;
+	const prefixes = [WORKSPACE_ROOT_ID_PREFIX, 'folder:', 'file:'] as const;
 	const prefix = prefixes.find((candidate) => id.startsWith(candidate));
 
 	if (!prefix) {

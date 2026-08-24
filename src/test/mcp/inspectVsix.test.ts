@@ -1,11 +1,17 @@
 import * as assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 interface InspectVsixModule {
+	findExtensionManifestCapabilityProblems(
+		manifest: unknown,
+	): readonly string[];
 	findUnresolvedMcpRuntimeSpecifiers(source: string): readonly string[];
 	findUnexpectedVsixPayloadEntries(entryNames: Iterable<string>): readonly string[];
 }
 
 const {
+	findExtensionManifestCapabilityProblems,
 	findUnresolvedMcpRuntimeSpecifiers,
 	findUnexpectedVsixPayloadEntries,
 } = require(
@@ -13,6 +19,58 @@ const {
 ) as InspectVsixModule;
 
 suite('MCP VSIX bundle dependency inspection', () => {
+	test('extension manifest는 limited Workspace capability와 restricted CLI 설정을 선언한다', () => {
+		const manifest = JSON.parse(
+			readFileSync(join(__dirname, '../../../package.json'), 'utf8'),
+		) as {
+			readonly capabilities?: {
+				readonly untrustedWorkspaces?: unknown;
+				readonly virtualWorkspaces?: unknown;
+			};
+		};
+
+		assert.deepStrictEqual(manifest.capabilities, {
+			untrustedWorkspaces: {
+				supported: 'limited',
+				restrictedConfigurations: [
+					'crispy.codexCliPath',
+					'crispy.claudeCliPath',
+					'crispy.antigravityCliPath',
+				],
+			},
+			virtualWorkspaces: {
+				supported: 'limited',
+			},
+		});
+		assert.deepStrictEqual(
+			findExtensionManifestCapabilityProblems(manifest),
+			[],
+		);
+	});
+
+	test('VSIX manifest 검사기는 entrypoint, Node와 Workspace capability 누락을 열거한다', () => {
+		assert.deepStrictEqual(
+			findExtensionManifestCapabilityProblems({
+				main: './unexpected.js',
+				engines: { node: '22.x' },
+				capabilities: {
+					untrustedWorkspaces: {
+						supported: true,
+						restrictedConfigurations: ['crispy.codexCliPath'],
+					},
+					virtualWorkspaces: { supported: false },
+				},
+			}),
+			[
+				'main',
+				'engines.node',
+				'capabilities.untrustedWorkspaces.supported',
+				'capabilities.untrustedWorkspaces.restrictedConfigurations',
+				'capabilities.virtualWorkspaces.supported',
+			],
+		);
+	});
+
 	test('실제 import와 require에서 Node builtin만 허용한다', () => {
 		const source = [
 			'import fs from "node:fs";',

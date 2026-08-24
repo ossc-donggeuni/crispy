@@ -10,6 +10,7 @@ import type {
 	WorkspaceSnapshot,
 } from '../../workspace/workspaceModel';
 import { convertWorkspaceSnapshotToGraph } from '../../workspace/workspaceToGraph';
+import { createWorkspaceRootId } from '../../workspace/workspaceRootId';
 
 suite('Workspace Snapshot to Graph', () => {
 	test('빈 Workspace Snapshot을 빈 Graph로 변환한다', () => {
@@ -267,7 +268,7 @@ function createWorkspaceRoot(
 	const uri = vscode.Uri.file(`/workspace/${name}`);
 
 	return {
-		id: `workspace-root:${uri.toString()}`,
+		id: createWorkspaceRootId(uri),
 		name,
 		uri,
 		status,

@@ -118,10 +118,11 @@ button:focus-visible {
 	position: absolute;
 	z-index: 1;
 	display: grid;
-	grid-template-rows: auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr) auto;
 	grid-template-areas:
 		'header'
-		'terminal';
+		'terminal'
+		'workspace-status';
 	min-width: 0;
 	min-height: 0;
 	overflow: hidden;
@@ -250,7 +251,8 @@ button:focus-visible {
 	display: none;
 }
 
-.terminal-surface[data-state='exited'] .terminal-overlay {
+.terminal-surface[data-state='exited'] .terminal-overlay,
+.terminal-surface[data-state='starting'] .terminal-overlay {
 	color: var(--vscode-foreground);
 }
 
@@ -296,9 +298,9 @@ button:focus-visible {
 #chat-drag-handle,
 #chat-collapse-toggle {
 	display: grid;
-	flex: 0 0 auto;
-	width: 22px;
-	height: 22px;
+	flex: 0 0 var(--agent-toolbar-control-size);
+	width: var(--agent-toolbar-control-size);
+	height: var(--agent-toolbar-control-size);
 	padding: 0;
 	place-items: center;
 	color: var(--vscode-foreground);
@@ -334,13 +336,17 @@ button:focus-visible {
 }
 
 #chat-drag-handle::before {
-	width: 18px;
-	height: 18px;
+	width: var(--agent-toolbar-icon-size);
+	height: var(--agent-toolbar-icon-size);
 	mask-image: url('./graph/assets/ui-icons/drag-handle.svg');
 	-webkit-mask-image: url('./graph/assets/ui-icons/drag-handle.svg');
 }
 
-#chat-collapse-toggle::before,
+#chat-collapse-toggle::before {
+	width: var(--agent-toolbar-icon-size);
+	height: var(--agent-toolbar-icon-size);
+}
+
 #chat-sticker-opener::before {
 	width: 12px;
 	height: 12px;
