@@ -359,6 +359,9 @@ suite('Graph View', () => {
 			end.id,
 			task.id,
 		);
+		const workElements = [workA, workB, workC, workD].map((work) => (
+			getTaskElement(root, 'data-task-node-id', work.id, task.id)
+		));
 
 		assert.strictEqual(
 			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
@@ -368,10 +371,13 @@ suite('Graph View', () => {
 			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
 			'disconnected',
 		);
+		assert.ok(workElements.every((element) => (
+			element.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE) === 'disconnected'
+		)));
 		connectTaskPorts(root, task.id, start.id, workA.id);
 		assert.strictEqual(
 			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
-			'connected',
+			'disconnected',
 		);
 		assert.strictEqual(
 			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
@@ -414,9 +420,16 @@ suite('Graph View', () => {
 		connectTaskPorts(root, task.id, workD.id, workC.id);
 		connectTaskPorts(root, task.id, workC.id, end.id);
 		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
 			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
 			'connected',
 		);
+		assert.ok(workElements.every((element) => (
+			element.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE) === 'connected'
+		)));
 		const connected = graphView.taskState.getTask(task.id);
 
 		assert.ok(connected);
@@ -593,14 +606,20 @@ suite('Graph View', () => {
 		const edge = task.edges[0];
 		const endEdge = task.edges[1];
 		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
 		const end = task.nodes.find((node) => node.kind === 'end');
 
-		assert.ok(edge && endEdge && start && end);
+		assert.ok(edge && endEdge && start && work && end);
 		const startElement = getTaskElement(root, 'data-task-node-id', start.id, task.id);
+		const workElement = getTaskElement(root, 'data-task-node-id', work.id, task.id);
 		const endElement = getTaskElement(root, 'data-task-node-id', end.id, task.id);
 
 		assert.strictEqual(
 			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
+			workElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
 			'connected',
 		);
 		assert.strictEqual(
@@ -643,6 +662,23 @@ suite('Graph View', () => {
 			'disconnected',
 		);
 		assert.strictEqual(
+			workElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		connectTaskPorts(root, task.id, start.id, work.id);
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
+			workElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
 			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
 			'connected',
 		);
@@ -654,8 +690,29 @@ suite('Graph View', () => {
 
 		endDisconnect.dispatch('click', createClickEvent(endDisconnect));
 		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		assert.strictEqual(
+			workElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'disconnected',
+		);
+		assert.strictEqual(
 			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
 			'disconnected',
+		);
+		connectTaskPorts(root, task.id, work.id, end.id);
+		assert.strictEqual(
+			startElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
+			workElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
+		);
+		assert.strictEqual(
+			endElement.getAttribute(TASK_CONNECTION_STATE_ATTRIBUTE),
+			'connected',
 		);
 
 		graphView.dispose();
@@ -922,6 +979,10 @@ suite('Graph View', () => {
 		assert.match(taskViewCss, /\.task-node-port\s*\{[^}]*top:\s*50%;/s);
 		assert.match(
 			taskViewCss,
+			/\.task-node-port\s*\{[^}]*--task-port-color:\s*var\(--graph-node-border-color\);/s,
+		);
+		assert.match(
+			taskViewCss,
 			/\.task-input-port\s*\{[^}]*left:\s*0;[^}]*translate\(-50%,\s*-50%\)/s,
 		);
 		assert.match(
@@ -942,11 +1003,23 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			taskViewCss,
-			/\.task-end-node\[data-task-connection-state=['"]disconnected['"]\]\s*\{[^}]*--vscode-charts-orange[^}]*--graph-node-background:[^}]*62%/s,
+			/\.task-end-node\[data-task-connection-state=['"]disconnected['"]\]\s*\{[^}]*color-mix\([^}]*--vscode-charts-orange[^}]*#7a2e00[^}]*--graph-node-background:[^}]*62%/s,
 		);
 		assert.match(
 			taskViewCss,
-			/\.task-end-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-focusBorder[^}]*--graph-node-background:\s*var\(--graph-node-default-background\)/s,
+			/\.task-end-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-testing-iconFailed[^}]*--graph-node-background:\s*var\(--graph-node-default-background\)/s,
+		);
+		assert.doesNotMatch(
+			taskViewCss,
+			/\.task-end-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*(?:--vscode-focusBorder|--vscode-testing-iconPassed)/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-work-node\[data-task-connection-state=['"]disconnected['"]\]\s*\{[^}]*--vscode-descriptionForeground/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-work-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-focusBorder/s,
 		);
 		assert.match(taskViewCss, /\.task-work-node\s*>\s*\.task-node-description,[^{]*\{[^}]*display:\s*none;/s);
 		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);

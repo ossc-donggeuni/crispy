@@ -1,6 +1,6 @@
 import {
 	assertValidTaskBlueprint,
-	getTaskFlowStatus,
+	getTaskFlowAnalysis,
 	type TaskBlueprint,
 	type TaskFlowStatus,
 	type TaskNode,
@@ -25,14 +25,14 @@ interface TaskLayoutNodeBase {
 	readonly height: number;
 }
 
-/** Start/End가 현재 Work Edge를 하나 이상 가지는지 나타내는 파생 상태다. */
-export type TaskBoundaryConnectionState = 'connected' | 'disconnected';
+/** Node가 START→END 완성 경로에 참여하는지 나타내는 파생 상태다. */
+export type TaskNodeConnectionState = 'connected' | 'disconnected';
 
 /** TaskBlueprint 제목을 표시하는 시작 Layout Node다. */
 export interface TaskStartLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'start';
 	readonly title: string;
-	readonly connectionState: TaskBoundaryConnectionState;
+	readonly connectionState: TaskNodeConnectionState;
 }
 
 /** Work Node의 표시 정보와 prompt를 제공하는 Layout Node다. */
@@ -42,13 +42,14 @@ export interface TaskWorkLayoutNode extends TaskLayoutNodeBase {
 	readonly description: string;
 	readonly prompt: string;
 	readonly canRemove: boolean;
+	readonly connectionState: TaskNodeConnectionState;
 }
 
 /** TaskBlueprint 제목을 표시하는 종료 Layout Node다. */
 export interface TaskEndLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'end';
 	readonly title: string;
-	readonly connectionState: TaskBoundaryConnectionState;
+	readonly connectionState: TaskNodeConnectionState;
 }
 
 /** Task Renderer가 처리하는 Start, Work, End Layout Node다. */
@@ -113,8 +114,12 @@ export function createTaskGraphLayout(
 /** 내부 Node/Edge ID lookup이 다른 Task와 섞이지 않도록 한 Task만 Layout한다. */
 function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 	assertValidTaskBlueprint(task);
-	const flowState = getTaskFlowStatus(task);
-	const taskNodesById = new Map(task.nodes.map((node) => [node.id, node]));
+	const flowAnalysis = getTaskFlowAnalysis(task);
+	const flowState = flowAnalysis.status;
+	const taskConnected = flowState === 'ready';
+	const boundaryConnectionState: TaskNodeConnectionState = taskConnected
+		? 'connected'
+		: 'disconnected';
 	const nodes: TaskLayoutNode[] = task.nodes.map((node) => {
 		const storedPosition = task.nodePositions[node.id];
 
@@ -142,10 +147,7 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				...base,
 				kind: node.kind,
 				title: task.title,
-				connectionState: task.edges.some((edge) => (
-					edge.source === node.id
-					&& taskNodesById.get(edge.target)?.kind === 'work'
-				)) ? 'connected' : 'disconnected',
+				connectionState: boundaryConnectionState,
 			};
 		} else if (node.kind === 'work') {
 			return {
@@ -155,16 +157,16 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				description: node.description,
 				prompt: node.prompt,
 				canRemove: true,
+				connectionState: flowAnalysis.connectedNodeIds.has(node.id)
+					? 'connected'
+					: 'disconnected',
 			};
 		} else {
 			return {
 				...base,
 				kind: node.kind,
 				title: task.title,
-				connectionState: task.edges.some((edge) => (
-					edge.target === node.id
-					&& taskNodesById.get(edge.source)?.kind === 'work'
-				)) ? 'connected' : 'disconnected',
+				connectionState: boundaryConnectionState,
 			};
 		}
 	});

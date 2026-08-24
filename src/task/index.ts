@@ -19,8 +19,10 @@ export {
 } from './taskModel';
 export {
 	assertValidTaskBlueprint,
+	getTaskFlowAnalysis,
 	getTaskFlowStatus,
 	validateTaskBlueprint,
+	type TaskFlowAnalysis,
 	type TaskFlowStatus,
 	type TaskValidationIssue,
 	type TaskValidationIssueCode,

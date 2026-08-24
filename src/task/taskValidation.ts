@@ -22,6 +22,12 @@ export type TaskValidationIssueCode =
 /** Task DAG가 실행 가능한 흐름인지 구분한다. */
 export type TaskFlowStatus = 'ready' | 'incomplete';
 
+/** START에서 END까지 완성된 실행 경로와 그 경로에 참여하는 Node를 나타낸다. */
+export interface TaskFlowAnalysis {
+	readonly status: TaskFlowStatus;
+	readonly connectedNodeIds: ReadonlySet<string>;
+}
+
 /** 호출자가 오류 원인과 관련 Node/Edge를 식별할 수 있는 validation 결과다. */
 export interface TaskValidationIssue {
 	readonly code: TaskValidationIssueCode;
@@ -220,18 +226,25 @@ export function assertValidTaskBlueprint(blueprint: TaskBlueprint): void {
 }
 
 /**
- * Structurally valid Task가 Start에서 End까지 모든 Work를 연결한 흐름인지 판별한다.
+ * Structurally valid Task에 Start에서 End까지 완성된 실행 경로가 있는지 판별한다.
  * 편집 중의 disconnected Task는 정상 Blueprint이지만 incomplete이다.
  */
 export function getTaskFlowStatus(blueprint: TaskBlueprint): TaskFlowStatus {
+	return getTaskFlowAnalysis(blueprint).status;
+}
+
+/** START 순방향과 END 역방향 reachability의 교집합으로 완성 경로를 분석한다. */
+export function getTaskFlowAnalysis(
+	blueprint: TaskBlueprint,
+): TaskFlowAnalysis {
 	if (validateTaskBlueprint(blueprint).length > 0) {
-		return 'incomplete';
+		return { status: 'incomplete', connectedNodeIds: new Set() };
 	}
 
 	const start = blueprint.nodes.find((node) => node.kind === 'start');
 	const end = blueprint.nodes.find((node) => node.kind === 'end');
 	if (!start || !end) {
-		return 'incomplete';
+		return { status: 'incomplete', connectedNodeIds: new Set() };
 	}
 
 	const outgoingByNodeId = new Map(blueprint.nodes.map((node) => (
@@ -249,22 +262,22 @@ export function getTaskFlowStatus(blueprint: TaskBlueprint): TaskFlowStatus {
 	const reachableFromStart = collectReachableNodes(start.id, outgoingByNodeId);
 	const reachingEnd = collectReachableNodes(end.id, incomingByNodeId);
 	if (!reachableFromStart.has(end.id)) {
-		return 'incomplete';
+		return { status: 'incomplete', connectedNodeIds: new Set() };
 	}
+	const connectedNodeIds = new Set(blueprint.nodes.flatMap((node) => (
+		reachableFromStart.has(node.id) && reachingEnd.has(node.id)
+			? [node.id]
+			: []
+	)));
+	const hasIncompleteBoundaryConnection = blueprint.nodes.some((node) => (
+		node.kind === 'work'
+		&& reachableFromStart.has(node.id) !== reachingEnd.has(node.id)
+	));
 
-	for (const node of blueprint.nodes) {
-		if (
-			(node.kind === 'work' && (
-				!reachableFromStart.has(node.id) || !reachingEnd.has(node.id)
-			))
-			|| (node.kind !== 'start' && incomingByNodeId.get(node.id)?.length === 0)
-			|| (node.kind !== 'end' && outgoingByNodeId.get(node.id)?.length === 0)
-		) {
-			return 'incomplete';
-		}
-	}
-
-	return 'ready';
+	return {
+		status: hasIncompleteBoundaryConnection ? 'incomplete' : 'ready',
+		connectedNodeIds,
+	};
 }
 
 /** 인접 Node map을 따라 시작 Node에서 도달 가능한 ID를 모은다. */

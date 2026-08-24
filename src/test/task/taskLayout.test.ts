@@ -48,6 +48,7 @@ suite('Task Layout', () => {
 		assert.strictEqual(startLayout.title, 'Ready Task');
 		assert.strictEqual(endLayout.title, startLayout.title);
 		assert.strictEqual(startLayout.connectionState, 'connected');
+		assert.strictEqual(workLayout.connectionState, 'connected');
 		assert.strictEqual(endLayout.connectionState, 'connected');
 		assert.deepStrictEqual(layout.edges.map((edge) => ({
 			id: edge.id,
@@ -187,17 +188,86 @@ suite('Task Layout', () => {
 			['end', 'disconnected'],
 		]);
 		assert.deepStrictEqual(getBoundaryConnectionStates(partialLayout), [
-			['start', 'connected'],
+			['start', 'disconnected'],
 			['end', 'disconnected'],
 		]);
 		assert.deepStrictEqual(getBoundaryConnectionStates(endOnlyLayout), [
 			['start', 'disconnected'],
-			['end', 'connected'],
+			['end', 'disconnected'],
 		]);
 		assert.deepStrictEqual(getBoundaryConnectionStates(connectedLayout), [
 			['start', 'connected'],
 			['end', 'connected'],
 		]);
+		assert.deepStrictEqual(getWorkConnectionStates(disconnectedLayout), [
+			['Work', 'disconnected'],
+		]);
+		assert.deepStrictEqual(getWorkConnectionStates(partialLayout), [
+			['Work', 'disconnected'],
+		]);
+		assert.deepStrictEqual(getWorkConnectionStates(endOnlyLayout), [
+			['Work', 'disconnected'],
+		]);
+		assert.deepStrictEqual(getWorkConnectionStates(connectedLayout), [
+			['Work', 'connected'],
+		]);
+	});
+
+	test('완성 경로 Work만 connected로 표시하고 한쪽 연결 Work는 Boundary를 disconnected로 만든다', () => {
+		const serial = createSerialTask({ x: 0, y: 0 });
+		const branch = createBranchTask({ x: 0, y: 0 });
+		const partiallyUnusedBranch = {
+			...branch,
+			edges: branch.edges.filter(
+				(edge) => edge.id !== 'task-edge:e-end',
+			),
+		};
+		const readyWithOrphan = createReadyTask('task:orphan', { x: 0, y: 0 });
+		const orphanWork = createWorkNode('task-node:orphan', 'Orphan');
+		const isolatedWork: TaskBlueprint = {
+			...readyWithOrphan,
+			nodes: [...readyWithOrphan.nodes, orphanWork],
+			nodePositions: {
+				...readyWithOrphan.nodePositions,
+				[orphanWork.id]: { x: 320, y: 104 },
+			},
+		};
+
+		assert.deepStrictEqual(
+			getBoundaryConnectionStates(createTaskGraphLayout([serial])),
+			[['start', 'connected'], ['end', 'connected']],
+		);
+		assert.deepStrictEqual(
+			getWorkConnectionStates(createTaskGraphLayout([serial])),
+			[
+				['Serial A', 'connected'],
+				['Serial B', 'connected'],
+				['Serial C', 'connected'],
+			],
+		);
+		assert.deepStrictEqual(
+			getBoundaryConnectionStates(createTaskGraphLayout([partiallyUnusedBranch])),
+			[['start', 'disconnected'], ['end', 'disconnected']],
+		);
+		assert.deepStrictEqual(
+			getWorkConnectionStates(createTaskGraphLayout([partiallyUnusedBranch])),
+			[
+				['Work A', 'connected'],
+				['Work B', 'connected'],
+				['Work C', 'connected'],
+				['Join', 'connected'],
+				['Work D', 'connected'],
+				['Work E', 'disconnected'],
+			],
+		);
+		assert.deepStrictEqual(
+			getBoundaryConnectionStates(createTaskGraphLayout([isolatedWork])),
+			[['start', 'connected'], ['end', 'connected']],
+		);
+		assert.deepStrictEqual(
+			getWorkConnectionStates(createTaskGraphLayout([isolatedWork])),
+			[['Work', 'connected'], ['Orphan', 'disconnected']],
+		);
 	});
 
 	test('Single Port를 공유하는 Branch/Join Edge endpoint를 분산하지 않는다', () => {
@@ -257,6 +327,9 @@ suite('Task Layout', () => {
 			['start', 'connected'],
 			['end', 'connected'],
 		]);
+		assert.ok(getWorkConnectionStates(layout).every(([, state]) => (
+			state === 'connected'
+		)));
 	});
 
 	test('Work/End 위치 변경 뒤 모든 incident Edge가 최신 단일 Port 중심을 공유한다', () => {
@@ -368,6 +441,14 @@ function getBoundaryConnectionStates(
 	return layout.nodes.flatMap((node) => node.kind === 'work'
 		? []
 		: [[node.kind, node.connectionState] as const]);
+}
+
+function getWorkConnectionStates(
+	layout: ReturnType<typeof createTaskGraphLayout>,
+): Array<readonly [string, 'connected' | 'disconnected']> {
+	return layout.nodes.flatMap((node) => node.kind === 'work'
+		? [[node.title, node.connectionState] as const]
+		: []);
 }
 
 function assertGeometryDelta(
@@ -493,6 +574,48 @@ function createBranchTask(
 		}, {
 			id: 'task-edge:e-end',
 			source: workE.id,
+			target: end.id,
+		}],
+	};
+}
+
+function createSerialTask(
+	origin: { readonly x: number; readonly y: number },
+): TaskBlueprint {
+	const start = { id: 'task-node:serial-start', kind: 'start' as const };
+	const workA = createWorkNode('task-node:serial-a', 'Serial A');
+	const workB = createWorkNode('task-node:serial-b', 'Serial B');
+	const workC = createWorkNode('task-node:serial-c', 'Serial C');
+	const end = { id: 'task-node:serial-end', kind: 'end' as const };
+
+	return {
+		version: TASK_BLUEPRINT_VERSION,
+		id: 'task:serial',
+		title: 'Serial Task',
+		description: '',
+		origin,
+		nodePositions: {
+			[workA.id]: { x: 320, y: 0 },
+			[workB.id]: { x: 640, y: 0 },
+			[workC.id]: { x: 960, y: 0 },
+			[end.id]: { x: 1280, y: 0 },
+		},
+		nodes: [start, workA, workB, workC, end],
+		edges: [{
+			id: 'task-edge:serial-start-a',
+			source: start.id,
+			target: workA.id,
+		}, {
+			id: 'task-edge:serial-a-b',
+			source: workA.id,
+			target: workB.id,
+		}, {
+			id: 'task-edge:serial-b-c',
+			source: workB.id,
+			target: workC.id,
+		}, {
+			id: 'task-edge:serial-c-end',
+			source: workC.id,
 			target: end.id,
 		}],
 	};

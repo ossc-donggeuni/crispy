@@ -3,6 +3,7 @@ import {
 	assertValidTaskBlueprint,
 	createDefaultTaskBlueprint,
 	createTaskState,
+	getTaskFlowAnalysis,
 	getTaskFlowStatus,
 	TASK_BLUEPRINT_VERSION,
 	TASK_DEFAULT_END_POSITION,
@@ -540,6 +541,72 @@ suite('Task Domain', () => {
 			...ready,
 			nodePositions: {},
 		}), 'incomplete');
+	});
+
+	test('Flow status는 고립 Work는 무시하고 Boundary 한쪽에만 연결된 Work는 incomplete로 판별한다', () => {
+		const task = addWorks(createTask(), [
+			'Connected',
+			'Start Only',
+			'End Only',
+			'Unused',
+		]);
+		const start = getNode(task, 'start');
+		const end = getNode(task, 'end');
+		const [connectedWork, startOnlyWork, endOnlyWork, unusedWork] = task.nodes.filter(
+			(node) => node.kind === 'work',
+		);
+
+		assert.ok(connectedWork && startOnlyWork && endOnlyWork && unusedWork);
+		const withUnusedWork: TaskBlueprint = {
+			...task,
+			edges: [{
+				id: 'task-edge:start-connected',
+				source: start.id,
+				target: connectedWork.id,
+			}, {
+				id: 'task-edge:connected-end',
+				source: connectedWork.id,
+				target: end.id,
+			}],
+		};
+		const analysis = getTaskFlowAnalysis(withUnusedWork);
+
+		assert.strictEqual(analysis.status, 'ready');
+		assert.strictEqual(analysis.connectedNodeIds.size, 3);
+		assert.strictEqual(analysis.connectedNodeIds.has(start.id), true);
+		assert.strictEqual(analysis.connectedNodeIds.has(connectedWork.id), true);
+		assert.strictEqual(analysis.connectedNodeIds.has(end.id), true);
+		assert.strictEqual(analysis.connectedNodeIds.has(unusedWork.id), false);
+
+		const withIncompleteBoundaryConnections: TaskBlueprint = {
+			...withUnusedWork,
+			edges: [...withUnusedWork.edges, {
+				id: 'task-edge:start-only',
+				source: start.id,
+				target: startOnlyWork.id,
+			}, {
+				id: 'task-edge:end-only',
+				source: endOnlyWork.id,
+				target: end.id,
+			}],
+		};
+		const incompleteAnalysis = getTaskFlowAnalysis(
+			withIncompleteBoundaryConnections,
+		);
+
+		assert.strictEqual(incompleteAnalysis.status, 'incomplete');
+		assert.strictEqual(
+			incompleteAnalysis.connectedNodeIds.has(connectedWork.id),
+			true,
+		);
+		assert.strictEqual(
+			incompleteAnalysis.connectedNodeIds.has(startOnlyWork.id),
+			false,
+		);
+		assert.strictEqual(
+			incompleteAnalysis.connectedNodeIds.has(endOnlyWork.id),
+			false,
+		);
 	});
 
 	test('중복 Task ID와 중복 Node/Edge ID를 거부하고 Task 내부 ID는 다른 Task와 격리한다', () => {

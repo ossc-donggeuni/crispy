@@ -901,11 +901,7 @@ function syncTaskNodeElement(
 	element.setAttribute(TASK_NODE_ID_ATTRIBUTE, node.id);
 	element.setAttribute(TASK_NODE_KIND_ATTRIBUTE, node.kind);
 	element.setAttribute(TASK_FLOW_STATE_ATTRIBUTE, node.flowState);
-	if (node.kind === 'work') {
-		element.removeAttribute(TASK_CONNECTION_STATE_ATTRIBUTE);
-	} else {
-		element.setAttribute(TASK_CONNECTION_STATE_ATTRIBUTE, node.connectionState);
-	}
+	element.setAttribute(TASK_CONNECTION_STATE_ATTRIBUTE, node.connectionState);
 	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	element.setAttribute('role', 'group');
 	element.setAttribute('aria-label', createTaskNodeAriaLabel(node));
