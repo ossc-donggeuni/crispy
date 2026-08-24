@@ -47,6 +47,12 @@ import {
 	initializeGraphView,
 } from '../../webview/graph/graphView';
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
+import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
+import { createAgentActivityEffectReconciler } from '../../webview/graph/agentActivityEffects';
+import {
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	getAgentActivityBindingBlockHeight,
+} from '../../webview/graph/agentActivityBindings';
 import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
@@ -91,6 +97,40 @@ suite('Graph View', () => {
 
 		assert.ok(hiddenRule);
 		assert.match(hiddenRule[0], /display:\s*none;/);
+	});
+
+	test('Agent Binding은 absolute paint, shared subtree width와 G-11 local Effect geometry를 사용한다', () => {
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const containerRule = graphViewCss.match(
+			/\.graph-agent-activity-bindings\s*\{[^}]*\}/,
+		);
+		const sessionRule = graphViewCss.match(
+			/\.graph-agent-activity-session-id\s*\{[^}]*\}/,
+		);
+
+		assert.ok(containerRule);
+		assert.match(containerRule[0], /position:\s*absolute;/);
+		assert.match(
+			containerRule[0],
+			/top:\s*var\(\s*--graph-agent-activity-binding-top/,
+		);
+		assert.match(containerRule[0], /pointer-events:\s*none;/);
+		assert.match(containerRule[0], /left:\s*0;/);
+		assert.match(containerRule[0], /width:\s*100%;/);
+		assert.ok(sessionRule);
+		assert.match(sessionRule[0], /overflow:\s*hidden;/);
+		assert.match(sessionRule[0], /text-overflow:\s*ellipsis;/);
+		assert.match(
+			graphViewCss,
+			/\.graph-agent-activity-binding\.graph-node-effect-host\s*\{/,
+		);
+		assert.match(
+			graphViewCss,
+			/\.graph-node-effect-layer\s*\{[^}]*pointer-events:\s*none;/,
+		);
 	});
 
 	test('Effect Region은 World layer에서 interaction 없이 기존 reflow easing을 사용한다', () => {
@@ -211,6 +251,133 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(getNodeEffects(folder), []);
 		assert.strictEqual(folder.hasClass('graph-node-effect-host'), false);
 		graphView.dispose();
+	});
+
+	test('Effect owner가 같은 Target의 외부 Effect와 독립적으로 조합·정리된다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK);
+		const target = { nodeId: 'folder:app/src' };
+		const effectOwner = graphView.createNodeEffectOwner();
+
+		graphView.setNodeEffect(target, { kind: 'outline', color: '#22cc88' });
+		effectOwner.setNodeEffect(target, { kind: 'outline', color: '#ff3355' });
+		effectOwner.setNodeEffect(target, { kind: 'pulse', color: '#ff3355' });
+		const region = getEffectRegion(root, target.nodeId);
+
+		assert.deepStrictEqual(
+			getNodeEffects(region, 'outline')
+				.map((effect) => effect.style.getPropertyValue(
+					'--graph-node-effect-color',
+				))
+				.sort(),
+			['#22cc88', '#ff3355'],
+		);
+		assert.strictEqual(getNodeEffects(region, 'pulse').length, 1);
+
+		effectOwner.clearNodeEffect(target);
+
+		assert.strictEqual(getNodeEffects(region, 'outline').length, 1);
+		assert.strictEqual(
+			getNodeEffect(region, 'outline').style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#22cc88',
+		);
+		assert.strictEqual(findNodeEffect(region, 'pulse'), undefined);
+
+		effectOwner.setNodeEffect(target, { kind: 'shimmer', color: '#ff3355' });
+		effectOwner.dispose();
+		assert.strictEqual(findNodeEffect(region, 'shimmer'), undefined);
+		assert.ok(getNodeEffect(region, 'outline'));
+
+		effectOwner.setNodeEffect(target, { kind: 'pulse', color: '#ff3355' });
+		assert.strictEqual(findNodeEffect(region, 'pulse'), undefined);
+
+		graphView.clearNodeEffect(target);
+		assert.strictEqual(findEffectRegion(root, target.nodeId), undefined);
+		graphView.dispose();
+	});
+
+	test('기존 occurrence kind merge와 opt-in owner recipe 교체를 함께 보존한다', () => {
+		const ownerDocument = new FakeDocument();
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+		);
+		const sourceTarget = { nodeId: 'folder:effect-owner-recipe' };
+		const occurrenceTarget = {
+			...sourceTarget,
+			rootId: 'folder:effect-owner-recipe::detached:1',
+		};
+		const sourceElement = ownerDocument.createElement('article');
+		const occurrenceElement = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(sourceTarget, sourceElement.asHtmlElement());
+		nodeEffects.registerNode(
+			occurrenceTarget,
+			occurrenceElement.asHtmlElement(),
+		);
+		const genericOwner = nodeEffects.createOwner();
+
+		genericOwner.setNodeEffect(sourceTarget, {
+			kind: 'marching-dash',
+			color: '#55ccff',
+		});
+		genericOwner.setNodeEffect(sourceTarget, {
+			kind: 'icon',
+			icon: 'alert',
+			color: '#55ccff',
+		});
+		genericOwner.setNodeEffect(occurrenceTarget, {
+			kind: 'pulse',
+			color: '#55ccff',
+		});
+
+		assert.deepStrictEqual(
+			getDirectNodeEffects(occurrenceElement).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['marching-dash', 'icon', 'pulse'],
+		);
+		genericOwner.dispose();
+
+		const externalOwner = nodeEffects.createOwner();
+		const recipeOwner = nodeEffects.createOwner();
+
+		externalOwner.setNodeEffect(sourceTarget, {
+			kind: 'outline-strong',
+			color: '#ffaa33',
+		});
+		recipeOwner.replaceNodeEffects(sourceTarget, [
+			{ kind: 'marching-dash', color: '#55ccff' },
+			{ kind: 'icon', icon: 'alert', color: '#55ccff' },
+		]);
+		recipeOwner.replaceNodeEffects(occurrenceTarget, [
+			{ kind: 'pulse', color: '#55ccff' },
+		], { sourceInheritance: 'replace' });
+
+		assert.deepStrictEqual(
+			getDirectNodeEffects(occurrenceElement).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['outline-strong', 'pulse'],
+		);
+
+		recipeOwner.clearNodeEffect(occurrenceTarget);
+		assert.deepStrictEqual(
+			getDirectNodeEffects(occurrenceElement).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['outline-strong', 'marching-dash', 'icon'],
+		);
+		nodeEffects.dispose();
 	});
 
 	test('Parent Effect는 열린 visible subtree를 하나의 Region으로 재귀 확장·수축한다', () => {
@@ -546,6 +713,111 @@ suite('Graph View', () => {
 		nodeEffects.dispose();
 	});
 
+	test('Target과 Local Effect Host는 remount와 kind 전환에도 G-11 timeline을 공유한다', () => {
+		const ownerDocument = new FakeDocument();
+		let animationTime = 100;
+		const nodeEffects = createGraphNodeEffects(
+			ownerDocument as unknown as Document,
+			() => animationTime,
+		);
+		const target = { nodeId: 'file:shared-effect-timeline.ts' };
+		const targetElement = ownerDocument.createElement('article');
+
+		nodeEffects.registerNode(target, targetElement.asHtmlElement());
+		animationTime = 350;
+		for (const kind of ['shimmer', 'pulse', 'marching-dash'] as const) {
+			nodeEffects.setNodeEffect(target, { kind, color: '#55ccff' });
+		}
+		const bindingElement = ownerDocument.createElement('div');
+		const localHost = nodeEffects.createLocalEffectHost(
+			bindingElement.asHtmlElement(),
+		);
+
+		localHost.setEffects([
+			{ kind: 'shimmer', color: '#55ccff' },
+			{ kind: 'pulse', color: '#55ccff' },
+			{ kind: 'marching-dash', color: '#55ccff' },
+			{ kind: 'outline', color: '#55ccff' },
+			{ kind: 'icon', icon: 'alert', color: '#55ccff' },
+		]);
+
+		for (const kind of ['shimmer', 'pulse', 'marching-dash'] as const) {
+			assert.strictEqual(
+				getDirectNodeEffect(targetElement, kind).style.getPropertyValue(
+					'--graph-node-effect-animation-delay',
+				),
+				'-250ms',
+			);
+			assert.strictEqual(
+				getDirectNodeEffect(bindingElement, kind).style.getPropertyValue(
+					'--graph-node-effect-animation-delay',
+				),
+				'-250ms',
+			);
+		}
+		assert.strictEqual(bindingElement.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '-250ms');
+		assert.strictEqual(getDirectNodeEffect(
+			bindingElement,
+			'outline',
+		).style.getPropertyValue('--graph-node-effect-animation-delay'), '');
+		assert.strictEqual(getDirectNodeEffect(
+			bindingElement,
+			'icon',
+		).style.getPropertyValue('--graph-node-effect-animation-delay'), '');
+
+		localHost.dispose();
+		animationTime = 850;
+		const remountedBinding = ownerDocument.createElement('div');
+		const remountedHost = nodeEffects.createLocalEffectHost(
+			remountedBinding.asHtmlElement(),
+		);
+
+		remountedHost.setEffects([
+			{ kind: 'shimmer', color: '#ff8844' },
+			{ kind: 'pulse', color: '#ff8844' },
+			{ kind: 'marching-dash', color: '#ff8844' },
+		]);
+		for (const kind of ['shimmer', 'pulse', 'marching-dash'] as const) {
+			assert.strictEqual(
+				getDirectNodeEffect(remountedBinding, kind).style.getPropertyValue(
+					'--graph-node-effect-animation-delay',
+				),
+				'-750ms',
+			);
+		}
+
+		animationTime = 950;
+		remountedHost.setEffects([{ kind: 'outline', color: '#ff8844' }]);
+		assert.strictEqual(remountedBinding.style.getPropertyValue(
+			'--graph-node-effect-animation-delay',
+		), '');
+		animationTime = 1_100;
+		remountedHost.setEffects([{ kind: 'pulse', color: '#ff8844' }]);
+		assert.strictEqual(
+			getDirectNodeEffect(remountedBinding, 'pulse').style.getPropertyValue(
+				'--graph-node-effect-animation-delay',
+			),
+			'-1000ms',
+		);
+		animationTime = 1_300;
+		remountedHost.setEffects([{
+			kind: 'marching-dash',
+			color: '#ff8844',
+		}]);
+		assert.strictEqual(
+			getDirectNodeEffect(
+				remountedBinding,
+				'marching-dash',
+			).style.getPropertyValue('--graph-node-effect-animation-delay'),
+			'-1200ms',
+		);
+
+		remountedHost.dispose();
+		nodeEffects.dispose();
+	});
+
 	test('Folder collapse/open과 Graph refresh 뒤 새 DOM에 활성 Effect를 복원한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -675,6 +947,576 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Folder Binding을 snapshot 순서로 갱신하고 Graph remount 뒤 복원한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+			},
+		}, GRAPH_MOCK, {}, store);
+		const target = { nodeId: 'folder:app/src' };
+
+		store.setAgentActivity('session-A', target, 'planned');
+		store.setAgentActivity('session-B', target, 'editing');
+		store.setAgentActivity('session-C', target, 'active');
+		const firstFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+		const sessionABinding = getAgentBindingElements(firstFolder)[2];
+
+		assert.deepStrictEqual(getAgentBindingState(firstFolder), [
+			['session-B', 'editing'],
+			['session-C', 'active'],
+			['session-A', 'planned'],
+		]);
+		const closedBindingTop = Number.parseFloat(
+			firstFolder.style.getPropertyValue(
+				'--graph-agent-activity-binding-top',
+			),
+		);
+
+		assert.strictEqual(
+			closedBindingTop,
+			GRAPH_FOLDER_NODE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP,
+		);
+		graphView.setNodeEffect(target, { kind: 'outline', color: '#55aaee' });
+		let effectBounds = readEffectRegionBounds(getEffectRegion(root, target.nodeId));
+		let folderPosition = readTranslate(firstFolder.style.transform);
+		let bindingBounds = readAgentBindingHorizontalBounds(firstFolder);
+
+		assert.deepStrictEqual(bindingBounds, {
+			x: effectBounds.x,
+			width: effectBounds.width,
+		});
+		const closedBindingWidth = bindingBounds.width;
+		assert.ok(
+			effectBounds.y + effectBounds.height
+				<= folderPosition.y + closedBindingTop,
+		);
+
+		graphView.state.toggleFolder(target.nodeId);
+		const openBindingTop = Number.parseFloat(
+			firstFolder.style.getPropertyValue(
+				'--graph-agent-activity-binding-top',
+			),
+		);
+
+		assert.ok(openBindingTop > closedBindingTop);
+		effectBounds = readEffectRegionBounds(getEffectRegion(root, target.nodeId));
+		folderPosition = readTranslate(firstFolder.style.transform);
+		bindingBounds = readAgentBindingHorizontalBounds(firstFolder);
+		assert.deepStrictEqual(bindingBounds, {
+			x: effectBounds.x,
+			width: effectBounds.width,
+		});
+		assert.ok(bindingBounds.width > closedBindingWidth);
+		assert.ok(
+			effectBounds.y + effectBounds.height
+				<= folderPosition.y + openBindingTop,
+		);
+		graphView.state.toggleFolder(target.nodeId);
+
+		store.setAgentActivity('session-A', target, 'rejected');
+
+		assert.strictEqual(getAgentBindingElements(firstFolder)[0], sessionABinding);
+		assert.deepStrictEqual(getAgentBindingState(firstFolder), [
+			['session-A', 'rejected'],
+			['session-B', 'editing'],
+			['session-C', 'active'],
+		]);
+
+		graphView.state.toggleFolder('folder:app');
+		assert.strictEqual(findAgentBindingContainer(firstFolder), undefined);
+		graphView.state.toggleFolder('folder:app');
+		const reopenedFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		assert.notStrictEqual(reopenedFolder, firstFolder);
+		assert.deepStrictEqual(getAgentBindingState(reopenedFolder), [
+			['session-A', 'rejected'],
+			['session-B', 'editing'],
+			['session-C', 'active'],
+		]);
+		assert.deepStrictEqual(
+			readAgentBindingHorizontalBounds(reopenedFolder),
+			pickHorizontalBounds(getEffectRegion(root, target.nodeId)),
+		);
+
+		graphView.updateGraph({ roots: [], rootNodes: {} });
+		assert.strictEqual(findAgentBindingContainer(reopenedFolder), undefined);
+		graphView.updateGraph(GRAPH_MOCK);
+		const refreshedFolder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			target.nodeId,
+		);
+
+		assert.deepStrictEqual(getAgentBindingState(refreshedFolder), [
+			['session-A', 'rejected'],
+			['session-B', 'editing'],
+			['session-C', 'active'],
+		]);
+		assert.deepStrictEqual(
+			readAgentBindingHorizontalBounds(refreshedFolder),
+			pickHorizontalBounds(getEffectRegion(root, target.nodeId)),
+		);
+
+		graphView.dispose();
+		assert.strictEqual(findAgentBindingContainer(refreshedFolder), undefined);
+		store.setAgentActivity('session-D', target, 'mentioned');
+		assert.strictEqual(findAgentBindingContainer(refreshedFolder), undefined);
+	});
+
+	test('Standalone Binding count 변화만 기존 Graph reflow 경로의 footprint를 갱신한다', () => {
+		const first = { kind: 'file' as const, id: 'file:layout-a', name: 'a.ts' };
+		const second = { kind: 'file' as const, id: 'file:layout-b', name: 'b.ts' };
+		const graph: Graph = {
+			roots: [
+				{ id: 'root:layout-a', nodeId: first.id },
+				{ id: 'root:layout-b', nodeId: second.id },
+			],
+			rootNodes: { [first.id]: first, [second.id]: second },
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			graph,
+			{},
+			store,
+		);
+		const firstCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			first.id,
+		);
+		const secondCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			second.id,
+		);
+		const initialFirst = readTranslate(firstCard.style.transform);
+		const initialSecond = readTranslate(secondCard.style.transform);
+
+		store.setAgentActivity('session-A', { nodeId: first.id }, 'planned');
+		assert.deepStrictEqual(readTranslate(firstCard.style.transform), initialFirst);
+		assert.strictEqual(
+			readTranslate(secondCard.style.transform).y,
+			initialSecond.y + getAgentActivityBindingBlockHeight(1),
+		);
+		assert.strictEqual(
+			firstCard.style.getPropertyValue(
+				'--graph-agent-activity-binding-top',
+			),
+			`${GRAPH_FOLDER_NODE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP}px`,
+		);
+		const oneBindingPosition = secondCard.style.transform;
+
+		store.setAgentActivity('session-A', { nodeId: first.id }, 'editing');
+		assert.strictEqual(secondCard.style.transform, oneBindingPosition);
+
+		store.setAgentActivity('session-B', { nodeId: first.id }, 'active');
+		assert.strictEqual(
+			readTranslate(secondCard.style.transform).y,
+			initialSecond.y + getAgentActivityBindingBlockHeight(2),
+		);
+
+		store.clearAgentActivity('session-A', { nodeId: first.id });
+		assert.strictEqual(secondCard.style.transform, oneBindingPosition);
+		store.clearAgentActivity('session-B', { nodeId: first.id });
+		assert.deepStrictEqual(readTranslate(secondCard.style.transform), initialSecond);
+
+		graphView.dispose();
+		store.setAgentActivity('session-C', { nodeId: first.id }, 'mentioned');
+		assert.deepStrictEqual(readTranslate(secondCard.style.transform), initialSecond);
+	});
+
+	test('Binding footprint는 Target Card, Edge anchor와 G-11 Direct Effect bounds를 확장하지 않는다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:binding-geometry/index.ts',
+			name: 'index.ts',
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:binding-geometry',
+			name: 'binding-geometry',
+			status: 'loaded',
+			children: [file],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+		}, createSingleRootGraph(project), {}, store);
+		const fileCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			file.id,
+		);
+		const edge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${project.id}->${file.id}`,
+		);
+		const initialTransform = fileCard.style.transform;
+		const initialEdgePath = edge.getAttribute('d');
+
+		graphView.setNodeEffect(
+			{ nodeId: file.id },
+			{ kind: 'shimmer', color: '#55aaee' },
+		);
+		const shimmer = getNodeEffect(fileCard, 'shimmer');
+
+		store.setAgentActivity('session-A', { nodeId: file.id }, 'editing');
+
+		assert.strictEqual(fileCard.style.height, `${GRAPH_FOLDER_NODE_HEIGHT}px`);
+		assert.strictEqual(fileCard.style.transform, initialTransform);
+		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.strictEqual(getNodeEffect(fileCard, 'shimmer'), shimmer);
+		const bindingContainer = findAgentBindingContainer(fileCard);
+
+		assert.ok(bindingContainer);
+		assert.strictEqual(bindingContainer.style.left, '');
+		assert.strictEqual(bindingContainer.style.width, '');
+		graphView.dispose();
+	});
+
+	test('Debug Session의 대표 Target Effect와 자신의 Binding Effect는 같은 색을 쓴다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:debug-binding-color.ts',
+			name: 'debug-binding-color.ts',
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			createSingleRootGraph(file),
+			{},
+			store,
+		);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+		);
+
+		store.setAgentActivity(
+			'debug-g12-active',
+			{ nodeId: file.id },
+			'active',
+		);
+		store.setAgentActivity(
+			'debug-g12-planned',
+			{ nodeId: file.id },
+			'planned',
+		);
+		const fileCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			file.id,
+		);
+		const [activeBinding, plannedBinding] = getAgentBindingElements(fileCard);
+		const targetEffect = getDirectNodeEffect(fileCard, 'shimmer');
+		const bindingEffect = getDirectNodeEffect(activeBinding, 'shimmer');
+
+		assert.strictEqual(
+			targetEffect.style.getPropertyValue('--graph-node-effect-color'),
+			bindingEffect.style.getPropertyValue('--graph-node-effect-color'),
+		);
+		assert.strictEqual(getDirectNodeEffects(fileCard).length, 1);
+		assert.strictEqual(getDirectNodeEffects(activeBinding).length, 1);
+		assert.deepStrictEqual(
+			getDirectNodeEffects(plannedBinding).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['marching-dash', 'icon'],
+		);
+		assert.strictEqual(getDirectNodeEffects(fileCard, 'marching-dash').length, 0);
+
+		activityEffects.dispose();
+		graphView.dispose();
+	});
+
+	test('Grouped File Binding 뒤 실제 Row까지 Folder subtree Effect content extent를 확장한다', () => {
+		const files = ['a', 'b', 'c', 'd'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:folder-effect-extent/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:folder-effect-extent/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: files,
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:folder-effect-extent',
+			name: 'folder-effect-extent',
+			status: 'loaded',
+			children: [folder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[folder.id]: true,
+			},
+		}, createSingleRootGraph(project), {}, store);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+		);
+		const folderTarget = { nodeId: folder.id };
+		const fileTarget = { nodeId: files[1]?.id ?? '' };
+		const fileGroupId = createFileGroupId(folder.id);
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const edge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${folder.id}->${fileGroupId}`,
+		);
+
+		store.setAgentActivity('session-folder', folderTarget, 'active');
+		const region = getEffectRegion(root, folder.id);
+		const initialBounds = readEffectRegionBounds(region);
+		const initialEdgePath = edge.getAttribute('d');
+		const initialGroupHeight = Number.parseFloat(fileGroup.style.height);
+
+		store.setAgentActivity('session-file', fileTarget, 'editing');
+
+		const bindingHeight = getAgentActivityBindingBlockHeight(1);
+		const updatedBounds = readEffectRegionBounds(region);
+		const groupPosition = readTranslate(fileGroup.style.transform);
+		const fileRow = getDescendantByAttribute(
+			fileGroup,
+			'data-file-id',
+			fileTarget.nodeId,
+		);
+		const bindingContainer = findAgentBindingContainer(fileRow);
+
+		assert.strictEqual(updatedBounds.height, initialBounds.height + bindingHeight);
+		assert.strictEqual(
+			updatedBounds.y + updatedBounds.height,
+			groupPosition.y + initialGroupHeight + bindingHeight + 6,
+		);
+		assert.strictEqual(
+			fileGroup.style.height,
+			`${initialGroupHeight + bindingHeight}px`,
+		);
+		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
+		assert.ok(getNodeEffect(region, 'shimmer'));
+		assert.ok(getDirectNodeEffect(fileRow, 'pulse'));
+		assert.ok(bindingContainer);
+		assert.ok(getDirectNodeEffect(getAgentBindingElements(fileRow)[0], 'pulse'));
+		activityEffects.dispose();
+		graphView.dispose();
+	});
+
+	test('clearSession은 여러 Target의 effective footprint를 한 최신 Layout으로 수렴시킨다', () => {
+		const files = ['a', 'b', 'c'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:clear-session-${name}`,
+			name: `${name}.ts`,
+		}));
+		const graph: Graph = {
+			roots: files.map((file) => ({
+				id: `root:${file.id}`,
+				nodeId: file.id,
+			})),
+			rootNodes: Object.fromEntries(files.map((file) => [file.id, file])),
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			graph,
+			{},
+			store,
+		);
+		const thirdCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			files[2]?.id ?? '',
+		);
+		const initialThird = readTranslate(thirdCard.style.transform);
+
+		store.setAgentActivity('session-A', { nodeId: files[0]?.id ?? '' }, 'editing');
+		store.setAgentActivity('session-B', { nodeId: files[0]?.id ?? '' }, 'planned');
+		store.setAgentActivity('session-A', { nodeId: files[1]?.id ?? '' }, 'active');
+		assert.strictEqual(
+			readTranslate(thirdCard.style.transform).y,
+			initialThird.y
+				+ getAgentActivityBindingBlockHeight(2)
+				+ getAgentActivityBindingBlockHeight(1),
+		);
+
+		store.clearAgentActivitiesBySession('session-A');
+		assert.strictEqual(
+			readTranslate(thirdCard.style.transform).y,
+			initialThird.y + getAgentActivityBindingBlockHeight(1),
+		);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: files[0]?.id ?? '' }).map(
+				(entry) => entry.sessionId,
+			),
+			['session-B'],
+		);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: files[1]?.id ?? '' }),
+			[],
+		);
+		graphView.dispose();
+	});
+
+	test('clearSession은 여러 Target Binding에서 해당 Session만 한 번에 제거한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+			},
+		}, GRAPH_MOCK, {}, store);
+		const targetX = { nodeId: 'folder:app/src' };
+		const targetY = { nodeId: 'folder:app' };
+
+		store.setAgentActivity('session-A', targetX, 'editing');
+		store.setAgentActivity('session-B', targetX, 'planned');
+		store.setAgentActivity('session-A', targetY, 'active');
+		const elementX = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetX.nodeId,
+		);
+		const elementY = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			targetY.nodeId,
+		);
+
+		store.clearAgentActivitiesBySession('session-A');
+
+		assert.deepStrictEqual(getAgentBindingState(elementX), [
+			['session-B', 'planned'],
+		]);
+		assert.strictEqual(findAgentBindingContainer(elementY), undefined);
+		assert.deepStrictEqual(store.getActivities(targetX).map((entry) => (
+			entry.sessionId
+		)), ['session-B']);
+
+		graphView.dispose();
+	});
+
+	test('Grouped File pagination과 standalone File의 Target Binding lifecycle을 따른다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const pagedFileId = 'file:app/src/index.ts';
+		const fileGroupId = createFileGroupId('folder:app/src');
+
+		store.setAgentActivity('session-row', { nodeId: pagedFileId }, 'editing');
+		store.setAgentActivity(
+			'session-standalone',
+			{ nodeId: GRAPH_MOCK_FILE_ROOT.id },
+			'active',
+		);
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK, {}, store);
+		const standaloneFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_FILE_ROOT.id,
+		);
+		const fileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			fileGroupId,
+		);
+		const collapsedHeight = fileGroup.style.height;
+
+		assert.deepStrictEqual(getAgentBindingState(standaloneFile), [
+			['session-standalone', 'active'],
+		]);
+		assert.strictEqual(
+			findAgentBindingContainer(standaloneFile)?.style.left,
+			'',
+		);
+		assert.strictEqual(
+			findAgentBindingContainer(standaloneFile)?.style.width,
+			'',
+		);
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-file-id',
+			pagedFileId,
+		), undefined);
+
+		graphView.state.showMoreFiles(fileGroupId);
+		const firstRow = getDescendantByAttribute(root, 'data-file-id', pagedFileId);
+
+		assert.deepStrictEqual(getAgentBindingState(firstRow), [
+			['session-row', 'editing'],
+		]);
+		assert.strictEqual(findAgentBindingContainer(firstRow)?.style.left, '');
+		assert.strictEqual(findAgentBindingContainer(firstRow)?.style.width, '');
+		assert.strictEqual(
+			fileGroup.style.height,
+			`${getFileGroupHeight(7, true)
+				+ getAgentActivityBindingBlockHeight(1)}px`,
+		);
+		assert.strictEqual(
+			firstRow.style.marginBottom,
+			`${getAgentActivityBindingBlockHeight(1)}px`,
+		);
+		graphView.state.collapseFileGroup(fileGroupId);
+		assert.strictEqual(findAgentBindingContainer(firstRow), undefined);
+		assert.strictEqual(fileGroup.style.height, collapsedHeight);
+		graphView.state.showMoreFiles(fileGroupId);
+		const restoredRow = getDescendantByAttribute(root, 'data-file-id', pagedFileId);
+
+		assert.notStrictEqual(restoredRow, firstRow);
+		assert.deepStrictEqual(getAgentBindingState(restoredRow), [
+			['session-row', 'editing'],
+		]);
+
+		graphView.dispose();
+	});
+
 	test('rootId는 Detached actual occurrence만 지정하고 Backlink에는 복제하지 않는다', () => {
 		const folder = {
 			kind: 'folder' as const,
@@ -715,7 +1557,6 @@ suite('Graph View', () => {
 			'data-target-node-id',
 			folder.id,
 		);
-
 		graphView.setNodeEffect(
 			{ nodeId: folder.id, rootId: detachedRootId },
 			{ kind: 'outline', color: '#44dd88' },
@@ -739,6 +1580,308 @@ suite('Graph View', () => {
 			createGraphLayoutNodeId(detachedRootId, folder.id),
 		), undefined);
 		assert.strictEqual(findNodeEffect(detachedRootButton, 'outline'), undefined);
+		graphView.dispose();
+	});
+
+	test('Source Agent Binding은 Detached occurrence에 투영되고 Backlink에는 표시되지 않는다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:binding-detached',
+			name: 'binding-detached',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:binding-detached/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:binding-detached',
+			name: 'binding-detached',
+			status: 'loaded',
+			children: [folder],
+		};
+		const detachedRootId = createPromotedGraphRootId(folder.id);
+		const detachedLayoutNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			folder.id,
+		);
+		const store = createAgentActivityStore();
+
+		store.setAgentActivity(
+			'session-global',
+			{ nodeId: folder.id },
+			'planned',
+		);
+		store.setAgentActivity(
+			'session-occurrence',
+			{ nodeId: folder.id, rootId: detachedRootId },
+			'editing',
+		);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[detachedLayoutNodeId]: true,
+			},
+			detachedRootNodeIds: { [folder.id]: true },
+		}, createSingleRootGraph(project, 'root:binding-detached'), {}, store);
+		graphView.setNodeEffect(
+			{ nodeId: folder.id, rootId: detachedRootId },
+			{ kind: 'outline', color: '#44dd88' },
+		);
+		const detachedCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedLayoutNodeId,
+		);
+		const backlink = getDescendantByAttribute(
+			root,
+			'data-target-node-id',
+			folder.id,
+		);
+
+		assert.deepStrictEqual(getAgentBindingState(detachedCard), [
+			['session-occurrence', 'editing'],
+			['session-global', 'planned'],
+		]);
+		assert.strictEqual(
+			getDescendantByClass(
+				detachedCard,
+				'graph-agent-activity-bindings',
+			).getAttribute('data-graph-root-id'),
+			detachedRootId,
+		);
+		assert.strictEqual(findAgentBindingContainer(backlink), undefined);
+		assert.deepStrictEqual(
+			readAgentBindingHorizontalBounds(detachedCard),
+			pickHorizontalBounds(getEffectRegion(root, detachedLayoutNodeId)),
+		);
+		const initialBindingWidth = readAgentBindingHorizontalBounds(
+			detachedCard,
+		).width;
+		const detachedFileLayoutNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			'file:binding-detached/index.ts',
+		);
+		const detachedFile = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			detachedFileLayoutNodeId,
+		);
+		const detachedFilePosition = readTranslate(detachedFile.style.transform);
+		const currentState = graphView.state.getState();
+
+		graphView.state.setState({
+			...currentState,
+			nodePositions: {
+				...currentState.nodePositions,
+				[detachedFileLayoutNodeId]: {
+					x: detachedFilePosition.x + 80,
+					y: detachedFilePosition.y,
+				},
+			},
+		});
+		assert.deepStrictEqual(
+			readAgentBindingHorizontalBounds(detachedCard),
+			pickHorizontalBounds(getEffectRegion(root, detachedLayoutNodeId)),
+		);
+		assert.ok(
+			readAgentBindingHorizontalBounds(detachedCard).width
+				> initialBindingWidth,
+		);
+
+		graphView.dispose();
+	});
+
+	test('Detached occurrence의 Binding과 대표 Effect가 같은 effective Activity를 따른다', () => {
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:activity-effect-detached',
+			name: 'activity-effect-detached',
+			status: 'loaded' as const,
+			children: [{
+				kind: 'file' as const,
+				id: 'file:activity-effect-detached/index.ts',
+				name: 'index.ts',
+			}],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:activity-effect-detached',
+			name: 'activity-effect-detached',
+			status: 'loaded',
+			children: [folder],
+		};
+		const firstRootId = createDetachedRootId(folder.id, 1);
+		const secondRootId = createDetachedRootId(folder.id, 2);
+		const firstLayoutNodeId = createGraphLayoutNodeId(firstRootId, folder.id);
+		const secondLayoutNodeId = createGraphLayoutNodeId(secondRootId, folder.id);
+		const sourceTarget = { nodeId: folder.id };
+		const firstTarget = { ...sourceTarget, rootId: firstRootId };
+		const store = createAgentActivityStore();
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[firstLayoutNodeId]: true,
+				[secondLayoutNodeId]: true,
+			},
+			detachedRootNodeIds: {
+				[firstRootId]: true,
+				[secondRootId]: true,
+			},
+		}, createSingleRootGraph(
+			project,
+			'root:activity-effect-detached',
+		), {}, store);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+		);
+		let firstCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			firstLayoutNodeId,
+		);
+		let secondCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondLayoutNodeId,
+		);
+
+		store.setAgentActivity('session-A', sourceTarget, 'planned');
+		store.setAgentActivity('session-A', firstTarget, 'editing');
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'editing'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+		assert.deepStrictEqual(getAgentBindingState(secondCard), [
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, secondCard, secondLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		store.clearAgentActivity('session-A', firstTarget);
+		store.setAgentActivity('session-A', sourceTarget, 'rejected');
+		store.setAgentActivity('session-B', firstTarget, 'planned');
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'rejected'],
+			['session-B', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['outline', 'icon'],
+		);
+		assert.strictEqual(
+			getNodeEffect(
+				getEffectRegion(root, firstLayoutNodeId),
+				'outline',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'var(--vscode-errorForeground, #f14c4c)',
+		);
+		assert.strictEqual(
+			getDirectNodeEffect(firstCard, 'icon').getAttribute(
+				'data-graph-node-effect-icon',
+			),
+			'cancel',
+		);
+
+		store.setAgentActivity('session-A', sourceTarget, 'planned');
+		store.setAgentActivity('session-B', firstTarget, 'editing');
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-B', 'editing'],
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+
+		store.clearAgentActivity('session-B', firstTarget);
+		store.setAgentActivity('session-A', firstTarget, 'editing');
+		store.clearAgentActivity('session-A', firstTarget);
+
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		store.setAgentActivity('session-A', firstTarget, 'editing');
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, secondCard, secondLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		const visibleState = graphView.state.getState();
+
+		graphView.state.setState({
+			...visibleState,
+			hiddenNodeIds: { [folder.id]: true },
+		});
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			firstLayoutNodeId,
+		), undefined);
+
+		const hiddenState = graphView.state.getState();
+
+		graphView.state.setState({
+			...hiddenState,
+			hiddenNodeIds: {},
+		});
+		const remountedFirstCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			firstLayoutNodeId,
+		);
+		const remountedSecondCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			secondLayoutNodeId,
+		);
+
+		assert.notStrictEqual(remountedFirstCard, firstCard);
+		assert.notStrictEqual(remountedSecondCard, secondCard);
+		firstCard = remountedFirstCard;
+		secondCard = remountedSecondCard;
+		assert.deepStrictEqual(getAgentBindingState(firstCard), [
+			['session-A', 'editing'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, firstCard, firstLayoutNodeId),
+			['pulse'],
+		);
+		assert.deepStrictEqual(getAgentBindingState(secondCard), [
+			['session-A', 'planned'],
+		]);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, secondCard, secondLayoutNodeId),
+			['marching-dash', 'icon'],
+		);
+
+		activityEffects.dispose();
 		graphView.dispose();
 	});
 
@@ -6700,6 +7843,7 @@ class FakeStyle {
 	top = '';
 	bottom = '';
 	maxWidth = '';
+	marginBottom = '';
 	opacity = '';
 	scale = '';
 	private readonly customProperties = new Map<string, string>();
@@ -6920,6 +8064,28 @@ function getDescendantsByClass(
 	]);
 }
 
+function findAgentBindingContainer(element: FakeElement): FakeElement | undefined {
+	return element.children.find((child) => (
+		child.hasClass('graph-agent-activity-bindings')
+	));
+}
+
+function getAgentBindingElements(element: FakeElement): FakeElement[] {
+	const container = findAgentBindingContainer(element);
+
+	assert.ok(container);
+	return container.children;
+}
+
+function getAgentBindingState(
+	element: FakeElement,
+): Array<readonly [string, string]> {
+	return getAgentBindingElements(element).map((binding) => [
+		binding.getAttribute('data-session-id') ?? '',
+		binding.getAttribute('data-activity') ?? '',
+	]);
+}
+
 function openArrangeAllDialog(root: FakeElement): FakeElement {
 	const button = getDescendantByAttribute(
 		root,
@@ -7113,6 +8279,34 @@ function readEffectRegionBounds(region: FakeElement): {
 	};
 }
 
+function readAgentBindingHorizontalBounds(target: FakeElement): {
+	readonly x: number;
+	readonly width: number;
+} {
+	const container = findAgentBindingContainer(target);
+
+	assert.ok(container);
+	const targetPosition = readTranslate(target.style.transform);
+	const left = Number.parseFloat(container.style.left);
+	const width = Number.parseFloat(container.style.width);
+
+	assert.ok(Number.isFinite(left));
+	assert.ok(Number.isFinite(width));
+	return {
+		x: targetPosition.x + left,
+		width,
+	};
+}
+
+function pickHorizontalBounds(region: FakeElement): {
+	readonly x: number;
+	readonly width: number;
+} {
+	const { x, width } = readEffectRegionBounds(region);
+
+	return { x, width };
+}
+
 function createLayoutPositionMap(
 	layout: ReturnType<typeof createGraphLayout>,
 ): ReadonlyMap<string, { readonly x: number; readonly y: number }> {
@@ -7127,6 +8321,41 @@ function getNodeEffects(
 		(effect) => kind === undefined
 			|| effect.getAttribute('data-graph-node-effect') === kind,
 	);
+}
+
+function getDirectNodeEffects(
+	element: FakeElement,
+	kind?: string,
+): FakeElement[] {
+	const layer = element.children.find((child) => (
+		child.hasClass('graph-node-effect-layer')
+	));
+
+	return (layer?.children ?? []).filter((effect) => (
+		effect.hasClass('graph-node-effect')
+		&& (kind === undefined
+			|| effect.getAttribute('data-graph-node-effect') === kind)
+	));
+}
+
+function getDirectNodeEffect(element: FakeElement, kind: string): FakeElement {
+	const effect = getDirectNodeEffects(element, kind)[0];
+
+	assert.ok(effect, `${kind} direct Graph Node Effect가 있어야 한다.`);
+	return effect;
+}
+
+function getRepresentativeEffectKinds(
+	root: FakeElement,
+	target: FakeElement,
+	layoutNodeId: string,
+): Array<string | null> {
+	const region = findEffectRegion(root, layoutNodeId);
+
+	return [
+		...(region ? getNodeEffects(region) : []),
+		...getDirectNodeEffects(target),
+	].map((effect) => effect.getAttribute('data-graph-node-effect'));
 }
 
 function findEffectRegion(

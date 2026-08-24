@@ -1,10 +1,17 @@
 import * as assert from 'assert';
 import {
+	clearAgentActivitiesBySession,
+	clearAgentActivity,
+	parseAgentActivityEvent,
+	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
+	setAgentActivity,
+	type AgentActivityKind,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
+	type GraphNodeEffectTarget,
 	type WebviewToExtensionMessage,
 	type WorkspaceOpenFileMessage,
 	type WorkspaceStateChangedMessage,
@@ -144,6 +151,166 @@ suite('Extension to Webview Workspace messages', () => {
 				undefined,
 			);
 		}
+	});
+});
+
+suite('Agent Activity messages', () => {
+	const sessionId = 'session:agent-activity-1';
+	const target: GraphNodeEffectTarget = {
+		nodeId: 'file:file:///workspace/app/src/index.ts',
+		rootId: 'detached:root:1',
+	};
+	const activityKinds = [
+		'planned',
+		'active',
+		'editing',
+		'completed',
+		'mentioned',
+		'rejected',
+	] as const satisfies readonly AgentActivityKind[];
+
+	test('6개 Activity 각각 setAgentActivity 메시지를 생성하고 parsing한다', () => {
+		for (const activity of activityKinds) {
+			const event = { sessionId, target, activity };
+			const message = setAgentActivity(sessionId, target, activity);
+
+			assert.deepStrictEqual(message, {
+				type: 'agent.activity.set',
+				sessionId,
+				target,
+				activity,
+			});
+			assert.deepStrictEqual(parseAgentActivityEvent(event), event);
+			assert.deepStrictEqual(
+				parseAgentActivityToWebviewMessage(message),
+				message,
+			);
+			const extensionMessage: ExtensionToWebviewMessage = message;
+			assert.strictEqual(extensionMessage.type, 'agent.activity.set');
+		}
+	});
+
+	test('알 수 없는 Activity와 Event 부가 필드를 거부한다', () => {
+		for (const event of [
+			{ sessionId, target, activity: 'unknown' },
+			{ sessionId, target, activity: '' },
+			{ sessionId, target, activity: 1 },
+			{ sessionId, target, activity: 'active', color: '#fff' },
+		]) {
+			assert.strictEqual(parseAgentActivityEvent(event), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.set',
+				...event,
+			}), undefined);
+		}
+	});
+
+	test('빈 값과 기존 Session ID 규칙을 벗어난 sessionId를 거부한다', () => {
+		for (const invalidSessionId of ['', ' invalid', 'a'.repeat(129), 1]) {
+			assert.strictEqual(parseAgentActivityEvent({
+				sessionId: invalidSessionId,
+				target,
+				activity: 'planned',
+			}), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.clear',
+				sessionId: invalidSessionId,
+				target,
+			}), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.clearSession',
+				sessionId: invalidSessionId,
+			}), undefined);
+		}
+	});
+
+	test('G-11 Target parser 기준으로 잘못된 set/clear Target을 거부한다', () => {
+		for (const invalidTarget of [
+			{},
+			{ nodeId: '' },
+			{ nodeId: 'folder:src', rootId: '' },
+			{ nodeId: 'folder:src', rootId: 1 },
+			{ nodeId: 'folder:src', unexpected: true },
+		]) {
+			assert.strictEqual(parseAgentActivityEvent({
+				sessionId,
+				target: invalidTarget,
+				activity: 'editing',
+			}), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.clear',
+				sessionId,
+				target: invalidTarget,
+			}), undefined);
+		}
+	});
+
+	test('단일 Target Activity clear 계약을 strict하게 검증한다', () => {
+		const message = clearAgentActivity(sessionId, target);
+
+		assert.deepStrictEqual(
+			parseAgentActivityToWebviewMessage(message),
+			message,
+		);
+		for (const invalidMessage of [
+			{ type: 'agent.activity.clear', sessionId },
+			{ type: 'agent.activity.clear', target },
+			{ type: 'agent.activity.clear', sessionId, target, activity: 'active' },
+		]) {
+			assert.strictEqual(
+				parseAgentActivityToWebviewMessage(invalidMessage),
+				undefined,
+			);
+		}
+	});
+
+	test('Session 전체 Activity clear 계약을 strict하게 검증한다', () => {
+		const message = clearAgentActivitiesBySession(sessionId);
+
+		assert.deepStrictEqual(
+			parseAgentActivityToWebviewMessage(message),
+			message,
+		);
+		for (const invalidMessage of [
+			{ type: 'agent.activity.clearSession' },
+			{ type: 'agent.activity.clearSession', sessionId, target },
+			{ type: 'agent.activity.clearSession', sessionId, activity: 'completed' },
+			{ type: 'agent.activity.clearAll', sessionId },
+		]) {
+			assert.strictEqual(
+				parseAgentActivityToWebviewMessage(invalidMessage),
+				undefined,
+			);
+		}
+	});
+
+	test('기존 Workspace/Graph Effect 메시지 parser와 허용 범위를 섞지 않는다', () => {
+		const effectMessage = {
+			type: 'graph.nodeEffect.set',
+			target,
+			effect: { kind: 'pulse', color: '#43d17a' },
+		} satisfies GraphNodeEffectSetMessage;
+		const workspaceMessage = {
+			type: 'workspace.graphUpdated',
+			graph: createWorkspaceGraph(),
+		} satisfies WorkspaceToWebviewMessage;
+
+		assert.deepStrictEqual(
+			parseGraphNodeEffectToWebviewMessage(effectMessage),
+			effectMessage,
+		);
+		assert.deepStrictEqual(
+			parseWorkspaceToWebviewMessage(workspaceMessage),
+			workspaceMessage,
+		);
+		assert.strictEqual(
+			parseAgentActivityToWebviewMessage(effectMessage),
+			undefined,
+		);
+		assert.strictEqual(
+			parseAgentActivityToWebviewMessage(workspaceMessage),
+			undefined,
+		);
 	});
 });
 

@@ -5,9 +5,12 @@ import type {
 } from '../../messages';
 import type {
 	GraphLayout,
-	GraphLayoutNode,
 	GraphLayoutPosition,
 } from './graphLayout';
+import {
+	getGraphNodeEffectRegionBounds,
+	type GraphNodeEffectRegionBounds,
+} from './graphNodeEffectGeometry';
 
 interface GraphNodeEffectRegion {
 	readonly element: HTMLElement;
@@ -15,20 +18,16 @@ interface GraphNodeEffectRegion {
 	bounds?: GraphNodeEffectRegionBounds;
 }
 
-interface GraphNodeEffectRegistration {
-	readonly target: GraphNodeEffectTarget;
+interface GraphNodeEffectElementHost {
 	readonly element: HTMLElement;
-	readonly effectElements: Map<GraphNodeEffectKind, Element>;
-	readonly layoutNodeId?: string;
+	readonly effectElements: Map<string, Element>;
 	layer?: HTMLElement;
 	region?: GraphNodeEffectRegion;
 }
 
-interface GraphNodeEffectRegionBounds {
-	readonly x: number;
-	readonly y: number;
-	readonly width: number;
-	readonly height: number;
+interface GraphNodeEffectRegistration extends GraphNodeEffectElementHost {
+	readonly target: GraphNodeEffectTarget;
+	readonly layoutNodeId?: string;
 }
 
 export interface GraphNodeEffectRegistrationOptions {
@@ -36,10 +35,45 @@ export interface GraphNodeEffectRegistrationOptions {
 	readonly layoutNodeId?: string;
 }
 
+export interface GraphNodeEffectRecipeOptions {
+	/** occurrence recipe가 이 owner의 Source recipe 전체를 대체한다. */
+	readonly sourceInheritance?: 'merge' | 'replace';
+}
+
+/** 한 기능이 소유한 Effect만 변경하고 정리하는 격리된 수명주기 경계다. */
+export interface GraphNodeEffectOwner {
+	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
+	/** 이 owner의 Target recipe를 한 번에 교체한다. */
+	replaceNodeEffects(
+		target: GraphNodeEffectTarget,
+		effects: readonly GraphNodeEffect[],
+		options?: GraphNodeEffectRecipeOptions,
+	): void;
+	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
+	dispose(): void;
+}
+
+/** Graph Target 저장소와 분리된 단일 Element 전용 Effect Host다. */
+export interface GraphNodeLocalEffectHost {
+	/** 기존 kind DOM은 재사용하면서 이 Element가 표시할 Effect만 동기화한다. */
+	setEffects(effects: readonly GraphNodeEffect[]): void;
+	/** 이 local host가 만든 Effect DOM과 animation state를 정리한다. */
+	dispose(): void;
+}
+
+/** 모든 G-11 animation primitive가 같은 절대 경과 시간을 사용하는 phase source다. */
+export interface GraphNodeEffectAnimationTimeline {
+	getAnimationDelay(): string;
+}
+
 /** Transient 효과 상태와 현재 Renderer DOM registration을 연결한다. */
 export interface GraphNodeEffects {
 	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
 	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
+	/** 다른 Effect owner와 독립적으로 변경 및 dispose할 수 있는 범위를 만든다. */
+	createOwner(): GraphNodeEffectOwner;
+	/** Target Effect와 동일한 animation timeline을 쓰는 local host를 만든다. */
+	createLocalEffectHost(element: HTMLElement): GraphNodeLocalEffectHost;
 	registerNode(
 		target: GraphNodeEffectTarget,
 		element: HTMLElement,
@@ -59,7 +93,6 @@ const EFFECT_COLOR_PROPERTY = '--graph-node-effect-color';
 const EFFECT_ANIMATION_DELAY_PROPERTY = '--graph-node-effect-animation-delay';
 const EFFECT_REGION_TRANSITION_DURATION_PROPERTY =
 	'--graph-node-effect-region-transition-duration';
-const EFFECT_REGION_PADDING = 6;
 const EFFECT_REGION_TRANSITION_CLASS = 'is-layout-transitioning';
 const EFFECT_PULSE_SOURCE_CLASS = 'graph-node-effect-pulse-source';
 const ICON_PATHS = {
@@ -67,6 +100,56 @@ const ICON_PATHS = {
 	cancel: 'M6.25 6.25 13.75 13.75 M13.75 6.25 6.25 13.75',
 	alert: 'M10 5.5V11.25 M10 14.25V14.35',
 } as const;
+
+/**
+ * Target registration 없이 한 Binding 같은 독립 Element에 G-11 primitive를 렌더링한다.
+ */
+export function createGraphNodeLocalEffectHost(
+	element: HTMLElement,
+	animationTimeline: GraphNodeEffectAnimationTimeline = (
+		createGraphNodeEffectAnimationTimeline(() => (
+			element.ownerDocument.defaultView?.performance.now() ?? Date.now()
+		))
+	),
+): GraphNodeLocalEffectHost {
+	const ownerDocument = element.ownerDocument;
+	const registration: GraphNodeEffectElementHost = {
+		element,
+		effectElements: new Map(),
+	};
+	let disposed = false;
+
+	return {
+		setEffects(effects): void {
+			if (disposed) {
+				return;
+			}
+			const supportedEffects = new Map<string, GraphNodeEffect>();
+
+			for (const effect of effects) {
+				if (isSupportedColor(ownerDocument, effect.color)) {
+					supportedEffects.set(effect.kind, { ...effect });
+				}
+			}
+			syncEffectElements(
+				registration,
+				supportedEffects,
+				ownerDocument,
+				animationTimeline.getAnimationDelay(),
+				() => registration.layer
+					?? createEffectLayer(registration, ownerDocument),
+			);
+		},
+		dispose(): void {
+			if (disposed) {
+				return;
+			}
+
+			disposed = true;
+			removeRegistrationEffects(registration);
+		},
+	};
+}
 
 /** GraphState와 분리된 in-memory 효과 저장소를 생성한다. */
 export function createGraphNodeEffects(
@@ -78,36 +161,30 @@ export function createGraphNodeEffects(
 ): GraphNodeEffects {
 	const effectsByTarget = new Map<
 		string,
-		Map<GraphNodeEffectKind, GraphNodeEffect>
+		Map<number, Map<GraphNodeEffectKind, GraphNodeEffect>>
 	>();
+	const sourceReplacementOwnersByTarget = new Map<string, Set<number>>();
 	const registrationsByNodeId = new Map<
 		string,
 		Set<GraphNodeEffectRegistration>
 	>();
-	const initialAnimationTime = getAnimationTime();
-	const animationEpoch = Number.isFinite(initialAnimationTime)
-		? initialAnimationTime
-		: 0;
+	const animationTimeline = createGraphNodeEffectAnimationTimeline(
+		getAnimationTime,
+	);
 	let currentLayout: GraphLayout | undefined;
 	let currentPositions: ReadonlyMap<string, GraphLayoutPosition> = new Map();
+	let nextOwnerId = 1;
 	let disposed = false;
-	const getAnimationDelay = (): string => {
-		const currentTime = getAnimationTime();
-		const elapsed = Number.isFinite(currentTime)
-			? Math.max(0, currentTime - animationEpoch)
-			: 0;
-		const roundedElapsed = Math.round(elapsed * 1_000) / 1_000;
-
-		return `-${roundedElapsed}ms`;
-	};
+	const defaultOwnerId = 0;
 
 	const syncNodeRegistrations = (nodeId: string): void => {
-		const animationDelay = getAnimationDelay();
+		const animationDelay = animationTimeline.getAnimationDelay();
 
 		for (const registration of registrationsByNodeId.get(nodeId) ?? []) {
 			syncRegistration(
 				registration,
 				effectsByTarget,
+				sourceReplacementOwnersByTarget,
 				ownerDocument,
 				animationDelay,
 				regionLayer,
@@ -122,42 +199,168 @@ export function createGraphNodeEffects(
 			}
 		}
 	};
+	const setOwnedNodeEffect = (
+		ownerId: number,
+		target: GraphNodeEffectTarget,
+		effect: GraphNodeEffect,
+	): boolean => {
+		if (disposed || !isSupportedColor(ownerDocument, effect.color)) {
+			return false;
+		}
+
+		const key = createTargetKey(target);
+		const effectsByOwner = effectsByTarget.get(key)
+			?? new Map<number, Map<GraphNodeEffectKind, GraphNodeEffect>>();
+		const effects = effectsByOwner.get(ownerId)
+			?? new Map<GraphNodeEffectKind, GraphNodeEffect>();
+
+		effects.set(effect.kind, { ...effect });
+		effectsByOwner.set(ownerId, effects);
+		effectsByTarget.set(key, effectsByOwner);
+		syncNodeRegistrations(target.nodeId);
+		return true;
+	};
+	const replaceOwnedNodeEffects = (
+		ownerId: number,
+		target: GraphNodeEffectTarget,
+		effects: readonly GraphNodeEffect[],
+		options: GraphNodeEffectRecipeOptions,
+	): boolean => {
+		if (disposed) {
+			return false;
+		}
+
+		const supportedEffects = new Map<GraphNodeEffectKind, GraphNodeEffect>();
+
+		for (const effect of effects) {
+			if (isSupportedColor(ownerDocument, effect.color)) {
+				supportedEffects.set(effect.kind, { ...effect });
+			}
+		}
+
+		if (supportedEffects.size === 0) {
+			return clearOwnedNodeEffect(ownerId, target);
+		}
+
+		const key = createTargetKey(target);
+		const effectsByOwner = effectsByTarget.get(key)
+			?? new Map<number, Map<GraphNodeEffectKind, GraphNodeEffect>>();
+
+		effectsByOwner.set(ownerId, supportedEffects);
+		effectsByTarget.set(key, effectsByOwner);
+		setSourceReplacement(
+			sourceReplacementOwnersByTarget,
+			key,
+			ownerId,
+			target.rootId !== undefined
+				&& options.sourceInheritance === 'replace',
+		);
+		syncNodeRegistrations(target.nodeId);
+		return true;
+	};
+	const clearOwnedNodeEffect = (
+		ownerId: number,
+		target: GraphNodeEffectTarget,
+		kind?: GraphNodeEffectKind,
+	): boolean => {
+		if (disposed) {
+			return false;
+		}
+
+		const key = createTargetKey(target);
+		const effectsByOwner = effectsByTarget.get(key);
+		const effects = effectsByOwner?.get(ownerId);
+
+		if (!effects) {
+			return false;
+		}
+
+		if (kind && !effects.delete(kind)) {
+			return false;
+		}
+		if (!kind || effects.size === 0) {
+			effectsByOwner?.delete(ownerId);
+			setSourceReplacement(
+				sourceReplacementOwnersByTarget,
+				key,
+				ownerId,
+				false,
+			);
+		}
+		if (effectsByOwner?.size === 0) {
+			effectsByTarget.delete(key);
+		}
+		syncNodeRegistrations(target.nodeId);
+		return true;
+	};
+	const hasOwnedTargetEffects = (
+		ownerId: number,
+		target: GraphNodeEffectTarget,
+	): boolean => effectsByTarget
+		.get(createTargetKey(target))
+		?.has(ownerId) === true;
+	const createOwner = (): GraphNodeEffectOwner => {
+		const ownerId = nextOwnerId;
+		nextOwnerId += 1;
+		const ownedTargets = new Map<string, GraphNodeEffectTarget>();
+		let ownerDisposed = false;
+
+		return {
+			setNodeEffect(target, effect): void {
+				if (
+					!ownerDisposed
+					&& setOwnedNodeEffect(ownerId, target, effect)
+				) {
+					ownedTargets.set(createTargetKey(target), { ...target });
+				}
+			},
+			replaceNodeEffects(target, effects, options = {}): void {
+				if (ownerDisposed) {
+					return;
+				}
+
+				replaceOwnedNodeEffects(ownerId, target, effects, options);
+				if (hasOwnedTargetEffects(ownerId, target)) {
+					ownedTargets.set(createTargetKey(target), { ...target });
+				} else {
+					ownedTargets.delete(createTargetKey(target));
+				}
+			},
+			clearNodeEffect(target, kind): void {
+				if (
+					ownerDisposed
+					|| !clearOwnedNodeEffect(ownerId, target, kind)
+				) {
+					return;
+				}
+				if (!hasOwnedTargetEffects(ownerId, target)) {
+					ownedTargets.delete(createTargetKey(target));
+				}
+			},
+			dispose(): void {
+				if (ownerDisposed) {
+					return;
+				}
+
+				ownerDisposed = true;
+				for (const target of ownedTargets.values()) {
+					clearOwnedNodeEffect(ownerId, target);
+				}
+				ownedTargets.clear();
+			},
+		};
+	};
 
 	return {
 		setNodeEffect(target, effect): void {
-			if (disposed || !isSupportedColor(ownerDocument, effect.color)) {
-				return;
-			}
-
-			const key = createTargetKey(target);
-			const effects = effectsByTarget.get(key)
-				?? new Map<GraphNodeEffectKind, GraphNodeEffect>();
-
-			effects.set(effect.kind, { ...effect });
-			effectsByTarget.set(key, effects);
-			syncNodeRegistrations(target.nodeId);
+			setOwnedNodeEffect(defaultOwnerId, target, effect);
 		},
 		clearNodeEffect(target, kind): void {
-			if (disposed) {
-				return;
-			}
-
-			const key = createTargetKey(target);
-			const effects = effectsByTarget.get(key);
-
-			if (!effects) {
-				return;
-			}
-
-			if (kind) {
-				effects.delete(kind);
-				if (effects.size === 0) {
-					effectsByTarget.delete(key);
-				}
-			} else {
-				effectsByTarget.delete(key);
-			}
-			syncNodeRegistrations(target.nodeId);
+			clearOwnedNodeEffect(defaultOwnerId, target, kind);
+		},
+		createOwner,
+		createLocalEffectHost(element): GraphNodeLocalEffectHost {
+			return createGraphNodeLocalEffectHost(element, animationTimeline);
 		},
 		registerNode(target, element, options = {}): () => void {
 			if (disposed) {
@@ -180,8 +383,9 @@ export function createGraphNodeEffects(
 			syncRegistration(
 				registration,
 				effectsByTarget,
+				sourceReplacementOwnersByTarget,
 				ownerDocument,
-				getAnimationDelay(),
+				animationTimeline.getAnimationDelay(),
 				regionLayer,
 			);
 			if (currentLayout) {
@@ -242,31 +446,93 @@ export function createGraphNodeEffects(
 			}
 			registrationsByNodeId.clear();
 			effectsByTarget.clear();
+			sourceReplacementOwnersByTarget.clear();
 			currentLayout = undefined;
 			currentPositions = new Map();
 		},
 	};
 }
 
-/** Global Source 효과 위에 특정 Detached occurrence 효과를 kind별로 덮어쓴다. */
+/** 기본은 kind별 merge하고 opt-in occurrence recipe만 같은 owner Source를 대체한다. */
 function getRegistrationEffects(
 	registration: GraphNodeEffectRegistration,
 	effectsByTarget: ReadonlyMap<
 		string,
-		ReadonlyMap<GraphNodeEffectKind, GraphNodeEffect>
+		ReadonlyMap<number, ReadonlyMap<GraphNodeEffectKind, GraphNodeEffect>>
 	>,
-): Map<GraphNodeEffectKind, GraphNodeEffect> {
-	const effects = new Map(
+	sourceReplacementOwnersByTarget: ReadonlyMap<string, ReadonlySet<number>>,
+): Map<string, GraphNodeEffect> {
+	const effects = flattenOwnedEffects(
 		effectsByTarget.get(createTargetKey({
 			nodeId: registration.target.nodeId,
-		})) ?? [],
+		})),
 	);
 
 	if (registration.target.rootId) {
-		for (const [kind, effect] of effectsByTarget.get(createTargetKey(
-			registration.target,
-		)) ?? []) {
-			effects.set(kind, effect);
+		const occurrenceKey = createTargetKey(registration.target);
+
+		for (const ownerId of sourceReplacementOwnersByTarget.get(
+			occurrenceKey,
+		) ?? []) {
+			removeOwnerEffects(effects, ownerId);
+		}
+		for (const [key, effect] of flattenOwnedEffects(
+			effectsByTarget.get(occurrenceKey),
+		)) {
+			effects.set(key, effect);
+		}
+	}
+
+	return effects;
+}
+
+function removeOwnerEffects(
+	effects: Map<string, GraphNodeEffect>,
+	ownerId: number,
+): void {
+	const ownerPrefix = `${ownerId}:`;
+
+	for (const key of effects.keys()) {
+		if (key.startsWith(ownerPrefix)) {
+			effects.delete(key);
+		}
+	}
+}
+
+function setSourceReplacement(
+	replacementsByTarget: Map<string, Set<number>>,
+	targetKey: string,
+	ownerId: number,
+	replaceSource: boolean,
+): void {
+	if (replaceSource) {
+		const owners = replacementsByTarget.get(targetKey) ?? new Set<number>();
+
+		owners.add(ownerId);
+		replacementsByTarget.set(targetKey, owners);
+		return;
+	}
+
+	const owners = replacementsByTarget.get(targetKey);
+
+	owners?.delete(ownerId);
+	if (owners?.size === 0) {
+		replacementsByTarget.delete(targetKey);
+	}
+}
+
+/** Owner와 kind 조합마다 독립적인 Effect instance key로 펼친다. */
+function flattenOwnedEffects(
+	effectsByOwner: ReadonlyMap<
+		number,
+		ReadonlyMap<GraphNodeEffectKind, GraphNodeEffect>
+	> | undefined,
+): Map<string, GraphNodeEffect> {
+	const effects = new Map<string, GraphNodeEffect>();
+
+	for (const [ownerId, ownerEffects] of effectsByOwner ?? []) {
+		for (const [kind, effect] of ownerEffects) {
+			effects.set(createEffectInstanceKey(ownerId, kind), effect);
 		}
 	}
 
@@ -277,67 +543,39 @@ function syncRegistration(
 	registration: GraphNodeEffectRegistration,
 	effectsByTarget: ReadonlyMap<
 		string,
-		ReadonlyMap<GraphNodeEffectKind, GraphNodeEffect>
+		ReadonlyMap<number, ReadonlyMap<GraphNodeEffectKind, GraphNodeEffect>>
 	>,
+	sourceReplacementOwnersByTarget: ReadonlyMap<string, ReadonlySet<number>>,
 	ownerDocument: Document,
 	animationDelay: string,
 	regionLayer: HTMLElement | undefined,
 ): void {
-	const effects = getRegistrationEffects(registration, effectsByTarget);
+	const effects = getRegistrationEffects(
+		registration,
+		effectsByTarget,
+		sourceReplacementOwnersByTarget,
+	);
 
-	for (const [kind, element] of registration.effectElements) {
-		if (!effects.has(kind)) {
-			element.remove();
-			registration.effectElements.delete(kind);
-			if (kind === 'pulse') {
-				registration.element.style.removeProperty(
-					EFFECT_ANIMATION_DELAY_PROPERTY,
-				);
-				registration.element.classList.remove(EFFECT_PULSE_SOURCE_CLASS);
-			}
-		}
-	}
-
-	for (const effect of effects.values()) {
-		const current = registration.effectElements.get(effect.kind);
-		const effectElement = current ?? createEffectElement(effect, ownerDocument);
-
-		updateEffectElement(effectElement, effect);
-		if (!current) {
-			applyAnimationPhase(
-				registration,
-				effectElement,
-				effect.kind,
-				animationDelay,
-			);
-			const layer = shouldUseEffectRegion(registration, effect.kind, regionLayer)
-				? registration.region?.layer
-					?? createEffectRegion(registration, ownerDocument, regionLayer).layer
-				: registration.layer
-					?? createEffectLayer(registration, ownerDocument);
-
-			layer.append(effectElement);
-			registration.effectElements.set(effect.kind, effectElement);
-		}
-		if (effect.kind === 'pulse') {
-			registration.element.classList.add(EFFECT_PULSE_SOURCE_CLASS);
-		}
-	}
+	syncEffectElements(
+		registration,
+		effects,
+		ownerDocument,
+		animationDelay,
+		(kind) => shouldUseEffectRegion(registration, kind, regionLayer)
+			? registration.region?.layer
+				?? createEffectRegion(registration, ownerDocument, regionLayer).layer
+			: registration.layer
+				?? createEffectLayer(registration, ownerDocument),
+	);
 
 	if (registration.effectElements.size === 0) {
-		registration.layer?.remove();
-		registration.layer = undefined;
-		registration.region?.element.remove();
-		registration.region = undefined;
-		registration.element.classList.remove('graph-node-effect-host');
-		registration.element.classList.remove(EFFECT_PULSE_SOURCE_CLASS);
 		return;
 	}
 
 	const usesRegion = regionLayer && registration.layoutNodeId
-		? [...effects.keys()].some((kind) => kind !== 'icon')
+		? [...effects.values()].some(({ kind }) => kind !== 'icon')
 		: false;
-	const usesLocalLayer = [...effects.keys()].some((kind) => (
+	const usesLocalLayer = [...effects.values()].some(({ kind }) => (
 		!shouldUseEffectRegion(registration, kind, regionLayer)
 	));
 
@@ -348,6 +586,60 @@ function syncRegistration(
 	if (!usesLocalLayer) {
 		registration.layer?.remove();
 		registration.layer = undefined;
+	}
+}
+
+/** Effect kind별 Element를 유지하며 지정된 host/layer에만 DOM primitive를 동기화한다. */
+function syncEffectElements(
+	registration: GraphNodeEffectElementHost,
+	effects: ReadonlyMap<string, GraphNodeEffect>,
+	ownerDocument: Document,
+	animationDelay: string,
+	resolveLayer: (kind: GraphNodeEffectKind) => HTMLElement,
+): void {
+
+	for (const [key, current] of registration.effectElements) {
+		if (!effects.has(key)) {
+			current.remove();
+			registration.effectElements.delete(key);
+		}
+	}
+
+	for (const [key, effect] of effects) {
+		const current = registration.effectElements.get(key);
+		const effectElement = current ?? createEffectElement(effect, ownerDocument);
+
+		updateEffectElement(effectElement, effect);
+		if (!current) {
+			applyAnimationPhase(
+				registration,
+				effectElement,
+				effect.kind,
+				animationDelay,
+			);
+			const layer = resolveLayer(effect.kind);
+
+			layer.append(effectElement);
+			registration.effectElements.set(key, effectElement);
+		}
+	}
+
+	const hasPulse = [...effects.values()].some(({ kind }) => kind === 'pulse');
+	if (hasPulse) {
+		registration.element.classList.add(EFFECT_PULSE_SOURCE_CLASS);
+	} else {
+		registration.element.classList.remove(EFFECT_PULSE_SOURCE_CLASS);
+		registration.element.style.removeProperty(EFFECT_ANIMATION_DELAY_PROPERTY);
+	}
+
+	if (registration.effectElements.size === 0) {
+		registration.layer?.remove();
+		registration.layer = undefined;
+		registration.region?.element.remove();
+		registration.region = undefined;
+		registration.element.classList.remove('graph-node-effect-host');
+		registration.element.classList.remove(EFFECT_PULSE_SOURCE_CLASS);
+		return;
 	}
 }
 
@@ -363,7 +655,7 @@ function shouldUseEffectRegion(
 
 /** 나중에 생성된 occurrence도 기존 Effect와 같은 Document 시간 위상에 합류시킨다. */
 function applyAnimationPhase(
-	registration: GraphNodeEffectRegistration,
+	registration: GraphNodeEffectElementHost,
 	effectElement: Element,
 	kind: GraphNodeEffectKind,
 	animationDelay: string,
@@ -385,7 +677,7 @@ function applyAnimationPhase(
 }
 
 function createEffectLayer(
-	registration: GraphNodeEffectRegistration,
+	registration: GraphNodeEffectElementHost,
 	ownerDocument: Document,
 ): HTMLElement {
 	const layer = ownerDocument.createElement('span');
@@ -435,7 +727,7 @@ function syncRegionGeometry(
 		return false;
 	}
 
-	const bounds = calculateVisibleSubtreeBounds(layout, positions, layoutNodeId);
+	const bounds = getGraphNodeEffectRegionBounds(layout, positions, layoutNodeId);
 
 	if (!bounds) {
 		const changed = region.element.hidden === false;
@@ -467,72 +759,6 @@ function syncRegionGeometry(
 	region.element.style.height = `${bounds.height}px`;
 	region.bounds = bounds;
 	return true;
-}
-
-function calculateVisibleSubtreeBounds(
-	layout: GraphLayout,
-	positions: ReadonlyMap<string, GraphLayoutPosition>,
-	rootNodeId: string,
-): GraphNodeEffectRegionBounds | undefined {
-	const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
-	const childrenByParent = new Map<string, string[]>();
-
-	for (const edge of layout.edges) {
-		if (edge.hidden) {
-			continue;
-		}
-		const childIds = childrenByParent.get(edge.sourceId) ?? [];
-
-		childIds.push(edge.targetId);
-		childrenByParent.set(edge.sourceId, childIds);
-	}
-
-	let minX = Number.POSITIVE_INFINITY;
-	let minY = Number.POSITIVE_INFINITY;
-	let maxX = Number.NEGATIVE_INFINITY;
-	let maxY = Number.NEGATIVE_INFINITY;
-	const visited = new Set<string>();
-	const pending = [rootNodeId];
-
-	while (pending.length > 0) {
-		const nodeId = pending.pop();
-
-		if (!nodeId || visited.has(nodeId)) {
-			continue;
-		}
-		visited.add(nodeId);
-		const node = nodesById.get(nodeId);
-
-		if (!node || node.hidden || isBacklinkOnlyNode(node)) {
-			continue;
-		}
-		const position = positions.get(nodeId) ?? node.position;
-
-		minX = Math.min(minX, position.x);
-		minY = Math.min(minY, position.y);
-		maxX = Math.max(maxX, position.x + node.width);
-		maxY = Math.max(maxY, position.y + node.height);
-		pending.push(...(childrenByParent.get(nodeId) ?? []));
-	}
-
-	if (!Number.isFinite(minX)) {
-		return undefined;
-	}
-
-	return {
-		x: minX - EFFECT_REGION_PADDING,
-		y: minY - EFFECT_REGION_PADDING,
-		width: maxX - minX + EFFECT_REGION_PADDING * 2,
-		height: maxY - minY + EFFECT_REGION_PADDING * 2,
-	};
-}
-
-function isBacklinkOnlyNode(node: GraphLayoutNode): boolean {
-	return node.kind === 'folder-backlink'
-		|| (
-			node.kind === 'file-group'
-			&& node.children.every((file) => file.presentation === 'backlink')
-		);
 }
 
 function hasSameRegionBounds(
@@ -594,7 +820,7 @@ function updateEffectElement(element: Element, effect: GraphNodeEffect): void {
 }
 
 function removeRegistrationEffects(
-	registration: GraphNodeEffectRegistration,
+	registration: GraphNodeEffectElementHost,
 ): void {
 	registration.layer?.remove();
 	registration.layer = undefined;
@@ -610,8 +836,44 @@ function createTargetKey(target: GraphNodeEffectTarget): string {
 	return JSON.stringify([target.nodeId, target.rootId ?? null]);
 }
 
+function createEffectInstanceKey(
+	ownerId: number,
+	kind: GraphNodeEffectKind,
+): string {
+	return `${ownerId}:${kind}`;
+}
+
 function isSupportedColor(ownerDocument: Document, color: string): boolean {
 	const css = ownerDocument.defaultView?.CSS;
 
 	return typeof css?.supports !== 'function' || css.supports('color', color);
+}
+
+function createGraphNodeEffectAnimationTimeline(
+	getAnimationTime: () => number,
+): GraphNodeEffectAnimationTimeline {
+	const initialAnimationTime = getAnimationTime();
+	const animationEpoch = Number.isFinite(initialAnimationTime)
+		? initialAnimationTime
+		: 0;
+
+	return {
+		getAnimationDelay: () => getAnimationDelay(
+			getAnimationTime,
+			animationEpoch,
+		),
+	};
+}
+
+function getAnimationDelay(
+	getAnimationTime: () => number,
+	animationEpoch: number,
+): string {
+	const currentTime = getAnimationTime();
+	const elapsed = Number.isFinite(currentTime)
+		? Math.max(0, currentTime - animationEpoch)
+		: 0;
+	const roundedElapsed = Math.round(elapsed * 1_000) / 1_000;
+
+	return `-${roundedElapsed}ms`;
 }
