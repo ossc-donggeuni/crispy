@@ -9,6 +9,7 @@ const root = {
 	scheme: 'file',
 	fsPath: '/trusted/workspace' as ValidatedWorkspaceFsPath,
 } as ValidatedWorkspaceRoot;
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
 
 suite('Codex terminal launch preparation', () => {
 	test('trusted cwd와 executable을 Shell resolution 없이 구조화해 반환한다', async () => {
@@ -16,8 +17,9 @@ suite('Codex terminal launch preparation', () => {
 		let executableCalls = 0;
 		let configStyleCalls = 0;
 		const prepare = createPrepareCodexTerminalLaunch({
-			workspaceResolver: () => {
+			workspaceResolver: (workspaceRootId) => {
 				workspaceCalls += 1;
+				assert.strictEqual(workspaceRootId, WORKSPACE_ROOT_ID);
 				return { ok: true, root };
 			},
 			resolveExecutable: async (providerId, options) => {
@@ -42,7 +44,11 @@ suite('Codex terminal launch preparation', () => {
 			},
 		});
 
-		const result = await prepare('tab-codex', 'session-codex');
+		const result = await prepare(
+			'tab-codex',
+			'session-codex',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(result.ok, true);
 		if (!result.ok) {
@@ -76,7 +82,11 @@ suite('Codex terminal launch preparation', () => {
 			readEnvironment: () => ({}),
 		});
 
-		const result = await prepare('tab-codex', 'session-codex');
+		const result = await prepare(
+			'tab-codex',
+			'session-codex',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(result.ok, false);
 		assert.strictEqual(executableCalls, 0);
@@ -107,10 +117,16 @@ suite('Codex terminal launch preparation', () => {
 			resolveConfigStyle: async () => 'keyed-filters',
 		});
 
-		assert.strictEqual((await prepare('tab-one', 'session-one')).ok, false);
+		assert.strictEqual((await prepare(
+			'tab-one', 'session-one', WORKSPACE_ROOT_ID,
+		)).ok, false);
 		available = true;
-		assert.strictEqual((await prepare('tab-two', 'session-two')).ok, true);
-		assert.strictEqual((await prepare('tab-three', 'session-three')).ok, true);
+		assert.strictEqual((await prepare(
+			'tab-two', 'session-two', WORKSPACE_ROOT_ID,
+		)).ok, true);
+		assert.strictEqual((await prepare(
+			'tab-three', 'session-three', WORKSPACE_ROOT_ID,
+		)).ok, true);
 		assert.strictEqual(calls, 2);
 	});
 
@@ -129,7 +145,11 @@ suite('Codex terminal launch preparation', () => {
 			resolveConfigStyle: async () => undefined,
 		});
 
-		const result = await prepare('tab-bare', 'session-bare');
+		const result = await prepare(
+			'tab-bare',
+			'session-bare',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(result.ok, true);
 		if (result.ok) {

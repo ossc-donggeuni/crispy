@@ -7,6 +7,7 @@ import {
 	type WorkspacePreflight,
 } from '../../agent/host/workspace/workspacePreflight';
 import type { ValidatedWorkspaceRoot } from '../../agent/host/workspace/types';
+import type { WorkspaceRootId } from '../../workspace/workspaceRootId';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =
@@ -21,7 +22,11 @@ type Assert<Condition extends true> = Condition;
 /** preflight가 root, cwd 또는 Webview message를 입력받지 않는지 검증한다. */
 type PreflightHasOnlyValidatedIds = Assert<Equal<
 	Parameters<WorkspacePreflight>,
-	[tabId: string, sessionId: string | null]
+	[
+		tabId: string,
+		sessionId: string | null,
+		workspaceRootId: WorkspaceRootId,
+	]
 >>;
 
 /** production preflight도 동일한 입력 계약을 사용하는지 검증한다. */
@@ -32,6 +37,7 @@ type CanonicalPreflightMatchesContract = Assert<Equal<
 
 const hostRoot = parse(process.cwd()).root;
 const workspacePath = `${hostRoot}workspace${sep}preflight`;
+const workspaceRootId = 'workspace-root:file:///workspace/preflight';
 const root = {
 	scheme: 'file',
 	fsPath: workspacePath,
@@ -41,7 +47,7 @@ suite('Workspace preflight contract', () => {
 	test('성공 root를 Host 전용 결과로 반환한다', () => {
 		const preflight = createWorkspacePreflight(() => ({ ok: true, root }));
 
-		const result = preflight('tab-start', null);
+		const result = preflight('tab-start', null, workspaceRootId);
 
 		assert.deepStrictEqual(result, { ok: true, root });
 		assert.strictEqual(parseHostToWebviewMessage(result).ok, false);
@@ -53,7 +59,7 @@ suite('Workspace preflight contract', () => {
 			code: 'workspace_untrusted',
 		}));
 
-		const result = preflight('tab-start', null);
+		const result = preflight('tab-start', null, workspaceRootId);
 
 		assert.strictEqual(result.ok, false);
 		if (!result.ok) {
@@ -78,8 +84,12 @@ suite('Workspace preflight contract', () => {
 				: { ok: false, code: 'workspace_root_unavailable' };
 		});
 
-		const startResult = preflight('tab-one', null);
-		const restartResult = preflight('tab-two', 'session-two');
+		const startResult = preflight('tab-one', null, workspaceRootId);
+		const restartResult = preflight(
+			'tab-two',
+			'session-two',
+			workspaceRootId,
+		);
 
 		assert.strictEqual(startResult.ok, true);
 		assert.strictEqual(restartResult.ok, false);

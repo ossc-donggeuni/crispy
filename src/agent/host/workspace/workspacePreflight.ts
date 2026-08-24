@@ -1,4 +1,8 @@
-import type { SessionId, TabId } from '../../protocol/messages';
+import type {
+	SessionId,
+	TabId,
+	WorkspaceRootId,
+} from '../../protocol/messages';
 import {
 	mapWorkspaceFailureToTerminalError,
 	type WorkspaceTerminalErrorMessage,
@@ -24,6 +28,7 @@ export type WorkspacePreflightResult =
 export type WorkspacePreflight = (
 	tabId: TabId,
 	sessionId: SessionId | null,
+	workspaceRootId: WorkspaceRootId,
 ) => WorkspacePreflightResult;
 
 /**
@@ -39,8 +44,9 @@ export function createWorkspacePreflight(
 	return function runPreflight(
 		tabId: TabId,
 		sessionId: SessionId | null,
+		workspaceRootId: WorkspaceRootId,
 	): WorkspacePreflightResult {
-		const result = resolveWorkspace();
+		const result = resolveWorkspace(workspaceRootId);
 		if (result.ok) {
 			return result;
 		}

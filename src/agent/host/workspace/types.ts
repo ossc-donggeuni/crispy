@@ -1,4 +1,6 @@
 import type { WorkspaceExecutionErrorCode } from '../../protocol/errors';
+import type { WorkspaceRootId } from '../../../workspace/workspaceRootId';
+import type { WorkspaceFolder } from 'vscode';
 
 /** 일반 문자열과 검증된 작업공간 파일 경로를 구분하는 컴파일 타임 표식이다. */
 declare const validatedWorkspaceFsPathBrand: unique symbol;
@@ -14,15 +16,17 @@ export type ValidatedWorkspaceFsPath = string & {
 	readonly [validatedWorkspaceFsPathBrand]: true;
 };
 
-/** trusted 단일 file workspace 검증을 통과한 Host 내부 URI 표현이다. */
+/** trusted file workspace 검증을 통과한 Host 내부 URI 표현이다. */
 export interface ValidatedWorkspaceUri {
 	readonly scheme: 'file';
 	readonly fsPath: ValidatedWorkspaceFsPath;
 	readonly [validatedWorkspaceUriBrand]: true;
 }
 
-/** Graph와 모든 terminal session이 공유하는 Host 결정 workspace root다. */
+/** fresh exact lookup으로 선택되어 terminal cwd에 사용할 수 있는 Workspace root다. */
 export type ValidatedWorkspaceRoot = ValidatedWorkspaceUri & {
+	readonly id: WorkspaceRootId;
+	readonly workspaceFolder: WorkspaceFolder;
 	readonly [validatedWorkspaceRootBrand]: true;
 };
 

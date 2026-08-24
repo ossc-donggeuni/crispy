@@ -61,6 +61,8 @@ interface TerminalHostStub extends TerminalMessageHost {
 	switchAgent(
 		tabId: string,
 		providerId: Parameters<TerminalMessageHost['switchAgent']>[1],
+		workspaceRootId: Parameters<TerminalMessageHost['switchAgent']>[2],
+		switchAttemptId: Parameters<TerminalMessageHost['switchAgent']>[3],
 	): Promise<unknown>;
 	resetAgent(tabId: string): void;
 	routeInput(message: unknown): void;
@@ -102,8 +104,14 @@ function createTerminalHostStub(): {
 			createTab: (tabId) => record('createTab', tabId),
 			switchTab: (tabId) => record('switchTab', tabId),
 			closeTab: (tabId) => record('closeTab', tabId),
-			async switchAgent(tabId, providerId) {
-				record('switchAgent', tabId, providerId);
+			async switchAgent(tabId, providerId, workspaceRootId, switchAttemptId) {
+				record(
+					'switchAgent',
+					tabId,
+					providerId,
+					workspaceRootId,
+					switchAttemptId,
+				);
 			},
 			resetAgent: (tabId) => record('resetAgent', tabId),
 			routeInput: (message) => record('routeInput', message),
@@ -1365,7 +1373,15 @@ suite('Crispy Extension Host', () => {
 		assert.deepStrictEqual(calls, [
 			{ method: 'createTab', args: ['tab-lifecycle'] },
 			{ method: 'switchTab', args: ['tab-lifecycle'] },
-			{ method: 'switchAgent', args: ['tab-lifecycle', 'codex'] },
+			{
+				method: 'switchAgent',
+				args: [
+					'tab-lifecycle',
+					'codex',
+					'workspace-root:file:///workspace/lifecycle',
+					1,
+				],
+			},
 			{ method: 'resetAgent', args: ['tab-lifecycle'] },
 			{ method: 'closeTab', args: ['tab-lifecycle'] },
 		]);

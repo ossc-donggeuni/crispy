@@ -202,7 +202,7 @@ try {
 				activateTab(tabId);
 			},
 
-			onProviderSelected(tabId, providerId): boolean {
+			onProviderSelected(tabId, providerId) {
 				const selectableRoots = workspacePresentation.rootCatalog.filter(
 					(entry) => entry.selectable,
 				);
@@ -212,19 +212,23 @@ try {
 				}
 
 				lastIssuedSwitchAttemptId += 1;
-				return postAgentMessage({
+				const posted = postAgentMessage({
 					type: 'agent.switch',
 					tabId,
 					providerId,
 					workspaceRootId: selectableRoots[0]!.id,
 					switchAttemptId: lastIssuedSwitchAttemptId,
 				});
+				return posted ? lastIssuedSwitchAttemptId : false;
 			},
 
-			onAgentReselectionRequested(tabId): void {
-				/** Host PTY와 기존 xterm을 정리한 뒤 같은 탭에 빈 표면을 다시 만든다. */
-				postAgentMessage({ type: 'agent.reset', tabId });
+			onAgentReselectionRequested(tabId): boolean {
+				if (!postAgentMessage({ type: 'agent.reset', tabId })) {
+					return false;
+				}
+				/** Reset 요청과 동시에 이전 xterm input을 끊고 logical commit을 기다린다. */
 				terminalPool.resetTab(tabId);
+				return true;
 			},
 
 			onMcpRestartRequested(tabId, sessionId): boolean {
@@ -372,9 +376,14 @@ function handleHostMessage(message: unknown): void {
 		case 'extension.ready':
 			console.log('[Crispy] Extension ready');
 			break;
-		default:
-			agentPanelUi?.handleHostMessage(parseResult.value);
-			terminalPool.handleHostMessage(parseResult.value);
+		default: {
+			const shouldForwardToTerminal =
+				agentPanelUi?.handleHostMessage(parseResult.value) ?? true;
+			if (shouldForwardToTerminal) {
+				terminalPool.handleHostMessage(parseResult.value);
+			}
+			break;
+		}
 	}
 }
 

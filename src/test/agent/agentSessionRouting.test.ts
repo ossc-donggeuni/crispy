@@ -15,6 +15,7 @@ const root = {
 	scheme: 'file',
 	fsPath: '/validated/workspace' as ValidatedWorkspaceFsPath,
 } as ValidatedWorkspaceRoot;
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///validated/workspace';
 
 const launchPolicy: ShellLaunchPolicy = {
 	executable: '/host/selected/shell',
@@ -46,6 +47,7 @@ function createRoutingHost(fakePid: number = 4242): {
 	const host = new TerminalHost({
 		ptyAdapter,
 		prepareLaunch: successfulPrepare,
+		workspaceResolver: () => ({ ok: true, root }),
 		emitMessage: (message) => messages.push(message),
 		processTreeController: createCaptureFailureProcessTreeController(),
 		resolveAgentAutoRunInput: async (providerId) =>
@@ -86,7 +88,7 @@ async function openTab(
 ): Promise<void> {
 	host.createTab(tabId);
 	await host.handleTerminalReady(tabId, 80, 24);
-	await host.switchAgent(tabId, providerId);
+	await host.switchAgent(tabId, providerId, WORKSPACE_ROOT_ID, 1);
 }
 
 /**
@@ -143,7 +145,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 			assert.strictEqual(firstSession.state.kind, 'running');
 			assert.deepStrictEqual(firstHandle.writes, [expected]);
 
-			await host.switchAgent(tabId, providerId);
+			await host.switchAgent(tabId, providerId, WORKSPACE_ROOT_ID, 1);
 			const secondSession = host.getActiveSession(tabId);
 			const secondHandle = latestHandle(ptyAdapter);
 			assert.ok(secondSession !== undefined);
@@ -180,7 +182,12 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 			host.createTab(tabId);
 			await host.handleTerminalReady(tabId, 80, 24);
 
-			const switching = host.switchAgent(tabId, providerId);
+			const switching = host.switchAgent(
+				tabId,
+				providerId,
+				WORKSPACE_ROOT_ID,
+				1,
+			);
 			/** launch 준비 뒤 provider CLI resolver가 완료되는 microtask까지 기다린다. */
 			await Promise.resolve();
 			await Promise.resolve();
@@ -214,7 +221,12 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		const { host, ptyAdapter } = createRoutingHost();
 
 		host.createTab('tab-early-provider');
-		await host.switchAgent('tab-early-provider', 'codex');
+		await host.switchAgent(
+			'tab-early-provider',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 		assert.strictEqual(ptyAdapter.spawnCalls.length, 0);
 
 		await host.handleTerminalReady('tab-early-provider', 100, 30);
@@ -368,7 +380,12 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		const { host, ptyAdapter, messages } = createRoutingHost();
 
 		await host.handleTerminalReady('tab-unregistered', 80, 24);
-		await host.switchAgent('tab-unregistered', 'codex');
+		await host.switchAgent(
+			'tab-unregistered',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 
 		assert.strictEqual(ptyAdapter.spawnCalls.length, 0);
 		const errors = messagesOfType(messages, 'terminal.error');

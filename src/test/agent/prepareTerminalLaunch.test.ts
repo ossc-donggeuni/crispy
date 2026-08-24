@@ -22,6 +22,7 @@ import {
 	parseHostToWebviewMessage,
 	parseWebviewToHostMessage,
 } from '../../agent/protocol/validator';
+import type { WorkspaceRootId } from '../../workspace/workspaceRootId';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =
@@ -36,7 +37,11 @@ type Assert<Condition extends true> = Condition;
 /** 실행 준비 함수에는 Webview 실행 계약을 넣을 인자가 없음을 검증한다. */
 type PreparationAcceptsOnlyValidatedIds = Assert<Equal<
 	Parameters<PrepareTerminalLaunch>,
-	[tabId: string, sessionId: string | null]
+	[
+		tabId: string,
+		sessionId: string | null,
+		workspaceRootId?: WorkspaceRootId,
+	]
 >>;
 
 /** production 진입점도 initial/restart 공통 계약을 사용하는지 검증한다. */
@@ -66,15 +71,16 @@ function validatedRoot(fsPath: string): ValidatedWorkspaceRoot {
 }
 
 const root = validatedRoot('/validated/workspace');
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///validated/workspace';
 
 suite('Terminal launch Host preparation', () => {
 	test('trusted single-root file workspace를 ShellLaunchPolicy.cwd로 연결한다', async () => {
 		const filesystem = new FakeShellFilesystem();
 		const prepare = createPrepareTerminalLaunch({
-			workspaceResolver: () => ({
-				ok: true,
-				root,
-			}),
+			workspaceResolver: (workspaceRootId) => {
+				assert.strictEqual(workspaceRootId, WORKSPACE_ROOT_ID);
+				return { ok: true, root };
+			},
 			shellResolver: createShellLaunchPolicyResolver(filesystem),
 			readPlatform: () => 'darwin',
 			readEnvironment: () => ({
@@ -82,7 +88,7 @@ suite('Terminal launch Host preparation', () => {
 			}),
 		});
 
-		const result = await prepare('tab-initial', null);
+		const result = await prepare('tab-initial', null, WORKSPACE_ROOT_ID);
 
 		assert.strictEqual(result.ok, true);
 		if (result.ok) {
@@ -131,7 +137,11 @@ suite('Terminal launch Host preparation', () => {
 				},
 			});
 
-			const result = await prepare('tab-workspace-failure', null);
+			const result = await prepare(
+				'tab-workspace-failure',
+				null,
+				WORKSPACE_ROOT_ID,
+			);
 
 			assert.strictEqual(result.ok, false);
 			assert.strictEqual(shellCalls, 0);
@@ -167,8 +177,12 @@ suite('Terminal launch Host preparation', () => {
 			},
 		});
 
-		const initial = await prepare('tab-shared', null);
-		const restart = await prepare('tab-shared', 'session-existing');
+		const initial = await prepare('tab-shared', null, WORKSPACE_ROOT_ID);
+		const restart = await prepare(
+			'tab-shared',
+			'session-existing',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(initial.ok, true);
 		assert.strictEqual(restart.ok, true);
@@ -216,6 +230,7 @@ suite('Terminal launch Host preparation', () => {
 		const result = await prepare(
 			'tab-shell-failure',
 			'session-existing',
+			WORKSPACE_ROOT_ID,
 		);
 
 		assert.strictEqual(result.ok, false);
@@ -254,7 +269,11 @@ suite('Terminal launch Host preparation', () => {
 		});
 
 		assert.strictEqual(dependencyCalls, 0);
-		const result = await prepare('tab-request-scoped', null);
+		const result = await prepare(
+			'tab-request-scoped',
+			null,
+			WORKSPACE_ROOT_ID,
+		);
 		assert.strictEqual(result.ok, false);
 		assert.strictEqual(dependencyCalls, 2);
 	});

@@ -717,7 +717,10 @@ suite('Webview State Wiring', () => {
 			return {
 				model,
 				getSnapshot: () => model.getSnapshot(),
-				handleHostMessage: () => undefined,
+				handleHostMessage: (message) => (
+					message.type !== 'agent.switchAccepted'
+					|| message.switchAttemptId > 1
+				),
 				dispose(): void {
 					agentPanelUiDisposed = true;
 				},
@@ -839,7 +842,7 @@ suite('Webview State Wiring', () => {
 			} as MessageEvent);
 
 			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
-			assert.strictEqual(agentProviderSelect(agentTabId, 'claude'), true);
+			assert.strictEqual(agentProviderSelect(agentTabId, 'claude'), 1);
 			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages), [{
 				type: 'agent.switch',
 				tabId: agentTabId,
@@ -937,6 +940,28 @@ suite('Webview State Wiring', () => {
 
 			hostMessageHandler({ data: terminalStartingMessage } as MessageEvent);
 			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
+
+			const rejectedSwitchAccepted = {
+				type: 'agent.switchAccepted',
+				tabId: agentTabId,
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:file:///workspace/refreshed',
+				switchAttemptId: 1,
+				assignmentRevision: 1,
+			} as const;
+			hostMessageHandler({ data: rejectedSwitchAccepted } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
+
+			const acceptedSwitchAccepted = {
+				...rejectedSwitchAccepted,
+				switchAttemptId: 2,
+				assignmentRevision: 3,
+			} as const;
+			hostMessageHandler({ data: acceptedSwitchAccepted } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [
+				terminalStartingMessage,
+				acceptedSwitchAccepted,
+			]);
 			assert.deepStrictEqual(graphUpdates, [
 				refreshedWorkspaceGraph,
 				refreshedWorkspaceGraph,

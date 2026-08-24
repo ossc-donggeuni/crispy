@@ -9,12 +9,16 @@ const root = {
 	scheme: 'file',
 	fsPath: '/trusted/workspace' as ValidatedWorkspaceFsPath,
 } as ValidatedWorkspaceRoot;
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
 
 suite('Claude terminal launch preparation', () => {
 	test('resolved executable 뒤 bounded compatibility 결과를 구조화한다', async () => {
 		let compatibilityCalls = 0;
 		const prepare = createPrepareClaudeTerminalLaunch({
-			workspaceResolver: () => ({ ok: true, root }),
+			workspaceResolver: (workspaceRootId) => {
+				assert.strictEqual(workspaceRootId, WORKSPACE_ROOT_ID);
+				return { ok: true, root };
+			},
 			resolveExecutable: async (providerId, options) => {
 				assert.strictEqual(providerId, 'claude');
 				assert.strictEqual(options?.override, '/opt/custom claude');
@@ -39,7 +43,11 @@ suite('Claude terminal launch preparation', () => {
 			},
 		});
 
-		const result = await prepare('tab-claude', 'session-claude');
+		const result = await prepare(
+			'tab-claude',
+			'session-claude',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(result.ok, true);
 		if (!result.ok) {
@@ -78,7 +86,11 @@ suite('Claude terminal launch preparation', () => {
 				resolveCompatibility: async () => compatibility,
 			});
 
-			const result = await prepare('tab-bare', 'session-bare');
+			const result = await prepare(
+				'tab-bare',
+				'session-bare',
+				WORKSPACE_ROOT_ID,
+			);
 			assert.strictEqual(result.ok, true);
 			if (result.ok) {
 				assert.strictEqual(result.preparation.mcpCompatible, false);
@@ -103,7 +115,11 @@ suite('Claude terminal launch preparation', () => {
 			},
 		});
 
-		const result = await prepare('tab-claude', 'session-claude');
+		const result = await prepare(
+			'tab-claude',
+			'session-claude',
+			WORKSPACE_ROOT_ID,
+		);
 
 		assert.strictEqual(result.ok, false);
 		assert.strictEqual(compatibilityCalls, 0);
@@ -137,10 +153,16 @@ suite('Claude terminal launch preparation', () => {
 			}),
 		});
 
-		assert.strictEqual((await prepare('tab-one', 'session-one')).ok, false);
+		assert.strictEqual((await prepare(
+			'tab-one', 'session-one', WORKSPACE_ROOT_ID,
+		)).ok, false);
 		available = true;
-		assert.strictEqual((await prepare('tab-two', 'session-two')).ok, true);
-		assert.strictEqual((await prepare('tab-three', 'session-three')).ok, true);
+		assert.strictEqual((await prepare(
+			'tab-two', 'session-two', WORKSPACE_ROOT_ID,
+		)).ok, true);
+		assert.strictEqual((await prepare(
+			'tab-three', 'session-three', WORKSPACE_ROOT_ID,
+		)).ok, true);
 		assert.strictEqual(calls, 2);
 	});
 });

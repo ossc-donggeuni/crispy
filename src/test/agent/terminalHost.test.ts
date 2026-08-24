@@ -38,6 +38,7 @@ const root = {
 	scheme: 'file',
 	fsPath: '/validated/workspace' as ValidatedWorkspaceFsPath,
 } as ValidatedWorkspaceRoot;
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///validated/workspace';
 
 const launchPolicy: ShellLaunchPolicy = {
 	executable: '/host/selected/shell',
@@ -61,6 +62,8 @@ function createHost(
 	return {
 		host: new TerminalHost({
 			...options,
+			workspaceResolver: options.workspaceResolver
+				?? (() => ({ ok: true, root })),
 			processTreeController: options.processTreeController
 				?? createCaptureFailureProcessTreeController(),
 			emitMessage: (message) => messages.push(message),
@@ -185,7 +188,7 @@ suite('TerminalHost public session behavior', () => {
 
 		host.createTab('tab-agent-reset');
 		await host.handleTerminalReady('tab-agent-reset', 80, 24);
-		await host.switchAgent('tab-agent-reset', 'codex');
+		await host.switchAgent('tab-agent-reset', 'codex', WORKSPACE_ROOT_ID, 1);
 		const session = host.getActiveSession('tab-agent-reset');
 		assert.ok(session);
 
@@ -213,7 +216,12 @@ suite('TerminalHost public session behavior', () => {
 
 		host.createTab('tab-agent-reset-tree');
 		await host.handleTerminalReady('tab-agent-reset-tree', 80, 24);
-		await host.switchAgent('tab-agent-reset-tree', 'codex');
+		await host.switchAgent(
+			'tab-agent-reset-tree',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 		const session = host.getActiveSession('tab-agent-reset-tree');
 		assert.ok(session);
 
@@ -239,7 +247,7 @@ suite('TerminalHost public session behavior', () => {
 
 		host.createTab('tab-close-tree');
 		await host.handleTerminalReady('tab-close-tree', 80, 24);
-		await host.switchAgent('tab-close-tree', 'codex');
+		await host.switchAgent('tab-close-tree', 'codex', WORKSPACE_ROOT_ID, 1);
 		const session = host.getActiveSession('tab-close-tree');
 		assert.ok(session);
 
@@ -271,11 +279,16 @@ suite('TerminalHost public session behavior', () => {
 
 		host.createTab('tab-reselect-tree');
 		await host.handleTerminalReady('tab-reselect-tree', 80, 24);
-		await host.switchAgent('tab-reselect-tree', 'codex');
+		await host.switchAgent('tab-reselect-tree', 'codex', WORKSPACE_ROOT_ID, 1);
 		const first = host.getActiveSession('tab-reselect-tree');
 		assert.ok(first);
 
-		const reselecting = host.switchAgent('tab-reselect-tree', 'claude');
+		const reselecting = host.switchAgent(
+			'tab-reselect-tree',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
 		await waitUntil(() => controller.calls.includes('terminate:4313'));
 
 		assert.strictEqual(adapter.spawnCalls.length, 1);
@@ -292,14 +305,536 @@ suite('TerminalHost public session behavior', () => {
 	});
 });
 
+suite('TerminalHost Workspace assignment', () => {
+	test('최초 switch preflight 실패는 assignment, session과 revision을 변경하지 않는다', async () => {
+		let prepareCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			workspaceResolver: () => ({
+				ok: false,
+				code: 'workspace_untrusted',
+			}),
+			prepareLaunch: async () => {
+				prepareCalls += 1;
+				return { ok: true, policy: launchPolicy };
+			},
+		});
+		host.createTab('tab-preflight-rejected');
+		await host.handleTerminalReady('tab-preflight-rejected', 80, 24);
+
+		await host.switchAgent(
+			'tab-preflight-rejected',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		assert.strictEqual(host.getTabAssignment('tab-preflight-rejected'), undefined);
+		assert.strictEqual(host.getActiveSession('tab-preflight-rejected'), undefined);
+		assert.strictEqual(host.getAssignmentRevision('tab-preflight-rejected'), 0);
+		assert.strictEqual(prepareCalls, 0);
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.error',
+			tabId: 'tab-preflight-rejected',
+			sessionId: null,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: false,
+			switchAttemptId: 1,
+		}]);
+	});
+
+	test('기존 assignment의 provider switch preflight 실패는 session ownership을 유지한다', async () => {
+		let workspaceAvailable = true;
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => workspaceAvailable
+				? { ok: true, root }
+				: { ok: false, code: 'workspace_root_unavailable' },
+		});
+		host.createTab('tab-preserve-on-preflight');
+		await host.handleTerminalReady('tab-preserve-on-preflight', 80, 24);
+		await host.switchAgent(
+			'tab-preserve-on-preflight',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const assignment = host.getTabAssignment('tab-preserve-on-preflight');
+		const session = host.getActiveSession('tab-preserve-on-preflight');
+		assert.ok(assignment);
+		assert.ok(session);
+		workspaceAvailable = false;
+
+		await host.switchAgent(
+			'tab-preserve-on-preflight',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+
+		assert.strictEqual(host.getTabAssignment('tab-preserve-on-preflight'), assignment);
+		assert.strictEqual(host.getActiveSession('tab-preserve-on-preflight'), session);
+		assert.strictEqual(host.getAssignmentRevision('tab-preserve-on-preflight'), 1);
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(session.state.kind, 'running');
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-preserve-on-preflight',
+			sessionId: null,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			canRestart: false,
+			switchAttemptId: 2,
+		});
+	});
+
+	test('성공 commit마다 frozen assignment identity와 revision을 새로 만든다', async () => {
+		const { host, messages } = createHost({
+			ptyAdapter: new FakePtyAdapter(),
+			prepareLaunch: successfulPrepare,
+		});
+		host.createTab('tab-assignment');
+
+		await host.switchAgent('tab-assignment', 'codex', WORKSPACE_ROOT_ID, 1);
+		const first = host.getTabAssignment('tab-assignment');
+		assert.ok(first);
+		assert.ok(Object.isFrozen(first));
+		assert.strictEqual(host.getAssignmentRevision('tab-assignment'), 1);
+
+		await host.switchAgent('tab-assignment', 'codex', WORKSPACE_ROOT_ID, 2);
+		const second = host.getTabAssignment('tab-assignment');
+		assert.ok(second);
+		assert.notStrictEqual(second, first);
+		assert.deepStrictEqual(second, first);
+		assert.strictEqual(host.getAssignmentRevision('tab-assignment'), 2);
+
+		host.resetAgent('tab-assignment');
+		assert.strictEqual(host.getTabAssignment('tab-assignment'), undefined);
+		assert.strictEqual(host.getAssignmentRevision('tab-assignment'), 3);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'agent.resetCompleted',
+			tabId: 'tab-assignment',
+			assignmentRevision: 3,
+		});
+	});
+
+	test('assignment가 있는 탭의 다른 Workspace switch를 mutation 없이 거부한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+		});
+		host.createTab('tab-workspace-lock');
+		await host.handleTerminalReady('tab-workspace-lock', 80, 24);
+		await host.switchAgent(
+			'tab-workspace-lock',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		const assignment = host.getTabAssignment('tab-workspace-lock');
+		const session = host.getActiveSession('tab-workspace-lock');
+		assert.ok(assignment);
+		assert.ok(session);
+
+		await host.switchAgent(
+			'tab-workspace-lock',
+			'claude',
+			'workspace-root:file:///different/workspace',
+			2,
+		);
+
+		assert.strictEqual(host.getTabAssignment('tab-workspace-lock'), assignment);
+		assert.strictEqual(host.getActiveSession('tab-workspace-lock'), session);
+		assert.strictEqual(host.getAssignmentRevision('tab-workspace-lock'), 1);
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-workspace-lock',
+			sessionId: null,
+			code: 'workspace_change_requires_reset',
+			message: 'Reset the Agent before changing its Workspace.',
+			canRestart: false,
+			switchAttemptId: 2,
+		});
+	});
+
+	test('동일 값 ABA switch도 object identity와 cleanup barrier로 한 번만 시작한다', async () => {
+		let releaseTermination!: () => void;
+		const terminationPending = new Promise<void>((resolve) => {
+			releaseTermination = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => terminationPending,
+		});
+		const adapter = new FakePtyAdapter(4315);
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+		});
+		host.createTab('tab-assignment-aba');
+		await host.handleTerminalReady('tab-assignment-aba', 80, 24);
+		await host.switchAgent(
+			'tab-assignment-aba',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		const switchA = host.switchAgent(
+			'tab-assignment-aba',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		await waitUntil(() => controller.calls.includes('terminate:4315'));
+		const assignmentA = host.getTabAssignment('tab-assignment-aba');
+		const switchB = host.switchAgent(
+			'tab-assignment-aba',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			3,
+		);
+		const assignmentB = host.getTabAssignment('tab-assignment-aba');
+		assert.ok(assignmentA);
+		assert.ok(assignmentB);
+		assert.notStrictEqual(assignmentB, assignmentA);
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+
+		releaseTermination();
+		await Promise.all([switchA, switchB]);
+
+		assert.strictEqual(adapter.spawnCalls.length, 2);
+		assert.strictEqual(host.getTabAssignment('tab-assignment-aba'), assignmentB);
+		assert.strictEqual(host.getAssignmentRevision('tab-assignment-aba'), 3);
+		assert.strictEqual(host.getActiveSession('tab-assignment-aba')?.state.kind, 'running');
+	});
+
+	test('switchAccepted publish 시점에는 이전 session input ownership이 이미 제거된다', async () => {
+		const adapter = new FakePtyAdapter();
+		const messages: HostToWebviewMessage[] = [];
+		let host!: TerminalHost;
+		let previousSessionId: string | undefined;
+		host = new TerminalHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => ({ ok: true, root }),
+			processTreeController: createCaptureFailureProcessTreeController(),
+			emitMessage: (message) => {
+				messages.push(message);
+				if (
+					message.type === 'agent.switchAccepted'
+					&& message.switchAttemptId === 2
+					&& previousSessionId !== undefined
+				) {
+					host.routeInput({
+						type: 'terminal.input',
+						tabId: message.tabId,
+						sessionId: previousSessionId,
+						data: 'must-not-reach-old-process',
+					});
+				}
+			},
+		});
+		host.createTab('tab-accepted-input-cutoff');
+		await host.handleTerminalReady('tab-accepted-input-cutoff', 80, 24);
+		await host.switchAgent(
+			'tab-accepted-input-cutoff',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		previousSessionId = host.getActiveSession(
+			'tab-accepted-input-cutoff',
+		)?.sessionId;
+		const writesBeforeSwitch = [...adapter.handles[0].writes];
+
+		await host.switchAgent(
+			'tab-accepted-input-cutoff',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+
+		assert.deepStrictEqual(adapter.handles[0].writes, writesBeforeSwitch);
+		assert.strictEqual(messages.some((message) =>
+			message.type === 'agent.switchAccepted'
+			&& message.switchAttemptId === 2
+		), true);
+	});
+
+	test('Reset commit 중 reentrant switch는 mutation 없이 거부된다', async () => {
+		const messages: HostToWebviewMessage[] = [];
+		let host!: TerminalHost;
+		host = new TerminalHost({
+			ptyAdapter: new FakePtyAdapter(),
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => ({ ok: true, root }),
+			processTreeController: createCaptureFailureProcessTreeController(),
+			emitMessage: (message) => {
+				messages.push(message);
+				if (message.type === 'agent.resetCompleted') {
+					void host.switchAgent(
+						message.tabId,
+						'claude',
+						WORKSPACE_ROOT_ID,
+						2,
+					);
+				}
+			},
+		});
+		host.createTab('tab-reset-reentrant');
+		await host.switchAgent(
+			'tab-reset-reentrant',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		host.resetAgent('tab-reset-reentrant');
+
+		assert.strictEqual(host.getTabAssignment('tab-reset-reentrant'), undefined);
+		assert.strictEqual(host.getAssignmentRevision('tab-reset-reentrant'), 2);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-reset-reentrant',
+			sessionId: null,
+			code: 'invalid_session_state',
+			message: 'Agent reset is still being committed.',
+			canRestart: false,
+			switchAttemptId: 2,
+		});
+	});
+
+	test('Reset 완료 뒤 새 assignment start는 이전 cleanup barrier를 기다린다', async () => {
+		let releaseTermination!: () => void;
+		const terminationPending = new Promise<void>((resolve) => {
+			releaseTermination = resolve;
+		});
+		const controller = new FakeProcessTreeController({
+			beforeTerminate: () => terminationPending,
+		});
+		const adapter = new FakePtyAdapter(4316);
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			processTreeController: controller,
+		});
+		host.createTab('tab-reset-barrier');
+		await host.handleTerminalReady('tab-reset-barrier', 80, 24);
+		await host.switchAgent(
+			'tab-reset-barrier',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		host.resetAgent('tab-reset-barrier');
+		const switching = host.switchAgent(
+			'tab-reset-barrier',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		const ready = host.handleTerminalReady('tab-reset-barrier', 100, 30);
+		await waitUntil(() => controller.calls.includes('terminate:4316'));
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+
+		releaseTermination();
+		await Promise.all([switching, ready]);
+
+		assert.strictEqual(adapter.spawnCalls.length, 2);
+		assert.strictEqual(host.getTabAssignment('tab-reset-barrier')?.providerId, 'claude');
+		assert.strictEqual(host.getActiveSession('tab-reset-barrier')?.state.kind, 'running');
+	});
+});
+
 suite('TerminalHost start orchestration', () => {
+	test('final preflight의 latest fsPath를 await 없이 generic spawn cwd에 적용한다', async () => {
+		let workspaceCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: async () => ({
+				ok: true,
+				policy: { ...launchPolicy, cwd: '/stale/preparation/path' },
+			}),
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return {
+					ok: true,
+					root: {
+						...root,
+						fsPath: (
+							workspaceCalls === 1
+								? '/preflight/path'
+								: '/fresh/final/path'
+						) as ValidatedWorkspaceFsPath,
+					},
+				};
+			},
+		});
+		host.createTab('tab-final-cwd');
+		await host.handleTerminalReady('tab-final-cwd', 80, 24);
+
+		await host.switchAgent(
+			'tab-final-cwd',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		assert.strictEqual(workspaceCalls, 2);
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.strictEqual(adapter.spawnCalls[0].cwd, '/fresh/final/path');
+	});
+
+	test('post-assignment Workspace 실패는 non-null retry session과 assignment를 보존한다', async () => {
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			workspaceResolver: () => ({ ok: true, root }),
+			prepareLaunch: async (tabId, sessionId) => ({
+				ok: false,
+				error: {
+					type: 'terminal.error',
+					tabId,
+					sessionId,
+					code: 'workspace_root_unavailable',
+					message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+					canRestart: true,
+				},
+			}),
+		});
+		host.createTab('tab-post-assignment-failure');
+		await host.handleTerminalReady('tab-post-assignment-failure', 80, 24);
+
+		await host.switchAgent(
+			'tab-post-assignment-failure',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		const assignment = host.getTabAssignment('tab-post-assignment-failure');
+		const session = host.getActiveSession('tab-post-assignment-failure');
+		assert.ok(assignment);
+		assert.ok(session);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_root_unavailable',
+		});
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-post-assignment-failure',
+			sessionId: session.sessionId,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			canRestart: true,
+		});
+	});
+
+	test('final preflight 실패는 spawn 없이 retry session을 error로 보존한다', async () => {
+		let workspaceCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return workspaceCalls === 1
+					? { ok: true, root }
+					: { ok: false, code: 'workspace_path_invalid' };
+			},
+		});
+		host.createTab('tab-final-preflight-failure');
+		await host.handleTerminalReady('tab-final-preflight-failure', 80, 24);
+
+		await host.switchAgent(
+			'tab-final-preflight-failure',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		const session = host.getActiveSession('tab-final-preflight-failure');
+		assert.ok(session);
+		assert.strictEqual(workspaceCalls, 2);
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_path_invalid',
+		});
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-final-preflight-failure',
+			sessionId: session.sessionId,
+			code: 'workspace_path_invalid',
+			message: '유효한 로컬 작업공간 폴더를 연 후 다시 시도하세요.',
+			canRestart: true,
+		});
+	});
+
+	test('stale preparation continuation은 같은 root의 새 assignment를 spawn하지 않는다', async () => {
+		let releaseFirst!: (
+			value: Awaited<ReturnType<PrepareTerminalLaunch>>,
+		) => void;
+		let preparationCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host } = createHost({
+			ptyAdapter: adapter,
+			workspaceResolver: () => ({ ok: true, root }),
+			prepareLaunch: () => {
+				preparationCalls += 1;
+				if (preparationCalls === 1) {
+					return new Promise((resolve) => {
+						releaseFirst = resolve;
+					});
+				}
+				return Promise.resolve({ ok: true, policy: launchPolicy });
+			},
+		});
+		host.createTab('tab-stale-preparation');
+		await host.handleTerminalReady('tab-stale-preparation', 80, 24);
+		const switchA = host.switchAgent(
+			'tab-stale-preparation',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+		await waitUntil(() => preparationCalls === 1);
+
+		const switchB = host.switchAgent(
+			'tab-stale-preparation',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		await switchB;
+		releaseFirst({ ok: true, policy: launchPolicy });
+		await switchA;
+
+		assert.strictEqual(preparationCalls, 2);
+		assert.strictEqual(adapter.spawnCalls.length, 1);
+		assert.strictEqual(host.getTabAssignment('tab-stale-preparation')?.providerId, 'claude');
+		assert.strictEqual(host.getActiveSession('tab-stale-preparation')?.state.kind, 'running');
+	});
+
 	test('workspace와 Shell policy 결과로 PTY를 시작하고 Host sessionId를 전달한다', async () => {
 		let workspaceCalls = 0;
 		let shellCalls = 0;
 		const adapter = new FakePtyAdapter(9201);
 		const prepare = createPrepareTerminalLaunch({
-			workspaceResolver: () => {
+			workspaceResolver: (workspaceRootId) => {
 				workspaceCalls += 1;
+				assert.strictEqual(workspaceRootId, WORKSPACE_ROOT_ID);
 				return { ok: true, root };
 			},
 			shellResolver: async (platform, env, workspaceRoot) => {
@@ -317,7 +852,14 @@ suite('TerminalHost start orchestration', () => {
 			prepareLaunch: prepare,
 		});
 
-		await host.startSession('tab-start-success', 120, 36);
+		host.createTab('tab-start-success');
+		await host.handleTerminalReady('tab-start-success', 120, 36);
+		await host.switchAgent(
+			'tab-start-success',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 
 		const session = host.getActiveSession('tab-start-success');
 		assert.ok(session);
@@ -332,6 +874,14 @@ suite('TerminalHost start orchestration', () => {
 		}]);
 		assert.deepStrictEqual(session.state, { kind: 'running', pid: 9201 });
 		assert.deepStrictEqual(messages, [
+			{
+				type: 'agent.switchAccepted',
+				tabId: 'tab-start-success',
+				providerId: 'codex',
+				workspaceRootId: WORKSPACE_ROOT_ID,
+				switchAttemptId: 1,
+				assignmentRevision: 1,
+			},
 			{
 				type: 'terminal.starting',
 				tabId: 'tab-start-success',
@@ -424,7 +974,14 @@ suite('TerminalHost start orchestration', () => {
 			}),
 		});
 
-		await host.startSession('tab-workspace-failure', 80, 24);
+		host.createTab('tab-workspace-failure');
+		await host.handleTerminalReady('tab-workspace-failure', 80, 24);
+		await host.switchAgent(
+			'tab-workspace-failure',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 
 		assert.strictEqual(workspaceCalls, 1);
 		assert.strictEqual(shellCalls, 0);
@@ -455,7 +1012,14 @@ suite('TerminalHost start orchestration', () => {
 			}),
 		});
 
-		await host.startSession('tab-shell-failure', 80, 24);
+		host.createTab('tab-shell-failure');
+		await host.handleTerminalReady('tab-shell-failure', 80, 24);
+		await host.switchAgent(
+			'tab-shell-failure',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 
 		assert.strictEqual(shellCalls, 1);
 		assert.strictEqual(adapter.spawnCalls.length, 0);
@@ -866,7 +1430,14 @@ suite('TerminalHost restart orchestration', () => {
 			prepareLaunch: prepare,
 		});
 
-		await host.startSession('tab-restart', 120, 36);
+		host.createTab('tab-restart');
+		await host.handleTerminalReady('tab-restart', 120, 36);
+		await host.switchAgent(
+			'tab-restart',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
 		const first = host.getActiveSession('tab-restart');
 		assert.ok(first);
 		adapter.handles[0].emitExit({ exitCode: 1 });

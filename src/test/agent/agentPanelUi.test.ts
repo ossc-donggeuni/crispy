@@ -219,6 +219,158 @@ suite('Agent Panel UI', () => {
 		}
 	});
 
+	test('Host switchAccepted 전에는 provider를 commit하지 않고 attempt/revision 순서만 적용한다', () => {
+		const fixture = createFixture({
+			onProviderSelected: () => 7,
+		});
+		selectProvider(fixture.providerPicker, 'claude');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, undefined);
+		fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 6,
+			assignmentRevision: 1,
+		});
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, undefined);
+
+		fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 7,
+			assignmentRevision: 1,
+		});
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, 'claude');
+		assert.strictEqual(fixture.providerPicker.hidden, true);
+
+		fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 7,
+			assignmentRevision: 1,
+		});
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, 'claude');
+	});
+
+	test('correlated pre-assignment 오류는 pending switch만 해제하고 picker 선택을 복구한다', () => {
+		let attempt = 0;
+		const fixture = createFixture({
+			onProviderSelected: () => {
+				attempt += 1;
+				return attempt;
+			},
+		});
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId,
+			sessionId: null,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: false,
+			switchAttemptId: 1,
+		});
+
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, undefined);
+		assert.strictEqual(fixture.providerPicker.hidden, false);
+		selectProvider(fixture.providerPicker, 'claude');
+		assert.strictEqual(attempt, 2);
+	});
+
+	test('Reset barrier는 늦은 accepted/error의 Terminal 전달과 provider 부활을 차단한다', async () => {
+		const resets: string[] = [];
+		let switchAttemptId = 2;
+		const fixture = createFixture({
+			onProviderSelected: () => {
+				switchAttemptId += 1;
+				return switchAttemptId;
+			},
+			onAgentReselectionRequested: (tabId) => {
+				resets.push(tabId);
+				return true;
+			},
+		});
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 3,
+			assignmentRevision: 1,
+		}), true);
+
+		requireElement(fixture.topBar, 'agent-restart-session').click();
+		fixture.dialog.answer(true);
+		await flushMicrotasks();
+		assert.deepStrictEqual(resets, [tabId]);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, 'codex');
+
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 3,
+			assignmentRevision: 1,
+		}), false);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, 'codex');
+
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.resetCompleted',
+			tabId,
+			assignmentRevision: 2,
+		}), true);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, undefined);
+		assert.strictEqual(fixture.providerPicker.hidden, false);
+
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.resetCompleted',
+			tabId,
+			assignmentRevision: 1,
+		}), false);
+
+		selectProvider(fixture.providerPicker, 'claude');
+		assert.strictEqual(switchAttemptId, 4);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId,
+			sessionId: null,
+			code: 'workspace_untrusted',
+			message: 'stale error',
+			canRestart: false,
+			switchAttemptId: 3,
+		}), false);
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 4,
+			assignmentRevision: 3,
+		}), true);
+
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 3,
+			assignmentRevision: 1,
+		}), false);
+		assert.strictEqual(fixture.controller.getSnapshot().tabs[0].providerId, 'claude');
+	});
+
 	test('+ 버튼은 미선택 탭과 선택기를 다시 표시한다', () => {
 		const createdTabIds: string[] = [];
 		const fixture = createFixture({

@@ -497,6 +497,92 @@ suite('Shell Terminal Webview', () => {
 		assert.strictEqual(terminal.focusCalls, 1);
 	});
 
+	test('switchAccepted 즉시 이전 session input을 차단하고 새 starting session만 수락한다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		const elements = createElements();
+		const controller = initializeShellTerminal(
+			elements.surface,
+			elements.mount,
+			elements.overlay,
+			(message) => messages.push(message),
+			createDependencies(terminal),
+		);
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		terminal.emitData('before switch');
+
+		controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId: TAB_ID,
+			providerId: 'claude',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 2,
+			assignmentRevision: 2,
+		});
+		terminal.emitData('after accepted');
+		controller.handleHostMessage({
+			type: 'terminal.starting',
+			tabId: TAB_ID,
+			sessionId: 'session-next',
+		});
+		terminal.emitData('while starting');
+
+		assert.deepStrictEqual(messages, [{
+			type: 'terminal.input',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: 'before switch',
+		}]);
+		assert.strictEqual(terminal.resetCalls, 1);
+		assert.strictEqual(elements.surfaceElement.dataset.state, 'starting');
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: 'session-next',
+		});
+		terminal.emitData('after started');
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.input',
+			tabId: TAB_ID,
+			sessionId: 'session-next',
+			data: 'after started',
+		});
+	});
+
+	test('correlated pre-assignment 오류는 terminal overlay를 만들지 않는다', () => {
+		const terminal = new FakeTerminal();
+		const overlayView = new FakeOverlayView();
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId: TAB_ID,
+			sessionId: null,
+			code: 'workspace_untrusted',
+			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			canRestart: false,
+			switchAttemptId: 1,
+		});
+
+		assert.deepStrictEqual(overlayView.shownStates, []);
+	});
+
 	test('자동 제목 복원은 terminal.input을 먼저 원형 전달한 뒤 파생 후보만 callback한다', () => {
 		const terminal = new FakeTerminal();
 		const events: string[] = [];

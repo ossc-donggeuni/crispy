@@ -2,6 +2,8 @@ import {
 	validateWorkspacePolicy as validateWorkspaceRootPolicy,
 } from '../../../workspace/workspacePolicy';
 import type { WorkspaceContextSnapshot } from './workspaceContext';
+import type { WorkspaceRootId } from '../../../workspace/workspaceRootId';
+import type { WorkspaceFolder } from 'vscode';
 import type {
 	ValidatedWorkspaceFsPath,
 	ValidatedWorkspaceRoot,
@@ -26,22 +28,19 @@ function validationFailure(
  */
 export function validateWorkspacePolicy(
 	snapshot: WorkspaceContextSnapshot,
+	workspaceRootId: WorkspaceRootId,
 	platform: NodeJS.Platform = process.platform,
 ): WorkspaceValidationResult {
 	if (!snapshot.isTrusted) {
 		return validationFailure('workspace_untrusted');
 	}
 
-	if (snapshot.workspaceFolders.length === 0) {
+	const folder = snapshot.workspaceFolders.find(
+		(candidate) => candidate.id === workspaceRootId,
+	);
+	if (folder === undefined) {
 		return validationFailure('workspace_root_unavailable');
 	}
-
-	if (snapshot.workspaceFolders.length > 1) {
-		/** Phase 4의 ID 기반 resolver가 root를 exact lookup하기 전에는 모호한 root를 실행하지 않는다. */
-		return validationFailure('workspace_root_unavailable');
-	}
-
-	const folder = snapshot.workspaceFolders[0];
 	const rootPolicy = validateWorkspaceRootPolicy({
 		uriScheme: folder.scheme,
 		fsPath: folder.fsPath,
@@ -52,6 +51,8 @@ export function validateWorkspacePolicy(
 	}
 
 	const root = {
+		id: folder.id,
+		workspaceFolder: folder.workspaceFolder as WorkspaceFolder,
 		scheme: 'file',
 		fsPath: rootPolicy.fsPath as ValidatedWorkspaceFsPath,
 	} as ValidatedWorkspaceRoot;

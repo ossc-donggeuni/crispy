@@ -7,7 +7,12 @@ import {
 	MCP_RESTART_ACCEPT_LABEL,
 	type AgentConfirmDialog,
 } from './agentConfirmDialog';
-import type { HostToWebviewMessage, ProviderId, SessionId } from '../protocol';
+import type {
+	HostToWebviewMessage,
+	ProviderId,
+	SessionId,
+	SwitchAttemptId,
+} from '../protocol';
 import { messageByMcpFailureReason } from '../../mcp/failureReason';
 import {
 	createAgentTabModel,
@@ -60,12 +65,12 @@ export interface AgentPanelUiCallbacks {
 	onProviderSelected?(
 		tabId: AgentTabId,
 		providerId: ProviderId,
-	): boolean | void;
+	): SwitchAttemptId | boolean | void;
 
 	/**
 	 * 재시작 버튼으로 현재 CLI를 종료하고 provider 재선택을 요청했다.
 	 */
-	onAgentReselectionRequested?(tabId: AgentTabId): void;
+	onAgentReselectionRequested?(tabId: AgentTabId): boolean | number | void;
 
 	/** retryable MCP failure 확인 뒤 current tab/session의 명시적 재시작을 요청한다. */
 	onMcpRestartRequested?(tabId: AgentTabId, sessionId: SessionId): boolean | void;
@@ -85,8 +90,12 @@ export interface AgentPanelUiController {
 	/** 현재 탭 상태 snapshot을 반환한다. */
 	getSnapshot(): AgentTabModelSnapshot;
 
-	/** 검증된 Host lifecycle/status를 tab과 session identity에 맞을 때만 반영한다. */
-	handleHostMessage(message: HostToWebviewMessage): void;
+	/**
+	 * 검증된 Host lifecycle/status를 tab과 session identity에 맞을 때만 반영한다.
+	 *
+	 * @returns 현재 Webview lifecycle에 유효해 Terminal 표면에도 전달할 메시지인지 여부
+	 */
+	handleHostMessage(message: HostToWebviewMessage): boolean;
 
 	/** 각 bar, 탭 strip과 확인 다이얼로그를 정리한다. */
 	dispose(): void;
@@ -133,6 +142,14 @@ export function initializeAgentPanelUi(
 		elements.renameDialogHost,
 		dependencies,
 	);
+	const pendingSwitchByTab = new Map<AgentTabId, Readonly<{
+		readonly providerId: ProviderId;
+		readonly switchAttemptId: SwitchAttemptId;
+	}>>();
+	const lastIssuedSwitchAttemptByTab = new Map<AgentTabId, SwitchAttemptId>();
+	const lastAppliedAssignmentRevisionByTab = new Map<AgentTabId, number>();
+	const resetBarrierAttemptByTab = new Map<AgentTabId, SwitchAttemptId>();
+	const resettingTabs = new Set<AgentTabId>();
 	let disposed = false;
 
 	/**
@@ -163,23 +180,40 @@ export function initializeAgentPanelUi(
 		{
 			onProviderSelect(providerId): void {
 				const activeTab = getActiveTab();
-				if (activeTab === undefined) {
+				if (
+					activeTab === undefined
+					|| resettingTabs.has(activeTab.id)
+					|| pendingSwitchByTab.has(activeTab.id)
+				) {
 					return;
 				}
 
-				let accepted = true;
+				let result: SwitchAttemptId | boolean | void;
 				try {
-					accepted = callbacks.onProviderSelected?.(
+					result = callbacks.onProviderSelected?.(
 						activeTab.id,
 						providerId,
-					) !== false;
+					);
 				} catch {
-					accepted = false;
+					result = false;
 				}
-				if (!accepted) {
+				if (result === false) {
+					return;
+				}
+				if (
+					typeof result === 'number'
+					&& Number.isSafeInteger(result)
+					&& result > 0
+				) {
+					pendingSwitchByTab.set(activeTab.id, Object.freeze({
+						providerId,
+						switchAttemptId: result,
+					}));
+					lastIssuedSwitchAttemptByTab.set(activeTab.id, result);
 					return;
 				}
 
+				/** 콜백 없는 독립 UI 소비자는 기존 즉시 commit 동작을 유지한다. */
 				model.assignProvider(activeTab.id, providerId);
 			},
 		},
@@ -209,8 +243,26 @@ export function initializeAgentPanelUi(
 						return;
 					}
 
+					let result: boolean | number | void;
+					try {
+						result = callbacks.onAgentReselectionRequested?.(activeTab.id);
+					} catch {
+						result = false;
+					}
+					if (result === false) {
+						return;
+					}
+					if (result === true) {
+						resettingTabs.add(activeTab.id);
+						resetBarrierAttemptByTab.set(
+							activeTab.id,
+							lastIssuedSwitchAttemptByTab.get(activeTab.id) ?? 0,
+						);
+						return;
+					}
+
+					/** 콜백 없는 독립 UI 소비자는 기존 즉시 Reset 동작을 유지한다. */
 					model.clearProvider(activeTab.id);
-					notify(() => callbacks.onAgentReselectionRequested?.(activeTab.id));
 				}).catch(() => {
 					/** 확인 다이얼로그 실패 시 현재 세션을 유지한다. */
 				});
@@ -286,6 +338,11 @@ export function initializeAgentPanelUi(
 						}
 
 						model.closeTab(tabId);
+						pendingSwitchByTab.delete(tabId);
+						lastIssuedSwitchAttemptByTab.delete(tabId);
+						lastAppliedAssignmentRevisionByTab.delete(tabId);
+						resetBarrierAttemptByTab.delete(tabId);
+						resettingTabs.delete(tabId);
 						notify(() => callbacks.onTabClosed?.(tabId));
 					})
 					.catch(() => {
@@ -329,17 +386,71 @@ export function initializeAgentPanelUi(
 	return {
 		model,
 		getSnapshot: () => model.getSnapshot(),
-		handleHostMessage(message): void {
+		handleHostMessage(message): boolean {
 			if (disposed) {
-				return;
+				return false;
 			}
 			switch (message.type) {
+				case 'agent.switchAccepted': {
+					const pending = pendingSwitchByTab.get(message.tabId);
+					const resetBarrier = resetBarrierAttemptByTab.get(message.tabId) ?? 0;
+					const lastRevision = lastAppliedAssignmentRevisionByTab.get(
+						message.tabId,
+					) ?? 0;
+					if (
+						resettingTabs.has(message.tabId)
+						|| message.switchAttemptId <= resetBarrier
+						|| message.assignmentRevision <= lastRevision
+						|| pending?.switchAttemptId !== message.switchAttemptId
+						|| pending.providerId !== message.providerId
+					) {
+						return false;
+					}
+					pendingSwitchByTab.delete(message.tabId);
+					lastAppliedAssignmentRevisionByTab.set(
+						message.tabId,
+						message.assignmentRevision,
+					);
+					model.assignProvider(message.tabId, message.providerId);
+					return true;
+				}
+				case 'agent.resetCompleted': {
+					const lastRevision = lastAppliedAssignmentRevisionByTab.get(
+						message.tabId,
+					) ?? 0;
+					if (message.assignmentRevision <= lastRevision) {
+						return false;
+					}
+					lastAppliedAssignmentRevisionByTab.set(
+						message.tabId,
+						message.assignmentRevision,
+					);
+					pendingSwitchByTab.delete(message.tabId);
+					resettingTabs.delete(message.tabId);
+					model.clearProvider(message.tabId);
+					return true;
+				}
+				case 'terminal.error': {
+					if (message.switchAttemptId === undefined) {
+						return true;
+					}
+					const resetBarrier = resetBarrierAttemptByTab.get(message.tabId) ?? 0;
+					const pending = pendingSwitchByTab.get(message.tabId);
+					if (
+						message.switchAttemptId > resetBarrier
+						&& pending?.switchAttemptId === message.switchAttemptId
+					) {
+						pendingSwitchByTab.delete(message.tabId);
+						return true;
+					}
+					return false;
+				}
 				case 'terminal.started':
 					model.setSession(message.tabId, message.sessionId);
-					break;
+					return true;
 				case 'terminal.exited':
 					model.clearSession(message.tabId, message.sessionId);
-					break;
+					return true;
 				case 'mcp.statusChanged':
 					model.setMcpStatus(
 						message.tabId,
@@ -353,10 +464,12 @@ export function initializeAgentPanelUi(
 								retryable: message.retryable,
 							},
 					);
-					break;
+					return true;
 				case 'mcp.statusCleared':
 					model.clearMcpStatus(message.tabId, message.sessionId);
-					break;
+					return true;
+				default:
+					return true;
 			}
 		},
 		dispose(): void {
@@ -365,6 +478,11 @@ export function initializeAgentPanelUi(
 			}
 
 			disposed = true;
+			pendingSwitchByTab.clear();
+			lastIssuedSwitchAttemptByTab.clear();
+			lastAppliedAssignmentRevisionByTab.clear();
+			resetBarrierAttemptByTab.clear();
+			resettingTabs.clear();
 			const cleanupActions = [
 				() => unsubscribe(),
 				() => confirmDialog.dispose(),

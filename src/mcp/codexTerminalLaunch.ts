@@ -1,6 +1,7 @@
 import type {
 	SessionId,
 	TabId,
+	WorkspaceRootId,
 } from '../agent/protocol/messages';
 import { buildShellEnv } from '../agent/host/shell/shellResolver';
 import type { PrepareTerminalLaunch } from '../agent/host/terminal/prepareTerminalLaunch';
@@ -27,6 +28,7 @@ export interface PreparedCodexTerminalLaunch {
 export type PrepareCodexTerminalLaunch = (
 	tabId: TabId,
 	sessionId: SessionId,
+	workspaceRootId: WorkspaceRootId,
 ) => Promise<
 	| { readonly ok: true; readonly preparation: PreparedCodexTerminalLaunch }
 	| Awaited<ReturnType<PrepareTerminalLaunch>> & { readonly ok: false }
@@ -61,8 +63,8 @@ export function createPrepareCodexTerminalLaunch(
 	const resolveConfigStyle = dependencies.resolveConfigStyle
 		?? resolveCodexConfigStyle;
 
-	return async (tabId, sessionId) => {
-		const workspace = dependencies.workspaceResolver();
+	return async (tabId, sessionId, workspaceRootId) => {
+		const workspace = dependencies.workspaceResolver(workspaceRootId);
 		if (!workspace.ok) {
 			return {
 				ok: false,

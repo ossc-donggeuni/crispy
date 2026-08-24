@@ -213,7 +213,15 @@ export interface TerminalMessageHost {
 	createTab(tabId: string): void;
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
-	switchAgent(tabId: string, providerId: ProviderId): Promise<unknown>;
+	switchAgent(
+		tabId: string,
+		providerId: ProviderId,
+		workspaceRootId: Extract<
+			WebviewToHostMessage,
+			{ type: 'agent.switch' }
+		>['workspaceRootId'],
+		switchAttemptId: number,
+	): Promise<unknown>;
 	resetAgent(tabId: string): void;
 	routeInput(
 		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
@@ -854,9 +862,11 @@ function handleTerminalMessage(
 			break;
 		case 'agent.switch':
 			void terminalHost.switchAgent(
-				message.tabId,
-				message.providerId,
-			).catch(() => undefined);
+					message.tabId,
+					message.providerId,
+					message.workspaceRootId,
+					message.switchAttemptId,
+				).catch(() => undefined);
 			break;
 		case 'agent.reset':
 			terminalHost.resetAgent(message.tabId);

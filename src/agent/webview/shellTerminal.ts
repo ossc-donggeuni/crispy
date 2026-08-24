@@ -305,6 +305,7 @@ export function initializeShellTerminal(
 ): ShellTerminalController {
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
+	let startingSessionId: SessionId | undefined;
 	let sessionEverStarted = false;
 	let restartSessionId: SessionId | undefined;
 	let restartRequested = false;
@@ -535,6 +536,36 @@ export function initializeShellTerminal(
 		dispose,
 		handleHostMessage(message): void {
 			switch (message.type) {
+				case 'agent.switchAccepted':
+					if (message.tabId !== tabId) {
+						return;
+					}
+					if (activeSessionId !== undefined) {
+						titleCollector?.endSession(activeSessionId);
+					}
+					activeSessionId = undefined;
+					startingSessionId = undefined;
+					restartSessionId = undefined;
+					restartRequested = false;
+					pendingKeyboardData = undefined;
+					sessionEverStarted = true;
+					try {
+						terminal?.reset();
+					} catch {
+						/** 이전 buffer 제거 실패와 무관하게 input session ownership은 해제된다. */
+					}
+					surface.dataset.state = 'starting';
+					break;
+				case 'terminal.starting':
+					if (message.tabId !== tabId) {
+						return;
+					}
+					activeSessionId = undefined;
+					startingSessionId = message.sessionId;
+					restartSessionId = undefined;
+					restartRequested = false;
+					surface.dataset.state = 'starting';
+					break;
 				case 'terminal.started':
 					if (
 						message.tabId === tabId
@@ -543,6 +574,7 @@ export function initializeShellTerminal(
 					) {
 						const replacedSessionId = activeSessionId;
 						activeSessionId = message.sessionId;
+						startingSessionId = undefined;
 						seenSessionIds.add(message.sessionId);
 						titleCollector?.startSession(message.sessionId);
 						restartSessionId = undefined;
@@ -612,6 +644,13 @@ export function initializeShellTerminal(
 					}
 					break;
 				case 'terminal.error':
+					if (
+						message.sessionId === null
+						&& message.switchAttemptId !== undefined
+					) {
+						/** pre-assignment 오류는 provider picker가 처리하며 Terminal overlay를 만들지 않는다. */
+						return;
+					}
 					/** 현재 세션이 없을 때만 Host가 새로 만든 세션의 시작 실패를 받아들인다. */
 					if (
 						message.tabId !== tabId
@@ -619,11 +658,18 @@ export function initializeShellTerminal(
 							activeSessionId !== undefined
 							&& message.sessionId !== activeSessionId
 						)
+						|| (
+							message.sessionId !== null
+							&& activeSessionId === undefined
+							&& startingSessionId !== undefined
+							&& message.sessionId !== startingSessionId
+						)
 					) {
 						return;
 					}
 
 					activeSessionId = undefined;
+					startingSessionId = undefined;
 					if (message.sessionId !== undefined && message.sessionId !== null) {
 						titleCollector?.endSession(message.sessionId);
 					}

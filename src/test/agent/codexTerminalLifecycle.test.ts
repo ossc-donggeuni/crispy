@@ -24,6 +24,11 @@ const shellPolicy: ShellLaunchPolicy = {
 	cwd: '/trusted/workspace',
 	env: { PATH: '/bin' },
 };
+const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
+const workspaceRoot = {
+	scheme: 'file',
+	fsPath: '/trusted/workspace',
+} as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
 
 const successfulShellPrepare: PrepareTerminalLaunch = async () => ({
 	ok: true,
@@ -160,6 +165,9 @@ function createFixture(options: {
 		'buildCodexMcpLaunchPlan'
 	];
 	readonly processTreeController?: ProcessTreeController;
+	readonly workspaceResolver?: ConstructorParameters<typeof TerminalHost>[0][
+		'workspaceResolver'
+	];
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -172,6 +180,8 @@ function createFixture(options: {
 	const host = new TerminalHost({
 		ptyAdapter: adapter,
 		prepareLaunch: successfulShellPrepare,
+		workspaceResolver: options.workspaceResolver
+			?? (() => ({ ok: true, root: workspaceRoot })),
 		resolveAgentAutoRunInput: async (providerId) =>
 			providerId === 'claude' ? 'claude\r' : 'agy\r',
 		prepareCodexLaunch: async () => ({
@@ -213,10 +223,46 @@ async function beginCodex(
 ): Promise<void> {
 	host.createTab(tabId);
 	await host.handleTerminalReady(tabId, 100, 30);
-	return host.switchAgent(tabId, 'codex');
+	return host.switchAgent(tabId, 'codex', WORKSPACE_ROOT_ID, 1);
 }
 
 suite('Codex direct PTY and MCP transaction', () => {
+	test('final Workspace 실패는 MCP를 정리하고 bare fallback 없이 retry session을 남긴다', async () => {
+		let workspaceCalls = 0;
+		const fixture = createFixture({
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return workspaceCalls === 1
+					? { ok: true, root: workspaceRoot }
+					: { ok: false, code: 'workspace_root_unavailable' };
+			},
+		});
+
+		await beginCodex(fixture.host, 'tab-final-workspace-failure');
+
+		const session = fixture.host.getActiveSession('tab-final-workspace-failure');
+		assert.ok(session !== undefined);
+		assert.strictEqual(workspaceCalls, 2);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_root_unavailable',
+		});
+		assert.deepStrictEqual(fixture.supervisor.prepareCalls, [session.sessionId]);
+		assert.strictEqual(
+			fixture.supervisor.stopCalls.includes(session.sessionId),
+			true,
+		);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-final-workspace-failure',
+			sessionId: session.sessionId,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			canRestart: true,
+		});
+	});
+
 	test('authenticated activity 전에는 표시하지 않고 current activity 뒤 초록을 한 번만 보낸다', async () => {
 		const fixture = createFixture();
 		await beginCodex(fixture.host, 'tab-status-connected');
@@ -487,7 +533,12 @@ suite('Codex stale attempt and cleanup', () => {
 		await waitUntil(() => supervisor.prepareCalls.length === 1);
 		const oldSessionId = supervisor.prepareCalls[0];
 
-		await fixture.host.switchAgent('tab-reselect', 'claude');
+		await fixture.host.switchAgent(
+			'tab-reselect',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
 		supervisor.completePrepare(oldSessionId);
 		await codexSwitch;
 

@@ -2,6 +2,7 @@ import type {
 	HostToWebviewMessage,
 	SessionId,
 	TabId,
+	WorkspaceRootId,
 } from '../../protocol/messages';
 import {
 	mapShellLaunchFailureToTerminalError,
@@ -32,6 +33,7 @@ export type TerminalLaunchErrorMessage = Extract<
 export type PrepareTerminalLaunch = (
 	tabId: TabId,
 	sessionId: SessionId | null,
+	workspaceRootId?: WorkspaceRootId,
 ) => Promise<
 	| { readonly ok: true; readonly policy: ShellLaunchPolicy }
 	| { readonly ok: false; readonly error: TerminalLaunchErrorMessage }
@@ -71,8 +73,11 @@ export function createPrepareTerminalLaunch(
 	return async function prepareLaunch(
 		tabId: TabId,
 		sessionId: SessionId | null,
+		workspaceRootId?: WorkspaceRootId,
 	): ReturnType<PrepareTerminalLaunch> {
-		const workspaceResult = workspaceResolver();
+		const workspaceResult = workspaceRootId === undefined
+			? { ok: false, code: 'workspace_root_unavailable' } as const
+			: workspaceResolver(workspaceRootId);
 		if (!workspaceResult.ok) {
 			return {
 				ok: false,
