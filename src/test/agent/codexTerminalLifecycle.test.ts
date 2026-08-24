@@ -991,9 +991,13 @@ suite('Codex stale attempt and cleanup', () => {
 		fixture.host.handleMcpRuntimeEvent(oldFailure);
 
 		const restart = fixture.host.restartMcpSession(first.tabId, first.sessionId);
+		const mismatched = fixture.host.restartMcpSession(
+			first.tabId,
+			'session-stale-restart',
+		);
 		const duplicate = fixture.host.restartMcpSession(first.tabId, first.sessionId);
 		assert.strictEqual(duplicate, restart);
-		await restart;
+		await Promise.all([restart, mismatched]);
 
 		const second = fixture.host.getActiveSession('tab-mcp-restart');
 		assert.ok(second !== undefined);
@@ -1017,6 +1021,12 @@ suite('Codex stale attempt and cleanup', () => {
 			(message) => message.type === 'mcp.statusChanged'
 				&& message.sessionId === second.sessionId,
 		), false);
+		assert.strictEqual(fixture.messages.some(
+			(message) => message.type === 'mcp.restartRejected'
+				&& message.tabId === first.tabId
+				&& message.sessionId === 'session-stale-restart'
+				&& message.code === 'invalid_session_state',
+		), true);
 		fixture.host.handleMcpRuntimeEvent(oldActivity);
 		fixture.host.handleMcpRuntimeEvent(oldFailure);
 		assert.strictEqual(fixture.messages.some(
@@ -1295,7 +1305,7 @@ suite('Codex stale attempt and cleanup', () => {
 		assert.strictEqual(fixture.adapter.handles[3].killCallCount, 0);
 	});
 
-	test('non-retryable 또는 connected session의 mcp.restart는 CLI를 종료하지 않는다', async () => {
+	test('non-retryable session의 mcp.restart는 CLI를 보존하고 거부한다', async () => {
 		const supervisor = new FakeCodexSupervisor();
 		supervisor.prepareFailure = {
 			ok: false,
@@ -1311,6 +1321,162 @@ suite('Codex stale attempt and cleanup', () => {
 		assert.strictEqual(fixture.host.getActiveSession(session.tabId), session);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
 		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
+	});
+
+	test('connected session의 mcp.restart도 CLI와 status를 보존하고 거부한다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-connected-mcp-restart');
+		const session = fixture.host.getActiveSession('tab-connected-mcp-restart');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.activity(session.sessionId),
+		);
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), session);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId)?.status, 'connected');
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
+	});
+
+	test('session exit 직후 도착한 stale mcp.restart도 명시적으로 거부한다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-stale-mcp-exit');
+		const session = fixture.host.getActiveSession('tab-stale-mcp-exit');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		fixture.adapter.handles[0].emitExit({ exitCode: 0 });
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
+	});
+
+	test('Reset 직후 도착한 stale mcp.restart도 명시적으로 거부한다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-stale-mcp-reset');
+		const session = fixture.host.getActiveSession('tab-stale-mcp-reset');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		fixture.host.resetAgent(session.tabId);
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
+	});
+
+	test('mcp.restart queue 뒤 Reset되면 perform 진입 gate가 요청을 거부한다', async () => {
+		const fixture = createFixture();
+		await beginCodex(fixture.host, 'tab-queued-mcp-reset');
+		const session = fixture.host.getActiveSession('tab-queued-mcp-reset');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+
+		const restarting = fixture.host.restartMcpSession(
+			session.tabId,
+			session.sessionId,
+		);
+		fixture.host.resetAgent(session.tabId);
+		await restarting;
+
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
+	});
+
+	test('Trust revoke 직후 도착한 stale mcp.restart도 명시적으로 거부한다', async () => {
+		let trusted = true;
+		const fixture = createFixture({ readWorkspaceTrust: () => trusted });
+		await beginCodex(fixture.host, 'tab-stale-mcp-trust');
+		const session = fixture.host.getActiveSession('tab-stale-mcp-trust');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		trusted = false;
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.activity(session.sessionId),
+		);
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
+	});
+
+	test('MCP preflight의 reentrant Reset도 identity gate가 stale 요청을 거부한다', async () => {
+		let resetDuringRestartPreflight = false;
+		let fixture!: ReturnType<typeof createFixture>;
+		fixture = createFixture({
+			workspaceResolver: () => {
+				if (resetDuringRestartPreflight) {
+					resetDuringRestartPreflight = false;
+					fixture.host.resetAgent('tab-mcp-preflight-reset');
+				}
+				return { ok: true, root: workspaceRoot };
+			},
+		});
+		await beginCodex(fixture.host, 'tab-mcp-preflight-reset');
+		const session = fixture.host.getActiveSession('tab-mcp-preflight-reset');
+		assert.ok(session !== undefined);
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
+		resetDuringRestartPreflight = true;
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), undefined);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.deepStrictEqual(fixture.messages.at(-1), {
+			type: 'mcp.restartRejected',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
+		});
 	});
 
 	test('normal exit, tab close와 Panel dispose가 해당 MCP와 PTY를 멱등 정리한다', async () => {

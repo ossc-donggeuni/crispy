@@ -647,6 +647,96 @@ suite('Agent Panel UI', () => {
 		});
 	});
 
+	test('Reset 완료는 최신 Catalog의 단일 selectable root만 자동 선택한다', async () => {
+		const workspaceA: WorkspaceRootCatalogEntry = {
+			id: 'workspace-root:file:///repo/a',
+			name: 'repo-a',
+			description: 'file:///repo/a',
+			selectable: true,
+		};
+		const workspaceB: WorkspaceRootCatalogEntry = {
+			id: 'workspace-root:file:///repo/b',
+			name: 'repo-b',
+			description: 'file:///repo/b',
+			selectable: true,
+		};
+		const scenarios = [
+			{ name: 'root 0개', catalog: [], expected: null },
+			{ name: 'root 1개', catalog: [workspaceB], expected: workspaceB.id },
+			{ name: 'root 2개', catalog: [workspaceA, workspaceB], expected: null },
+			{
+				name: 'Trust 해제',
+				catalog: [{
+					...workspaceA,
+					selectable: false,
+					reason: 'workspace_untrusted' as const,
+				}],
+				expected: null,
+			},
+		] as const;
+
+		for (const scenario of scenarios) {
+			const fixture = createFixture({
+				onAgentReselectionRequested: () => true,
+			}, [workspaceA]);
+			const tabId = fixture.controller.getSnapshot().tabs[0].id;
+			selectProvider(fixture.providerPicker, 'codex');
+
+			requireElement(fixture.topBar, 'agent-restart-session').click();
+			fixture.dialog.answer(true);
+			await flushMicrotasks();
+			assert.strictEqual(
+				fixture.controller.getAssignmentState(tabId)?.kind,
+				'resetting',
+				scenario.name,
+			);
+
+			/** Reset transaction 중 바뀐 최신 Catalog를 완료 시점에 사용한다. */
+			fixture.controller.updateWorkspaceRootCatalog(scenario.catalog);
+			assert.strictEqual(fixture.controller.handleHostMessage({
+				type: 'agent.resetCompleted',
+				tabId,
+				assignmentRevision: 2,
+			}), true);
+
+			const state = fixture.controller.getAssignmentState(tabId);
+			assert.strictEqual(state?.kind, 'unassigned', scenario.name);
+			assert.strictEqual(
+				state?.kind === 'unassigned'
+					? state.selectedWorkspaceRootId
+					: undefined,
+				scenario.expected,
+				scenario.name,
+			);
+			assert.strictEqual(
+				requireElement(fixture.providerPicker, 'agent-workspace-picker').value,
+				scenario.expected ?? '',
+				scenario.name,
+			);
+			assert.deepStrictEqual(
+				fixture.providerPicker
+					.findAll('agent-provider-option')
+					.map((option) => option.disabled),
+				scenario.expected === null
+					? [true, true, true]
+					: [false, false, false],
+				scenario.name,
+			);
+
+			if (scenario.name === 'Trust 해제') {
+				fixture.controller.updateWorkspaceRootCatalog([workspaceA]);
+				const trustedState = fixture.controller.getAssignmentState(tabId);
+				assert.strictEqual(
+					trustedState?.kind === 'unassigned'
+						? trustedState.selectedWorkspaceRootId
+						: undefined,
+					workspaceA.id,
+					'Re-trust 뒤 단일 root를 다시 자동 선택한다.',
+				);
+			}
+		}
+	});
+
 	test('pending switch 실패는 제거된 root를 현재 단일 root로 재선택하고 provider를 다시 활성화한다', () => {
 		const selections: Array<{
 			providerId: string;
@@ -959,9 +1049,15 @@ suite('Agent Panel UI', () => {
 		}), true);
 		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
 			kind: 'unassigned',
-			selectedWorkspaceRootId: null,
+			selectedWorkspaceRootId: 'workspace-root:file:///workspace',
 			pendingSwitch: null,
 		});
+		assert.deepStrictEqual(
+			fixture.providerPicker
+				.findAll('agent-provider-option')
+				.map((option) => option.disabled),
+			[false, false, false],
+		);
 	});
 
 	test('Reset barrier는 늦은 accepted/error의 Terminal 전달과 provider 부활을 차단한다', async () => {
@@ -1018,7 +1114,6 @@ suite('Agent Panel UI', () => {
 			assignmentRevision: 1,
 		}), false);
 
-		selectWorkspace(fixture.providerPicker, 'workspace-root:file:///workspace');
 		selectProvider(fixture.providerPicker, 'claude');
 		assert.strictEqual(switchAttemptId, 4);
 		assert.strictEqual(fixture.controller.handleHostMessage({
@@ -1115,6 +1210,21 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(
 			fixture.controller.getSnapshot().tabs[0].label,
 			UNSELECTED_TAB_LABEL,
+		);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tab.id), {
+			kind: 'unassigned',
+			selectedWorkspaceRootId: 'workspace-root:file:///workspace',
+			pendingSwitch: null,
+		});
+		assert.strictEqual(
+			requireElement(fixture.providerPicker, 'agent-workspace-picker').value,
+			'workspace-root:file:///workspace',
+		);
+		assert.deepStrictEqual(
+			fixture.providerPicker
+				.findAll('agent-provider-option')
+				.map((option) => option.disabled),
+			[false, false, false],
 		);
 	});
 
@@ -1312,6 +1422,34 @@ suite('Agent Panel UI', () => {
 		);
 	});
 
+	test('MCP restart callback이 없으면 확인 뒤 pending을 즉시 복구한다', async () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started', tabId, sessionId: 'session-no-callback',
+		});
+		fixture.controller.handleHostMessage({
+			type: 'mcp.statusChanged',
+			tabId,
+			sessionId: 'session-no-callback',
+			status: 'failed',
+			reason: 'adapter_exited',
+			retryable: true,
+		});
+		const restart = requireElement(fixture.topBar, 'agent-mcp-restart');
+
+		restart.click();
+		fixture.dialog.answer(true);
+		await flushMicrotasks();
+
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs[0].mcpRestartPending,
+			false,
+		);
+		assert.strictEqual(restart.disabled, false);
+	});
+
 	test('mcp.restartRejected는 failed 표시를 유지하고 restart pending만 끝낸다', async () => {
 		const fixture = createFixture({
 			onMcpRestartRequested: () => undefined,
@@ -1342,8 +1480,8 @@ suite('Agent Panel UI', () => {
 			type: 'mcp.restartRejected',
 			tabId,
 			sessionId: 'session-rejected',
-			code: 'workspace_untrusted',
-			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			code: 'invalid_session_state',
+			message: 'MCP restart is no longer valid for the current session.',
 		});
 
 		const tab = fixture.controller.getSnapshot().tabs[0];

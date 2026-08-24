@@ -237,6 +237,18 @@ export function initializeAgentPanelUi(
 		pendingSwitch: null,
 	});
 
+	/** Reset 뒤 최신 Catalog의 단일 selectable root 정책을 두 UI 경로에 동일하게 적용한다. */
+	const resetTabAssignment = (tabId: AgentTabId): void => {
+		providerPickerOpenTabs.delete(tabId);
+		assignmentStateByTab.set(
+			tabId,
+			createUnassignedState(selectWorkspaceForUnassignedTab(null)),
+		);
+		model.clearProvider(tabId);
+		/** pending switch에는 model provider가 없어 clearProvider가 notify하지 않을 수 있다. */
+		renderViews();
+	};
+
 	const getEffectiveCatalog = (
 		tabId: AgentTabId | undefined,
 	): readonly WorkspaceRootCatalogEntry[] => {
@@ -545,9 +557,7 @@ export function initializeAgentPanelUi(
 					}
 
 					/** 콜백 없는 독립 UI 소비자는 기존 즉시 Reset 동작을 유지한다. */
-					providerPickerOpenTabs.delete(activeTab.id);
-					assignmentStateByTab.set(activeTab.id, createUnassignedState());
-					model.clearProvider(activeTab.id);
+					resetTabAssignment(activeTab.id);
 				}).catch(() => {
 					/** 확인 다이얼로그 실패 시 현재 세션을 유지한다. */
 				});
@@ -577,9 +587,14 @@ export function initializeAgentPanelUi(
 						model.setMcpRestartPending(tabId, sessionId, false);
 						return;
 					}
+					const requestRestart = callbacks.onMcpRestartRequested;
+					if (requestRestart === undefined) {
+						model.setMcpRestartPending(tabId, sessionId, false);
+						return;
+					}
 
 					try {
-						if (callbacks.onMcpRestartRequested?.(tabId, sessionId) === false) {
+						if (requestRestart(tabId, sessionId) === false) {
 							model.setMcpRestartPending(tabId, sessionId, false);
 						}
 					} catch {
@@ -784,9 +799,7 @@ export function initializeAgentPanelUi(
 						message.tabId,
 						message.assignmentRevision,
 					);
-					providerPickerOpenTabs.delete(message.tabId);
-					assignmentStateByTab.set(message.tabId, createUnassignedState());
-					model.clearProvider(message.tabId);
+					resetTabAssignment(message.tabId);
 					return true;
 				}
 				case 'terminal.error': {

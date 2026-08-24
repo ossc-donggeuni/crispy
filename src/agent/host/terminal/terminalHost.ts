@@ -294,6 +294,7 @@ const START_ERROR_MESSAGES = Object.freeze({
 	unknownTab: 'Terminal tab is not registered.',
 	workspaceLocked: 'Reset the Agent before changing its Workspace.',
 	resetting: 'Agent reset is still being committed.',
+	mcpRestartUnavailable: 'MCP restart is no longer valid for the current session.',
 });
 
 /** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
@@ -441,8 +442,11 @@ export class TerminalHost {
 		InternalMcpStatusRecord
 	>();
 
-	/** 같은 탭의 명시적 MCP+Agent restart 연타를 Host에서도 직렬화한다. */
-	private readonly mcpRestartByTab = new Map<TabId, Promise<void>>();
+	/** 같은 탭의 명시적 MCP+Agent restart 연타를 요청 session과 함께 직렬화한다. */
+	private readonly mcpRestartByTab = new Map<TabId, {
+		readonly sessionId: SessionId;
+		readonly completion: Promise<void>;
+	}>();
 
 	/** Session 종료 경로에서 root-only kill을 피하는 process-tree controller다. */
 	private readonly processTreeController: ProcessTreeController;
@@ -1897,20 +1901,25 @@ export class TerminalHost {
 	restartMcpSession(tabId: TabId, sessionId: SessionId): Promise<void> {
 		const existing = this.mcpRestartByTab.get(tabId);
 		if (existing !== undefined) {
-			return existing;
+			if (existing.sessionId !== sessionId) {
+				this.rejectMcpRestartForInvalidState(tabId, sessionId);
+				return Promise.resolve();
+			}
+			return existing.completion;
 		}
 		if (!this.canRestartMcpSession(tabId, sessionId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return Promise.resolve();
 		}
 
 		const restart = Promise.resolve().then(() =>
 			this.performMcpRestart(tabId, sessionId)
 		).finally(() => {
-			if (this.mcpRestartByTab.get(tabId) === restart) {
+			if (this.mcpRestartByTab.get(tabId)?.completion === restart) {
 				this.mcpRestartByTab.delete(tabId);
 			}
 		});
-		this.mcpRestartByTab.set(tabId, restart);
+		this.mcpRestartByTab.set(tabId, { sessionId, completion: restart });
 		return restart;
 	}
 
@@ -1928,19 +1937,36 @@ export class TerminalHost {
 			&& retryabilityByFailureReason[status.failure.reason];
 	}
 
+	/** stale 요청도 Webview pending을 끝낼 수 있도록 기존 CLI를 건드리지 않는 응답을 보낸다. */
+	private rejectMcpRestartForInvalidState(
+		tabId: TabId,
+		sessionId: SessionId,
+	): void {
+		this.publish({
+			type: 'mcp.restartRejected',
+			tabId,
+			sessionId,
+			code: 'invalid_session_state',
+			message: START_ERROR_MESSAGES.mcpRestartUnavailable,
+		});
+	}
+
 	private async performMcpRestart(
 		tabId: TabId,
 		sessionId: SessionId,
 	): Promise<void> {
 		if (!this.canRestartMcpSession(tabId, sessionId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
 		const session = this.sessionsById.get(sessionId);
 		if (session === undefined) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
 		const assignment = this.assignmentByTab.get(tabId);
 		if (assignment === undefined || !isMcpProviderId(assignment.providerId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
 		let workspace: WorkspaceValidationResult;
@@ -1968,6 +1994,7 @@ export class TerminalHost {
 			|| this.assignmentByTab.get(tabId) !== assignment
 			|| this.sessionsById.get(sessionId) !== session
 		) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
 

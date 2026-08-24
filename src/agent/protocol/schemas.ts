@@ -1,6 +1,6 @@
 import {
+	MCP_RESTART_REJECTION_CODES,
 	TERMINAL_ERROR_CODES,
-	WORKSPACE_EXECUTION_ERROR_CODES,
 } from './errors';
 import { PROVIDER_IDS } from './providers';
 import { MCP_FAILURE_REASONS } from '../../mcp/failureReason';
@@ -119,8 +119,8 @@ const orderingRevisionSchema = defineFieldSchema<number>((value, field) => {
 
 	return validationSuccess(value);
 });
-const workspaceExecutionErrorCodeSchema = stringAllowlistSchema(
-	WORKSPACE_EXECUTION_ERROR_CODES,
+const mcpRestartRejectionCodeSchema = stringAllowlistSchema(
+	MCP_RESTART_REJECTION_CODES,
 	'invalid_field',
 );
 /** MCP 실패 reason은 공유 domain allowlist에서만 가져온다. */
@@ -298,7 +298,7 @@ export const HOST_TO_WEBVIEW_MESSAGE_SCHEMAS = defineMessageSchemaRegistry({
 	'mcp.restartRejected': {
 		tabId: idSchema,
 		sessionId: idSchema,
-		code: workspaceExecutionErrorCodeSchema,
+		code: mcpRestartRejectionCodeSchema,
 		message: stringSchema,
 	},
 });

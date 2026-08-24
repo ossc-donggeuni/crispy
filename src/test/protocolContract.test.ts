@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import {
 	ID_MAX_LENGTH,
+	MCP_RESTART_REJECTION_CODES,
 	PROVIDER_IDS,
 	TERMINAL_COLS_MAX,
 	TERMINAL_COLS_MIN,
@@ -307,8 +308,8 @@ suite('Host↔Webview protocol completion contract', () => {
 			}));
 		});
 
-		test('mcp.restartRejected는 Workspace execution 오류만 허용한다', () => {
-			for (const code of WORKSPACE_EXECUTION_ERROR_CODES) {
+		test('mcp.restartRejected는 Workspace 오류와 stale session 상태만 허용한다', () => {
+			for (const code of MCP_RESTART_REJECTION_CODES) {
 				assertSuccess(parseHostToWebviewMessage({
 					type: 'mcp.restartRejected',
 					tabId: TAB_ID,

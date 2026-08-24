@@ -10,6 +10,16 @@ export const WORKSPACE_EXECUTION_ERROR_CODES = [
 export type WorkspaceExecutionErrorCode =
 	typeof WORKSPACE_EXECUTION_ERROR_CODES[number];
 
+/** MCP restart가 기존 CLI를 보존한 채 거부될 수 있는 안정적인 오류 code다. */
+export const MCP_RESTART_REJECTION_CODES = [
+	...WORKSPACE_EXECUTION_ERROR_CODES,
+	'invalid_session_state',
+] as const;
+
+/** Host가 mcp.restartRejected로 보고할 수 있는 오류 code union이다. */
+export type McpRestartRejectionCode =
+	typeof MCP_RESTART_REJECTION_CODES[number];
+
 /** Webview에 전달할 수 있는 안정적인 terminal 오류 code allowlist다. */
 export const TERMINAL_ERROR_CODES = [
 	...WORKSPACE_EXECUTION_ERROR_CODES,
