@@ -16,6 +16,7 @@ import {
 import type {
 	ExtensionToWebviewMessage,
 	WebviewToExtensionMessage,
+	WorkspaceToWebviewMessage,
 } from '../messages';
 import {
 	createDefaultWebviewSessionState,
@@ -29,7 +30,10 @@ import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
-import { deserializeGraphFromWebview } from '../webview/graph/graphTransport';
+import {
+	deserializeWorkspacePresentationFromWebview,
+	type WorkspacePresentation,
+} from '../workspace/workspacePresentation';
 import { createGraphLayout } from '../webview/graph/graphLayout';
 import type { Graph } from '../webview/graph/graphModel';
 import { addGraphRoot } from '../webview/graph/graphRootPromotion';
@@ -557,8 +561,10 @@ suite('Crispy Extension Host', () => {
 				conversionCalls += 1;
 				return conversionCalls === 1 ? staleGraph : latestGraph;
 			},
-			async postMessage(message: { graph: Graph }) {
-				graphMessages.push(message.graph);
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
+			async postMessage(message: WorkspaceToWebviewMessage) {
+				graphMessages.push(message.presentation.graph);
 				return true;
 			},
 		};
@@ -659,8 +665,10 @@ suite('Crispy Extension Host', () => {
 				conversionCalls += 1;
 				return conversionCalls === 1 ? staleGraph : latestGraph;
 			},
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
 			async postMessage(message) {
-				graphMessages.push(message.graph);
+				graphMessages.push(message.presentation.graph);
 				return true;
 			},
 		});
@@ -706,6 +714,8 @@ suite('Crispy Extension Host', () => {
 				conversionCalls += 1;
 				return { roots: [], rootNodes: {} };
 			},
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
 			async postMessage() {
 				postMessageCalls += 1;
 				return true;
@@ -773,18 +783,26 @@ suite('Crispy Extension Host', () => {
 		assert.ok(
 			panel.webview.html.includes(`img-src ${panel.webview.cspSource};`),
 		);
+		assert.strictEqual(
+			panel.webview.html.match(/data-workspace-presentation=/g)?.length,
+			1,
+		);
+		assert.doesNotMatch(panel.webview.html, /data-workspace-(?:graph|catalog)=/);
 	});
 
-	test('Canvas command가 현재 Workspace Root를 Graph 초기 데이터로 전달한다', async () => {
+	test('Canvas command가 같은 현재 Workspace Root를 Graph와 Catalog 초기 데이터로 전달한다', async () => {
 		const panel = await openCanvas();
-		const graph = getInitialWorkspaceGraph(panel);
+		const presentation = getInitialWorkspacePresentation(panel);
+		const graph = presentation.graph;
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 
 		assert.strictEqual(graph.roots.length, workspaceFolders.length);
+		assert.strictEqual(presentation.rootCatalog.length, workspaceFolders.length);
 		for (const [index, workspaceFolder] of workspaceFolders.entries()) {
 			const projectId = `workspace-root:${workspaceFolder.uri.toString()}`;
 			const graphRoot = graph.roots[index];
 			const project = graph.rootNodes[projectId];
+			const catalogEntry = presentation.rootCatalog[index];
 
 			assert.deepStrictEqual(graphRoot, {
 				id: `root:${projectId}`,
@@ -793,6 +811,9 @@ suite('Crispy Extension Host', () => {
 			assert.ok(project && project.kind === 'project');
 			assert.strictEqual(project.name, workspaceFolder.name);
 			assert.strictEqual(project.status, 'loaded');
+			assert.strictEqual(catalogEntry?.id, projectId);
+			assert.strictEqual(catalogEntry?.name, workspaceFolder.name);
+			assert.strictEqual(catalogEntry?.description, workspaceFolder.uri.toString());
 		}
 	});
 
@@ -1707,8 +1728,10 @@ function getSerializedInitialWebviewState(panel: vscode.WebviewPanel): string {
 	return match[1];
 }
 
-function getInitialWorkspaceGraph(panel: vscode.WebviewPanel): Graph {
-	const match = panel.webview.html.match(/data-workspace-graph="([^"]*)"/);
-	assert.ok(match, 'Webview 초기 HTML에 serialized Workspace Graph가 있어야 한다.');
-	return deserializeGraphFromWebview(match[1]);
+function getInitialWorkspacePresentation(
+	panel: vscode.WebviewPanel,
+): WorkspacePresentation {
+	const match = panel.webview.html.match(/data-workspace-presentation="([^"]*)"/);
+	assert.ok(match, 'Webview 초기 HTML에 atomic Workspace Presentation이 있어야 한다.');
+	return deserializeWorkspacePresentationFromWebview(match[1]);
 }

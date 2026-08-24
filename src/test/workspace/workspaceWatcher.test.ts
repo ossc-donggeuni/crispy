@@ -160,8 +160,12 @@ suite('Workspace Watcher', () => {
 					rootNodes: { [project.id]: project },
 				};
 			},
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
 			async postMessage(message) {
-				graphMessages.push(message.graph.roots[0]?.nodeId ?? 'empty');
+				graphMessages.push(
+					message.presentation.graph.roots[0]?.nodeId ?? 'empty',
+				);
 				return true;
 			},
 		});

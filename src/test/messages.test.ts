@@ -41,16 +41,22 @@ suite('Extension to Webview Workspace messages', () => {
 		assert.deepStrictEqual(webviewMessage, workspaceMessage);
 	});
 
-	test('Workspace 도메인 메시지가 기존 Graph 모델로 최상위 Host union에 연결된다', () => {
+	test('Workspace 도메인 메시지가 atomic Presentation으로 최상위 Host union에 연결된다', () => {
 		const graph = createWorkspaceGraph();
+		const rootCatalog = [{
+			id: 'workspace-root:file:///workspace/app' as const,
+			name: 'app',
+			description: 'file:///workspace/app',
+			selectable: true as const,
+		}];
 		const workspaceMessage = {
-			type: 'workspace.graphUpdated',
-			graph,
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
 		} satisfies WorkspaceToWebviewMessage;
 		const extensionMessage: ExtensionToWebviewMessage = workspaceMessage;
-		const graphPayload: Graph = workspaceMessage.graph;
+		const graphPayload: Graph = workspaceMessage.presentation.graph;
 
-		assert.strictEqual(extensionMessage.type, 'workspace.graphUpdated');
+		assert.strictEqual(extensionMessage.type, 'workspace.snapshotUpdated');
 		assert.strictEqual(graphPayload, graph);
 		assert.deepStrictEqual(
 			parseWorkspaceToWebviewMessage(extensionMessage),
@@ -62,15 +68,30 @@ suite('Extension to Webview Workspace messages', () => {
 		const graph = createWorkspaceGraph();
 
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
-			type: 'workspace.graphUpdated',
-			graph,
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog: [] },
 			unexpected: true,
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
-			type: 'workspace.graphUpdated',
-			graph: {
-				roots: [{ id: 'root:missing', nodeId: 'project:missing' }],
-				rootNodes: {},
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph: {
+					roots: [{ id: 'root:missing', nodeId: 'project:missing' }],
+					rootNodes: {},
+				},
+				rootCatalog: [],
+			},
+		}), undefined);
+		assert.strictEqual(parseWorkspaceToWebviewMessage({
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph,
+				rootCatalog: [{
+					id: 'workspace-root:',
+					name: 'invalid',
+					description: 'invalid',
+					selectable: true,
+				}],
 			},
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({

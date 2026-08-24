@@ -26,6 +26,17 @@ export {
 } from './workspacePolicy';
 export { createWorkspaceSnapshot } from './workspaceSnapshot';
 export { convertWorkspaceSnapshotToGraph } from './workspaceToGraph';
+export {
+	createWorkspaceRootCatalog,
+	type WorkspaceRootCatalogEntry,
+	type WorkspaceRootCatalogUnavailableReason,
+} from './workspaceRootCatalog';
+export {
+	deserializeWorkspacePresentationFromWebview,
+	parseWorkspacePresentation,
+	serializeWorkspacePresentationForWebview,
+	type WorkspacePresentation,
+} from './workspacePresentation';
 export { readDefaultWorkspaceFilter } from './workspaceDefaultFilter';
 export {
 	matchesWorkspaceFilterRule,
@@ -53,8 +64,13 @@ export {
 } from './workspacePersistence';
 export {
 	createCurrentWorkspaceGraph,
+	createCurrentWorkspacePresentation,
+	createCurrentWorkspaceSnapshot,
 	createWorkspaceRefreshCoordinator,
+	type WorkspaceGraphDependencies,
+	type WorkspacePresentationDependencies,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRefreshDependencies,
+	type WorkspaceSnapshotDependencies,
 } from './workspaceRefresh';
 export { watchWorkspaceChanges } from './workspaceWatcher';

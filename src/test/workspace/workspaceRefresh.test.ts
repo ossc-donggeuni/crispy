@@ -5,8 +5,10 @@ import type { Graph } from '../../webview/graph/graphModel';
 import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
+	type WorkspaceRefreshDependencies,
 } from '../../workspace/workspaceRefresh';
 import type { WorkspaceSnapshot } from '../../workspace/workspaceModel';
+import { createWorkspaceRootCatalog } from '../../workspace/workspaceRootCatalog';
 import { createWorkspaceRootId } from '../../workspace/workspaceRootId';
 
 suite('Workspace Refresh Coordinator', () => {
@@ -14,7 +16,7 @@ suite('Workspace Refresh Coordinator', () => {
 		let snapshotCalls = 0;
 		let conversionCalls = 0;
 		let postMessageCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				snapshotCalls += 1;
 				return createSnapshot('disposed');
@@ -44,7 +46,7 @@ suite('Workspace Refresh Coordinator', () => {
 		let snapshotCalls = 0;
 		let conversionCalls = 0;
 		let postMessageCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			createWorkspaceSnapshot() {
 				snapshotCalls += 1;
 				return snapshot.promise;
@@ -77,10 +79,12 @@ suite('Workspace Refresh Coordinator', () => {
 		const snapshot = createDeferred<WorkspaceSnapshot>();
 		let conversionCalls = 0;
 		let postMessageCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		let coordinator: ReturnType<typeof createWorkspaceRefreshCoordinator>;
+		coordinator = createTestWorkspaceRefreshCoordinator({
 			createWorkspaceSnapshot: () => snapshot.promise,
 			convertWorkspaceSnapshotToGraph() {
 				conversionCalls += 1;
+				coordinator.dispose();
 				return createGraph('converted-before-dispose');
 			},
 			async postMessage() {
@@ -92,12 +96,9 @@ suite('Workspace Refresh Coordinator', () => {
 
 		await Promise.resolve();
 		snapshot.resolve(createSnapshot('converted-before-dispose'));
-		await Promise.resolve();
-		assert.strictEqual(conversionCalls, 1);
-
-		coordinator.dispose();
 		await activeRefresh;
 
+		assert.strictEqual(conversionCalls, 1);
 		assert.strictEqual(postMessageCalls, 0);
 	});
 
@@ -129,15 +130,18 @@ suite('Workspace Refresh Coordinator', () => {
 		assert.strictEqual(snapshotCalls, 1);
 		convertedSnapshots.length = 0;
 
-		const coordinator = createWorkspaceRefreshCoordinator(dependencies);
+		const coordinator = createTestWorkspaceRefreshCoordinator(dependencies);
 
 		await coordinator.requestWorkspaceRefresh();
 
 		assert.strictEqual(snapshotCalls, 2);
 		assert.deepStrictEqual(convertedSnapshots, [snapshot]);
 		assert.deepStrictEqual(messages, [{
-			type: 'workspace.graphUpdated',
-			graph,
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph,
+				rootCatalog: createWorkspaceRootCatalog(snapshot, true, 'linux'),
+			},
 		}]);
 	});
 
@@ -163,14 +167,21 @@ suite('Workspace Refresh Coordinator', () => {
 			await createCurrentWorkspaceGraph(dependencies),
 			createGraph('filter-fallback'),
 		);
-		const coordinator = createWorkspaceRefreshCoordinator(dependencies);
+		const coordinator = createTestWorkspaceRefreshCoordinator(dependencies);
 
 		await coordinator.requestWorkspaceRefresh();
 
 		assert.strictEqual(receivedFilterCount, 0);
 		assert.deepStrictEqual(messages, [{
-			type: 'workspace.graphUpdated',
-			graph: createGraph('filter-fallback'),
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph: createGraph('filter-fallback'),
+				rootCatalog: createWorkspaceRootCatalog(
+					createSnapshot('filter-fallback'),
+					true,
+					'linux',
+				),
+			},
 		}]);
 	});
 
@@ -184,7 +195,7 @@ suite('Workspace Refresh Coordinator', () => {
 		let snapshotCalls = 0;
 		let activeSnapshots = 0;
 		let maxActiveSnapshots = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				const index = snapshotCalls;
 				snapshotCalls += 1;
@@ -233,7 +244,7 @@ suite('Workspace Refresh Coordinator', () => {
 		assert.strictEqual(maxActiveSnapshots, 1);
 		assert.strictEqual(activeSnapshots, 0);
 		assert.deepStrictEqual(
-			messages.map((message) => message.graph.roots[0]?.nodeId),
+			messages.map((message) => message.presentation.graph.roots[0]?.nodeId),
 			['project:a', 'project:b', 'project:c'],
 		);
 	});
@@ -243,7 +254,7 @@ suite('Workspace Refresh Coordinator', () => {
 		const secondSnapshot = createDeferred<WorkspaceSnapshot>();
 		const messages: WorkspaceToWebviewMessage[] = [];
 		let snapshotCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			createWorkspaceSnapshot() {
 				snapshotCalls += 1;
 				if (snapshotCalls === 1) {
@@ -276,14 +287,14 @@ suite('Workspace Refresh Coordinator', () => {
 		await failedWithPending;
 
 		assert.deepStrictEqual(
-			messages.map((message) => message.graph.roots[0]?.nodeId),
+			messages.map((message) => message.presentation.graph.roots[0]?.nodeId),
 			['project:pending'],
 		);
 
 		await coordinator.requestWorkspaceRefresh();
 		assert.strictEqual(snapshotCalls, 3);
 		assert.deepStrictEqual(
-			messages.map((message) => message.graph.roots[0]?.nodeId),
+			messages.map((message) => message.presentation.graph.roots[0]?.nodeId),
 			['project:pending', 'project:recovered'],
 		);
 	});
@@ -291,7 +302,7 @@ suite('Workspace Refresh Coordinator', () => {
 	test('Graph 변환 실패는 전송하지 않고 coordinator를 Idle로 복구한다', async () => {
 		const messages: WorkspaceToWebviewMessage[] = [];
 		let conversionCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				return createSnapshot(`snapshot-${conversionCalls}`);
 			},
@@ -315,15 +326,50 @@ suite('Workspace Refresh Coordinator', () => {
 		await coordinator.requestWorkspaceRefresh();
 		assert.strictEqual(conversionCalls, 2);
 		assert.deepStrictEqual(
-			messages.map((message) => message.graph.roots[0]?.nodeId),
+			messages.map((message) => message.presentation.graph.roots[0]?.nodeId),
 			['project:converted'],
+		);
+	});
+
+	test('Catalog 생성 실패는 Graph만 부분 전송하지 않고 마지막 정상 Presentation을 유지한다', async () => {
+		const snapshot = createSnapshot('catalog');
+		const graph = createGraph('catalog');
+		const messages: WorkspaceToWebviewMessage[] = [];
+		let catalogCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			createWorkspaceSnapshot: async () => snapshot,
+			convertWorkspaceSnapshotToGraph: () => graph,
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog(value) {
+				catalogCalls += 1;
+				if (catalogCalls === 1) {
+					throw new Error('catalog failed');
+				}
+
+				return createWorkspaceRootCatalog(value, true, 'linux');
+			},
+			async postMessage(message) {
+				messages.push(message);
+				return true;
+			},
+		});
+
+		await coordinator.requestWorkspaceRefresh();
+		assert.strictEqual(messages.length, 0);
+
+		await coordinator.requestWorkspaceRefresh();
+		assert.strictEqual(messages.length, 1);
+		assert.strictEqual(messages[0]?.presentation.graph, graph);
+		assert.deepStrictEqual(
+			messages[0]?.presentation.rootCatalog.map(({ id }) => id),
+			[snapshot.roots[0]?.id],
 		);
 	});
 
 	test('postMessage false는 retry나 dispose로 해석하지 않고 다음 요청을 허용한다', async () => {
 		let snapshotCalls = 0;
 		let postMessageCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				snapshotCalls += 1;
 				return createSnapshot(`delivery-${snapshotCalls}`);
@@ -348,7 +394,7 @@ suite('Workspace Refresh Coordinator', () => {
 
 	test('postMessage rejection은 완료 Promise에 노출하지 않고 다음 요청을 허용한다', async () => {
 		let postMessageCalls = 0;
-		const coordinator = createWorkspaceRefreshCoordinator({
+		const coordinator = createTestWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				return createSnapshot(`rejection-${postMessageCalls}`);
 			},
@@ -375,7 +421,7 @@ suite('Workspace Refresh Coordinator', () => {
 		const oldSnapshot = createDeferred<WorkspaceSnapshot>();
 		const oldMessages: WorkspaceToWebviewMessage[] = [];
 		const newMessages: WorkspaceToWebviewMessage[] = [];
-		const oldCoordinator = createWorkspaceRefreshCoordinator({
+		const oldCoordinator = createTestWorkspaceRefreshCoordinator({
 			createWorkspaceSnapshot: () => oldSnapshot.promise,
 			convertWorkspaceSnapshotToGraph: () => createGraph('old'),
 			async postMessage(message) {
@@ -387,7 +433,7 @@ suite('Workspace Refresh Coordinator', () => {
 
 		await Promise.resolve();
 		oldCoordinator.dispose();
-		const newCoordinator = createWorkspaceRefreshCoordinator({
+		const newCoordinator = createTestWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				return createSnapshot('new');
 			},
@@ -404,11 +450,28 @@ suite('Workspace Refresh Coordinator', () => {
 
 		assert.strictEqual(oldMessages.length, 0);
 		assert.deepStrictEqual(
-			newMessages.map((message) => message.graph.roots[0]?.nodeId),
+			newMessages.map((message) => message.presentation.graph.roots[0]?.nodeId),
 			['project:new'],
 		);
 	});
 });
+
+function createTestWorkspaceRefreshCoordinator(
+	dependencies: Omit<
+		WorkspaceRefreshDependencies,
+		'readWorkspaceTrust' | 'createWorkspaceRootCatalog'
+	>,
+) {
+	return createWorkspaceRefreshCoordinator({
+		...dependencies,
+		readWorkspaceTrust: () => true,
+		createWorkspaceRootCatalog: (snapshot) => createWorkspaceRootCatalog(
+			snapshot,
+			true,
+			'linux',
+		),
+	});
+}
 
 function createSnapshot(name: string): WorkspaceSnapshot {
 	const uri = vscode.Uri.file(`/workspace/${name}`);

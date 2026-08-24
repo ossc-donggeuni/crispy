@@ -12,7 +12,7 @@ import {
 	type GraphStateSnapshot,
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
-import { serializeGraphForWebview } from '../webview/graph/graphTransport';
+import { serializeWorkspacePresentationForWebview } from '../workspace/workspacePresentation';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
@@ -738,9 +738,18 @@ suite('Webview State Wiring', () => {
 			style: { setProperty: () => undefined },
 			clientWidth: 1000,
 			clientHeight: 800,
+			getAttribute: (attribute: string) => (
+				attribute === 'data-workspace-presentation'
+					? serializeWorkspacePresentationForWebview({
+						graph: initialWorkspaceGraph,
+						rootCatalog: [],
+					})
+					: null
+			),
 		} as unknown as HTMLElement;
 		const elements = new Map<string, HTMLElement>([
 			['.crispy-layout', layoutElement],
+			['#app', layoutElement],
 			['#graph-area', {} as HTMLElement],
 			['#agent-chat-area', {} as HTMLElement],
 			['#chat-drag-handle', {} as HTMLElement],
@@ -758,11 +767,7 @@ suite('Webview State Wiring', () => {
 		]);
 		const documentMock = {
 			currentScript: {
-				getAttribute: (attribute: string) => (
-					attribute === 'data-workspace-graph'
-						? serializeGraphForWebview(initialWorkspaceGraph)
-						: null
-				),
+				getAttribute: () => null,
 			},
 			querySelector: (selector: string) => elements.get(selector) ?? null,
 		};
@@ -812,8 +817,11 @@ suite('Webview State Wiring', () => {
 
 			hostMessageHandler({
 				data: {
-					type: 'workspace.graphUpdated',
-					graph: refreshedWorkspaceGraph,
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: refreshedWorkspaceGraph,
+						rootCatalog: [],
+					},
 				},
 			} as MessageEvent);
 
@@ -821,6 +829,24 @@ suite('Webview State Wiring', () => {
 			assert.deepStrictEqual(terminalHostMessages, []);
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphDisposed, false);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: initialWorkspaceGraph,
+						rootCatalog: [{
+							id: 'workspace-root:',
+							name: 'invalid',
+							description: 'invalid',
+							selectable: true,
+						}],
+					},
+				},
+			} as MessageEvent);
+
+			/** Catalog가 잘못되면 유효한 Graph도 부분 적용하지 않는다. */
+			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
 
 			hostMessageHandler({
 				data: {

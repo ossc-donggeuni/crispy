@@ -37,11 +37,12 @@ import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from './workspace/workspaceMetadata';
-import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
 import type { GraphState } from './webview/graph/graphState';
 import {
 	createCurrentWorkspaceGraph,
+	createCurrentWorkspacePresentation,
+	createWorkspaceRootCatalog,
 	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
@@ -49,8 +50,10 @@ import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
+	serializeWorkspacePresentationForWebview,
 	watchWorkspaceChanges,
 	writeWorkspacePersistentState,
+	type WorkspacePresentation,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRootFilter,
 } from './workspace';
@@ -268,6 +271,14 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		),
 		convertWorkspaceSnapshotToGraph,
 	};
+	const workspacePresentationDependencies = {
+		...workspaceGraphDependencies,
+		readWorkspaceTrust: () => vscode.workspace.isTrusted,
+		createWorkspaceRootCatalog: (
+			snapshot: Parameters<typeof createWorkspaceRootCatalog>[0],
+			isTrusted: boolean,
+		) => createWorkspaceRootCatalog(snapshot, isTrusted, process.platform),
+	};
 	let debugEffectMessages: GraphNodeEffectSetMessage[] = [];
 	/**
 	 * 기존 WebviewPanel을 표시하거나 새 Panel에 Dock 및 Resize UI를 설정한다.
@@ -346,9 +357,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				);
 			},
 		);
-		
+
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({
-			...workspaceGraphDependencies,
+			...workspacePresentationDependencies,
 			postMessage: (message: WorkspaceToWebviewMessage) => (
 				panel.webview.postMessage(message)
 			),
@@ -372,8 +383,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		});
 
 		const rootUris = getCurrentWorkspaceRootUris();
-		const [graph, workspaceState] = await Promise.all([
-			createCurrentWorkspaceGraph(workspaceGraphDependencies),
+		const [workspacePresentation, workspaceState] = await Promise.all([
+			createCurrentWorkspacePresentation(workspacePresentationDependencies),
 			loadWorkspacePersistentStateForRoots(rootUris),
 		]);
 		if (panelDisposed) {
@@ -390,7 +401,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			stylesUri,
 			scriptUri,
 			initialWebviewState,
-			graph,
+			workspacePresentation,
 		);
 		currentRuntime = runtime;
 
@@ -918,7 +929,7 @@ export async function deactivate(): Promise<void> {
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock, Resize 및 Collapse 동작을 실행하는 Webview 스크립트 URI
  * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
- * @param graph 실제 Workspace Snapshot에서 생성한 초기 Graph
+ * @param workspacePresentation 같은 Workspace Snapshot에서 생성한 초기 Graph와 Catalog
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
  */
 function getWebviewHtml(
@@ -926,10 +937,11 @@ function getWebviewHtml(
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
 	initialWebviewState: PersistedWebviewState | undefined,
-	graph: Graph,
+	workspacePresentation: WorkspacePresentation,
 ): string {
 	const serializedWebviewState = serializeWebviewState(initialWebviewState);
-	const serializedGraph = serializeGraphForWebview(graph);
+	const serializedWorkspacePresentation =
+		serializeWorkspacePresentationForWebview(workspacePresentation);
 
 	/** xterm DOM renderer가 팔레트용 <style>과 truecolor용 style attribute를 생성한다. */
 	/** 두 style 경계만 inline을 허용하고 script와 외부 stylesheet는 Webview source로 제한한다. */
@@ -943,7 +955,7 @@ function getWebviewHtml(
 				<title>Crispy</title>
 			</head>
 			<body>
-				<main class="crispy-layout" data-dock="right">
+				<main id="app" class="crispy-layout" data-dock="right" data-workspace-presentation="${serializedWorkspacePresentation}">
 					<section id="graph-area"></section>
 					<div id="panel-resize-handle"></div>
 					<section id="agent-chat-area">
@@ -963,7 +975,7 @@ function getWebviewHtml(
 					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}"></script>
 			</body>
 			</html>`;
 }

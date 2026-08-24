@@ -13,8 +13,8 @@ import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
+import { deserializeWorkspacePresentationFromWebview } from '../workspace/workspacePresentation';
 import { initializeGraphView } from './graph/graphView';
-import { deserializeGraphFromWebview } from './graph/graphTransport';
 import type { GraphStateSnapshot } from './graph/graphState';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
 import { initializePanelCollapse } from './panel/panelCollapse';
@@ -53,10 +53,14 @@ const vscodeApi = acquireVsCodeApi();
 const currentScript = document.currentScript;
 const serializedInitialState = currentScript?.getAttribute('data-webview-state')
 	?? undefined;
-const serializedWorkspaceGraph = currentScript?.getAttribute('data-workspace-graph')
-	?? undefined;
+const app = getRequiredElement<HTMLElement>('#app');
+const serializedWorkspacePresentation = app.getAttribute(
+	'data-workspace-presentation',
+) ?? undefined;
 const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
-const workspaceGraph = deserializeGraphFromWebview(serializedWorkspaceGraph);
+let workspacePresentation = deserializeWorkspacePresentationFromWebview(
+	serializedWorkspacePresentation,
+);
 const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
@@ -72,7 +76,7 @@ const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
-	workspaceGraph,
+	workspacePresentation.graph,
 	{
 		onFileOpenRequest: (fileId) => {
 			vscodeApi.postMessage({
@@ -338,7 +342,8 @@ function handleHostMessage(message: unknown): void {
 	const workspaceMessage = parseWorkspaceToWebviewMessage(message);
 
 	if (workspaceMessage) {
-		graphView.updateGraph(workspaceMessage.graph);
+		graphView.updateGraph(workspaceMessage.presentation.graph);
+		workspacePresentation = workspaceMessage.presentation;
 		return;
 	}
 

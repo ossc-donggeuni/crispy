@@ -15,6 +15,7 @@ import {
 } from '../../workspace/workspaceRefresh';
 import { createWorkspaceSnapshot } from '../../workspace/workspaceSnapshot';
 import { convertWorkspaceSnapshotToGraph } from '../../workspace/workspaceToGraph';
+import { createWorkspaceRootCatalog } from '../../workspace/workspaceRootCatalog';
 
 suite('Workspace Filter Integration', () => {
 	test('기본 Filter를 최초 생성하고 같은 초기 Workspace Graph에 적용한다', async () => {
@@ -125,6 +126,10 @@ suite('Workspace Filter Integration', () => {
 				rootFilters,
 			),
 			convertWorkspaceSnapshotToGraph,
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: (
+				snapshot: Parameters<typeof createWorkspaceRootCatalog>[0],
+			) => createWorkspaceRootCatalog(snapshot, true, 'linux'),
 			async postMessage(message: WorkspaceToWebviewMessage) {
 				messages.push(message);
 				return true;
@@ -153,7 +158,9 @@ suite('Workspace Filter Integration', () => {
 		await coordinator.requestWorkspaceRefresh();
 
 		assert.strictEqual(messages.length, 1);
-		assert.deepStrictEqual(getWorkspaceChildNames(messages[0]!.graph), [
+		assert.deepStrictEqual(getWorkspaceChildNames(
+			messages[0]!.presentation.graph,
+		), [
 			'generated',
 			'keep.ts',
 		]);

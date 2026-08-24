@@ -2,10 +2,12 @@ import type {
 	HostToWebviewWireMessage,
 	WebviewToHostWireMessage,
 } from './agent/protocol';
-import type { Graph } from './webview/graph/graphModel';
-import { parseGraph } from './webview/graph/graphTransport';
 import type { WebviewSessionState } from './webview/webviewState';
 import type { WorkspacePersistentState } from './workspace/workspaceMetadata';
+import {
+	parseWorkspacePresentation,
+	type WorkspacePresentation,
+} from './workspace/workspacePresentation';
 
 /** Webview Session snapshot 변경을 Extension Host에 전달하는 상태 경계 메시지다. */
 export interface WebviewStateChangedMessage {
@@ -34,8 +36,8 @@ export type WebviewToExtensionMessage =
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {
-	type: 'workspace.graphUpdated';
-	graph: Graph;
+	type: 'workspace.snapshotUpdated';
+	presentation: WorkspacePresentation;
 };
 
 /** Host가 지정할 수 있는 Graph Node 시각 효과 종류다. */
@@ -230,16 +232,18 @@ export function parseWorkspaceToWebviewMessage(
 	const candidate = value as Record<string, unknown>;
 
 	if (
-		candidate.type !== 'workspace.graphUpdated'
+		candidate.type !== 'workspace.snapshotUpdated'
 		|| Object.keys(candidate).length !== 2
-		|| !Object.hasOwn(candidate, 'graph')
+		|| !Object.hasOwn(candidate, 'presentation')
 	) {
 		return undefined;
 	}
 
-	const graph = parseGraph(candidate.graph);
+	const presentation = parseWorkspacePresentation(candidate.presentation);
 
-	return graph ? { type: 'workspace.graphUpdated', graph } : undefined;
+	return presentation
+		? { type: 'workspace.snapshotUpdated', presentation }
+		: undefined;
 }
 
 /** `src/agent/protocol`이 공개하는 타입을 기존 import 경로에서도 재노출한다. */
