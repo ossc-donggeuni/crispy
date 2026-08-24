@@ -4,6 +4,9 @@ import {
 } from 'node:child_process';
 import type { ProcessTreeController } from '../agent/host/terminal/processTreeController';
 import { createHostProcessTreeController } from '../agent/host/terminal/processTreeControllerFactory';
+import type {
+	WorkspaceChildSpawnCwdResolver,
+} from '../agent/host/workspace/workspaceChildSpawnPreflight';
 import type { ResolvedAgentExecutable } from './agentExecutableResolver';
 import {
 	createAgentProcessSpawnOptions,
@@ -26,6 +29,8 @@ export interface ResolveCodexConfigStyleOptions {
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
 	readonly environment: NodeJS.ProcessEnv;
+	/** `spawn()` 바로 전에 current Workspace/Trust를 재검증해 fresh cwd를 반환한다. */
+	readonly resolveWorkspaceCwdBeforeSpawn: WorkspaceChildSpawnCwdResolver;
 	/** Session cleanup과 Workspace Trust revoke가 version child tree를 취소하는 신호다. */
 	readonly signal?: AbortSignal;
 	/** Test seam; production creates the same bounded Host controller lazily on failure. */
@@ -36,6 +41,7 @@ export interface ResolveCodexConfigStyleOptions {
 
 export type CodexVersionProbeFailureReason =
 	| 'request_invalid'
+	| 'workspace_preflight_failed'
 	| 'spawn_error'
 	| 'exit_nonzero'
 	| 'signal'
@@ -131,13 +137,30 @@ async function readVersionOutput(
 	if (options.signal?.aborted) {
 		return failure('signal');
 	}
+	let freshCwd: string | undefined;
+	try {
+		/** 이 동기 resolver 성공과 아래 spawn 사이에는 await가 없어야 한다. */
+		freshCwd = options.resolveWorkspaceCwdBeforeSpawn();
+	} catch {
+		return failure('workspace_preflight_failed');
+	}
+	if (freshCwd === undefined) {
+		return failure('workspace_preflight_failed');
+	}
+	if (options.signal?.aborted) {
+		return failure('signal');
+	}
+	const freshRequest = Object.freeze({
+		...request,
+		cwd: freshCwd,
+	});
 	let child: ChildProcess;
 	try {
 		child = spawn(
-			request.executable,
-			[...request.args],
+			freshRequest.executable,
+			[...freshRequest.args],
 			{
-				...createAgentProcessSpawnOptions(request),
+				...createAgentProcessSpawnOptions(freshRequest),
 				stdio: ['ignore', 'pipe', 'pipe'],
 			},
 		);

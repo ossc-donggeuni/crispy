@@ -2,6 +2,9 @@ import { execFile, type ChildProcess } from 'node:child_process';
 import type { ProviderId, ProviderRegistry } from '../../protocol/providers';
 import type { ShellLaunchPolicy } from '../shell/types';
 import { createHostProcessTreeController } from '../terminal/processTreeControllerFactory';
+import type {
+	WorkspaceChildSpawnCwdResolver,
+} from '../workspace/workspaceChildSpawnPreflight';
 
 /**
  * provider 하나를 시작할 때 Host가 적용하는 실행 정책이다.
@@ -75,7 +78,8 @@ const WINDOWS_AGENT_PROBE_FALLBACK_KILL_WAIT_MS = 250;
 export type WindowsAgentCommandProbe = (
 	command: string,
 	policy: ShellLaunchPolicy,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	resolveWorkspaceCwdBeforeSpawn: WorkspaceChildSpawnCwdResolver,
 ) => Promise<boolean>;
 
 /** provider 자동 실행 입력을 세션 시작 전에 비동기로 결정하는 Host 내부 경계다. */
@@ -83,7 +87,21 @@ export type AgentAutoRunInputResolver = (
 	providerId: ProviderId,
 	policy: ShellLaunchPolicy,
 	signal?: AbortSignal,
+	resolveWorkspaceCwdBeforeSpawn?: WorkspaceChildSpawnCwdResolver,
 ) => Promise<string | undefined>;
+
+/** Windows command probe의 실제 child 생성 경계를 단위 테스트에서 관찰하는 seam이다. */
+export type WindowsAgentProbeExecFile = (
+	executable: string,
+	args: readonly string[],
+	options: Readonly<{
+		readonly cwd: string;
+		readonly env: NodeJS.ProcessEnv;
+		readonly windowsHide: boolean;
+		readonly maxBuffer: number;
+	}>,
+	onExit: (error: Error | null) => void,
+) => ChildProcess;
 
 /** Windows provider CLI 탐색 경계를 생성할 때 주입할 수 있는 의존성이다. */
 export interface AgentAutoRunInputResolverOptions {
@@ -127,84 +145,111 @@ function normalizeCliPath(value: string | undefined): string | undefined {
  * 후보는 single-quoted literal로만 삽입하며 stdout/stderr와 원본 오류는 외부로 내보내지
  * 않는다.
  */
-export const probeWindowsAgentCommand: WindowsAgentCommandProbe = (
-	command,
-	policy,
-	signal,
-) => new Promise((resolve) => {
-	if (signal?.aborted) {
-		resolve(false);
-		return;
-	}
-	const quotedCommand = quotePowerShellLiteral(command);
-	const script = [
-		'$ErrorActionPreference = "Stop"',
-		`try { & ${quotedCommand} --version *> $null; if ($?) { exit 0 } } catch {}`,
-		'exit 1',
-	].join('; ');
+const systemWindowsAgentProbeExecFile: WindowsAgentProbeExecFile = (
+	executable,
+	args,
+	options,
+	onExit,
+) => execFile(executable, [...args], options, (error) => onExit(error));
 
-	let settled = false;
-	let terminationStarted = false;
-	let timer: NodeJS.Timeout | undefined;
-	let child: ChildProcess | undefined;
-	const finish = (available: boolean): void => {
-		if (settled) {
+/** legacy/non-Windows resolver 호출이 Windows child 생성으로 이어지지 않는 fail-closed guard다. */
+const blockWorkspaceChildSpawn: WorkspaceChildSpawnCwdResolver = () => undefined;
+
+/** production과 test가 같은 preflight-to-child 경계를 공유하도록 probe를 생성한다. */
+export function createWindowsAgentCommandProbe(
+	executeFile: WindowsAgentProbeExecFile = systemWindowsAgentProbeExecFile,
+): WindowsAgentCommandProbe {
+	return (
+		command,
+		policy,
+		signal,
+		resolveWorkspaceCwdBeforeSpawn,
+	) => new Promise((resolve) => {
+		if (signal?.aborted) {
+			resolve(false);
 			return;
 		}
-		settled = true;
-		if (timer !== undefined) {
-			clearTimeout(timer);
-		}
-		signal?.removeEventListener('abort', handleAbort);
-		resolve(available);
-	};
-	const terminateAndFinish = async (): Promise<void> => {
-		if (settled || terminationStarted) {
+		const quotedCommand = quotePowerShellLiteral(command);
+		const script = [
+			'$ErrorActionPreference = "Stop"',
+			`try { & ${quotedCommand} --version *> $null; if ($?) { exit 0 } } catch {}`,
+			'exit 1',
+		].join('; ');
+
+		let settled = false;
+		let terminationStarted = false;
+		let timer: NodeJS.Timeout | undefined;
+		let child: ChildProcess | undefined;
+		const finish = (available: boolean): void => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			if (timer !== undefined) {
+				clearTimeout(timer);
+			}
+			signal?.removeEventListener('abort', handleAbort);
+			resolve(available);
+		};
+		const terminateAndFinish = async (): Promise<void> => {
+			if (settled || terminationStarted) {
+				return;
+			}
+			terminationStarted = true;
+			if (timer !== undefined) {
+				clearTimeout(timer);
+			}
+			if (child !== undefined) {
+				await terminateWindowsProbeProcessTree(child);
+			}
+			finish(false);
+		};
+		const handleAbort = (): void => {
+			void terminateAndFinish();
+		};
+
+		try {
+			/**
+			 * 이 resolver와 executeFile 사이에는 await를 두지 않는다. Windows command
+			 * probe도 실제 child 경계에서 current Workspace/Trust와 cwd를 다시 확정한다.
+			 */
+			const freshCwd = resolveWorkspaceCwdBeforeSpawn();
+			if (freshCwd === undefined || signal?.aborted) {
+				finish(false);
+				return;
+			}
+			child = executeFile(
+				policy.executable,
+				['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+				{
+					cwd: freshCwd,
+					env: policy.env,
+					windowsHide: true,
+					maxBuffer: 64 * 1024,
+				},
+				(error) => {
+					if (!terminationStarted) {
+						finish(error === null);
+					}
+				},
+			);
+		} catch {
+			finish(false);
 			return;
 		}
-		terminationStarted = true;
-		if (timer !== undefined) {
-			clearTimeout(timer);
-		}
-		if (child !== undefined) {
-			await terminateWindowsProbeProcessTree(child);
-		}
-		finish(false);
-	};
-	const handleAbort = (): void => {
-		void terminateAndFinish();
-	};
 
-	try {
-		child = execFile(
-			policy.executable,
-			['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
-			{
-				cwd: policy.cwd,
-				env: policy.env,
-				windowsHide: true,
-				maxBuffer: 64 * 1024,
-			},
-			(error) => {
-				if (!terminationStarted) {
-					finish(error === null);
-				}
-			},
-		);
-	} catch {
-		finish(false);
-		return;
-	}
+		timer = setTimeout(() => {
+			void terminateAndFinish();
+		}, WINDOWS_AGENT_PROBE_TIMEOUT_MS);
+		timer.unref?.();
+		signal?.addEventListener('abort', handleAbort, { once: true });
+		if (signal?.aborted) {
+			handleAbort();
+		}
+	});
+}
 
-	timer = setTimeout(() => {
-		void terminateAndFinish();
-	}, WINDOWS_AGENT_PROBE_TIMEOUT_MS);
-	timer.unref?.();
-	signal?.addEventListener('abort', handleAbort, { once: true });
-	if (signal?.aborted) {
-		handleAbort();
-	}
-});
+export const probeWindowsAgentCommand = createWindowsAgentCommandProbe();
 
 /** Abort/timeout 시 PowerShell root뿐 아니라 probe가 만든 CLI descendant까지 종료한다. */
 async function terminateWindowsProbeProcessTree(child: ChildProcess): Promise<void> {
@@ -333,7 +378,12 @@ export function createAgentAutoRunInputResolver(
 		readonly verified: boolean;
 	}>>();
 
-	return async (providerId, policy, signal) => {
+	return async (
+		providerId,
+		policy,
+		signal,
+		resolveWorkspaceCwdBeforeSpawn,
+	) => {
 		if (signal?.aborted) {
 			return undefined;
 		}
@@ -344,6 +394,8 @@ export function createAgentAutoRunInputResolver(
 			return undefined;
 		}
 		const override = normalizeCliPath(getCliPath(providerId));
+		const childSpawnCwdResolver = resolveWorkspaceCwdBeforeSpawn
+			?? blockWorkspaceChildSpawn;
 
 		if (platform !== 'win32') {
 			if (override !== undefined) {
@@ -364,7 +416,12 @@ export function createAgentAutoRunInputResolver(
 						break;
 					}
 					try {
-						if (await probe(candidate.command, policy, signal)) {
+						if (await probe(
+							candidate.command,
+							policy,
+							signal,
+							childSpawnCwdResolver,
+						)) {
 							return { ...candidate, verified: true };
 						}
 					} catch {

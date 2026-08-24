@@ -315,14 +315,12 @@ export function initializeAgentPanelUi(
 		}
 		return {
 			...workspaceState,
-			workspaceSelected: state.kind === 'unassigned'
-				? state.selectedWorkspaceRootId !== null
-				: state.kind === 'assigned'
-					? workspaceRootCatalog.some((entry) => (
-						entry.id === state.assignment.workspaceRootId
-						&& entry.selectable
-					))
-					: false,
+			workspaceSelected: state.kind !== 'resetting'
+				&& workspaceState.selectedWorkspaceRootId !== null
+				&& workspaceRootCatalog.some((entry) => (
+					entry.id === workspaceState.selectedWorkspaceRootId
+					&& entry.selectable
+				)),
 			forceShow: providerPickerOpenTabs.has(tabId),
 		};
 	};
@@ -814,10 +812,17 @@ export function initializeAgentPanelUi(
 						&& state !== undefined
 						&& state.kind !== 'resetting'
 					) {
-						assignmentStateByTab.set(message.tabId, Object.freeze({
-							...state,
-							pendingSwitch: null,
-						}));
+						assignmentStateByTab.set(
+							message.tabId,
+							state.kind === 'unassigned'
+								? createUnassignedState(selectWorkspaceForUnassignedTab(
+									state.selectedWorkspaceRootId,
+								))
+								: Object.freeze({
+									...state,
+									pendingSwitch: null,
+								}),
+						);
 						providerPickerOpenTabs.delete(message.tabId);
 						renderViews();
 						return true;

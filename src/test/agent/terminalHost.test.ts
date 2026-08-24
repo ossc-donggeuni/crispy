@@ -817,6 +817,61 @@ suite('TerminalHost start orchestration', () => {
 		});
 	});
 
+	test('generic Windows child guard 실패 뒤 final preflight도 PTY start를 차단한다', async () => {
+		let workspaceAvailable = true;
+		let workspaceCalls = 0;
+		let childGuardCalls = 0;
+		const adapter = new FakePtyAdapter();
+		const { host, messages } = createHost({
+			ptyAdapter: adapter,
+			prepareLaunch: successfulPrepare,
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return workspaceAvailable
+					? { ok: true, root }
+					: { ok: false, code: 'workspace_root_unavailable' };
+			},
+			resolveAgentAutoRunInput: async (
+				_providerId,
+				_policy,
+				_signal,
+				resolveWorkspaceCwdBeforeSpawn,
+			) => {
+				workspaceAvailable = false;
+				childGuardCalls += 1;
+				assert.strictEqual(resolveWorkspaceCwdBeforeSpawn?.(), undefined);
+				return 'agy\r';
+			},
+		});
+		host.createTab('tab-windows-probe-preflight');
+		await host.handleTerminalReady('tab-windows-probe-preflight', 80, 24);
+
+		await host.switchAgent(
+			'tab-windows-probe-preflight',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			1,
+		);
+
+		const session = host.getActiveSession('tab-windows-probe-preflight');
+		assert.ok(session);
+		assert.strictEqual(childGuardCalls, 1);
+		assert.strictEqual(workspaceCalls, 3);
+		assert.strictEqual(adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_root_unavailable',
+		});
+		assert.deepStrictEqual(messages.at(-1), {
+			type: 'terminal.error',
+			tabId: 'tab-windows-probe-preflight',
+			sessionId: session.sessionId,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			canRestart: true,
+		});
+	});
+
 	test('stale preparation continuation은 같은 root의 새 assignment를 spawn하지 않는다', async () => {
 		let releaseFirst!: (
 			value: Awaited<ReturnType<PrepareTerminalLaunch>>,

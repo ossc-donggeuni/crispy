@@ -11,6 +11,7 @@ import type {
 	AgentExecutableResolver,
 	ResolvedAgentExecutable,
 } from './agentExecutableResolver';
+import type { WorkspaceValidationFailure } from '../agent/host/workspace/types';
 import {
 	resolveCodexConfigStyle,
 	type CodexConfigStyleResolver,
@@ -128,6 +129,9 @@ export function createPrepareCodexTerminalLaunch(
 		}
 
 		let shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle | undefined;
+		let probeWorkspaceFailure: WorkspaceValidationFailure | undefined;
+		let probeWorkspaceReadFailed = false;
+		let probeWorkspaceCwd = workspace.root.fsPath;
 		try {
 			shellEnvironmentPolicyStyle = await resolveConfigStyle({
 				executable: resolution.executable,
@@ -135,16 +139,46 @@ export function createPrepareCodexTerminalLaunch(
 				platform,
 				environment,
 				signal,
+				resolveWorkspaceCwdBeforeSpawn: () => {
+					if (signal?.aborted) {
+						return undefined;
+					}
+					try {
+						const freshWorkspace = dependencies.workspaceResolver(workspaceRootId);
+						if (!freshWorkspace.ok) {
+							probeWorkspaceFailure = freshWorkspace;
+							return undefined;
+						}
+						probeWorkspaceCwd = freshWorkspace.root.fsPath;
+						return probeWorkspaceCwd;
+					} catch {
+						probeWorkspaceReadFailed = true;
+						return undefined;
+					}
+				},
 			});
 		} catch {
 			/** An unreadable Codex version disables MCP but leaves bare Codex available. */
+		}
+		if (signal?.aborted || probeWorkspaceReadFailed) {
+			return providerStartFailure(tabId, sessionId);
+		}
+		if (probeWorkspaceFailure !== undefined) {
+			return {
+				ok: false,
+				error: mapWorkspaceFailureToTerminalError(
+					probeWorkspaceFailure,
+					tabId,
+					sessionId,
+				),
+			};
 		}
 
 		return {
 			ok: true,
 			preparation: Object.freeze({
 				executable: resolution.executable,
-				cwd: workspace.root.fsPath,
+				cwd: probeWorkspaceCwd,
 				environment: Object.freeze({ ...environment }),
 				platform,
 				...(shellEnvironmentPolicyStyle === undefined

@@ -375,12 +375,14 @@ suite('Claude direct PTY and MCP transaction', () => {
 		);
 		await Promise.resolve();
 
-		await fixture.host.switchAgent(
+		const antigravityStart = fixture.host.switchAgent(
 			'tab-stale-probe',
 			'antigravity',
 			WORKSPACE_ROOT_ID,
 			2,
 		);
+		await Promise.resolve();
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 0);
 		release({
 			ok: true,
 			preparation: {
@@ -391,7 +393,7 @@ suite('Claude direct PTY and MCP transaction', () => {
 				mcpCompatible: true,
 			},
 		});
-		await claudeStart;
+		await Promise.all([claudeStart, antigravityStart]);
 
 		assert.strictEqual(fixture.supervisor.prepareCalls.length, 0);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);

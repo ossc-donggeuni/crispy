@@ -238,7 +238,135 @@ async function beginCodex(
 	return host.switchAgent(tabId, 'codex', WORKSPACE_ROOT_ID, 1);
 }
 
+function createDeferredCodexPreparationCleanup(): {
+	readonly prepareCodexLaunch: NonNullable<ConstructorParameters<
+		typeof TerminalHost
+	>[0]['prepareCodexLaunch']>;
+	readonly started: Promise<void>;
+	readonly releaseCleanup: () => void;
+	readonly wasAborted: () => boolean;
+} {
+	let markStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		markStarted = resolve;
+	});
+	let releaseCleanup!: () => void;
+	const cleanup = new Promise<void>((resolve) => {
+		releaseCleanup = resolve;
+	});
+	let aborted = false;
+	const prepareCodexLaunch: NonNullable<ConstructorParameters<
+		typeof TerminalHost
+	>[0]['prepareCodexLaunch']> = (
+		_tabId,
+		_sessionId,
+		_workspaceRootId,
+		signal,
+	) => new Promise((resolve) => {
+		markStarted();
+		const finish = (): void => {
+			aborted = true;
+			void cleanup.then(() => resolve({
+				ok: true,
+				preparation: {
+					executable: {
+						executable: '/resolved/codex',
+						launcherKind: 'direct',
+					},
+					cwd: '/trusted/workspace',
+					environment: { PATH: '/bin' },
+					platform: 'linux',
+					shellEnvironmentPolicyStyle: 'keyed-filters',
+				},
+			}));
+		};
+		if (signal?.aborted) {
+			finish();
+			return;
+		}
+		signal?.addEventListener('abort', finish, { once: true });
+	});
+	return {
+		prepareCodexLaunch,
+		started,
+		releaseCleanup,
+		wasAborted: () => aborted,
+	};
+}
+
 suite('Codex direct PTY and MCP transaction', () => {
+	test('provider switch는 이전 preparation cleanup 완료 전 새 native spawn을 차단한다', async () => {
+		const deferred = createDeferredCodexPreparationCleanup();
+		const fixture = createFixture({
+			prepareCodexLaunch: deferred.prepareCodexLaunch,
+		});
+		const firstStart = beginCodex(fixture.host, 'tab-preparation-switch');
+		await deferred.started;
+
+		const switching = fixture.host.switchAgent(
+			'tab-preparation-switch',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		await Promise.resolve();
+
+		assert.strictEqual(deferred.wasAborted(), true);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 0);
+
+		deferred.releaseCleanup();
+		await Promise.all([firstStart, switching]);
+
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(
+			fixture.host.getTabProvider('tab-preparation-switch'),
+			'antigravity',
+		);
+		assert.strictEqual(
+			fixture.host.getActiveSession('tab-preparation-switch')?.state.kind,
+			'running',
+		);
+	});
+
+	test('Reset 후 switch는 이전 preparation cleanup 완료 전 새 native spawn을 차단한다', async () => {
+		const deferred = createDeferredCodexPreparationCleanup();
+		const fixture = createFixture({
+			prepareCodexLaunch: deferred.prepareCodexLaunch,
+		});
+		const firstStart = beginCodex(fixture.host, 'tab-preparation-reset');
+		await deferred.started;
+
+		fixture.host.resetAgent('tab-preparation-reset');
+		const switching = fixture.host.switchAgent(
+			'tab-preparation-reset',
+			'antigravity',
+			WORKSPACE_ROOT_ID,
+			2,
+		);
+		const ready = fixture.host.handleTerminalReady(
+			'tab-preparation-reset',
+			100,
+			30,
+		);
+		await Promise.resolve();
+
+		assert.strictEqual(deferred.wasAborted(), true);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 0);
+
+		deferred.releaseCleanup();
+		await Promise.all([firstStart, switching, ready]);
+
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		assert.strictEqual(
+			fixture.host.getTabProvider('tab-preparation-reset'),
+			'antigravity',
+		);
+		assert.strictEqual(
+			fixture.host.getActiveSession('tab-preparation-reset')?.state.kind,
+			'running',
+		);
+	});
+
 	test('Trust revoke는 in-flight provider preparation을 취소하고 cleanup 완료를 기다린다', async () => {
 		let trusted = true;
 		let preparationStarted!: () => void;

@@ -208,6 +208,7 @@ export async function runClaudeMcpSmoke(
 			cwd: options.cwd,
 			platform,
 			environment: options.baseEnvironment,
+			resolveWorkspaceCwdBeforeSpawn: () => options.cwd,
 		});
 		if (compatibility === undefined) {
 			report('failed:version_probe_failed');

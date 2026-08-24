@@ -1043,6 +1043,39 @@ export class TerminalHost {
 						providerId,
 						preparation.policy,
 						signal,
+						() => {
+							if (
+								capturedAssignment === undefined
+								|| !this.isCurrentAssignmentSession(
+									session,
+									capturedAssignment,
+								)
+							) {
+								return undefined;
+							}
+							let freshWorkspace: WorkspaceValidationResult;
+							try {
+								freshWorkspace = this.workspaceResolver(
+									capturedAssignment.workspaceRootId,
+								);
+							} catch {
+								return undefined;
+							}
+							if (!freshWorkspace.ok) {
+								if (freshWorkspace.code === 'workspace_untrusted') {
+									void this.handleWorkspaceTrustRevoke();
+								}
+								return undefined;
+							}
+							if (!this.isCurrentAssignmentSession(
+								session,
+								capturedAssignment,
+							)) {
+								return undefined;
+							}
+							this.observeWorkspaceTrustGranted();
+							return freshWorkspace.root.fsPath;
+						},
 					),
 				);
 			} catch {
@@ -2173,12 +2206,13 @@ export class TerminalHost {
 	}
 
 	/**
-	 * 실행 중 session을 routing에서 즉시 분리하고 전체 process tree를 비동기로 종료한다.
+	 * 실행 중 session을 routing에서 즉시 분리하고 provider 준비 child, MCP와 전체 process
+	 * tree 정리를 같은 탭 barrier에서 기다린다.
 	 * 유효 PID를 확보할 수 없거나 capture/terminate가 실패하면 root handle kill로 수렴한다.
 	 * 같은 session의 반복 요청은 최초 cleanup Promise를 재사용한다.
 	 */
 	private cleanupSessionProcessTree(session: TerminalSession): Promise<void> {
-		void this.cancelSessionPreparation(session.sessionId);
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
 		const existing = this.processCleanupBySession.get(session.sessionId);
 		if (existing !== undefined) {
 			return this.getTabCleanupBarrier(session.tabId) ?? existing;
@@ -2208,6 +2242,7 @@ export class TerminalHost {
 		this.updateWorkspaceTrustMonitor();
 
 		const cleanup = Promise.all([
+			preparationCleanup,
 			mcpCleanup,
 			process === undefined
 				? Promise.resolve()
@@ -3277,7 +3312,7 @@ export class TerminalHost {
 		session: TerminalSession,
 		assignment: AgentAssignment,
 	): Promise<void> {
-		void this.cancelSessionPreparation(session.sessionId);
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
 		this.providerAutoRunInputBySession.delete(session.sessionId);
 		this.clearMcpStatus(session);
 
@@ -3289,6 +3324,7 @@ export class TerminalHost {
 		}
 
 		const cleanup = Promise.all([
+			preparationCleanup,
 			this.cleanupMcpSession(session.sessionId),
 			process === undefined
 				? Promise.resolve()
@@ -3331,7 +3367,7 @@ export class TerminalHost {
 			await this.handleWorkspaceTrustRevoke();
 			return;
 		}
-		void this.cancelSessionPreparation(session.sessionId);
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
 		this.providerAutoRunInputBySession.delete(session.sessionId);
 		this.clearMcpStatus(session);
 
@@ -3343,6 +3379,7 @@ export class TerminalHost {
 		}
 
 		const cleanup = Promise.all([
+			preparationCleanup,
 			this.cleanupMcpSession(session.sessionId),
 			process === undefined
 				? Promise.resolve()

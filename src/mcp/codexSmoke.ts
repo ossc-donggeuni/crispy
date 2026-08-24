@@ -190,6 +190,7 @@ export async function runCodexMcpSmoke(
 			cwd: options.cwd,
 			platform,
 			environment: options.baseEnvironment,
+			resolveWorkspaceCwdBeforeSpawn: () => options.cwd,
 		});
 		if (shellEnvironmentPolicyStyle === undefined) {
 			report('failed:provider_unavailable');

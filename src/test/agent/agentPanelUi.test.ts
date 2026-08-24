@@ -647,6 +647,88 @@ suite('Agent Panel UI', () => {
 		});
 	});
 
+	test('pending switch 실패는 제거된 root를 현재 단일 root로 재선택하고 provider를 다시 활성화한다', () => {
+		const selections: Array<{
+			providerId: string;
+			workspaceRootId: string;
+		}> = [];
+		const workspaceA: WorkspaceRootCatalogEntry = {
+			id: 'workspace-root:file:///repo/a',
+			name: 'repo-a',
+			description: 'file:///repo/a',
+			selectable: true,
+		};
+		const workspaceB: WorkspaceRootCatalogEntry = {
+			id: 'workspace-root:file:///repo/b',
+			name: 'repo-b',
+			description: 'file:///repo/b',
+			selectable: true,
+		};
+		const fixture = createFixture({
+			onProviderSelected: (_tabId, providerId, workspaceRootId) => {
+				selections.push({ providerId, workspaceRootId });
+				return selections.length;
+			},
+		}, [workspaceA, workspaceB]);
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		const providerOptions = fixture.providerPicker.findAll(
+			'agent-provider-option',
+		);
+
+		selectWorkspace(fixture.providerPicker, workspaceA.id);
+		selectProvider(fixture.providerPicker, 'codex');
+		assert.deepStrictEqual(selections, [{
+			providerId: 'codex',
+			workspaceRootId: workspaceA.id,
+		}]);
+
+		fixture.controller.updateWorkspaceRootCatalog([workspaceB]);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'unassigned',
+			selectedWorkspaceRootId: workspaceA.id,
+			pendingSwitch: {
+				providerId: 'codex',
+				workspaceRootId: workspaceA.id,
+				switchAttemptId: 1,
+			},
+		});
+		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
+			true,
+			true,
+			true,
+		]);
+
+		assert.strictEqual(fixture.controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId,
+			sessionId: null,
+			code: 'workspace_root_unavailable',
+			message: 'Workspace is no longer available',
+			canRestart: false,
+			switchAttemptId: 1,
+		}), true);
+		assert.deepStrictEqual(fixture.controller.getAssignmentState(tabId), {
+			kind: 'unassigned',
+			selectedWorkspaceRootId: workspaceB.id,
+			pendingSwitch: null,
+		});
+		assert.strictEqual(
+			requireElement(fixture.providerPicker, 'agent-workspace-picker').value,
+			workspaceB.id,
+		);
+		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
+			false,
+			false,
+			false,
+		]);
+
+		selectProvider(fixture.providerPicker, 'claude');
+		assert.deepStrictEqual(selections, [
+			{ providerId: 'codex', workspaceRootId: workspaceA.id },
+			{ providerId: 'claude', workspaceRootId: workspaceB.id },
+		]);
+	});
+
 	test('provider만 바꿀 때 committed Workspace를 유지하고 실패하면 기존 assignment를 복원한다', () => {
 		let attempt = 0;
 		const selections: Array<{ providerId: string; workspaceRootId: string }> = [];

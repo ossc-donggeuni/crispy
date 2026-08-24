@@ -1,6 +1,8 @@
 import * as assert from 'assert';
+import type { ChildProcess } from 'node:child_process';
 import {
 	createAgentAutoRunInputResolver,
+	createWindowsAgentCommandProbe,
 	WINDOWS_ANTIGRAVITY_COMMAND_CANDIDATES,
 	WINDOWS_CLAUDE_COMMAND_CANDIDATES,
 	WINDOWS_CODEX_COMMAND_CANDIDATES,
@@ -18,6 +20,95 @@ const windowsPolicy: ShellLaunchPolicy = {
 };
 
 suite('Agent provider CLI 자동 탐색', () => {
+	test('실제 Windows execFile probe는 fresh Workspace preflight 없이는 child를 만들지 않는다', async () => {
+		let preflightCalls = 0;
+		let execFileCalls = 0;
+		const probe = createWindowsAgentCommandProbe(() => {
+			execFileCalls += 1;
+			throw new Error('guard 실패 뒤 execFile이 호출되면 안 된다');
+		});
+		const available = await probe(
+			'agy',
+			{ ...windowsPolicy, executable: process.execPath },
+			undefined,
+			() => {
+				preflightCalls += 1;
+				return undefined;
+			},
+		);
+
+		assert.strictEqual(available, false);
+		assert.strictEqual(preflightCalls, 1);
+		assert.strictEqual(execFileCalls, 0);
+	});
+
+	test('Windows execFile probe는 fresh cwd를 guard 직후 child options에 적용한다', async () => {
+		const events: string[] = [];
+		let childCwd: string | undefined;
+		const probe = createWindowsAgentCommandProbe((
+			_executable,
+			_args,
+			options,
+			onExit,
+		) => {
+			childCwd = options.cwd;
+			events.push('execFile');
+			setImmediate(() => onExit(null));
+			return {} as ChildProcess;
+		});
+
+		const available = await probe(
+			'agy',
+			windowsPolicy,
+			undefined,
+			() => {
+				events.push('workspace');
+				return 'C:\\fresh\\workspace';
+			},
+		);
+
+		assert.strictEqual(available, true);
+		assert.strictEqual(childCwd, 'C:\\fresh\\workspace');
+		assert.deepStrictEqual(events, ['workspace', 'execFile']);
+	});
+
+	test('Codex·Claude·Antigravity Windows 후보마다 fresh Workspace resolver를 전달한다', async () => {
+		const probes: string[] = [];
+		const freshCwds: string[] = [];
+		const resolver = createAgentAutoRunInputResolver({
+			platform: 'win32',
+			probeWindowsCommand: async (
+				command,
+				_policy,
+				_signal,
+				resolveWorkspaceCwdBeforeSpawn,
+			) => {
+				probes.push(command);
+				freshCwds.push(resolveWorkspaceCwdBeforeSpawn?.() ?? 'blocked');
+				return true;
+			},
+		});
+
+		for (const providerId of ['codex', 'claude', 'antigravity'] as const) {
+			assert.strictEqual(
+				await resolver(
+					providerId,
+					windowsPolicy,
+					undefined,
+					() => `C:\\fresh\\${providerId}`,
+				),
+				`${providerId === 'antigravity' ? 'agy' : providerId}\r`,
+			);
+		}
+
+		assert.deepStrictEqual(probes, ['codex', 'claude', 'agy']);
+		assert.deepStrictEqual(freshCwds, [
+			'C:\\fresh\\codex',
+			'C:\\fresh\\claude',
+			'C:\\fresh\\antigravity',
+		]);
+	});
+
 	test('Windows Codex는 codex, codex.cmd, codex.exe 순으로 첫 성공 후보를 사용한다', async () => {
 		const probes: string[] = [];
 		const resolver = createAgentAutoRunInputResolver({
