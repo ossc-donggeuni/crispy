@@ -145,6 +145,24 @@ suite('Graph View', () => {
 			getDescendantByClass(endElement, 'task-node-title').textContent,
 			firstTask.title,
 		);
+		assert.strictEqual(
+			getDescendantByClass(startElement, 'task-node-description').textContent,
+			firstTask.description,
+		);
+		assert.strictEqual(
+			getDescendantByClass(endElement, 'task-node-description').textContent,
+			firstTask.description,
+		);
+		assert.ok(getDescendantByClass(startElement, 'task-start-icon'));
+		assert.ok(getDescendantByClass(endElement, 'task-end-icon'));
+		assert.strictEqual(
+			getDescendantsByClass(startElement, 'task-node-kind').length,
+			0,
+		);
+		assert.strictEqual(
+			getDescendantsByClass(endElement, 'task-node-kind').length,
+			0,
+		);
 		assert.ok(nodeLayer.children.includes(workspaceRoot));
 		assert.ok(nodeLayer.children.includes(startElement));
 		assert.deepStrictEqual(
@@ -154,7 +172,11 @@ suite('Graph View', () => {
 				y: firstTask.origin.y + firstTask.nodePositions[firstEnd.id].y,
 			},
 		);
-		const renamedTask = { ...firstTask, title: 'Renamed Task' };
+		const renamedTask = {
+			...firstTask,
+			title: 'Renamed Task',
+			description: 'Renamed Task description',
+		};
 
 		graphView.updateTasks([renamedTask]);
 		assert.strictEqual(
@@ -164,6 +186,14 @@ suite('Graph View', () => {
 		assert.strictEqual(
 			getDescendantByClass(endElement, 'task-node-title').textContent,
 			renamedTask.title,
+		);
+		assert.strictEqual(
+			getDescendantByClass(startElement, 'task-node-description').textContent,
+			renamedTask.description,
+		);
+		assert.strictEqual(
+			getDescendantByClass(endElement, 'task-node-description').textContent,
+			renamedTask.description,
 		);
 
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
@@ -262,6 +292,15 @@ suite('Graph View', () => {
 			assert.strictEqual(
 				getDescendantByClass(workNode, 'task-node-title').textContent,
 				work.title,
+			);
+			assert.strictEqual(
+				getDescendantByClass(workNode, 'task-node-description').textContent,
+				work.description,
+			);
+			assert.ok(getDescendantByClass(workNode, 'task-work-icon'));
+			assert.strictEqual(
+				getDescendantsByClass(workNode, 'task-node-kind').length,
+				0,
 			);
 			assert.ok(getDescendantByAttribute(
 				workNode,
@@ -1031,7 +1070,28 @@ suite('Graph View', () => {
 			taskViewCss,
 			/\.task-work-node\[data-task-connection-state=['"]connected['"]\]\s*\{[^}]*--vscode-focusBorder/s,
 		);
-		assert.match(taskViewCss, /\.task-work-node\s*>\s*\.task-node-description,[^{]*\{[^}]*display:\s*none;/s);
+		assert.match(taskViewCss, /\.task-node\s*\{[^}]*align-items:\s*center;/s);
+		assert.match(taskViewCss, /\.task-node-content\s*\{[^}]*flex-direction:\s*column;/s);
+		assert.match(
+			taskViewCss,
+			/\.task-node-description\s*\{[^}]*--vscode-descriptionForeground[^}]*-webkit-line-clamp:\s*1;/s,
+		);
+		assert.doesNotMatch(
+			taskViewCss,
+			/\.task-work-node\s*>\s*\.task-node-description[^{]*\{[^}]*display:\s*none;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-start-icon\s*\{[^}]*task-start\.svg[^}]*\}/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-work-icon\s*\{[^}]*task-work\.svg[^}]*\}/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-end-icon\s*\{[^}]*task-end\.svg[^}]*\}/s,
+		);
 		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);
 		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);
 	});

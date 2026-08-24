@@ -47,6 +47,8 @@ suite('Task Layout', () => {
 		assert.strictEqual(workLayout.height, endLayout.height);
 		assert.strictEqual(startLayout.title, 'Ready Task');
 		assert.strictEqual(endLayout.title, startLayout.title);
+		assert.strictEqual(startLayout.description, 'Ready Task description');
+		assert.strictEqual(endLayout.description, startLayout.description);
 		assert.strictEqual(startLayout.connectionState, 'connected');
 		assert.strictEqual(workLayout.connectionState, 'connected');
 		assert.strictEqual(endLayout.connectionState, 'connected');
@@ -93,6 +95,8 @@ suite('Task Layout', () => {
 		assert.deepStrictEqual(end.position, { x: 670, y: 40 });
 		assert.strictEqual(start.title, 'Incomplete Task');
 		assert.strictEqual(end.title, start.title);
+		assert.strictEqual(start.description, task.description);
+		assert.strictEqual(end.description, start.description);
 		assert.strictEqual(start.connectionState, 'disconnected');
 		assert.strictEqual(end.connectionState, 'disconnected');
 	});
@@ -488,7 +492,7 @@ function createReadyTask(
 		version: TASK_BLUEPRINT_VERSION,
 		id: taskId,
 		title: 'Ready Task',
-		description: '',
+		description: 'Ready Task description',
 		origin,
 		nodePositions: {
 			[work.id]: { x: 320, y: 0 },

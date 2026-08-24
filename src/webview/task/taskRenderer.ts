@@ -926,39 +926,36 @@ function createTaskNodeContents(
 	node: TaskLayoutNode,
 	ownerDocument: Document,
 ): HTMLElement[] {
-	const kind = ownerDocument.createElement('span');
+	const icon = ownerDocument.createElement('span');
+	const content = ownerDocument.createElement('span');
 
-	kind.className = 'task-node-kind';
-	kind.textContent = node.kind === 'start'
-		? 'Start'
-		: node.kind === 'work' ? 'Work' : 'End';
-
+	icon.className = `task-node-icon task-${node.kind}-icon`;
+	icon.setAttribute('aria-hidden', 'true');
+	content.className = 'task-node-content';
 	const title = ownerDocument.createElement('strong');
+	const description = ownerDocument.createElement('span');
 
 	title.className = 'task-node-title';
 	title.textContent = node.title;
+	description.className = 'task-node-description';
+	description.textContent = node.description;
+	content.append(title, description);
 
 	if (node.kind === 'start') {
 		return [
-			kind,
-			title,
+			icon,
+			content,
 			createTaskNodeAction(ownerDocument, 'add-work'),
 			createTaskPort(ownerDocument, node, 'output'),
 		];
 	}
 	if (node.kind === 'end') {
-		return [kind, title, createTaskPort(ownerDocument, node, 'input')];
+		return [icon, content, createTaskPort(ownerDocument, node, 'input')];
 	}
 
-	const description = ownerDocument.createElement('span');
-
-	description.className = 'task-node-description';
-	description.textContent = node.description;
-
 	const contents = [
-		kind,
-		title,
-		description,
+		icon,
+		content,
 		createTaskPort(ownerDocument, node, 'input'),
 		createTaskPort(ownerDocument, node, 'output'),
 	];
@@ -968,7 +965,7 @@ function createTaskNodeContents(
 
 		prompt.className = 'task-node-prompt';
 		prompt.textContent = node.prompt;
-		contents.splice(3, 0, prompt);
+		content.append(prompt);
 	}
 	if (node.canRemove) {
 		contents.push(createTaskNodeAction(ownerDocument, 'remove-work'));

@@ -32,6 +32,7 @@ export type TaskNodeConnectionState = 'connected' | 'disconnected';
 export interface TaskStartLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'start';
 	readonly title: string;
+	readonly description: string;
 	readonly connectionState: TaskNodeConnectionState;
 }
 
@@ -49,6 +50,7 @@ export interface TaskWorkLayoutNode extends TaskLayoutNodeBase {
 export interface TaskEndLayoutNode extends TaskLayoutNodeBase {
 	readonly kind: 'end';
 	readonly title: string;
+	readonly description: string;
 	readonly connectionState: TaskNodeConnectionState;
 }
 
@@ -147,6 +149,7 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				...base,
 				kind: node.kind,
 				title: task.title,
+				description: task.description,
 				connectionState: boundaryConnectionState,
 			};
 		} else if (node.kind === 'work') {
@@ -166,6 +169,7 @@ function createTaskLayout(task: TaskBlueprint): TaskGraphLayout {
 				...base,
 				kind: node.kind,
 				title: task.title,
+				description: task.description,
 				connectionState: boundaryConnectionState,
 			};
 		}

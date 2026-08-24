@@ -1,8 +1,7 @@
 .task-node {
 	display: flex;
-	flex-direction: column;
-	gap: 3px;
-	justify-content: center;
+	align-items: center;
+	gap: 12px;
 	padding: 7px 16px;
 	cursor: grab;
 }
@@ -30,11 +29,6 @@
 
 .task-work-node[data-task-connection-state='connected'] {
 	--graph-node-outline-color: var(--vscode-focusBorder, #007fd4);
-}
-
-.task-work-node > .task-node-description,
-.task-work-node > .task-node-prompt {
-	display: none;
 }
 
 .task-start-node,
@@ -81,16 +75,40 @@
 	--graph-node-shadow: var(--graph-node-default-shadow);
 }
 
-.task-node-kind {
-	overflow: hidden;
-	color: var(--vscode-descriptionForeground, #9d9d9d);
-	font-size: 10px;
-	font-weight: 700;
-	line-height: 14px;
-	letter-spacing: 0.08em;
-	text-overflow: ellipsis;
-	text-transform: uppercase;
-	white-space: nowrap;
+.task-node-icon {
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	background-color: var(--graph-node-outline-color);
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+	pointer-events: none;
+}
+
+.task-start-icon {
+	mask-image: url('../graph/assets/ui-icons/task-start.svg');
+	-webkit-mask-image: url('../graph/assets/ui-icons/task-start.svg');
+}
+
+.task-work-icon {
+	mask-image: url('../graph/assets/ui-icons/task-work.svg');
+	-webkit-mask-image: url('../graph/assets/ui-icons/task-work.svg');
+}
+
+.task-end-icon {
+	mask-image: url('../graph/assets/ui-icons/task-end.svg');
+	-webkit-mask-image: url('../graph/assets/ui-icons/task-end.svg');
+}
+
+.task-node-content {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
 }
 
 .task-node-title {
@@ -103,25 +121,18 @@
 	-webkit-line-clamp: 1;
 }
 
-.task-node-description,
-.task-node-prompt {
+.task-node-description {
 	display: -webkit-box;
 	overflow: hidden;
 	color: var(--vscode-descriptionForeground, #9d9d9d);
 	font-size: 12px;
-	line-height: 16px;
+	line-height: 15px;
 	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
+	-webkit-line-clamp: 1;
 }
 
 .task-node-prompt {
-	padding-top: 3px;
-	border-top: 1px solid color-mix(
-		in srgb,
-		var(--vscode-descriptionForeground, #9d9d9d) 24%,
-		transparent
-	);
-	-webkit-line-clamp: 1;
+	display: none;
 }
 
 .task-node-actions {
