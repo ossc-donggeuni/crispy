@@ -55,6 +55,8 @@ export interface TaskRendererInteractions {
 	) => void;
 	/** Start/Work Double Click 대상을 Camera Focus 경계에 전달한다. */
 	onNodeFocus?: (node: TaskLayoutNode) => void;
+	/** Task Node 선택 변경을 transient Focus UI lifecycle 경계에 전달한다. */
+	onNodeSelectionChange?: (node: TaskLayoutNode | undefined) => void;
 	/** Start Action으로 연결 전 Work 하나를 추가한다. */
 	onWorkAdd?: (taskId: string) => void;
 	/** Start Action으로 Task 전체를 제거한다. */
@@ -247,6 +249,7 @@ export function initializeTaskRenderer(
 
 		nodeElements.get(selectedNodeKey)?.classList.remove('is-selected');
 		selectedNodeKey = undefined;
+		interactions.onNodeSelectionChange?.(undefined);
 	};
 
 	const selectTaskNode = (renderKey: string): void => {
@@ -257,6 +260,7 @@ export function initializeTaskRenderer(
 		clearTaskNodeSelection();
 		selectedNodeKey = renderKey;
 		nodeElements.get(renderKey)?.classList.add('is-selected');
+		interactions.onNodeSelectionChange?.(nodesByRenderKey.get(renderKey));
 	};
 
 	const stopTaskDrag = (releaseCapture: boolean): TaskDragSession | undefined => {
@@ -700,10 +704,14 @@ export function initializeTaskRenderer(
 			suppressDoubleClickKey = undefined;
 			return;
 		}
-		if (dragSession || (node.kind !== 'start' && node.kind !== 'work')) {
+		if (dragSession) {
 			return;
 		}
 
+		selectTaskNode(renderKey);
+		if (node.kind !== 'start' && node.kind !== 'work') {
+			return;
+		}
 		interactions.onNodeFocus?.(node);
 	};
 
@@ -768,6 +776,7 @@ export function initializeTaskRenderer(
 		}
 		if (selectedNodeKey && !nextNodeKeys.has(selectedNodeKey)) {
 			selectedNodeKey = undefined;
+			interactions.onNodeSelectionChange?.(undefined);
 		}
 		if (connectionSession && !nextNodeKeys.has(connectionSession.renderKey)) {
 			cancelTaskConnection();

@@ -8,6 +8,7 @@ import {
 	type TaskBlueprint,
 } from '../../task';
 import {
+	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
 	type GraphCameraState,
 } from '../../webview/graph/graphCamera';
@@ -76,6 +77,13 @@ import {
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
 } from '../../webview/task/taskLayout';
+import {
+	TASK_INSPECTOR_ATTRIBUTE,
+	TASK_INSPECTOR_FIELD_ATTRIBUTE,
+	TASK_INSPECTOR_KIND_ATTRIBUTE,
+	TASK_INSPECTOR_NODE_ID_ATTRIBUTE,
+	TASK_INSPECTOR_TASK_ID_ATTRIBUTE,
+} from '../../webview/task/taskInspector';
 
 suite('Graph View', () => {
 	test('Navigator Task 추가는 viewport 중심에 incomplete Start/End를 생성한다', () => {
@@ -1079,10 +1087,490 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('Task Port/Action/Grab CSS는 연결 상태와 pointer 충돌 규약을 표현한다', () => {
+	test('START/WORK Double Click은 선택과 Camera Focus 뒤 Overlay Inspector 하나를 연다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createSerialRenderingTask(
+			'task:inspector-display',
+			{ x: 100, y: 50 },
+			2,
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const [work, secondWork] = task.nodes.filter((node) => node.kind === 'work');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(
+			start
+			&& work?.kind === 'work'
+			&& secondWork?.kind === 'work'
+			&& end,
+		);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		);
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			end.id,
+			task.id,
+		);
+		const secondWorkElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			secondWork.id,
+			task.id,
+		);
+		const overlayLayer = getDescendantByClass(root, 'graph-overlay-layer');
+		const world = getDescendantByClass(root, 'graph-world');
+		const focusPoints: Array<{ readonly x: number; readonly y: number }> = [];
+
+		graphView.camera.focusOn = (point) => focusPoints.push(point);
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		assert.strictEqual(startElement.hasClass('is-selected'), true);
+		let inspector = getTaskInspector(root);
+
+		assert.strictEqual(getTaskInspector(overlayLayer), inspector);
+		assert.strictEqual(
+			findDescendantByAttribute(world, TASK_INSPECTOR_ATTRIBUTE, ''),
+			undefined,
+		);
+		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_TASK_ID_ATTRIBUTE), task.id);
+		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_NODE_ID_ATTRIBUTE), start.id);
+		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_KIND_ATTRIBUTE), 'start');
+		assert.strictEqual(inspector.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE), true);
+		assert.ok(getTaskInspectorControl(inspector, 'title'));
+		assert.ok(getTaskInspectorControl(inspector, 'description'));
+		assert.strictEqual(
+			findDescendantByAttribute(inspector, TASK_INSPECTOR_FIELD_ATTRIBUTE, 'prompt'),
+			undefined,
+		);
+		const firstInspector = inspector;
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		assert.strictEqual(getTaskInspector(root), firstInspector);
+		assert.strictEqual(getDescendantsByClass(root, 'task-inspector').length, 1);
+
+		workElement.dispatch('dblclick', createClickEvent(workElement));
+		assert.strictEqual(startElement.hasClass('is-selected'), false);
+		assert.strictEqual(workElement.hasClass('is-selected'), true);
+		inspector = getTaskInspector(root);
+		assert.notStrictEqual(inspector, firstInspector);
+		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_NODE_ID_ATTRIBUTE), work.id);
+		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_KIND_ATTRIBUTE), 'work');
+		assert.ok(getTaskInspectorControl(inspector, 'prompt'));
+		assert.strictEqual(getDescendantsByClass(root, 'task-inspector').length, 1);
+		const firstWorkInspector = inspector;
+
+		secondWorkElement.dispatch('dblclick', createClickEvent(secondWorkElement));
+		inspector = getTaskInspector(root);
+		assert.notStrictEqual(inspector, firstWorkInspector);
+		assert.strictEqual(
+			inspector.getAttribute(TASK_INSPECTOR_NODE_ID_ATTRIBUTE),
+			secondWork.id,
+		);
+		assert.strictEqual(getDescendantsByClass(root, 'task-inspector').length, 1);
+
+		endElement.dispatch('dblclick', createClickEvent(endElement));
+		assert.strictEqual(endElement.hasClass('is-selected'), true);
+		assert.strictEqual(findTaskInspector(root), undefined);
+		assert.deepStrictEqual(focusPoints, [
+			{ x: 240, y: 78 },
+			{ x: 240, y: 78 },
+			{ x: 560, y: 78 },
+			{ x: 880, y: 78 },
+		]);
+
+		graphView.dispose();
+	});
+
+	test('Task Focus는 Inspector interaction을 유지하고 Selection·삭제·외부 갱신에서 정리된다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && work?.kind === 'work' && end);
+		const focusWork = (): FakeElement => {
+			const workElement = getTaskElement(
+				root,
+				'data-task-node-id',
+				work.id,
+				task.id,
+			);
+
+			workElement.dispatch('dblclick', createClickEvent(workElement));
+			return getTaskInspector(root);
+		};
+		let inspector = focusWork();
+		const titleInput = getTaskInspectorControl(inspector, 'title');
+
+		titleInput.dispatch('pointerdown', createPointerEvent(titleInput, 10, 10));
+		titleInput.dispatch('pointerup', createPointerEvent(titleInput, 10, 10));
+		titleInput.dispatch('click', createClickEvent(titleInput));
+		assert.strictEqual(getTaskInspector(root), inspector);
+
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			end.id,
+			task.id,
+		);
+
+		endElement.dispatch('click', createClickEvent(endElement));
+		assert.strictEqual(findTaskInspector(root), undefined);
+
+		inspector = focusWork();
+		const viewport = getDescendantByClass(root, 'graph-viewport');
+
+		viewport.dispatch('pointerdown', createPointerEvent(viewport, 900, 700));
+		viewport.dispatch('pointerup', createPointerEvent(viewport, 900, 700));
+		viewport.dispatch('click', createClickEvent(viewport));
+		assert.strictEqual(findTaskInspector(root), undefined);
+
+		focusWork();
+		const removeWork = getDescendantByAttribute(
+			getTaskElement(root, 'data-task-node-id', work.id, task.id),
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'remove-work',
+		);
+
+		removeWork.dispatch('click', createClickEvent(removeWork));
+		assert.strictEqual(findTaskInspector(root), undefined);
+		assert.strictEqual(
+			graphView.taskState.getTask(task.id)?.nodes.some((node) => node.id === work.id),
+			false,
+		);
+
+		graphView.updateTasks([task]);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		const removeTask = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'remove-task',
+		);
+
+		removeTask.dispatch('click', createClickEvent(removeTask));
+		assert.strictEqual(findTaskInspector(root), undefined);
+		assert.strictEqual(graphView.taskState.getTask(task.id), undefined);
+
+		graphView.updateTasks([task]);
+		focusWork();
+		const nodePositions = { ...task.nodePositions };
+
+		delete nodePositions[work.id];
+		const withoutWork: TaskBlueprint = {
+			...task,
+			nodePositions,
+			nodes: task.nodes.filter((node) => node.id !== work.id),
+			edges: task.edges.filter((edge) => (
+				edge.source !== work.id && edge.target !== work.id
+			)),
+		};
+
+		graphView.updateTasks([withoutWork]);
+		assert.strictEqual(findTaskInspector(root), undefined);
+
+		graphView.updateTasks([task]);
+		const restoredStart = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+
+		restoredStart.dispatch('dblclick', createClickEvent(restoredStart));
+		graphView.updateTasks([]);
+		assert.strictEqual(findTaskInspector(root), undefined);
+
+		graphView.dispose();
+	});
+
+	test('START/WORK Inspector input은 Task State와 Layout/Node를 즉시 갱신하며 caret을 보존한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && work?.kind === 'work' && end);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		const startInspector = getTaskInspector(root);
+		const titleInput = getTaskInspectorControl(startInspector, 'title');
+		const descriptionInput = getTaskInspectorControl(startInspector, 'description');
+		const inputListenerCount = startInspector.getEventListenerCount('input');
+
+		titleInput.value = 'Edited Task';
+		titleInput.focus();
+		titleInput.setSelectionRange(4, 4);
+		titleInput.dispatch('input', createInputEvent(titleInput));
+		assert.strictEqual(getTaskInspector(root), startInspector);
+		assert.strictEqual(getTaskInspectorControl(startInspector, 'title'), titleInput);
+		assert.strictEqual(ownerDocument.activeElement, titleInput);
+		assert.strictEqual(titleInput.selectionStart, 4);
+		assert.strictEqual(titleInput.selectionEnd, 4);
+		assert.strictEqual(startInspector.getEventListenerCount('input'), inputListenerCount);
+
+		descriptionInput.value = 'Edited Task description';
+		descriptionInput.dispatch('input', createInputEvent(descriptionInput));
+		const editedStartTask = graphView.taskState.getTask(task.id);
+
+		assert.ok(editedStartTask);
+		assert.strictEqual(editedStartTask.title, 'Edited Task');
+		assert.strictEqual(editedStartTask.description, 'Edited Task description');
+		assert.deepStrictEqual(
+			editedStartTask.nodes.find((node) => node.id === start.id),
+			{ id: start.id, kind: 'start' },
+		);
+		const startLayout = createTaskGraphLayout([editedStartTask]).nodes.find(
+			(node) => node.id === start.id,
+		);
+
+		assert.ok(startLayout?.kind === 'start');
+		assert.strictEqual(startLayout.title, 'Edited Task');
+		assert.strictEqual(startLayout.description, 'Edited Task description');
+		assert.strictEqual(
+			getDescendantByClass(startElement, 'task-node-title').textContent,
+			'Edited Task',
+		);
+		assert.strictEqual(
+			getDescendantByClass(startElement, 'task-node-description').textContent,
+			'Edited Task description',
+		);
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			end.id,
+			task.id,
+		);
+
+		assert.strictEqual(
+			getDescendantByClass(endElement, 'task-node-title').textContent,
+			'Edited Task',
+		);
+
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		);
+
+		workElement.dispatch('dblclick', createClickEvent(workElement));
+		const workInspector = getTaskInspector(root);
+
+		assert.notStrictEqual(workInspector, startInspector);
+		const workTitle = getTaskInspectorControl(workInspector, 'title');
+		const workDescription = getTaskInspectorControl(workInspector, 'description');
+		const workPrompt = getTaskInspectorControl(workInspector, 'prompt');
+
+		workTitle.value = 'Edited Work';
+		workTitle.dispatch('input', createInputEvent(workTitle));
+		workDescription.value = 'Edited Work description';
+		workDescription.dispatch('input', createInputEvent(workDescription));
+		workPrompt.value = 'First line\nSecond line';
+		workPrompt.focus();
+		workPrompt.setSelectionRange(5, 5);
+		workPrompt.dispatch('input', createInputEvent(workPrompt));
+
+		assert.strictEqual(getTaskInspector(root), workInspector);
+		assert.strictEqual(getTaskInspectorControl(workInspector, 'prompt'), workPrompt);
+		assert.strictEqual(ownerDocument.activeElement, workPrompt);
+		assert.strictEqual(workPrompt.selectionStart, 5);
+		assert.strictEqual(workPrompt.selectionEnd, 5);
+		assert.strictEqual(getDescendantsByClass(root, 'task-inspector').length, 1);
+		const editedWorkTask = graphView.taskState.getTask(task.id);
+		const editedWork = editedWorkTask?.nodes.find((node) => node.id === work.id);
+
+		assert.ok(editedWork?.kind === 'work');
+		assert.deepStrictEqual({
+			title: editedWork.title,
+			description: editedWork.description,
+			prompt: editedWork.prompt,
+		}, {
+			title: 'Edited Work',
+			description: 'Edited Work description',
+			prompt: 'First line\nSecond line',
+		});
+		assert.ok(editedWorkTask);
+		const workLayout = createTaskGraphLayout([editedWorkTask]).nodes.find(
+			(node) => node.id === work.id,
+		);
+
+		assert.ok(workLayout?.kind === 'work');
+		assert.strictEqual(workLayout.title, editedWork.title);
+		assert.strictEqual(workLayout.description, editedWork.description);
+		assert.strictEqual(workLayout.prompt, editedWork.prompt);
+		assert.strictEqual(
+			getDescendantByClass(workElement, 'task-node-title').textContent,
+			'Edited Work',
+		);
+		assert.strictEqual(
+			getDescendantByClass(workElement, 'task-node-description').textContent,
+			'Edited Work description',
+		);
+		assert.strictEqual(
+			getDescendantByClass(workElement, 'task-node-prompt').textContent,
+			'First line\nSecond line',
+		);
+
+		graphView.dispose();
+	});
+
+	test('Task Inspector는 Camera/Layout 변화 뒤 재배치되며 panel 크기를 scale하지 않는다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 80 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(start);
+		const viewport = getDescendantByClass(root, 'graph-viewport');
+
+		viewport.clientWidth = 2_000;
+		viewport.clientHeight = 1_200;
+		graphView.camera.focusOn = () => undefined;
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		const inspector = getTaskInspector(root);
+		const initialWidth = inspector.style.width;
+
+		assert.strictEqual(initialWidth, '320px');
+		assert.strictEqual(inspector.style.left, '392px');
+		assert.strictEqual(inspector.style.top, '80px');
+
+		graphView.camera.setState({ x: 40, y: 30, scale: 2 });
+		assert.strictEqual(getTaskInspector(root), inspector);
+		assert.strictEqual(inspector.style.left, '812px');
+		assert.strictEqual(inspector.style.top, '190px');
+		assert.strictEqual(inspector.style.width, initialWidth);
+		assert.strictEqual(inspector.style.transform, '');
+		assert.strictEqual(inspector.style.scale, '');
+
+		graphView.updateTasks([{
+			...task,
+			origin: { x: 200, y: 100 },
+		}]);
+		assert.strictEqual(getTaskInspector(root), inspector);
+		assert.strictEqual(inspector.style.left, '1012px');
+		assert.strictEqual(inspector.style.top, '230px');
+		assert.strictEqual(inspector.style.width, initialWidth);
+
+		viewport.clientWidth = 900;
+		viewport.clientHeight = 300;
+		graphView.refreshVisibleGraphArea();
+		assert.strictEqual(inspector.style.left, '108px');
+		assert.strictEqual(inspector.style.top, '96px');
+		assert.strictEqual(inspector.style.width, initialWidth);
+
+		graphView.dispose();
+	});
+
+	test('Graph View dispose는 Inspector DOM과 listener를 정리한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(start);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		const inspector = getTaskInspector(root);
+		const titleInput = getTaskInspectorControl(inspector, 'title');
+		const titleAtDispose = graphView.taskState.getTask(task.id)?.title;
+
+		assert.strictEqual(inspector.getEventListenerCount('input'), 1);
+		assert.strictEqual(inspector.getEventListenerCount('pointerdown'), 1);
+		graphView.dispose();
+		assert.strictEqual(root.children.length, 0);
+		assert.strictEqual(inspector.getEventListenerCount('input'), 0);
+		assert.strictEqual(inspector.getEventListenerCount('pointerdown'), 0);
+
+		titleInput.value = 'Ignored after dispose';
+		titleInput.dispatch('input', createInputEvent(titleInput));
+		assert.strictEqual(graphView.taskState.getTask(task.id)?.title, titleAtDispose);
+		graphView.dispose();
+	});
+
+		test('Task Port/Action/Grab CSS는 연결 상태와 pointer 충돌 규약을 표현한다', () => {
 		const taskViewCss = readFileSync(resolve(
 			__dirname,
 			'../../../src/webview/task/taskView.css',
+		), 'utf8');
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
 		), 'utf8');
 
 		assert.match(taskViewCss, /\.task-node\s*\{[^}]*cursor:\s*grab;/s);
@@ -1165,6 +1653,27 @@ suite('Graph View', () => {
 		);
 		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);
 		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);
+		const inspectorRule = taskViewCss.match(/\.task-inspector\s*\{[^}]*\}/s);
+
+		assert.ok(inspectorRule);
+		assert.match(inspectorRule[0], /position:\s*absolute;/);
+		assert.match(inspectorRule[0], /width:\s*320px;/);
+		assert.match(inspectorRule[0], /pointer-events:\s*auto;/);
+		assert.match(inspectorRule[0], /--vscode-editorWidget-background/);
+		assert.doesNotMatch(inspectorRule[0], /transform:\s*[^;]*scale/);
+		assert.match(
+			taskViewCss,
+			/\.task-inspector-control\s*\{[^}]*--vscode-input-background[^}]*--vscode-input-border[^}]*cursor:\s*text;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-inspector-control:focus[^{]*\{[^}]*--vscode-focusBorder[^}]*--vscode-contrastActiveBorder/s,
+		);
+		assert.match(taskViewCss, /body\.vscode-high-contrast \.task-inspector/s);
+		assert.match(
+			graphViewCss,
+			/\.graph-reattach-confirm-overlay,[^{]*\.graph-arrange-all-confirm-overlay\s*\{[^}]*z-index:\s*10;/s,
+		);
 	});
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
 		const graphViewCss = readFileSync(resolve(
@@ -7794,6 +8303,7 @@ type GraphEventListener = (event: Event) => void;
 
 class FakeDocument {
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
+	activeElement: FakeElement | null = null;
 
 	createElement(tagName = 'div'): FakeElement {
 		return new FakeElement(this, tagName.toLowerCase());
@@ -7885,6 +8395,8 @@ class FakeElement {
 	textContent = '';
 	title = '';
 	type = '';
+	selectionStart: number | null = null;
+	selectionEnd: number | null = null;
 	clientWidth = 1000;
 	clientHeight = 800;
 	boundsLeft = 0;
@@ -7893,6 +8405,7 @@ class FakeElement {
 	private readonly attributes = new Map<string, string>();
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
 	private readonly capturedPointers = new Set<number>();
+	private inputValue = '';
 	private parent: FakeElement | undefined;
 
 	constructor(
@@ -7902,6 +8415,20 @@ class FakeElement {
 
 	asHtmlElement(): HTMLElement {
 		return this as unknown as HTMLElement;
+	}
+
+	get value(): string {
+		return this.inputValue;
+	}
+
+	set value(value: string) {
+		this.inputValue = value;
+		this.selectionStart = value.length;
+		this.selectionEnd = value.length;
+	}
+
+	get offsetHeight(): number {
+		return Number.parseFloat(this.style.height) || 0;
 	}
 
 	append(...children: FakeElement[]): void {
@@ -7929,6 +8456,7 @@ class FakeElement {
 		if (index >= 0) {
 			this.parent.children.splice(index, 1);
 		}
+		this.parent = undefined;
 	}
 
 	setAttribute(name: string, value = ''): void {
@@ -7988,6 +8516,10 @@ class FakeElement {
 		this.listeners.get(type)?.delete(listener);
 	}
 
+	getEventListenerCount(type: string): number {
+		return this.listeners.get(type)?.size ?? 0;
+	}
+
 	dispatch(type: string, event: Event): void {
 		for (const listener of this.listeners.get(type) ?? []) {
 			listener(event);
@@ -7996,6 +8528,15 @@ class FakeElement {
 		if (!(event as Event & { propagationStopped?: boolean }).propagationStopped) {
 			this.parent?.dispatch(type, event);
 		}
+	}
+
+	focus(): void {
+		this.ownerDocument.activeElement = this;
+	}
+
+	setSelectionRange(start: number, end: number): void {
+		this.selectionStart = start;
+		this.selectionEnd = end;
 	}
 
 	setPointerCapture(pointerId: number): void {
@@ -8106,6 +8647,28 @@ function getTaskElement(
 
 	assert.ok(taskElement, `${taskId}의 ${entityAttributeName}="${entityId}" 요소가 있어야 한다.`);
 	return taskElement;
+}
+
+function findTaskInspector(element: FakeElement): FakeElement | undefined {
+	return findDescendantByAttribute(element, TASK_INSPECTOR_ATTRIBUTE, '');
+}
+
+function getTaskInspector(element: FakeElement): FakeElement {
+	const inspector = findTaskInspector(element);
+
+	assert.ok(inspector, 'Task Inspector 요소가 있어야 한다.');
+	return inspector;
+}
+
+function getTaskInspectorControl(
+	element: FakeElement,
+	field: 'title' | 'description' | 'prompt',
+): FakeElement {
+	return getDescendantByAttribute(
+		element,
+		TASK_INSPECTOR_FIELD_ATTRIBUTE,
+		field,
+	);
 }
 
 function findTaskPort(
@@ -8285,6 +8848,14 @@ function createClickEvent(
 			return propagationStopped;
 		},
 	} as unknown as MouseEvent & { readonly propagationStopped: boolean };
+}
+
+function createInputEvent(target: FakeElement): InputEvent {
+	return {
+		target: target.asHtmlElement(),
+		preventDefault: () => undefined,
+		stopPropagation: () => undefined,
+	} as unknown as InputEvent;
 }
 
 function createKeyboardEvent(key: string): KeyboardEvent {

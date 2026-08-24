@@ -73,6 +73,11 @@ import {
 	type TaskLayoutNode,
 } from '../task/taskLayout';
 import { initializeTaskRenderer } from '../task/taskRenderer';
+import {
+	initializeTaskInspector,
+	type FocusedTaskNode,
+	type TaskInspectorFieldInput,
+} from '../task/taskInspector';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
@@ -1596,11 +1601,97 @@ export function initializeGraphView(
 		},
 		{ nodeEffects },
 	);
+	let currentTaskLayout = createTaskGraphLayout(
+		taskState.getSnapshot().tasks,
+	);
+	let focusedTaskNode: FocusedTaskNode | undefined;
 	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
+	let taskInspector: ReturnType<typeof initializeTaskInspector> | undefined;
+	const findFocusedTaskLayoutNode = (): TaskLayoutNode | undefined => (
+		focusedTaskNode
+			? currentTaskLayout.nodes.find((node) => (
+				node.taskId === focusedTaskNode?.taskId
+				&& node.id === focusedTaskNode.nodeId
+				&& (node.kind === 'start' || node.kind === 'work')
+			))
+			: undefined
+	);
+	const syncTaskInspector = (): void => {
+		taskInspector?.apply(focusedTaskNode, currentTaskLayout);
+	};
+	const clearTaskFocus = (): void => {
+		if (!focusedTaskNode) {
+			return;
+		}
+
+		focusedTaskNode = undefined;
+		syncTaskInspector();
+	};
 	const applyTaskState = (): void => {
-		taskRenderer.applyLayout(createTaskGraphLayout(
+		currentTaskLayout = createTaskGraphLayout(
 			taskState.getSnapshot().tasks,
-		));
+		);
+		taskRenderer.applyLayout(currentTaskLayout);
+		if (focusedTaskNode && !findFocusedTaskLayoutNode()) {
+			focusedTaskNode = undefined;
+		}
+		syncTaskInspector();
+	};
+	const handleTaskInspectorFieldInput = (
+		input: TaskInspectorFieldInput,
+	): void => {
+		if (
+			disposed
+			|| input.taskId !== focusedTaskNode?.taskId
+			|| input.nodeId !== focusedTaskNode.nodeId
+		) {
+			return;
+		}
+
+		const task = taskState.getTask(input.taskId);
+		const targetNode = task?.nodes.find((node) => node.id === input.nodeId);
+
+		if (!task) {
+			return;
+		}
+
+		if (input.kind === 'start') {
+			if (targetNode?.kind !== 'start') {
+				return;
+			}
+			const currentValue = input.field === 'title'
+				? task.title
+				: task.description;
+
+			if (currentValue === input.value) {
+				return;
+			}
+		} else {
+			if (targetNode?.kind !== 'work' || targetNode[input.field] === input.value) {
+				return;
+			}
+		}
+
+		const updated = taskState.updateTask(input.taskId, (current) => {
+			if (input.kind === 'start') {
+				return input.field === 'title'
+					? { ...current, title: input.value }
+					: { ...current, description: input.value };
+			}
+
+			return {
+				...current,
+				nodes: current.nodes.map((node) => (
+					node.id === input.nodeId && node.kind === 'work'
+						? { ...node, [input.field]: input.value }
+						: node
+				)),
+			};
+		});
+
+		if (updated) {
+			applyTaskState();
+		}
 	};
 	const handleTaskOriginChange = (taskId: string, origin: TaskOrigin): void => {
 		const updated = taskState.updateTask(taskId, (task) => ({
@@ -1622,10 +1713,29 @@ export function initializeGraphView(
 		}
 	};
 	const handleTaskNodeFocus = (node: TaskLayoutNode): void => {
+		focusedTaskNode = {
+			taskId: node.taskId,
+			nodeId: node.id,
+		};
 		camera.focusOn({
 			x: node.position.x + node.width / 2,
 			y: node.position.y + node.height / 2,
 		});
+		syncTaskInspector();
+	};
+	const handleTaskNodeSelectionChange = (
+		node: TaskLayoutNode | undefined,
+	): void => {
+		if (
+			focusedTaskNode
+			&& (
+				!node
+				|| node.taskId !== focusedTaskNode.taskId
+				|| node.id !== focusedTaskNode.nodeId
+			)
+		) {
+			clearTaskFocus();
+		}
 	};
 	const handleTaskWorkAdd = (taskId: string): void => {
 		if (taskState.addWork(taskId)) {
@@ -1678,11 +1788,17 @@ export function initializeGraphView(
 		applyTaskState();
 	};
 
+	taskInspector = initializeTaskInspector(
+		overlayLayer,
+		viewport,
+		camera,
+		{ onFieldInput: handleTaskInspectorFieldInput },
+	);
 	taskRenderer = initializeTaskRenderer(
 		edgeLayer,
 		nodeLayer,
 		viewport,
-		createTaskGraphLayout(taskState.getSnapshot().tasks),
+		currentTaskLayout,
 		{
 			getCameraScale: () => camera.getState().scale,
 			clientToWorld: ({ x, y }) => {
@@ -1696,6 +1812,7 @@ export function initializeGraphView(
 			onTaskOriginChange: handleTaskOriginChange,
 			onTaskNodePositionChange: handleTaskNodePositionChange,
 			onNodeFocus: handleTaskNodeFocus,
+			onNodeSelectionChange: handleTaskNodeSelectionChange,
 			onWorkAdd: handleTaskWorkAdd,
 			onTaskRemove: handleTaskRemove,
 			onWorkRemove: handleTaskWorkRemove,
@@ -1704,6 +1821,9 @@ export function initializeGraphView(
 			onEdgeDisconnect: handleTaskEdgeDisconnect,
 		},
 	);
+	const unsubscribeTaskInspectorCamera = state.subscribe(() => {
+		taskInspector?.refreshPosition();
+	});
 	navigator = initializeGraphNavigator(
 		overlayLayer,
 		viewport,
@@ -1738,6 +1858,7 @@ export function initializeGraphView(
 		refreshVisibleGraphArea(): void {
 			if (!disposed) {
 				navigator.refreshVisibleGraphArea();
+				taskInspector?.refreshPosition();
 			}
 		},
 		updateGraph(graph): void {
@@ -1877,7 +1998,11 @@ export function initializeGraphView(
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
 			unsubscribeLayout();
+			unsubscribeTaskInspectorCamera();
 			navigator.dispose();
+			taskInspector?.dispose();
+			taskInspector = undefined;
+			focusedTaskNode = undefined;
 			taskRenderer.dispose();
 			renderer.dispose();
 			nodeEffects.dispose();

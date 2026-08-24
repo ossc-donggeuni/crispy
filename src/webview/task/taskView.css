@@ -361,3 +361,95 @@
 	line-height: 1;
 	pointer-events: none;
 }
+
+.task-inspector {
+	position: absolute;
+	z-index: 4;
+	display: grid;
+	box-sizing: border-box;
+	width: 320px;
+	max-width: calc(100% - 24px);
+	gap: 12px;
+	max-height: calc(100% - 24px);
+	padding: 14px;
+	overflow: auto;
+	color: var(--vscode-foreground);
+	background: var(
+		--vscode-editorWidget-background,
+		var(--graph-floating-control-background)
+	);
+	border: 1px solid var(
+		--vscode-widget-border,
+		var(--vscode-contrastBorder, var(--graph-secondary-control-border))
+	);
+	border-radius: 8px;
+	box-shadow: var(--graph-floating-control-shadow);
+	pointer-events: auto;
+	touch-action: auto;
+	cursor: default;
+}
+
+.task-inspector-heading {
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 16px;
+	letter-spacing: 0.08em;
+}
+
+.task-inspector-field {
+	display: grid;
+	gap: 5px;
+	min-width: 0;
+	color: var(--vscode-foreground);
+	cursor: default;
+}
+
+.task-inspector-field-label {
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 16px;
+}
+
+.task-inspector-control {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	padding: 6px 8px;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	font: inherit;
+	font-size: 13px;
+	line-height: 18px;
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	border: 1px solid var(
+		--vscode-input-border,
+		var(--vscode-contrastBorder, var(--graph-secondary-control-border))
+	);
+	border-radius: 3px;
+	outline: none;
+	cursor: text;
+}
+
+textarea.task-inspector-control {
+	min-height: 96px;
+	resize: none;
+}
+
+.task-inspector-control:focus,
+.task-inspector-control:focus-visible {
+	border-color: var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--graph-viewport-accent-color))
+	);
+	outline: 1px solid var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--graph-viewport-accent-color))
+	);
+	outline-offset: -1px;
+}
+
+body.vscode-high-contrast .task-inspector,
+body.vscode-high-contrast-light .task-inspector {
+	border-color: var(--vscode-contrastBorder, var(--vscode-widget-border));
+	box-shadow: none;
+}

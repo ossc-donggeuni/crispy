@@ -1495,6 +1495,7 @@ body.vscode-high-contrast-light .graph-viewport {
 .graph-arrange-all-confirm-overlay {
 	position: absolute;
 	inset: 0;
+	z-index: 10;
 	display: grid;
 	place-items: center;
 	padding: 24px;

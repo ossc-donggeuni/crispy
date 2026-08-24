@@ -49,6 +49,9 @@ suite('Task Layout', () => {
 		assert.strictEqual(endLayout.title, startLayout.title);
 		assert.strictEqual(startLayout.description, 'Ready Task description');
 		assert.strictEqual(endLayout.description, startLayout.description);
+		assert.strictEqual(workLayout.title, 'Work');
+		assert.strictEqual(workLayout.description, 'Work description');
+		assert.strictEqual(workLayout.prompt, 'Run the work.\nKeep the result concise.');
 		assert.strictEqual(startLayout.connectionState, 'connected');
 		assert.strictEqual(workLayout.connectionState, 'connected');
 		assert.strictEqual(endLayout.connectionState, 'connected');
@@ -483,8 +486,8 @@ function createReadyTask(
 		id: 'task-node:same-work',
 		kind: 'work' as const,
 		title: 'Work',
-		description: '',
-		prompt: '',
+		description: 'Work description',
+		prompt: 'Run the work.\nKeep the result concise.',
 	};
 	const end = { id: 'task-node:same-end', kind: 'end' as const };
 
