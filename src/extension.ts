@@ -23,6 +23,7 @@ import {
 	type AgentActivityClearSessionMessage,
 	type AgentActivityKind,
 	type AgentActivitySetMessage,
+	type AgentActivityToWebviewMessage,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffect,
 	type GraphNodeEffectKind,
@@ -458,6 +459,29 @@ export function createAgentActivityDebugMessages(
 	return messages;
 }
 
+/** Agent Activity Debug 메시지를 실제 Command와 테스트가 공유하는 순서로 전달한다. */
+export async function postAgentActivityDebugMessages(
+	postMessage: (message: AgentActivityToWebviewMessage) => PromiseLike<unknown>,
+	graph: Graph,
+	graphState: AgentActivityDebugGraphState = {},
+): Promise<void> {
+	for (const message of createAgentActivityDebugClearMessages()) {
+		await postMessage(message);
+	}
+	for (const message of createAgentActivityDebugMessages(graph, graphState)) {
+		await postMessage(message);
+	}
+}
+
+/** Agent Activity Debug가 소유한 Session clear를 결정적인 순서로 전달한다. */
+export async function postAgentActivityDebugClearMessages(
+	postMessage: (message: AgentActivityClearSessionMessage) => PromiseLike<unknown>,
+): Promise<void> {
+	for (const message of createAgentActivityDebugClearMessages()) {
+		await postMessage(message);
+	}
+}
+
 function collectEffectKindsByTarget(
 	messages: readonly GraphNodeEffectSetMessage[],
 ): ReadonlyMap<string, ReadonlySet<GraphNodeEffectKind>> {
@@ -779,15 +803,11 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			return;
 		}
 
-		for (const message of createAgentActivityDebugClearMessages()) {
-			await postDebugMessage(panel, message);
-		}
-		for (const message of createAgentActivityDebugMessages(
+		await postAgentActivityDebugMessages(
+			(message) => postDebugMessage(panel, message),
 			graph,
 			lastWebviewState?.graph,
-		)) {
-			await postDebugMessage(panel, message);
-		}
+		);
 	};
 	const clearAgentActivities = async (): Promise<void> => {
 		const panel = currentRuntime?.panel;
@@ -796,9 +816,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			return;
 		}
 
-		for (const message of createAgentActivityDebugClearMessages()) {
-			await postDebugMessage(panel, message);
-		}
+		await postAgentActivityDebugClearMessages(
+			(message) => postDebugMessage(panel, message),
+		);
 	};
 	const openCanvasDisposable = vscode.commands.registerCommand(
 		OPEN_CANVAS_COMMAND_ID,

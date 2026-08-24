@@ -17,6 +17,8 @@ import {
 	handleWebviewMessage as handleHostWebviewMessage,
 	loadWorkspacePersistentStateForRoots,
 	persistWorkspacePersistentStateForRoots,
+	postAgentActivityDebugClearMessages,
+	postAgentActivityDebugMessages,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
@@ -55,7 +57,6 @@ import {
 import * as vscode from 'vscode';
 
 const COMMAND_ID = OPEN_CANVAS_COMMAND_ID;
-const HOST_MESSAGE_RELAY_BOUNDARY_TYPE = 'test.hostMessageRelay.boundary';
 
 /** handleWebviewMessage가 호출하는 Host 경계를 그대로 만족하는 테스트 대역이다. */
 interface TerminalHostStub extends TerminalMessageHost {
@@ -563,38 +564,46 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(panel.visible, true);
 	});
 
-	test('Agent Activity Debug/Clear Command는 reserved clear 뒤 public set 메시지만 전송한다', async () => {
-		const panel = await openCanvas();
-		const graph = getInitialWorkspacePresentation(panel).graph;
-		const initialState = parseWebviewState(JSON.parse(decodeURIComponent(
-			getSerializedInitialWebviewState(panel),
-		)));
-
-		assert.ok(initialState);
-		await installHostMessageRelay(panel);
+	test('Agent Activity Debug/Clear dispatch는 reserved clear 뒤 public set 메시지만 전송한다', async () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:debug-agent-command/index.ts',
+			name: 'index.ts',
+		};
+		const project = {
+			kind: 'project' as const,
+			id: 'project:debug-agent-command',
+			name: 'debug-agent-command',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const graph = createSingleRootGraph(project, 'root:debug-agent-command');
+		const graphState = { openedFolders: { [project.id]: true as const } };
 		const clearMessages = createAgentActivityDebugClearMessages();
 		const setMessages = createAgentActivityDebugMessages(
 			graph,
-			initialState.graph,
+			graphState,
+		);
+		const debugMessages: ExtensionToWebviewMessage[] = [];
+
+		await postAgentActivityDebugMessages(
+			(message) => {
+				debugMessages.push(message);
+				return Promise.resolve(true);
+			},
+			graph,
+			graphState,
 		);
 
-		const debugMessages = await collectRelayedHostMessages(
-			panel.webview,
-			() => vscode.commands.executeCommand(DEBUG_AGENT_ACTIVITIES_COMMAND_ID),
-		);
+		assert.deepStrictEqual(debugMessages, [...clearMessages, ...setMessages]);
 
-		assert.deepStrictEqual(
-			debugMessages.slice(0, clearMessages.length),
-			clearMessages,
-		);
-		assert.deepStrictEqual(
-			debugMessages.slice(clearMessages.length),
-			setMessages,
-		);
+		const clearOnlyMessages: ExtensionToWebviewMessage[] = [];
 
-		const clearOnlyMessages = await collectRelayedHostMessages(
-			panel.webview,
-			() => vscode.commands.executeCommand(CLEAR_AGENT_ACTIVITIES_COMMAND_ID),
+		await postAgentActivityDebugClearMessages(
+			(message) => {
+				clearOnlyMessages.push(message);
+				return Promise.resolve(true);
+			},
 		);
 
 		assert.deepStrictEqual(clearOnlyMessages, clearMessages);
@@ -1829,77 +1838,6 @@ async function sendWorkspaceState(
 		getWorkspaceStateFromMessage(await received),
 		state,
 	);
-}
-
-/** Host→Webview Debug 메시지를 test Webview가 다시 Host로 전달하도록 설치한다. */
-async function installHostMessageRelay(panel: vscode.WebviewPanel): Promise<void> {
-	const ready = onceWebviewMessage(
-		panel.webview,
-		(message) => isRecordWithType(message, 'test.hostMessageRelay.ready'),
-	);
-
-	panel.webview.html = `<!DOCTYPE html>
-		<html lang="en">
-		<body>
-			<script>
-				const vscode = acquireVsCodeApi();
-				window.addEventListener('message', (event) => {
-					vscode.postMessage({
-						type: 'test.hostMessageRelay.message',
-						message: event.data,
-					});
-				});
-				vscode.postMessage({ type: 'test.hostMessageRelay.ready' });
-			</script>
-		</body>
-		</html>`;
-
-	await ready;
-}
-
-/** Command 완료 뒤 relay boundary까지 전달된 Host 메시지를 순서대로 수집한다. */
-async function collectRelayedHostMessages(
-	webview: vscode.Webview,
-	sendMessages: () => PromiseLike<unknown>,
-): Promise<ExtensionToWebviewMessage[]> {
-	const messages: ExtensionToWebviewMessage[] = [];
-	let resolveBoundary!: () => void;
-	const boundaryReceived = new Promise<void>((resolve) => {
-		resolveBoundary = resolve;
-	});
-	const subscription = webview.onDidReceiveMessage((value: unknown) => {
-		if (!isRecordWithType(value, 'test.hostMessageRelay.message')) {
-			return;
-		}
-		if (isRecordWithType(value.message, HOST_MESSAGE_RELAY_BOUNDARY_TYPE)) {
-			resolveBoundary();
-			return;
-		}
-		messages.push(value.message as ExtensionToWebviewMessage);
-	});
-
-	try {
-		await sendMessages();
-		assert.strictEqual(
-			await webview.postMessage({ type: HOST_MESSAGE_RELAY_BOUNDARY_TYPE }),
-			true,
-			'Host message relay boundary가 live Webview에 전달되어야 한다.',
-		);
-		await boundaryReceived;
-		return messages;
-	} finally {
-		subscription.dispose();
-	}
-}
-
-function isRecordWithType(
-	value: unknown,
-	type: string,
-): value is Record<string, unknown> & { readonly type: string } {
-	return typeof value === 'object'
-		&& value !== null
-		&& !Array.isArray(value)
-		&& (value as Record<string, unknown>).type === type;
 }
 
 function getWebviewStateFromMessage(
