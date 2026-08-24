@@ -902,6 +902,227 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Scope-bound descendant는 Parent 재정렬 animation의 위치 상속 경계에서 제외한다', () => {
+		const referenceChild = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-rearrange/reference',
+			name: 'reference',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const workChild = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-rearrange/work',
+			name: 'work',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const parent = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-rearrange',
+			name: 'scope-rearrange',
+			status: 'loaded' as const,
+			children: [referenceChild, workChild],
+		};
+		const sibling = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-rearrange-sibling',
+			name: 'sibling',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:scope-rearrange',
+			name: 'workspace',
+			status: 'loaded',
+			children: [parent, sibling],
+		};
+		const task = createRenderingTask({ x: 100, y: 720 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const boundTask: TaskBlueprint = {
+			...task,
+			nodes: task.nodes.map((node) => node.id === work.id
+				? {
+					...node,
+					graphTargets: {
+						reference: [referenceChild.id],
+						work: [workChild.id],
+					},
+				}
+				: node),
+		};
+		const animationFrames = new FakeAnimationFrameScheduler();
+		const ownerDocument = new FakeDocument({ animationFrames });
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				openedFolders: {
+					[project.id]: true,
+					[parent.id]: true,
+				},
+			},
+			createSingleRootGraph(project),
+			{},
+			[boundTask],
+		);
+
+		finishPendingGraphAnimation(animationFrames, 0);
+		const referenceArea = getTaskScopeArea(
+			root,
+			boundTask.id,
+			work.id,
+			'reference',
+		);
+		const workArea = getTaskScopeArea(
+			root,
+			boundTask.id,
+			work.id,
+			'work',
+		);
+		const parentOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			parent.id,
+		);
+		const siblingOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			sibling.id,
+		);
+		const referenceOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			referenceChild.id,
+		);
+		const workOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			workChild.id,
+		);
+		const referenceEdge = getDescendantByAttribute(
+			root,
+			'data-graph-edge-id',
+			`${parent.id}->${referenceChild.id}`,
+		);
+		const initialParentPosition = readTranslate(
+			parentOccurrence.style.transform,
+		);
+		const fixedReferencePosition = readTranslate(
+			referenceOccurrence.style.transform,
+		);
+		const fixedWorkPosition = readTranslate(workOccurrence.style.transform);
+
+		setClientBounds(referenceArea, 0, 0, 0, 0);
+		setClientBounds(workArea, 0, 0, 0, 0);
+		performNodeDrop(parentOccurrence, 1_200, 900);
+
+		assert.deepStrictEqual(
+			readTranslate(referenceOccurrence.style.transform),
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(workOccurrence.style.transform),
+			fixedWorkPosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[referenceChild.id],
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[workChild.id],
+			fixedWorkPosition,
+		);
+		assert.strictEqual(animationFrames.pendingCount, 1);
+		animationFrames.runNext(1_000);
+		animationFrames.runNext(1_110);
+		assert.deepStrictEqual(
+			readTranslate(referenceOccurrence.style.transform),
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(workOccurrence.style.transform),
+			fixedWorkPosition,
+		);
+		animationFrames.runNext(1_220);
+		assert.strictEqual(animationFrames.pendingCount, 0);
+
+		const siblingPosition = readTranslate(siblingOccurrence.style.transform);
+
+		beginNodeDrag(
+			parentOccurrence,
+			siblingPosition.x + 8,
+			siblingPosition.y + 8,
+		);
+		const rearrangeStart = readTranslate(parentOccurrence.style.transform);
+		const edgeStartPath = referenceEdge.getAttribute('d');
+
+		parentOccurrence.dispatch(
+			'pointerup',
+			createPointerEvent(
+				parentOccurrence,
+				siblingPosition.x + 8,
+				siblingPosition.y + 8,
+			),
+		);
+
+		assert.notDeepStrictEqual(rearrangeStart, initialParentPosition);
+		assert.deepStrictEqual(
+			readTranslate(referenceOccurrence.style.transform),
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(workOccurrence.style.transform),
+			fixedWorkPosition,
+		);
+		assert.strictEqual(animationFrames.pendingCount, 1);
+
+		animationFrames.runNext(2_000);
+		animationFrames.runNext(2_110);
+		assertPositionIsBetween(
+			readTranslate(parentOccurrence.style.transform),
+			rearrangeStart,
+			initialParentPosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(referenceOccurrence.style.transform),
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(workOccurrence.style.transform),
+			fixedWorkPosition,
+		);
+		assert.notStrictEqual(referenceEdge.getAttribute('d'), edgeStartPath);
+
+		animationFrames.runNext(2_220);
+		assert.deepStrictEqual(
+			readTranslate(parentOccurrence.style.transform),
+			initialParentPosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(referenceOccurrence.style.transform),
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(workOccurrence.style.transform),
+			fixedWorkPosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[referenceChild.id],
+			fixedReferencePosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[workChild.id],
+			fixedWorkPosition,
+		);
+		assert.strictEqual(animationFrames.pendingCount, 0);
+		graphView.dispose();
+	});
+
 	test('Scope-bound Folder 펼침/접힘은 actual child와 기존 Edge의 Graph Layout transition을 유지한다', () => {
 		const child = {
 			kind: 'folder' as const,
@@ -1280,12 +1501,53 @@ suite('Graph View', () => {
 			'0',
 		);
 
-		performNodeDrop(scopedFolder, 140, 130);
+		const alignedReferencePosition = readTranslate(
+			scopedFolder.style.transform,
+		);
+		const alignedReferenceEdgePath = incomingFolderEdge.getAttribute('d');
+		const taskBeforeReferenceRedrop = graphView.taskState.getTask(task.id);
+
+		scopedFolder.dispatch(
+			'pointerdown',
+			createPointerEvent(scopedFolder, 130, 120),
+		);
+		scopedFolder.dispatch(
+			'pointermove',
+			createPointerEvent(scopedFolder, 136, 126),
+		);
+		assert.notDeepStrictEqual(
+			readTranslate(scopedFolder.style.transform),
+			alignedReferencePosition,
+		);
+		assert.notStrictEqual(
+			incomingFolderEdge.getAttribute('d'),
+			alignedReferenceEdgePath,
+		);
+		scopedFolder.dispatch(
+			'pointerup',
+			createPointerEvent(scopedFolder, 136, 126),
+		);
 		boundWork = graphView.taskState.getTask(task.id)?.nodes.find(
 			(node) => node.id === work.id,
 		);
 		assert.ok(boundWork?.kind === 'work');
 		assert.deepStrictEqual(boundWork.graphTargets.reference, [folderId]);
+		assert.strictEqual(
+			graphView.taskState.getTask(task.id),
+			taskBeforeReferenceRedrop,
+		);
+		assert.deepStrictEqual(
+			readTranslate(scopedFolder.style.transform),
+			alignedReferencePosition,
+		);
+		assert.strictEqual(
+			incomingFolderEdge.getAttribute('d'),
+			alignedReferenceEdgePath,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[folderId],
+			alignedReferencePosition,
+		);
 
 		performNodeDrop(scopedFolder, 140, 230);
 		boundWork = graphView.taskState.getTask(task.id)?.nodes.find(
@@ -1303,6 +1565,37 @@ suite('Graph View', () => {
 				folderId,
 			),
 			scopedFolder,
+		);
+		const alignedWorkPosition = readTranslate(scopedFolder.style.transform);
+		const taskBeforeWorkRedrop = graphView.taskState.getTask(task.id);
+
+		scopedFolder.dispatch(
+			'pointerdown',
+			createPointerEvent(scopedFolder, 130, 220),
+		);
+		scopedFolder.dispatch(
+			'pointermove',
+			createPointerEvent(scopedFolder, 136, 226),
+		);
+		assert.notDeepStrictEqual(
+			readTranslate(scopedFolder.style.transform),
+			alignedWorkPosition,
+		);
+		scopedFolder.dispatch(
+			'pointerup',
+			createPointerEvent(scopedFolder, 136, 226),
+		);
+		assert.deepStrictEqual(
+			readTranslate(scopedFolder.style.transform),
+			alignedWorkPosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[folderId],
+			alignedWorkPosition,
+		);
+		assert.strictEqual(
+			graphView.taskState.getTask(task.id),
+			taskBeforeWorkRedrop,
 		);
 		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
 

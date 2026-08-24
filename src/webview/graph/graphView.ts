@@ -1636,7 +1636,7 @@ export function initializeGraphView(
 			snapshot,
 			nextUnarrangedNodeIds,
 		);
-		const nodePositions = rebaseNodePositions(
+		let nodePositions = rebaseNodePositions(
 			previousLayout,
 			nextLayout,
 			snapshot.nodePositions,
@@ -1650,6 +1650,23 @@ export function initializeGraphView(
 		) {
 			// standalone File Card가 grouped Row로 돌아가면 Layout 좌표 소유권도 제거한다.
 			delete nodePositions[nodeId];
+		}
+		if (currentTaskScopeBoundaryNodeIds.size > 0) {
+			// Arrangement rebase는 일반 descendant를 Parent local 좌표로 옮긴다.
+			// Task Scope boundary는 Task Region이 절대 World 위치를 소유하므로,
+			// Renderer transition을 시작하기 전에 같은 최종 projection을 합성한다.
+			// 이 순서를 지켜야 Parent만 보간되고 bound actual Node는 빨려들지 않는다.
+			const wasApplyingTaskState = applyingTaskState;
+
+			applyingTaskState = true;
+			try {
+				nodePositions = applyTaskGraphScopeProjection(
+					nextLayout,
+					nodePositions,
+				).nodePositions;
+			} finally {
+				applyingTaskState = wasApplyingTaskState;
+			}
 		}
 
 		currentManualUnarrangedNodeIds = nextUnarrangedNodeIds;
@@ -2470,6 +2487,17 @@ export function initializeGraphView(
 			sourceNodeId,
 		);
 		const previousOccurrenceId = taskScopeOccurrenceByBinding.get(bindingKey);
+		const alreadyOwnedByDropArea = (
+			previousOccurrenceId === request.occurrenceNodeId
+			&& workNode.graphTargets[dropTarget.area].includes(sourceNodeId)
+		);
+
+		if (alreadyOwnedByDropArea) {
+			// 같은 actual occurrence를 같은 Region 안에서 다시 놓는 것은 semantic
+			// 변경이 아니다. Drag 중 임시 DOM 위치만 GraphState의 Scope projection
+			// 좌표로 되맞춰, binding Root가 수동 정렬처럼 어긋나지 않게 한다.
+			return { syncStoredPositions: true };
+		}
 
 		const draggedOccurrenceIsActual = isKnownTaskGraphScopeOccurrence(
 			request.occurrenceNodeId,
