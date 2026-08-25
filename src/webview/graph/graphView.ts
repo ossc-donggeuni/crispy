@@ -1083,8 +1083,42 @@ export function initializeGraphView(
 	let disposed = false;
 	/** 활성 Task Scope가 World 위치를 소유하는 actual Graph occurrence Root다. */
 	let currentTaskScopeBoundaryNodeIds = new Set<string>();
-	/** 비어 있는 Start/Work Scope Area의 transient 접힘 상태다. */
-	const collapsedTaskGraphScopeAreaKeys = new Set<string>();
+	/** 기본 접힘의 예외로 현재 펼쳐진 Start/Work Scope Area다. */
+	const expandedTaskGraphScopeAreaKeys = new Set<string>();
+	/**
+	 * target이 있는 Area는 펼침을 강제하고, 사라진 owner의 transient 예외만
+	 * 정리한다. 새 빈 Area는 Set에 없으므로 별도 초기화 없이 접힘이 기본이다.
+	 */
+	const reconcileExpandedTaskGraphScopeAreas = (): void => {
+		const currentAreaKeys = new Set<string>();
+
+		for (const task of taskState.getSnapshot().tasks) {
+			for (const node of task.nodes) {
+				if (node.kind === 'end') {
+					continue;
+				}
+				const graphTargets = node.kind === 'start'
+					? task.defaultGraphTargets
+					: node.graphTargets;
+
+				for (const area of ['reference', 'work'] as const) {
+					const key = createTaskGraphScopeAreaKey(task.id, node.id, area);
+
+					currentAreaKeys.add(key);
+					if (graphTargets[area].length > 0) {
+						expandedTaskGraphScopeAreaKeys.add(key);
+					}
+				}
+			}
+		}
+
+		for (const key of expandedTaskGraphScopeAreaKeys) {
+			if (!currentAreaKeys.has(key)) {
+				expandedTaskGraphScopeAreaKeys.delete(key);
+			}
+		}
+	};
+	reconcileExpandedTaskGraphScopeAreas();
 	let initialGraphState = state.getState();
 	let workspaceGraph = graph;
 	let taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
@@ -1798,7 +1832,7 @@ export function initializeGraphView(
 		taskId: string,
 		nodeId: string,
 		area: TaskGraphTargetAreaKind,
-	): boolean => collapsedTaskGraphScopeAreaKeys.has(
+	): boolean => !expandedTaskGraphScopeAreaKeys.has(
 		createTaskGraphScopeAreaKey(taskId, nodeId, area),
 	);
 	let currentTaskLayout = createTaskGraphLayout(
@@ -1852,37 +1886,6 @@ export function initializeGraphView(
 			}
 		}
 		return bindings;
-	};
-	/** 삭제되었거나 target이 생긴 Area의 stale 접힘 상태를 즉시 해제한다. */
-	const reconcileCollapsedTaskGraphScopeAreas = (): void => {
-		const collapsibleAreaKeys = new Set<string>();
-
-		for (const task of taskState.getSnapshot().tasks) {
-			for (const node of task.nodes) {
-				if (node.kind === 'end') {
-					continue;
-				}
-				const graphTargets = node.kind === 'start'
-					? task.defaultGraphTargets
-					: node.graphTargets;
-
-				for (const area of ['reference', 'work'] as const) {
-					if (graphTargets[area].length === 0) {
-						collapsibleAreaKeys.add(createTaskGraphScopeAreaKey(
-							task.id,
-							node.id,
-							area,
-						));
-					}
-				}
-			}
-		}
-
-		for (const key of collapsedTaskGraphScopeAreaKeys) {
-			if (!collapsibleAreaKeys.has(key)) {
-				collapsedTaskGraphScopeAreaKeys.delete(key);
-			}
-		}
 	};
 	const collectTaskGraphScopeOccurrenceIds = (): Set<string> => new Set(
 		[...taskScopeOccurrencesByBinding.values()].flatMap(
@@ -2258,7 +2261,7 @@ export function initializeGraphView(
 		}
 		applyingTaskState = true;
 		try {
-			reconcileCollapsedTaskGraphScopeAreas();
+			reconcileExpandedTaskGraphScopeAreas();
 			const bindings = collectTaskGraphScopeBindings();
 			const scopeBoundariesChanged = reconcileTaskGraphScopeOccurrences(bindings);
 			const snapshot = state.getState();
@@ -2860,10 +2863,10 @@ export function initializeGraphView(
 		}
 		const key = createTaskGraphScopeAreaKey(taskId, nodeId, area);
 
-		if (collapsedTaskGraphScopeAreaKeys.has(key)) {
-			collapsedTaskGraphScopeAreaKeys.delete(key);
+		if (expandedTaskGraphScopeAreaKeys.has(key)) {
+			expandedTaskGraphScopeAreaKeys.delete(key);
 		} else {
-			collapsedTaskGraphScopeAreaKeys.add(key);
+			expandedTaskGraphScopeAreaKeys.add(key);
 		}
 		applyTaskState();
 	};
@@ -3181,7 +3184,7 @@ export function initializeGraphView(
 			taskInspector = undefined;
 			focusedTaskNode = undefined;
 			taskScopeOccurrencesByBinding.clear();
-			collapsedTaskGraphScopeAreaKeys.clear();
+			expandedTaskGraphScopeAreaKeys.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
 			nodeEffects.dispose();
