@@ -755,7 +755,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('Start Task 가져오기는 오류를 inline 표시하고 대상 하나를 원자적으로 교체한다', () => {
+	test('Start Task 가져오기는 Dialog 상호작용에서 선택을 보존하고 대상 하나를 원자적으로 교체한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const baseTarget = createRenderingTask({ x: 100, y: 80 });
@@ -818,12 +818,22 @@ suite('Graph View', () => {
 		const targetEnd = target.nodes.find((node) => node.kind === 'end');
 
 		assert.ok(targetSnapshot && preservedSnapshot && targetStart && targetEnd && targetWork);
+		const targetStartElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			targetStart.id,
+			target.id,
+		);
+
+		targetStartElement.dispatch('dblclick', createClickEvent(targetStartElement));
+		const targetInspector = getTaskInspector(root);
 		const importButton = getDescendantByAttribute(
-			getTaskElement(root, 'data-task-node-id', targetStart.id, target.id),
+			targetStartElement,
 			TASK_NODE_ACTION_ATTRIBUTE,
 			'import-task',
 		);
 
+		assert.strictEqual(targetStartElement.hasClass('is-selected'), true);
 		assert.strictEqual(importButton.title, 'Task JSON 가져오기');
 		assert.strictEqual(
 			getDescendantByClass(importButton, 'task-node-action-symbol').textContent,
@@ -845,8 +855,37 @@ suite('Graph View', () => {
 			TASK_IMPORT_ERROR_ATTRIBUTE,
 			'',
 		);
+		const cancel = getDescendantByClass(dialog, 'task-import-dialog-cancel');
 		const accept = getDescendantByClass(dialog, 'task-import-dialog-accept');
 
+		assert.strictEqual(dialog.hidden, false);
+		assert.strictEqual(ownerDocument.activeElement, input);
+		assert.strictEqual(dialog.getEventListenerCount('pointerdown'), 1);
+		assert.strictEqual(dialog.getEventListenerCount('click'), 1);
+		const inputPointerDown = createPointerEvent(input, 0, 0) as PointerEvent & {
+			readonly propagationStopped: boolean;
+		};
+		const inputClick = createClickEvent(input);
+
+		input.dispatch('pointerdown', inputPointerDown);
+		input.dispatch('click', inputClick);
+		assert.strictEqual(inputPointerDown.propagationStopped, true);
+		assert.strictEqual(inputClick.propagationStopped, true);
+		assert.strictEqual(targetStartElement.hasClass('is-selected'), true);
+		assert.strictEqual(getTaskInspector(root), targetInspector);
+		const cancelPointerDown = createPointerEvent(cancel, 0, 0) as PointerEvent & {
+			readonly propagationStopped: boolean;
+		};
+		const cancelClick = createClickEvent(cancel);
+
+		cancel.dispatch('pointerdown', cancelPointerDown);
+		cancel.dispatch('click', cancelClick);
+		assert.strictEqual(cancelPointerDown.propagationStopped, true);
+		assert.strictEqual(cancelClick.propagationStopped, true);
+		assert.strictEqual(dialog.hidden, true);
+		assert.strictEqual(targetStartElement.hasClass('is-selected'), true);
+		assert.strictEqual(getTaskInspector(root), targetInspector);
+		importButton.dispatch('click', createClickEvent(importButton));
 		assert.strictEqual(dialog.hidden, false);
 		assert.strictEqual(ownerDocument.activeElement, input);
 		accept.focus();
@@ -872,16 +911,24 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(graphView.camera.getState(), cameraBeforeWheel);
 		assert.strictEqual(wheelEvent.defaultPrevented, false);
 		input.value = '{';
-		accept.dispatch('click', createClickEvent(accept));
+		const invalidAcceptClick = createClickEvent(accept);
+
+		accept.dispatch('click', invalidAcceptClick);
+		assert.strictEqual(invalidAcceptClick.propagationStopped, true);
 		assert.strictEqual(dialog.hidden, false);
 		assert.strictEqual(error.hidden, false);
 		assert.strictEqual(input.getAttribute('aria-invalid'), 'true');
 		assert.strictEqual(graphView.taskState.getTask(target.id), targetSnapshot);
+		assert.strictEqual(targetStartElement.hasClass('is-selected'), true);
+		assert.strictEqual(getTaskInspector(root), targetInspector);
 
 		input.value = serializeTaskTransfer(source);
 		input.dispatch('input', createInputEvent(input));
 		assert.strictEqual(error.hidden, true);
-		accept.dispatch('click', createClickEvent(accept));
+		const validAcceptClick = createClickEvent(accept);
+
+		accept.dispatch('click', validAcceptClick);
+		assert.strictEqual(validAcceptClick.propagationStopped, true);
 		assert.strictEqual(dialog.hidden, true);
 
 		const updated = graphView.taskState.getTask(target.id);
@@ -956,6 +1003,8 @@ suite('Graph View', () => {
 		currentImportButton.dispatch('click', createClickEvent(currentImportButton));
 		assert.strictEqual(ownerDocument.activeElement, input);
 		graphView.dispose();
+		assert.strictEqual(dialog.getEventListenerCount('pointerdown'), 0);
+		assert.strictEqual(dialog.getEventListenerCount('click'), 0);
 		assert.notStrictEqual(ownerDocument.activeElement, currentImportButton);
 	});
 

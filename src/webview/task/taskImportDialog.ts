@@ -125,6 +125,9 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 			clearError();
 		}
 	};
+	const stopInteractionPropagation = (event: Event): void => {
+		event.stopPropagation();
+	};
 	const handleKeyDown = (event: KeyboardEvent): void => {
 		if (!activeRequest) {
 			return;
@@ -161,6 +164,8 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 	cancelButton.addEventListener('click', close);
 	acceptButton.addEventListener('click', submit);
 	input.addEventListener('input', handleInput);
+	overlay.addEventListener('pointerdown', stopInteractionPropagation);
+	overlay.addEventListener('click', stopInteractionPropagation);
 	overlay.addEventListener('keydown', handleKeyDown);
 
 	return {
@@ -188,6 +193,8 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 			cancelButton.removeEventListener('click', close);
 			acceptButton.removeEventListener('click', submit);
 			input.removeEventListener('input', handleInput);
+			overlay.removeEventListener('pointerdown', stopInteractionPropagation);
+			overlay.removeEventListener('click', stopInteractionPropagation);
 			overlay.removeEventListener('keydown', handleKeyDown);
 			overlay.remove();
 		},
