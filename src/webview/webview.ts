@@ -188,6 +188,7 @@ const createWorkspacePersistentState = (
 	hiddenNodeIds: { ...snapshot.graph.hiddenNodeIds },
 	tasks: snapshot.tasks,
 	taskRelocations: [],
+	taskStorageReceipts: [],
 });
 
 /**
@@ -349,7 +350,11 @@ const normalizedInitialWorkspaceState = createWorkspacePersistentState(
 // 사용자 편집을 기다리지 않고 정리된 canonical snapshot을 disk에 반영한다.
 if (
 	JSON.stringify(normalizedInitialWorkspaceState)
-	!== JSON.stringify(initialWorkspaceState)
+	!== JSON.stringify({
+		...initialWorkspaceState,
+		// receipt는 Host가 보존하는 metadata이므로 Webview 정리 여부 비교에서 제외한다.
+		taskStorageReceipts: [],
+	})
 ) {
 	postWorkspaceSnapshot(graphView.getWorkspaceSnapshot());
 }

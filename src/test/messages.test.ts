@@ -40,6 +40,7 @@ suite('Extension to Webview Workspace messages', () => {
 					targetOrigins: [],
 				}],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			},
 		} satisfies WorkspaceStateChangedMessage;
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;

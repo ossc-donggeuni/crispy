@@ -22,8 +22,9 @@ suite('Workspace Persistent State', () => {
 			openedFolders: { 'folder:src': true },
 			detachedRootNodeIds: { 'file:src/index.ts': true },
 			hiddenNodeIds: { 'folder:src/private': true },
-			tasks: [],
-			taskRelocations: [],
+				tasks: [],
+				taskRelocations: [],
+				taskStorageReceipts: [],
 		});
 	});
 
@@ -38,8 +39,9 @@ suite('Workspace Persistent State', () => {
 			openedFolders: {},
 			detachedRootNodeIds: {},
 			hiddenNodeIds: {},
-			tasks: [],
-			taskRelocations: [],
+				tasks: [],
+				taskRelocations: [],
+				taskStorageReceipts: [],
 		});
 		assert.notStrictEqual(first, second);
 		assert.notStrictEqual(first.nodePositions, second.nodePositions);
@@ -52,6 +54,7 @@ suite('Workspace Persistent State', () => {
 		assert.notStrictEqual(first.hiddenNodeIds, second.hiddenNodeIds);
 		assert.notStrictEqual(first.tasks, second.tasks);
 		assert.notStrictEqual(first.taskRelocations, second.taskRelocations);
+		assert.notStrictEqual(first.taskStorageReceipts, second.taskStorageReceipts);
 	});
 
 	test('현재 버전이 아닌 상태를 거부한다', () => {
@@ -77,8 +80,9 @@ suite('Workspace Persistent State', () => {
 			openedFolders: {},
 			detachedRootNodeIds: {},
 			hiddenNodeIds: {},
-			tasks: [],
-			taskRelocations: [],
+				tasks: [],
+				taskRelocations: [],
+				taskStorageReceipts: [],
 		});
 	});
 
@@ -139,8 +143,9 @@ suite('Workspace Persistent State', () => {
 			openedFolders: {},
 			detachedRootNodeIds: {},
 			hiddenNodeIds: {},
-			tasks: [],
-			taskRelocations: [],
+				tasks: [],
+				taskRelocations: [],
+				taskStorageReceipts: [],
 		});
 	});
 
@@ -157,6 +162,11 @@ suite('Workspace Persistent State', () => {
 
 		assert.ok(state);
 		assert.deepStrictEqual(state.tasks, [record]);
+		assert.deepStrictEqual(state.taskStorageReceipts, [{
+			ownerRootId: record.ownerRootId,
+			taskId: record.task.id,
+			storageRevision: record.storageRevision,
+		}]);
 		assert.notStrictEqual(state.tasks[0], record);
 		assert.notStrictEqual(state.tasks[0]?.task, record.task);
 		assert.notStrictEqual(state.tasks[0]?.task.origin, record.task.origin);
@@ -172,6 +182,36 @@ suite('Workspace Persistent State', () => {
 			state.tasks[0]?.targetOrigins[0],
 			record.targetOrigins[0],
 		);
+	});
+
+	test('Task storage receipt는 owner별 최대 revision을 유지하고 오래된 live record를 숨긴다', () => {
+		const ownerRootId = 'workspace-root:file:///workspace/app';
+		const staleRecord = createTaskRecord(ownerRootId, 'receipt', 4);
+		const state = parseWorkspacePersistentState({
+			version: WORKSPACE_PERSISTENT_STATE_VERSION,
+			tasks: [staleRecord],
+			taskStorageReceipts: [{
+				ownerRootId,
+				taskId: staleRecord.task.id,
+				storageRevision: 3,
+			}, {
+				ownerRootId,
+				taskId: staleRecord.task.id,
+				storageRevision: 5,
+			}, {
+				ownerRootId: 'invalid-root',
+				taskId: staleRecord.task.id,
+				storageRevision: 9,
+			}],
+		});
+
+		assert.ok(state);
+		assert.deepStrictEqual(state.tasks, []);
+		assert.deepStrictEqual(state.taskStorageReceipts, [{
+			ownerRootId,
+			taskId: staleRecord.task.id,
+			storageRevision: 5,
+		}]);
 	});
 
 	test('Task relocation journal은 source와 destination owner를 검증해 복사한다', () => {

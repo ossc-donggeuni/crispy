@@ -35,12 +35,21 @@ export interface WorkspacePersistentState {
 	tasks: readonly WorkspaceTaskRecord[];
 	/** owner 이동을 여러 Root 파일에 crash-safe하게 반영하기 위한 source journal이다. */
 	taskRelocations: readonly WorkspaceTaskRelocation[];
+	/** owner Root가 해당 Task revision을 한 번 이상 저장했다는 영속 receipt다. */
+	taskStorageReceipts: readonly WorkspaceTaskStorageReceipt[];
 }
 
 /** source Root가 destination 저장을 완료할 때까지 보존하는 완전한 Task 이동 record다. */
 export interface WorkspaceTaskRelocation {
 	readonly sourceRootId: string;
 	readonly record: WorkspaceTaskRecord;
+}
+
+/** Task 삭제 뒤에도 남아 오래된 이동 journal의 부활을 막는 owner별 revision이다. */
+export interface WorkspaceTaskStorageReceipt {
+	readonly ownerRootId: string;
+	readonly taskId: string;
+	readonly storageRevision: number;
 }
 
 /** 외부 객체와 참조를 공유하지 않는 기본 Workspace Persistent State를 생성한다. */
@@ -54,6 +63,7 @@ export function createDefaultWorkspacePersistentState(): WorkspacePersistentStat
 		hiddenNodeIds: {},
 		tasks: [],
 		taskRelocations: [],
+		taskStorageReceipts: [],
 	};
 }
 
@@ -88,6 +98,9 @@ export function parseWorkspacePersistentState(
 	const taskRelocations = candidate.version === 1
 		? []
 		: parseWorkspaceTaskRelocations(candidate.taskRelocations);
+	const parsedTaskStorageReceipts = candidate.version === 1
+		? []
+		: parseWorkspaceTaskStorageReceipts(candidate.taskStorageReceipts);
 
 	if (
 		!nodePositions
@@ -97,9 +110,26 @@ export function parseWorkspacePersistentState(
 		|| !hiddenNodeIds
 		|| !tasks
 		|| !taskRelocations
+		|| !parsedTaskStorageReceipts
 	) {
 		return undefined;
 	}
+	const explicitReceiptByKey = new Map(parsedTaskStorageReceipts.map((receipt) => [
+		createTaskStorageReceiptKey(receipt),
+		receipt,
+	]));
+	const currentTasks = tasks.filter((record) => {
+		const receipt = explicitReceiptByKey.get(createTaskStorageReceiptKey({
+			ownerRootId: record.ownerRootId,
+			taskId: record.task.id,
+		}));
+
+		return !receipt || receipt.storageRevision <= record.storageRevision;
+	});
+	const taskStorageReceipts = normalizeTaskStorageReceipts(
+		parsedTaskStorageReceipts,
+		currentTasks,
+	);
 
 	return {
 		version: WORKSPACE_PERSISTENT_STATE_VERSION,
@@ -108,9 +138,83 @@ export function parseWorkspacePersistentState(
 		openedFolders,
 		detachedRootNodeIds,
 		hiddenNodeIds,
-		tasks,
+		tasks: currentTasks,
 		taskRelocations,
+		taskStorageReceipts,
 	};
+}
+
+/** Task storage receipt를 검증하고 owner/Task별 가장 높은 revision으로 정규화한다. */
+function parseWorkspaceTaskStorageReceipts(
+	value: unknown,
+): readonly WorkspaceTaskStorageReceipt[] | undefined {
+	if (value === undefined) {
+		return [];
+	}
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	const receipts = new Map<string, WorkspaceTaskStorageReceipt>();
+
+	for (const entry of value) {
+		if (
+			!isObjectWithExactKeys(entry, [
+				'ownerRootId',
+				'taskId',
+				'storageRevision',
+			])
+			|| !isWorkspaceRootId(entry.ownerRootId)
+			|| !isNonEmptyString(entry.taskId)
+			|| !isStorageRevision(entry.storageRevision)
+		) {
+			continue;
+		}
+		mergeTaskStorageReceipt({
+			ownerRootId: entry.ownerRootId,
+			taskId: entry.taskId,
+			storageRevision: entry.storageRevision,
+		}, receipts);
+	}
+	return [...receipts.values()];
+}
+
+/** 명시된 receipt와 live Task의 revision을 owner/Task별 단조 증가시킨다. */
+function normalizeTaskStorageReceipts(
+	receipts: readonly WorkspaceTaskStorageReceipt[],
+	tasks: readonly WorkspaceTaskRecord[],
+): readonly WorkspaceTaskStorageReceipt[] {
+	const byKey = new Map<string, WorkspaceTaskStorageReceipt>();
+
+	for (const receipt of receipts) {
+		mergeTaskStorageReceipt(receipt, byKey);
+	}
+	for (const record of tasks) {
+		mergeTaskStorageReceipt({
+			ownerRootId: record.ownerRootId,
+			taskId: record.task.id,
+			storageRevision: record.storageRevision,
+		}, byKey);
+	}
+	return [...byKey.values()];
+}
+
+function mergeTaskStorageReceipt(
+	receipt: WorkspaceTaskStorageReceipt,
+	target: Map<string, WorkspaceTaskStorageReceipt>,
+): void {
+	const key = createTaskStorageReceiptKey(receipt);
+	const current = target.get(key);
+
+	if (!current || receipt.storageRevision > current.storageRevision) {
+		target.set(key, receipt);
+	}
+}
+
+function createTaskStorageReceiptKey(receipt: {
+	readonly ownerRootId: string;
+	readonly taskId: string;
+}): string {
+	return JSON.stringify([receipt.ownerRootId, receipt.taskId]);
 }
 
 /** 이동 journal 배열 자체를 검증하고 잘못된 개별 entry만 격리한다. */

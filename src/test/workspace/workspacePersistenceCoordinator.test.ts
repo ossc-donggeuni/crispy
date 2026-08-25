@@ -44,8 +44,10 @@ suite('Workspace Persistence Coordinator', () => {
 		}]);
 		assertTaskRecords(fake.calls[1]?.state, [movedRecord]);
 		assertTaskRelocations(fake.calls[1]?.state, []);
+		assertTaskStorageReceipts(fake.calls[1]?.state, [movedRecord]);
 		assertTaskRecords(fake.calls[2]?.state, [movedRecord]);
 		assertTaskRelocations(fake.calls[2]?.state, []);
+		assertTaskStorageReceipts(fake.calls[2]?.state, [movedRecord]);
 		assertTaskRecords(fake.calls[3]?.state, []);
 		assertTaskRelocations(fake.calls[3]?.state, []);
 		assertTaskRecords(fake.getRootState(rootA), []);
@@ -83,6 +85,7 @@ suite('Workspace Persistence Coordinator', () => {
 			record: movedRecord,
 		}]);
 		assertTaskRecords(fake.getRootState(rootB), []);
+		assertTaskStorageReceipts(fake.getRootState(rootB), []);
 		assertTaskRecords(mergeFakeRootStates(fake, roots), [movedRecord]);
 		assert.strictEqual(warnings.length, 1);
 
@@ -97,6 +100,7 @@ suite('Workspace Persistence Coordinator', () => {
 		assertTaskRecords(fake.getRootState(rootA), []);
 		assertTaskRelocations(fake.getRootState(rootA), []);
 		assertTaskRecords(fake.getRootState(rootB), [movedRecord]);
+		assertTaskStorageReceipts(fake.getRootState(rootB), [movedRecord]);
 		assert.strictEqual(warnings.length, 1);
 	});
 
@@ -180,7 +184,21 @@ suite('Workspace Persistence Coordinator', () => {
 		);
 		assertTaskRecords(fake.getRootState(rootB), [movedRecord]);
 		assertTaskRelocations(fake.getRootState(rootA), [relocation]);
+		assertTaskStorageReceipts(fake.getRootState(rootB), [movedRecord]);
 		assertTaskRecords(mergeFakeRootStates(fake, roots), [movedRecord]);
+		const deletedDestination = {
+			...fake.getRootState(rootB),
+			tasks: [],
+		};
+		const afterDestinationDeletion = mergeWorkspacePersistentStates([{
+			rootUri: rootA,
+			state: fake.getRootState(rootA),
+		}, {
+			rootUri: rootB,
+			state: deletedDestination,
+		}]);
+
+		assertTaskRecords(afterDestinationDeletion, []);
 		assert.strictEqual(warnings.length, 1);
 
 		await coordinator.flush();
@@ -236,8 +254,10 @@ suite('Workspace Persistence Coordinator', () => {
 		assertTaskRecords(fake.calls[3]?.state, [movedA]);
 		assertTaskRelocations(fake.calls[3]?.state, [{
 			sourceRootId: ownerB,
-			record: movedB,
-		}]);
+				record: movedB,
+			}]);
+		assertTaskStorageReceipts(fake.calls[2]?.state, [movedB]);
+		assertTaskStorageReceipts(fake.calls[3]?.state, [movedA]);
 
 		// A destination stage 직후: A는 destination stage, B는 source journal 상태다.
 		assertTaskRecords(loadSingleRoot(rootA, fake.calls[2]?.state), [movedB]);
@@ -435,6 +455,29 @@ function assertTaskRelocations(
 	assert.deepStrictEqual(
 		state.taskRelocations.map(summarizeTaskRelocation).sort(compareTaskRelocation),
 		expected.map(summarizeTaskRelocation).sort(compareTaskRelocation),
+	);
+}
+
+function assertTaskStorageReceipts(
+	state: WorkspacePersistentState | undefined,
+	expected: readonly WorkspaceTaskRecord[],
+): void {
+	assert.ok(state);
+	const compareReceipt = (left: { readonly id: string }, right: {
+		readonly id: string;
+	}): number => left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+
+	assert.deepStrictEqual(
+		state.taskStorageReceipts.map((receipt) => ({
+			id: receipt.taskId,
+			ownerRootId: receipt.ownerRootId,
+			storageRevision: receipt.storageRevision,
+		})).sort(compareReceipt),
+		expected.map((record) => ({
+			id: record.task.id,
+			ownerRootId: record.ownerRootId,
+			storageRevision: record.storageRevision,
+		})).sort(compareReceipt),
 	);
 }
 

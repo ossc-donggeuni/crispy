@@ -154,6 +154,7 @@ export function mergeWorkspaceStateForRootTransition(
 			activeNextRootIds.has(record.ownerRootId)
 		)),
 		taskRelocations: [],
+		taskStorageReceipts: incoming.taskStorageReceipts,
 	};
 }
 

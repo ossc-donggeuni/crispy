@@ -14,6 +14,7 @@ import {
 	handleWebviewMessage as handleHostWebviewMessage,
 	loadWorkspacePersistentStateForRoots,
 	materializeWorkspacePersistenceContext,
+	mergeWorkspacePersistenceRootTransition,
 	persistWorkspacePersistentStateForRoots,
 	preserveUnresolvedTaskRelocations,
 } from '../extension';
@@ -1001,6 +1002,11 @@ suite('Crispy Extension Host', () => {
 			...createDefaultWorkspacePersistentState(),
 			tasks: [relocation.record],
 			taskRelocations: [relocation],
+			taskStorageReceipts: [{
+				ownerRootId: relocation.record.ownerRootId,
+				taskId: relocation.record.task.id,
+				storageRevision: relocation.record.storageRevision,
+			}],
 		};
 		const writes: Array<{
 			readonly rootUri: vscode.Uri;
@@ -1077,6 +1083,117 @@ suite('Crispy Extension Host', () => {
 
 		assert.deepStrictEqual(result.tasks, [relocation.record]);
 		assert.deepStrictEqual(result.taskRelocations, []);
+	});
+
+	test('Webview의 Task 삭제 snapshot도 Host의 storage receipt를 제거하지 않는다', () => {
+		const ownerUri = vscode.Uri.file('/workspace/receipt-owner');
+		const ownerRootId = `workspace-root:${ownerUri.toString()}`;
+		const record = createTaskRelocation(
+			'workspace-root:file:///workspace/source',
+			ownerRootId,
+			'deleted-with-receipt',
+			4,
+		).record;
+		const result = preserveUnresolvedTaskRelocations(
+			{
+				...createDefaultWorkspacePersistentState(),
+				tasks: [record],
+				taskStorageReceipts: [{
+					ownerRootId,
+					taskId: record.task.id,
+					storageRevision: record.storageRevision,
+				}],
+			},
+			createDefaultWorkspacePersistentState(),
+			[ownerUri],
+		);
+
+		assert.deepStrictEqual(result.tasks, []);
+		assert.deepStrictEqual(result.taskStorageReceipts, [{
+			ownerRootId,
+			taskId: record.task.id,
+			storageRevision: record.storageRevision,
+		}]);
+	});
+
+	test('A-only에서 B-only로 직접 바뀌면 제거된 source journal만 B에 복구한다', () => {
+		const sourceUri = vscode.Uri.file('/workspace/source-only');
+		const destinationUri = vscode.Uri.file('/workspace/destination-only');
+		const sourceRootId = `workspace-root:${sourceUri.toString()}`;
+		const destinationRootId = `workspace-root:${destinationUri.toString()}`;
+		const relocation = createTaskRelocation(
+			sourceRootId,
+			destinationRootId,
+			'direct-recovery',
+			8,
+		);
+		const staleSourceTask = createTaskRelocation(
+			'workspace-root:file:///workspace/older',
+			sourceRootId,
+			'removed-live',
+			3,
+		).record;
+		const sourceNodeId = `folder:${vscode.Uri.joinPath(
+			sourceUri,
+			'src',
+		).toString()}`;
+		const latestDesired: WorkspacePersistentState = {
+			...createDefaultWorkspacePersistentState(),
+			nodePositions: { [sourceNodeId]: { x: 10, y: 20 } },
+			tasks: [staleSourceTask],
+			taskRelocations: [relocation],
+		};
+
+		const recovered = mergeWorkspacePersistenceRootTransition(
+			latestDesired,
+			createDefaultWorkspacePersistentState(),
+			[sourceUri],
+			[destinationUri],
+		);
+
+		assert.deepStrictEqual(recovered.nodePositions, {});
+		assert.deepStrictEqual(recovered.tasks, [relocation.record]);
+		assert.deepStrictEqual(recovered.taskRelocations, []);
+		assert.deepStrictEqual(recovered.taskStorageReceipts, [{
+			ownerRootId: destinationRootId,
+			taskId: relocation.record.task.id,
+			storageRevision: relocation.record.storageRevision,
+		}]);
+	});
+
+	test('B의 covering receipt가 있으면 A-only journal이 삭제한 Task를 되살리지 않는다', () => {
+		const sourceUri = vscode.Uri.file('/workspace/source-deleted');
+		const destinationUri = vscode.Uri.file('/workspace/destination-deleted');
+		const relocation = createTaskRelocation(
+			`workspace-root:${sourceUri.toString()}`,
+			`workspace-root:${destinationUri.toString()}`,
+			'direct-deletion',
+			6,
+		);
+		const destinationState: WorkspacePersistentState = {
+			...createDefaultWorkspacePersistentState(),
+			taskStorageReceipts: [{
+				ownerRootId: relocation.record.ownerRootId,
+				taskId: relocation.record.task.id,
+				storageRevision: relocation.record.storageRevision,
+			}],
+		};
+
+		const retainedDeletion = mergeWorkspacePersistenceRootTransition(
+			{
+				...createDefaultWorkspacePersistentState(),
+				taskRelocations: [relocation],
+			},
+			destinationState,
+			[sourceUri],
+			[destinationUri],
+		);
+
+		assert.deepStrictEqual(retainedDeletion.tasks, []);
+		assert.deepStrictEqual(
+			retainedDeletion.taskStorageReceipts,
+			destinationState.taskStorageReceipts,
+		);
 	});
 
 	test('Workspace snapshot을 Root별로 write하고 실패 Root만 warning으로 격리한다', async () => {
@@ -2011,6 +2128,7 @@ function createWorkspacePersistentState(): WorkspacePersistentState {
 		},
 		tasks: [],
 		taskRelocations: [],
+		taskStorageReceipts: [],
 	};
 }
 
@@ -2034,6 +2152,7 @@ function createWorkspacePersistentStateForRoot(
 		hiddenNodeIds: { [folderId]: true },
 		tasks: [],
 		taskRelocations: [],
+		taskStorageReceipts: [],
 	};
 }
 
@@ -2078,6 +2197,7 @@ function mergeWorkspaceStates(
 		),
 		tasks: states.flatMap((state) => state.tasks),
 		taskRelocations: states.flatMap((state) => state.taskRelocations),
+		taskStorageReceipts: states.flatMap((state) => state.taskStorageReceipts),
 	};
 }
 

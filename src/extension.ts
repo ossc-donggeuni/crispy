@@ -1055,7 +1055,12 @@ function mergeRetainedWorkspaceState(
 		))),
 	);
 
-	return { version: currentState.version, ...graphState, ...taskState };
+	return {
+		version: currentState.version,
+		...graphState,
+		...taskState,
+		taskStorageReceipts: currentState.taskStorageReceipts,
+	};
 }
 
 /** from epoch부터 current epoch까지 한 번도 빠지지 않은 Root URI만 반환한다. */
@@ -1107,6 +1112,9 @@ export function preserveUnresolvedTaskRelocations(
 	const relocations = new Map<string, WorkspacePersistentState[
 		'taskRelocations'
 	][number]>();
+	const receipts = new Map<string, WorkspacePersistentState[
+		'taskStorageReceipts'
+	][number]>();
 
 	for (const relocation of [
 		...(currentState?.taskRelocations ?? []),
@@ -1132,10 +1140,121 @@ export function preserveUnresolvedTaskRelocations(
 			relocations.set(key, relocation);
 		}
 	}
+	const mergeReceipt = (
+		receipt: WorkspacePersistentState['taskStorageReceipts'][number],
+	): void => {
+		if (!activeRootIds.has(receipt.ownerRootId)) {
+			return;
+		}
+		const key = JSON.stringify([receipt.ownerRootId, receipt.taskId]);
+		const existing = receipts.get(key);
+
+		if (!existing || receipt.storageRevision > existing.storageRevision) {
+			receipts.set(key, receipt);
+		}
+	};
+
+	for (const receipt of [
+		...(currentState?.taskStorageReceipts ?? []),
+		...nextState.taskStorageReceipts,
+	]) {
+		mergeReceipt(receipt);
+	}
+	for (const record of [
+		...(currentState?.tasks ?? []),
+		...nextState.tasks,
+	]) {
+		mergeReceipt({
+			ownerRootId: record.ownerRootId,
+			taskId: record.task.id,
+			storageRevision: record.storageRevision,
+		});
+	}
 
 	return {
 		...nextState,
 		taskRelocations: [...relocations.values()],
+		taskStorageReceipts: [...receipts.values()],
+	};
+}
+
+/**
+ * Root 전환에서 retained Root는 Host desired, 새 Root는 disk를 택한다. 동시에
+ * 제거된 source의 journal만 receipt-aware Task winner 계산에 참여시켜
+ * A-only→B-only 전환을 복구하되 source의 Graph/live 상태는 가져오지 않는다.
+ */
+export function mergeWorkspacePersistenceRootTransition(
+	latestDesired: WorkspacePersistentState | undefined,
+	loaded: WorkspacePersistentState,
+	previousRootUris: readonly vscode.Uri[],
+	nextRootUris: readonly vscode.Uri[],
+): WorkspacePersistentState {
+	const previousRootKeys = new Set(previousRootUris.map((uri) => uri.toString()));
+	const nextRootKeys = new Set(nextRootUris.map((uri) => uri.toString()));
+	const desiredByRoot = latestDesired
+		? new Map(partitionWorkspacePersistentStateByRoot(
+			latestDesired,
+			nextRootUris,
+		).map((rootState) => [rootState.rootUri.toString(), rootState]))
+		: new Map<string, ReturnType<
+			typeof partitionWorkspacePersistentStateByRoot
+		>[number]>();
+	const loadedByRoot = new Map(partitionWorkspacePersistentStateByRoot(
+		loaded,
+		nextRootUris,
+	).map((rootState) => [rootState.rootUri.toString(), rootState]));
+	const selectedRootStates = nextRootUris.flatMap((rootUri) => {
+		const key = rootUri.toString();
+		const selected = previousRootKeys.has(key)
+			? desiredByRoot.get(key) ?? loadedByRoot.get(key)
+			: loadedByRoot.get(key);
+
+		return selected ? [selected] : [];
+	});
+	const merged = mergeWorkspacePersistentStates(selectedRootStates);
+
+	if (!latestDesired) {
+		return merged;
+	}
+	const removedSourceStates = previousRootUris.flatMap((rootUri) => {
+		if (nextRootKeys.has(rootUri.toString())) {
+			return [];
+		}
+		const sourceRootId = `workspace-root:${rootUri.toString()}`;
+		const taskRelocations = latestDesired.taskRelocations.filter(
+			(relocation) => relocation.sourceRootId === sourceRootId,
+		);
+
+		return taskRelocations.length === 0
+			? []
+			: [{
+				rootUri,
+				state: {
+					...createDefaultWorkspacePersistentState(),
+					taskRelocations,
+				},
+			}];
+	});
+
+	if (removedSourceStates.length === 0) {
+		return merged;
+	}
+	const recovered = mergeWorkspacePersistentStates([
+		...selectedRootStates,
+		...removedSourceStates,
+	]);
+	const nextRootIds = new Set(nextRootUris.map(
+		(rootUri) => `workspace-root:${rootUri.toString()}`,
+	));
+
+	return {
+		...merged,
+		tasks: recovered.tasks.filter((record) => (
+			nextRootIds.has(record.ownerRootId)
+		)),
+		taskStorageReceipts: recovered.taskStorageReceipts.filter((receipt) => (
+			nextRootIds.has(receipt.ownerRootId)
+		)),
 	};
 }
 
@@ -1183,28 +1302,12 @@ async function refreshWorkspacePersistenceContext(
 	const latestDesired = coordinator.getDesiredState()
 		?? lastWorkspaceState
 		?? desired;
-	const previousRootKeys = new Set(
-		workspacePersistenceRootUris.map((uri) => uri.toString()),
+	const merged = mergeWorkspacePersistenceRootTransition(
+		latestDesired,
+		loaded,
+		workspacePersistenceRootUris,
+		rootUris,
 	);
-	const desiredByRoot = latestDesired
-		? new Map(partitionWorkspacePersistentStateByRoot(latestDesired, rootUris).map(
-			(rootState) => [rootState.rootUri.toString(), rootState],
-		))
-		: new Map<string, ReturnType<typeof partitionWorkspacePersistentStateByRoot>[number]>();
-	const loadedByRoot = new Map(
-		partitionWorkspacePersistentStateByRoot(loaded, rootUris).map(
-			(rootState) => [rootState.rootUri.toString(), rootState],
-		),
-	);
-	const selectedRootStates = rootUris.flatMap((rootUri) => {
-		const key = rootUri.toString();
-		const selected = previousRootKeys.has(key)
-			? desiredByRoot.get(key) ?? loadedByRoot.get(key)
-			: loadedByRoot.get(key);
-
-		return selected ? [selected] : [];
-	});
-	const merged = mergeWorkspacePersistentStates(selectedRootStates);
 	const nextGeneration = nextWorkspaceContextGeneration + 1;
 
 	// loaded는 현재 Root들의 실제 disk baseline이고 merged는 retained Host 상태와

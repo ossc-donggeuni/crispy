@@ -530,6 +530,7 @@ function createState(
 		hiddenNodeIds: {},
 		tasks,
 		taskRelocations,
+		taskStorageReceipts: [],
 	};
 }
 

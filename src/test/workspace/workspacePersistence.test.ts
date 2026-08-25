@@ -270,6 +270,7 @@ suite('Workspace Persistence', () => {
 				},
 				tasks: [],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -328,6 +329,7 @@ suite('Workspace Persistence', () => {
 				},
 				tasks: [],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -361,6 +363,7 @@ suite('Workspace Persistence', () => {
 				},
 				tasks: [],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -399,6 +402,16 @@ suite('Workspace Persistence', () => {
 
 			assert.deepStrictEqual(app.tasks, [appTask]);
 			assert.deepStrictEqual(api.tasks, [apiTask]);
+			assert.deepStrictEqual(app.taskStorageReceipts, [{
+				ownerRootId: appTask.ownerRootId,
+				taskId: appTask.task.id,
+				storageRevision: appTask.storageRevision,
+			}]);
+			assert.deepStrictEqual(api.taskStorageReceipts, [{
+				ownerRootId: apiTask.ownerRootId,
+				taskId: apiTask.task.id,
+				storageRevision: apiTask.storageRevision,
+			}]);
 			assert.notStrictEqual(app.tasks[0], appTask);
 			assert.strictEqual(
 				partitioned.some(({ state: rootState }) => (
@@ -441,6 +454,11 @@ suite('Workspace Persistence', () => {
 
 			assert.deepStrictEqual(recovered.tasks, [movedTask]);
 			assert.deepStrictEqual(recovered.taskRelocations, [relocation]);
+			assert.deepStrictEqual(recovered.taskStorageReceipts, [{
+				ownerRootId: movedTask.ownerRootId,
+				taskId: movedTask.task.id,
+				storageRevision: movedTask.storageRevision,
+			}]);
 			const partitioned = partitionWorkspacePersistentStateByRoot(
 				recovered,
 				[appUri, apiUri],
@@ -454,6 +472,77 @@ suite('Workspace Persistence', () => {
 				getRootState(partitioned, apiUri).tasks,
 				[movedTask],
 			);
+		});
+
+		test('destination receipt는 같은 revision journal의 Task를 삭제 상태로 유지한다', () => {
+			const sourceUri = vscode.Uri.file('/workspace/source');
+			const destinationUri = vscode.Uri.file('/workspace/destination');
+			const movedTask = createTaskRecord(destinationUri, 'deleted-recovery', 5);
+			const relocation = {
+				sourceRootId: workspaceRootId(sourceUri),
+				record: movedTask,
+			};
+			const sourceState: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				taskRelocations: [relocation],
+			};
+			const destinationState: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				taskStorageReceipts: [{
+					ownerRootId: movedTask.ownerRootId,
+					taskId: movedTask.task.id,
+					storageRevision: movedTask.storageRevision,
+				}],
+			};
+
+			const merged = mergeWorkspacePersistentStates([{
+				rootUri: sourceUri,
+				state: sourceState,
+			}, {
+				rootUri: destinationUri,
+				state: destinationState,
+			}]);
+
+			assert.deepStrictEqual(merged.tasks, []);
+			assert.deepStrictEqual(merged.taskRelocations, [relocation]);
+			assert.deepStrictEqual(
+				merged.taskStorageReceipts,
+				destinationState.taskStorageReceipts,
+			);
+		});
+
+		test('destination receipt보다 최신 journal은 새 Task revision을 복구한다', () => {
+			const sourceUri = vscode.Uri.file('/workspace/source');
+			const destinationUri = vscode.Uri.file('/workspace/destination');
+			const movedTask = createTaskRecord(destinationUri, 'newer-recovery', 6);
+			const relocation = {
+				sourceRootId: workspaceRootId(sourceUri),
+				record: movedTask,
+			};
+			const recovered = mergeWorkspacePersistentStates([{
+				rootUri: sourceUri,
+				state: {
+					...createDefaultWorkspacePersistentState(),
+					taskRelocations: [relocation],
+				},
+			}, {
+				rootUri: destinationUri,
+				state: {
+					...createDefaultWorkspacePersistentState(),
+					taskStorageReceipts: [{
+						ownerRootId: movedTask.ownerRootId,
+						taskId: movedTask.task.id,
+						storageRevision: 5,
+					}],
+				},
+			}]);
+
+			assert.deepStrictEqual(recovered.tasks, [movedTask]);
+			assert.deepStrictEqual(recovered.taskStorageReceipts, [{
+				ownerRootId: movedTask.ownerRootId,
+				taskId: movedTask.task.id,
+				storageRevision: movedTask.storageRevision,
+			}]);
 		});
 	});
 
@@ -491,6 +580,7 @@ suite('Workspace Persistence', () => {
 				},
 				tasks: [],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			});
 		});
 
@@ -521,6 +611,7 @@ suite('Workspace Persistence', () => {
 				},
 				tasks: [],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			};
 
 			assert.deepStrictEqual(
@@ -561,8 +652,9 @@ suite('Workspace Persistence', () => {
 					...appState.hiddenNodeIds,
 					...apiState.hiddenNodeIds,
 				},
-				tasks: [],
-				taskRelocations: [],
+		tasks: [],
+		taskRelocations: [],
+		taskStorageReceipts: [],
 			};
 
 			assert.deepStrictEqual(mergeWorkspacePersistentStates([
@@ -592,6 +684,7 @@ suite('Workspace Persistence', () => {
 				},
 				tasks: [],
 				taskRelocations: [],
+				taskStorageReceipts: [],
 			});
 		});
 
@@ -830,9 +923,10 @@ function createState(
 		openedFolders: { [folder]: true },
 	detachedRootNodeIds: { [file]: true },
 	hiddenNodeIds: { [folder]: true },
-	tasks: [],
-	taskRelocations: [],
-	};
+		tasks: [],
+		taskRelocations: [],
+		taskStorageReceipts: [],
+		};
 }
 
 function createTaskRecord(

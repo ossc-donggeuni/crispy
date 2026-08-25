@@ -31,6 +31,7 @@ export {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 	type WorkspaceTaskRelocation,
+	type WorkspaceTaskStorageReceipt,
 } from './workspaceMetadata';
 export {
 	mergeWorkspacePersistentStates,

@@ -506,8 +506,9 @@ suite('Webview State Wiring', () => {
 			openedFolders: {},
 			detachedRootNodeIds: {},
 			hiddenNodeIds: {},
-			tasks: initialWorkspaceTasks,
-			taskRelocations: [],
+				tasks: initialWorkspaceTasks,
+				taskRelocations: [],
+				taskStorageReceipts: [],
 		};
 		const refreshedWorkspaceState: WorkspacePersistentState = {
 			...initialWorkspaceState,
@@ -564,8 +565,9 @@ suite('Webview State Wiring', () => {
 			openedFolders: currentGraphState.openedFolders,
 			detachedRootNodeIds: currentGraphState.detachedRootNodeIds,
 			hiddenNodeIds: currentGraphState.hiddenNodeIds,
-			tasks: currentWorkspaceTasks,
-			taskRelocations: [],
+				tasks: currentWorkspaceTasks,
+				taskRelocations: [],
+				taskStorageReceipts: [],
 		});
 		let panelState: PanelLayoutState | undefined;
 		let persistPanelState: (() => void) | undefined;
