@@ -5,6 +5,7 @@ import type {
 import type { Graph } from './webview/graph/graphModel';
 import { parseGraph } from './webview/graph/graphTransport';
 import type { WebviewSessionState } from './webview/webviewState';
+import type { TaskTransferSerializeFailureReason } from './task/taskTransfer';
 import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
@@ -38,13 +39,20 @@ export interface TaskJsonCopyMessage {
 	json: string;
 }
 
+/** Webview에서 Task 전송 JSON 생성 실패를 안전한 reason으로 알린다. */
+export interface TaskJsonCopyFailedMessage {
+	type: 'task.copyJsonFailed';
+	reason: TaskTransferSerializeFailureReason;
+}
+
 /** Webview에서 Extension Host로 전송하는 Agent wire 및 상태 경계 메시지다. */
 export type WebviewToExtensionMessage =
 	| WebviewToHostWireMessage
 	| WebviewStateChangedMessage
 	| WorkspaceStateChangedMessage
 	| WorkspaceOpenFileMessage
-	| TaskJsonCopyMessage;
+	| TaskJsonCopyMessage
+	| TaskJsonCopyFailedMessage;
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {

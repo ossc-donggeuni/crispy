@@ -5,6 +5,7 @@ import {
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
+	type TaskJsonCopyFailedMessage,
 	type TaskJsonCopyMessage,
 	type WebviewToExtensionMessage,
 	type WorkspaceOpenFileMessage,
@@ -68,6 +69,16 @@ suite('Extension to Webview Workspace messages', () => {
 		const webviewMessage: WebviewToExtensionMessage = copyMessage;
 
 		assert.deepStrictEqual(webviewMessage, copyMessage);
+	});
+
+	test('Task JSON 생성 실패는 allowlist reason만 Host union에 연결한다', () => {
+		const failureMessage = {
+			type: 'task.copyJsonFailed',
+			reason: 'transfer_limit',
+		} satisfies TaskJsonCopyFailedMessage;
+		const webviewMessage: WebviewToExtensionMessage = failureMessage;
+
+		assert.deepStrictEqual(webviewMessage, failureMessage);
 	});
 
 	test('Workspace 도메인 메시지가 기존 Graph 모델로 최상위 Host union에 연결된다', () => {

@@ -25,6 +25,7 @@ import {
 	type GraphNodeEffectKind,
 	type GraphNodeEffectSetMessage,
 	type GraphNodeEffectTarget,
+	type TaskJsonCopyFailedMessage,
 	type TaskJsonCopyMessage,
 	type WorkspaceOpenFileMessage,
 	type WorkspaceToWebviewMessage,
@@ -262,7 +263,7 @@ export interface WorkspaceFileHost {
 export interface TaskClipboardHost {
 	writeText(value: string): Thenable<void>;
 	reportCopySuccess(): void;
-	reportCopyFailure(): void;
+	reportCopyFailure(reason?: TaskJsonCopyFailedMessage['reason']): void;
 }
 
 const defaultWorkspaceFileHost: WorkspaceFileHost = {
@@ -278,9 +279,13 @@ const defaultTaskClipboardHost: TaskClipboardHost = {
 			2_000,
 		);
 	},
-	reportCopyFailure: () => {
+	reportCopyFailure: (reason) => {
 		void vscode.window.showErrorMessage(
-			'Crispy: Task JSON을 복사하지 못했습니다.',
+			reason === 'transfer_limit'
+				? 'Crispy: Task가 JSON 내보내기 한도를 초과했습니다.'
+				: reason === 'invalid_task'
+					? 'Crispy: Task JSON을 생성하지 못했습니다.'
+					: 'Crispy: Task JSON을 복사하지 못했습니다.',
 		);
 	},
 };
@@ -744,6 +749,16 @@ export function handleWebviewMessage(
 			return undefined;
 		}
 
+		if (candidate.type === 'task.copyJsonFailed') {
+			const failureMessage = parseTaskJsonCopyFailedMessage(candidate);
+
+			if (failureMessage) {
+				reportTaskJsonCopyFailure(failureMessage, taskClipboardHost);
+			}
+
+			return undefined;
+		}
+
 		if (candidate.type === 'webview.stateChanged') {
 			const state = parseWebviewSessionState(candidate.state);
 
@@ -925,6 +940,36 @@ function parseTaskJsonCopyMessage(
 	}
 
 	return { type: 'task.copyJson', json: value.json };
+}
+
+/** Task JSON 생성 실패 메시지의 exact field와 reason allowlist를 검증한다. */
+function parseTaskJsonCopyFailedMessage(
+	value: Record<string, unknown>,
+): TaskJsonCopyFailedMessage | undefined {
+	if (
+		value.type !== 'task.copyJsonFailed'
+		|| Object.keys(value).length !== 2
+		|| (
+			value.reason !== 'transfer_limit'
+			&& value.reason !== 'invalid_task'
+		)
+	) {
+		return undefined;
+	}
+
+	return { type: 'task.copyJsonFailed', reason: value.reason };
+}
+
+/** 검증된 Webview export 실패만 사용자 알림 경계로 전달한다. */
+function reportTaskJsonCopyFailure(
+	message: TaskJsonCopyFailedMessage,
+	host: TaskClipboardHost,
+): void {
+	try {
+		host.reportCopyFailure(message.reason);
+	} catch {
+		/** 사용자 알림 실패가 다른 Webview 메시지 처리로 전파되지 않게 한다. */
+	}
 }
 
 /** 검증된 Task JSON만 clipboard에 기록하고 완료 상태만 사용자에게 알린다. */

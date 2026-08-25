@@ -933,6 +933,11 @@ suite('Webview State Wiring', () => {
 				postedMessages.filter(({ type }) => type === 'task.copyJson'),
 				[{ type: 'task.copyJson', json: taskJson }],
 			);
+			graphViewInteractions?.onTaskJsonCopyFailure?.('transfer_limit');
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'task.copyJsonFailed'),
+				[{ type: 'task.copyJsonFailed', reason: 'transfer_limit' }],
+			);
 
 			hostMessageHandler({
 				data: {

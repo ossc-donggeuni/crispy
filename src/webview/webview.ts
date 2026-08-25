@@ -132,6 +132,12 @@ const graphView = initializeGraphView(
 				json,
 			});
 		},
+		onTaskJsonCopyFailure: (reason) => {
+			vscodeApi.postMessage({
+				type: 'task.copyJsonFailed',
+				reason,
+			});
+		},
 		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
 			viewport,
 			chatPanel,

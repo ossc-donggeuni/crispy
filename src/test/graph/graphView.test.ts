@@ -9,7 +9,10 @@ import {
 	type TaskBlueprint,
 	type WorkspaceTaskRecord,
 } from '../../task';
-import { serializeTaskTransfer } from '../../task/taskTransfer';
+import {
+	serializeTaskTransfer,
+	TASK_TRANSFER_JSON_MAX_BYTES,
+} from '../../task/taskTransfer';
 import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
@@ -702,6 +705,52 @@ suite('Graph View', () => {
 		assert.strictEqual(document.version, 1);
 		assert.strictEqual(copiedJson.includes('graphTargets'), false);
 		assert.strictEqual(copiedJson.includes(task.id), false);
+
+		graphView.dispose();
+	});
+
+	test('Start Task 내보내기는 전송 한도 실패를 예외 없이 상위 경계로 전달한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const base = createRenderingTask({ x: 100, y: 80 });
+		const task: TaskBlueprint = {
+			...base,
+			nodes: base.nodes.map((node) => node.kind === 'work'
+				? { ...node, prompt: 'x'.repeat(TASK_TRANSFER_JSON_MAX_BYTES) }
+				: node),
+		};
+		let copyCount = 0;
+		const failures: string[] = [];
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{
+				onTaskJsonCopyRequest: () => { copyCount += 1; },
+				onTaskJsonCopyFailure: (reason) => { failures.push(reason); },
+			},
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(start);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const exportButton = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'export-task',
+		);
+
+		assert.doesNotThrow(() => {
+			exportButton.dispatch('click', createClickEvent(exportButton));
+		});
+		assert.strictEqual(copyCount, 0);
+		assert.deepStrictEqual(failures, ['transfer_limit']);
 
 		graphView.dispose();
 	});

@@ -121,12 +121,63 @@ export type TaskTransferParseResult =
 	| TaskTransferParseSuccess
 	| TaskTransferParseFailure;
 
+/** Task export가 사용자 편집으로 해결 가능한 범위 실패인지 구분한다. */
+export type TaskTransferSerializeFailureReason =
+	| 'transfer_limit'
+	| 'invalid_task';
+
+/** Graph event 경계에서 예외 없이 처리할 수 있는 Task export 결과다. */
+export type TaskTransferSerializeResult =
+	| { readonly ok: true; readonly json: string }
+	| {
+		readonly ok: false;
+		readonly reason: TaskTransferSerializeFailureReason;
+	};
+
 /**
- * 내부 Task를 사람이 복사할 수 있는 안정적인 JSON 문서로 직렬화한다.
- * 런타임 ID, world origin과 모든 Workspace Graph Target은 포함하지 않는다.
+ * 내부 Task를 예외 없이 안정적인 JSON 문서로 직렬화한다. 런타임 ID,
+ * world origin과 모든 Workspace Graph Target은 포함하지 않는다.
  */
+export function trySerializeTaskTransfer(
+	task: TaskBlueprint,
+): TaskTransferSerializeResult {
+	try {
+		if (validateTaskBlueprint(task).length > 0) {
+			return { ok: false, reason: 'invalid_task' };
+		}
+		const json = createTaskTransferJson(task);
+		const verification = parseTaskTransferJson(json);
+
+		if (!verification.ok) {
+			return {
+				ok: false,
+				reason: verification.issues.some((issue) => (
+					issue.code === 'document_too_large'
+					|| issue.code === 'limit_exceeded'
+				))
+					? 'transfer_limit'
+					: 'invalid_task',
+			};
+		}
+
+		return { ok: true, json };
+	} catch {
+		return { ok: false, reason: 'invalid_task' };
+	}
+}
+
+/** 기존 호출자에는 성공 시 문자열, 실패 시 예외인 직렬화 계약을 유지한다. */
 export function serializeTaskTransfer(task: TaskBlueprint): string {
-	assertValidTaskBlueprint(task);
+	const result = trySerializeTaskTransfer(task);
+
+	if (!result.ok) {
+		throw new Error(`Task cannot be exported: ${result.reason}.`);
+	}
+
+	return result.json;
+}
+
+function createTaskTransferJson(task: TaskBlueprint): string {
 
 	const keyByNodeId = new Map<string, string>();
 	let workSequence = 0;
@@ -158,18 +209,8 @@ export function serializeTaskTransfer(task: TaskBlueprint): string {
 			})),
 		},
 	};
-	const json = JSON.stringify(document, undefined, 2);
-	const verification = parseTaskTransferJson(json);
 
-	if (!verification.ok) {
-		throw new Error(
-			`Task cannot be exported: ${verification.issues
-				.map((issue) => issue.message)
-				.join(' ')}`,
-		);
-	}
-
-	return json;
+	return JSON.stringify(document, undefined, 2);
 }
 
 /**

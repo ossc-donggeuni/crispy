@@ -79,7 +79,8 @@ import {
 import {
 	materializeTaskTransfer,
 	parseTaskTransferJson,
-	serializeTaskTransfer,
+	trySerializeTaskTransfer,
+	type TaskTransferSerializeFailureReason,
 } from '../../task/taskTransfer';
 import {
 	createTaskGraphLayout,
@@ -378,6 +379,8 @@ export interface GraphViewInteractions {
 	onFileOpenRequest?: (fileId: string) => void;
 	/** 생성한 Task 전송 JSON을 Host clipboard 경계로 전달한다. */
 	onTaskJsonCopyRequest?: (json: string) => void;
+	/** Task 전송 JSON 생성 실패를 안전한 reason으로 전달한다. */
+	onTaskJsonCopyFailure?: (reason: TaskTransferSerializeFailureReason) => void;
 	/** Floating Overlay를 제외한 현재 Graph 표시 영역을 Viewport local 좌표로 계산한다. */
 	resolveVisibleGraphArea?: (viewport: HTMLElement) => GraphVisibleArea;
 }
@@ -3198,7 +3201,13 @@ export function initializeGraphView(
 		if (!task) {
 			return;
 		}
-		interactions.onTaskJsonCopyRequest?.(serializeTaskTransfer(task));
+		const result = trySerializeTaskTransfer(task);
+
+		if (result.ok) {
+			interactions.onTaskJsonCopyRequest?.(result.json);
+		} else {
+			interactions.onTaskJsonCopyFailure?.(result.reason);
+		}
 	};
 	const clearTaskGraphScopeAreaExpansion = (taskId: string): void => {
 		const prefix = `${taskId}\u0000`;

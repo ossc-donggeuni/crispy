@@ -1552,6 +1552,50 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(writeCalls, 0);
 	});
 
+	test('task.copyJsonFailed는 검증된 reason만 clipboard write 없이 알린다', () => {
+		let writeCalls = 0;
+		const failures: Array<string | undefined> = [];
+		const clipboardHost: TaskClipboardHost = {
+			writeText: () => {
+				writeCalls += 1;
+				return Promise.resolve();
+			},
+			reportCopySuccess: () => undefined,
+			reportCopyFailure: (reason) => { failures.push(reason); },
+		};
+
+		for (const message of [{
+			type: 'task.copyJsonFailed',
+			reason: 'transfer_limit',
+		}, {
+			type: 'task.copyJsonFailed',
+			reason: 'invalid_task',
+		}, {
+			type: 'task.copyJsonFailed',
+			reason: 'unknown',
+		}, {
+			type: 'task.copyJsonFailed',
+			reason: 'transfer_limit',
+			cwd: '/sensitive/workspace',
+		}, {
+			type: 'task.copyJsonFailed',
+		}]) {
+			const result = handleHostWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				message,
+				undefined,
+				undefined,
+				undefined,
+				clipboardHost,
+			);
+
+			assert.strictEqual(result, undefined);
+		}
+
+		assert.strictEqual(writeCalls, 0);
+		assert.deepStrictEqual(failures, ['transfer_limit', 'invalid_task']);
+	});
+
 	test('task.copyJson clipboard 실패는 상태를 변경하지 않고 실패만 알린다', async () => {
 		let successCount = 0;
 		let failureCount = 0;

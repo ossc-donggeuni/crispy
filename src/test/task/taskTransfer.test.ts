@@ -10,6 +10,7 @@ import {
 	materializeTaskTransfer,
 	parseTaskTransferJson,
 	serializeTaskTransfer,
+	trySerializeTaskTransfer,
 	TASK_TRANSFER_FORMAT,
 	TASK_TRANSFER_JSON_MAX_BYTES,
 	TASK_TRANSFER_LIMITS,
@@ -34,6 +35,65 @@ suite('Task Transfer', () => {
 		assert.strictEqual(json.includes('folder:file:///source/reference'), false);
 		assert.strictEqual(json.includes('file:file:///source/work.ts'), false);
 		assert.ok(Buffer.byteLength(json, 'utf8') <= TASK_TRANSFER_JSON_MAX_BYTES);
+	});
+
+	test('non-throwing export는 정상 Task에 기존 serializer와 같은 JSON을 반환한다', () => {
+		const task = createSourceTask();
+		const result = trySerializeTaskTransfer(task);
+
+		assert.ok(result.ok);
+		assert.strictEqual(result.json, serializeTaskTransfer(task));
+	});
+
+	test('non-throwing export는 Node 수와 전체 JSON 한도를 typed 실패로 반환한다', () => {
+		const base = createDefaultTaskBlueprint(
+			{ title: 'Oversized Task' },
+			createSequentialIdSource('oversized'),
+		);
+		const start = requireNode(base, 'start');
+		const end = requireNode(base, 'end');
+		const works = Array.from(
+			{ length: TASK_TRANSFER_LIMITS.maxNodes - 1 },
+			(_, index) => ({
+				id: `task-node:oversized-work-${index}`,
+				kind: 'work' as const,
+				title: '',
+				description: '',
+				prompt: '',
+				agentProviderId: DEFAULT_WORK_AGENT_PROVIDER_ID,
+				graphTargets: { reference: [], work: [] },
+			}),
+		);
+		const tooManyNodes: TaskBlueprint = {
+			...base,
+			nodes: [start, ...works, end],
+			nodePositions: {
+				...Object.fromEntries(works.map((work, index) => [
+					work.id,
+					{ x: index * 16, y: 0 },
+				])),
+				[end.id]: { x: works.length * 16, y: 0 },
+			},
+			edges: [],
+		};
+		const source = createSourceTask();
+		const tooLargeJson: TaskBlueprint = {
+			...source,
+			nodes: source.nodes.map((node) => node.kind === 'work'
+				? { ...node, prompt: 'x'.repeat(TASK_TRANSFER_JSON_MAX_BYTES) }
+				: node),
+		};
+
+		assert.deepStrictEqual(validateTaskBlueprint(tooManyNodes), []);
+		assert.deepStrictEqual(trySerializeTaskTransfer(tooManyNodes), {
+			ok: false,
+			reason: 'transfer_limit',
+		});
+		assert.deepStrictEqual(validateTaskBlueprint(tooLargeJson), []);
+		assert.deepStrictEqual(trySerializeTaskTransfer(tooLargeJson), {
+			ok: false,
+			reason: 'transfer_limit',
+		});
 	});
 
 	test('import는 대상 Task identity/origin을 유지하고 내부 상태를 새 ID로 교체한다', () => {
