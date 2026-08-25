@@ -2716,9 +2716,29 @@ export function initializeGraphView(
 		}
 	};
 	const handleTaskWorkAdd = (taskId: string): void => {
-		if (taskState.addWork(taskId)) {
-			applyTaskState();
+		const previousNodeIds = new Set(
+			taskState.getTask(taskId)?.nodes.map((node) => node.id),
+		);
+		const updatedTask = taskState.addWork(taskId);
+		const addedWork = updatedTask?.nodes.find((node) => (
+			node.kind === 'work' && !previousNodeIds.has(node.id)
+		));
+
+		if (!addedWork) {
+			return;
 		}
+
+		applyTaskState();
+		const addedLayoutNode = currentTaskLayout.nodes.find((node) => (
+			node.taskId === taskId
+			&& node.id === addedWork.id
+			&& node.kind === 'work'
+		));
+
+		if (!addedLayoutNode || !taskRenderer.selectNode(taskId, addedWork.id)) {
+			return;
+		}
+		handleTaskNodeFocus(addedLayoutNode);
 	};
 	const handleTaskRemove = (taskId: string): void => {
 		if (taskState.removeTask(taskId)) {

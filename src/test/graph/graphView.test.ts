@@ -364,7 +364,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('Start Action은 겹치지 않는 Work를 추가하고 Node kind별 Port를 노출한다', () => {
+	test('Start Action은 겹치지 않는 Work를 추가하고 새 Work에 Focus하며 Node kind별 Port를 노출한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		let sequence = 0;
@@ -381,8 +381,10 @@ suite('Graph View', () => {
 		);
 		const start = task.nodes.find((node) => node.kind === 'start');
 		const end = task.nodes.find((node) => node.kind === 'end');
+		const addWorkFocusPoints: Array<{ readonly x: number; readonly y: number }> = [];
 
 		assert.ok(start && end);
+		graphView.camera.focusOn = (point) => addWorkFocusPoints.push(point);
 		for (let index = 0; index < 3; index += 1) {
 			const addWork = getDescendantByAttribute(
 				getTaskElement(
@@ -403,6 +405,25 @@ suite('Graph View', () => {
 		const works = updated.nodes.filter((node) => node.kind === 'work');
 
 		assert.strictEqual(works.length, 3);
+		const focusedWork = works[works.length - 1];
+		const focusedWorkElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			focusedWork.id,
+			task.id,
+		);
+		const inspector = getTaskInspector(root);
+
+		assert.strictEqual(focusedWorkElement.hasClass('is-selected'), true);
+		assert.strictEqual(
+			inspector.getAttribute(TASK_INSPECTOR_NODE_ID_ATTRIBUTE),
+			focusedWork.id,
+		);
+		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_KIND_ATTRIBUTE), 'work');
+		assert.deepStrictEqual(addWorkFocusPoints, works.map((work) => ({
+			x: task.origin.x + updated.nodePositions[work.id].x + TASK_NODE_WIDTH / 2,
+			y: task.origin.y + updated.nodePositions[work.id].y + TASK_NODE_HEIGHT / 2,
+		})));
 		assert.strictEqual(updated.edges.length, 0);
 		assert.strictEqual(getTaskFlowStatus(updated), 'incomplete');
 		const workPositions = works.map((work) => updated.nodePositions[work.id]);

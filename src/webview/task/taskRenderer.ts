@@ -58,6 +58,8 @@ export interface TaskGraphTargetRegionStatus {
 export interface TaskRenderer {
 	/** 기존 DOM을 재사용하며 최신 Task Layout을 적용한다. */
 	applyLayout(layout: TaskGraphLayout): void;
+	/** Task/Node ID가 일치하는 Node를 현재 선택으로 전환한다. */
+	selectNode(taskId: string, nodeId: string): boolean;
 	/** client pointer로 Scope Area를 hit-test하고 단 하나의 hover를 동기화한다. */
 	updateGraphTargetDrag(point: TaskLayoutPosition): TaskGraphTargetDropTarget | undefined;
 	/** Drag cancel/focus 전환/dispose 때 남은 Scope hover를 즉시 지운다. */
@@ -339,6 +341,16 @@ export function initializeTaskRenderer(
 		selectedNodeKey = renderKey;
 		nodeElements.get(renderKey)?.classList.add('is-selected');
 		interactions.onNodeSelectionChange?.(nodesByRenderKey.get(renderKey));
+	};
+	const selectNode = (taskId: string, nodeId: string): boolean => {
+		const renderKey = createTaskNodeRenderKey(taskId, nodeId);
+
+		if (!nodesByRenderKey.has(renderKey)) {
+			return false;
+		}
+
+		selectTaskNode(renderKey);
+		return true;
 	};
 
 	const stopTaskDrag = (releaseCapture: boolean): TaskDragSession | undefined => {
@@ -1015,6 +1027,7 @@ export function initializeTaskRenderer(
 
 	return {
 		applyLayout,
+		selectNode,
 		updateGraphTargetDrag,
 		clearGraphTargetDrag,
 		dispose(): void {
