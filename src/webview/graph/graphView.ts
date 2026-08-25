@@ -1083,6 +1083,8 @@ export function initializeGraphView(
 	let disposed = false;
 	/** 활성 Task Scope가 World 위치를 소유하는 actual Graph occurrence Root다. */
 	let currentTaskScopeBoundaryNodeIds = new Set<string>();
+	/** 비어 있는 Start/Work Scope Area의 transient 접힘 상태다. */
+	const collapsedTaskGraphScopeAreaKeys = new Set<string>();
 	let initialGraphState = state.getState();
 	let workspaceGraph = graph;
 	let taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
@@ -1792,8 +1794,16 @@ export function initializeGraphView(
 		},
 		{ nodeEffects },
 	);
+	const resolveTaskGraphTargetAreaCollapsed = (
+		taskId: string,
+		nodeId: string,
+		area: TaskGraphTargetAreaKind,
+	): boolean => collapsedTaskGraphScopeAreaKeys.has(
+		createTaskGraphScopeAreaKey(taskId, nodeId, area),
+	);
 	let currentTaskLayout = createTaskGraphLayout(
 		taskState.getSnapshot().tasks,
+		{ resolveGraphTargetAreaCollapsed: resolveTaskGraphTargetAreaCollapsed },
 	);
 	let focusedTaskNode: FocusedTaskNode | undefined;
 	let taskInspector: ReturnType<typeof initializeTaskInspector> | undefined;
@@ -1842,6 +1852,37 @@ export function initializeGraphView(
 			}
 		}
 		return bindings;
+	};
+	/** 삭제되었거나 target이 생긴 Area의 stale 접힘 상태를 즉시 해제한다. */
+	const reconcileCollapsedTaskGraphScopeAreas = (): void => {
+		const collapsibleAreaKeys = new Set<string>();
+
+		for (const task of taskState.getSnapshot().tasks) {
+			for (const node of task.nodes) {
+				if (node.kind === 'end') {
+					continue;
+				}
+				const graphTargets = node.kind === 'start'
+					? task.defaultGraphTargets
+					: node.graphTargets;
+
+				for (const area of ['reference', 'work'] as const) {
+					if (graphTargets[area].length === 0) {
+						collapsibleAreaKeys.add(createTaskGraphScopeAreaKey(
+							task.id,
+							node.id,
+							area,
+						));
+					}
+				}
+			}
+		}
+
+		for (const key of collapsedTaskGraphScopeAreaKeys) {
+			if (!collapsibleAreaKeys.has(key)) {
+				collapsedTaskGraphScopeAreaKeys.delete(key);
+			}
+		}
 	};
 	const collectTaskGraphScopeOccurrenceIds = (): Set<string> => new Set(
 		[...taskScopeOccurrencesByBinding.values()].flatMap(
@@ -2170,13 +2211,16 @@ export function initializeGraphView(
 		readonly changed: boolean;
 	} => {
 		const tasks = taskState.getSnapshot().tasks;
-		const provisionalLayout = createTaskGraphLayout(tasks);
+		const provisionalLayout = createTaskGraphLayout(tasks, {
+			resolveGraphTargetAreaCollapsed: resolveTaskGraphTargetAreaCollapsed,
+		});
 		const scopeLayouts = createCurrentTaskGraphScopeLayouts(
 			provisionalLayout,
 			graphLayout,
 			graphNodePositions,
 		);
 		const scopeSizeOptions = {
+			resolveGraphTargetAreaCollapsed: resolveTaskGraphTargetAreaCollapsed,
 			resolveGraphTargetAreaSize: (taskId, nodeId, area) => {
 				const scopeLayout = scopeLayouts.get(
 					createTaskGraphScopeAreaKey(taskId, nodeId, area),
@@ -2214,6 +2258,7 @@ export function initializeGraphView(
 		}
 		applyingTaskState = true;
 		try {
+			reconcileCollapsedTaskGraphScopeAreas();
 			const bindings = collectTaskGraphScopeBindings();
 			const scopeBoundariesChanged = reconcileTaskGraphScopeOccurrences(bindings);
 			const snapshot = state.getState();
@@ -2799,6 +2844,29 @@ export function initializeGraphView(
 			applyTaskState();
 		}
 	};
+	const handleTaskGraphTargetAreaToggle = (
+		taskId: string,
+		nodeId: string,
+		area: TaskGraphTargetAreaKind,
+	): void => {
+		const task = taskState.getTask(taskId);
+		const scopeOwner = task?.nodes.find((node) => node.id === nodeId);
+		const graphTargets = scopeOwner?.kind === 'start'
+			? task?.defaultGraphTargets
+			: scopeOwner?.kind === 'work' ? scopeOwner.graphTargets : undefined;
+
+		if (!graphTargets || graphTargets[area].length > 0) {
+			return;
+		}
+		const key = createTaskGraphScopeAreaKey(taskId, nodeId, area);
+
+		if (collapsedTaskGraphScopeAreaKeys.has(key)) {
+			collapsedTaskGraphScopeAreaKeys.delete(key);
+		} else {
+			collapsedTaskGraphScopeAreaKeys.add(key);
+		}
+		applyTaskState();
+	};
 	const handleTaskCreate = (): void => {
 		const tasks = taskState.getSnapshot().tasks;
 
@@ -2841,6 +2909,7 @@ export function initializeGraphView(
 			onWorkAdd: handleTaskWorkAdd,
 			onTaskRemove: handleTaskRemove,
 			onWorkRemove: handleTaskWorkRemove,
+			onGraphTargetAreaToggle: handleTaskGraphTargetAreaToggle,
 			resolveGraphTargetRegionStatus: (
 				taskId,
 				nodeId,
@@ -3112,6 +3181,7 @@ export function initializeGraphView(
 			taskInspector = undefined;
 			focusedTaskNode = undefined;
 			taskScopeOccurrencesByBinding.clear();
+			collapsedTaskGraphScopeAreaKeys.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
 			nodeEffects.dispose();

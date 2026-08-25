@@ -110,6 +110,7 @@ suite('Task Graph Target actual occurrence Layout', () => {
 		);
 		const area = {
 			kind: 'work' as const,
+			collapsed: false,
 			position: { x: 800, y: 300 },
 			width: scope.width,
 			height: scope.height,
@@ -171,6 +172,7 @@ suite('Task Graph Target actual occurrence Layout', () => {
 		assert.strictEqual(occurrence.bounds.width, root.width);
 		const area = {
 			kind: 'reference' as const,
+			collapsed: false,
 			position: { x: 500, y: 300 },
 			width: scope.width,
 			height: scope.height,
@@ -209,6 +211,7 @@ suite('Task Graph Target actual occurrence Layout', () => {
 		]);
 		const area = {
 			kind: 'reference' as const,
+			collapsed: false,
 			position: { x: 0, y: 0 },
 			width: scope.width,
 			height: scope.height,

@@ -92,6 +92,8 @@ suite('Task Layout', () => {
 		assert.ok(work?.kind === 'work' && start?.kind === 'start' && end);
 		for (const scopedNode of [start, work]) {
 			assert.deepStrictEqual(scopedNode.graphTargets, { reference: [], work: [] });
+			assert.strictEqual(scopedNode.scopeAreas.reference.collapsed, false);
+			assert.strictEqual(scopedNode.scopeAreas.work.collapsed, false);
 			assert.strictEqual(
 				scopedNode.scopeAreas.reference.height,
 				TASK_SCOPE_AREA_MIN_HEIGHT,
@@ -117,6 +119,116 @@ suite('Task Layout', () => {
 			});
 		}
 		assert.strictEqual('scopeAreas' in end, false);
+	});
+
+	test('비어 있는 Start/Work Scope는 Area별로 독립 접힘 geometry를 파생한다', () => {
+		const task = createReadyTask('task:scope-collapse', { x: 120, y: 240 });
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(start && work?.kind === 'work');
+		const collapsedAreaKeys = new Set([
+			`${start.id}:reference`,
+			`${work.id}:work`,
+		]);
+		const layout = createTaskGraphLayout([task], {
+			resolveGraphTargetAreaCollapsed: (_taskId, nodeId, area) => (
+				collapsedAreaKeys.has(`${nodeId}:${area}`)
+			),
+		});
+		const startLayout = layout.nodes.find((node) => node.id === start.id);
+		const workLayout = layout.nodes.find((node) => node.id === work.id);
+
+		assert.ok(startLayout?.kind === 'start' && workLayout?.kind === 'work');
+		assert.strictEqual(startLayout.scopeAreas.reference.collapsed, true);
+		assert.strictEqual(startLayout.scopeAreas.reference.height, 0);
+		assert.deepStrictEqual(
+			startLayout.scopeAreas.reference.position,
+			startLayout.scopeAreas.work.position,
+		);
+		assert.strictEqual(startLayout.scopeAreas.work.collapsed, false);
+		assert.strictEqual(
+			startLayout.scopeAreas.work.position.y
+				+ startLayout.scopeAreas.work.height
+				+ TASK_SCOPE_AREA_GAP,
+			startLayout.position.y,
+		);
+		assert.strictEqual(workLayout.scopeAreas.reference.collapsed, false);
+		assert.strictEqual(workLayout.scopeAreas.work.collapsed, true);
+		assert.strictEqual(workLayout.scopeAreas.work.height, 0);
+		assert.deepStrictEqual(
+			workLayout.scopeAreas.work.position,
+			workLayout.position,
+		);
+		assert.strictEqual(
+			workLayout.scopeAreas.reference.position.y
+				+ workLayout.scopeAreas.reference.height
+				+ TASK_SCOPE_AREA_GAP,
+			workLayout.position.y,
+		);
+		assert.deepStrictEqual(startLayout.visualBounds.position, {
+			x: startLayout.position.x,
+			y: startLayout.scopeAreas.work.position.y,
+		});
+		assert.deepStrictEqual(workLayout.visualBounds.position, {
+			x: workLayout.position.x,
+			y: workLayout.scopeAreas.reference.position.y,
+		});
+		assertLayoutEdgesUsePortCenters(layout);
+
+		const bothCollapsed = createTaskGraphLayout([task], {
+			resolveGraphTargetAreaCollapsed: (_taskId, nodeId) => nodeId === work.id,
+		}).nodes.find((node) => node.id === work.id);
+
+		assert.ok(bothCollapsed?.kind === 'work');
+		assert.strictEqual(bothCollapsed.scopeAreas.reference.collapsed, true);
+		assert.strictEqual(bothCollapsed.scopeAreas.work.collapsed, true);
+		assert.deepStrictEqual(bothCollapsed.scopeAreas.reference.position, workLayout.position);
+		assert.deepStrictEqual(bothCollapsed.scopeAreas.work.position, workLayout.position);
+		assert.deepStrictEqual(bothCollapsed.visualBounds, {
+			position: workLayout.position,
+			width: TASK_NODE_WIDTH,
+			height: TASK_NODE_HEIGHT,
+		});
+	});
+
+	test('할당된 Scope Area는 접힘 요청을 무시하고 기존 footprint를 유지한다', () => {
+		const task = createReadyTask('task:scope-collapse-guard', { x: 100, y: 200 });
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const populatedTask: TaskBlueprint = {
+			...task,
+			defaultGraphTargets: {
+				reference: ['folder:default-reference'],
+				work: [],
+			},
+			nodes: task.nodes.map((node) => node.id === work.id && node.kind === 'work'
+				? {
+					...node,
+					graphTargets: {
+						reference: [],
+						work: ['folder:local-work'],
+					},
+				}
+				: node),
+		};
+		const layout = createTaskGraphLayout([populatedTask], {
+			resolveGraphTargetAreaCollapsed: () => true,
+		});
+		const startLayout = layout.nodes.find((node) => node.kind === 'start');
+		const workLayout = layout.nodes.find((node) => node.id === work.id);
+
+		assert.ok(startLayout?.kind === 'start' && workLayout?.kind === 'work');
+		assert.strictEqual(startLayout.scopeAreas.reference.collapsed, false);
+		assert.strictEqual(
+			startLayout.scopeAreas.reference.height,
+			TASK_SCOPE_AREA_MIN_HEIGHT,
+		);
+		assert.strictEqual(workLayout.scopeAreas.work.collapsed, false);
+		assert.strictEqual(workLayout.scopeAreas.work.height, TASK_SCOPE_AREA_MIN_HEIGHT);
+		assert.strictEqual(startLayout.scopeAreas.work.collapsed, true);
+		assert.strictEqual(workLayout.scopeAreas.reference.collapsed, true);
 	});
 
 	test('Task 기본 Scope footprint는 Start Card 폭과 outgoing Edge anchor를 동기화한다', () => {

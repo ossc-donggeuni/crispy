@@ -27,6 +27,8 @@ export type TaskGraphTargetAreaKind = 'reference' | 'work';
 export interface TaskGraphTargetAreaLayout extends TaskLayoutBounds {
 	readonly kind: TaskGraphTargetAreaKind;
 	readonly sourceIds: readonly string[];
+	/** 비어 있는 Area가 hover action으로 접힌 파생 표시 상태다. */
+	readonly collapsed: boolean;
 }
 
 /** 실제 Graph occurrence footprint가 요청하는 Scope Region 크기다. */
@@ -43,6 +45,13 @@ export interface TaskGraphLayoutOptions {
 		area: TaskGraphTargetAreaKind,
 		sourceIds: readonly string[],
 	) => TaskGraphTargetAreaSize | undefined;
+	/** 비어 있는 Scope Area의 transient 접힘 상태를 GraphView에서 주입한다. */
+	readonly resolveGraphTargetAreaCollapsed?: (
+		taskId: string,
+		nodeId: string,
+		area: TaskGraphTargetAreaKind,
+		sourceIds: readonly string[],
+	) => boolean;
 }
 
 /** 모든 Task Layout Node가 공통으로 가지는 geometry와 소유 정보다. */
@@ -333,7 +342,7 @@ function createTaskGraphTargetAreaLayouts(
 	const resolveFootprintSize = (
 		area: TaskGraphTargetAreaKind,
 		sourceIds: readonly string[],
-	): TaskGraphTargetAreaSize => {
+	): TaskGraphTargetAreaSize & { readonly collapsed: boolean } => {
 		const resolved = options.resolveGraphTargetAreaSize?.(
 			taskId,
 			nodeId,
@@ -347,6 +356,14 @@ function createTaskGraphTargetAreaLayouts(
 				TASK_SCOPE_AREA_MIN_HEIGHT,
 				resolved?.height ?? TASK_SCOPE_AREA_MIN_HEIGHT,
 			),
+			collapsed: sourceIds.length === 0 && (
+				options.resolveGraphTargetAreaCollapsed?.(
+					taskId,
+					nodeId,
+					area,
+					sourceIds,
+				) ?? false
+			),
 		};
 	};
 	const workSize = resolveFootprintSize('work', graphTargets.work);
@@ -355,28 +372,38 @@ function createTaskGraphTargetAreaLayouts(
 	// 단일 폭으로 사용한다. 어느 한쪽의 subtree가 열리고 닫힐 때 두 Region과
 	// 실제 WORK Card가 항상 같은 left/right boundary를 공유한다.
 	const synchronizedWidth = Math.max(referenceSize.width, workSize.width);
-	const workTop = nodePosition.y - TASK_SCOPE_AREA_GAP - workSize.height;
-	const referenceTop = workTop - TASK_SCOPE_AREA_GAP - referenceSize.height;
+	const workHeight = workSize.collapsed ? 0 : workSize.height;
+	const referenceHeight = referenceSize.collapsed ? 0 : referenceSize.height;
+	// 아래 Card부터 펼쳐진 Area만 gap과 높이를 차감한다. 접힌 Area는 바로
+	// 아래 sibling의 top에 모여 확장 시 그 위치에서 위로 slide된다.
+	const workTop = workSize.collapsed
+		? nodePosition.y
+		: nodePosition.y - TASK_SCOPE_AREA_GAP - workHeight;
+	const referenceTop = referenceSize.collapsed
+		? workTop
+		: workTop - TASK_SCOPE_AREA_GAP - referenceHeight;
 
 	return {
 		reference: {
 			kind: 'reference',
+			collapsed: referenceSize.collapsed,
 			position: {
 				x: nodePosition.x,
 				y: referenceTop,
 			},
 			width: synchronizedWidth,
-			height: referenceSize.height,
+			height: referenceHeight,
 			sourceIds: graphTargets.reference,
 		},
 		work: {
 			kind: 'work',
+			collapsed: workSize.collapsed,
 			position: {
 				x: nodePosition.x,
 				y: workTop,
 			},
 			width: synchronizedWidth,
-			height: workSize.height,
+			height: workHeight,
 			sourceIds: graphTargets.work,
 		},
 	};

@@ -93,6 +93,12 @@ export interface TaskRendererInteractions {
 	onTaskRemove?: (taskId: string) => void;
 	/** Work Node와 incident Edge를 제거한다. */
 	onWorkRemove?: (taskId: string, nodeId: string) => void;
+	/** 비어 있는 Start/Work Scope Area의 펼침 상태를 토글한다. */
+	onGraphTargetAreaToggle?: (
+		taskId: string,
+		nodeId: string,
+		area: TaskGraphTargetAreaKind,
+	) => void;
 	/** 두 Task Port의 연결 가능성을 Domain DAG 기준으로 판정한다. */
 	canConnectNodes?: (
 		sourceTaskId: string,
@@ -143,7 +149,12 @@ interface TaskNodePositionDragSession extends TaskDragSessionBase {
 
 type TaskDragSession = TaskOriginDragSession | TaskNodePositionDragSession;
 type TaskPortDirection = 'input' | 'output';
-type TaskNodeAction = 'add-work' | 'remove-work' | 'remove-task';
+type TaskNodeAction =
+	| 'toggle-reference-area'
+	| 'toggle-work-area'
+	| 'add-work'
+	| 'remove-work'
+	| 'remove-task';
 
 interface TaskPortTarget {
 	readonly node: TaskLayoutNode;
@@ -166,6 +177,15 @@ const TASK_CONNECTION_SOURCE_CLASS = 'is-connection-source';
 const TASK_CONNECTION_VALID_CLASS = 'is-valid-target';
 const TASK_CONNECTION_INVALID_CLASS = 'is-invalid-target';
 const TASK_CONNECTION_HOVER_CLASS = 'is-connection-target';
+const TASK_SCOPE_SLIDE_PHASE_ATTRIBUTE = 'data-task-scope-slide-phase';
+const TASK_SCOPE_SLIDE_PHASES = ['a', 'b'] as const;
+
+type TaskScopeSlidePhase = typeof TASK_SCOPE_SLIDE_PHASES[number];
+
+interface TaskScopeSlideFrame {
+	readonly transform: string;
+	readonly height: string;
+}
 
 /** 기존 Graph World의 Edge/Node Layer에 Task 전용 DOM을 렌더링한다. */
 export function initializeTaskRenderer(
@@ -190,6 +210,59 @@ export function initializeTaskRenderer(
 	let suppressDoubleClickKey: string | undefined;
 	let hoveredScopeAreaKey: string | undefined;
 	let disposed = false;
+	const reducedMotionQuery = ownerDocument.defaultView?.matchMedia?.(
+		'(prefers-reduced-motion: reduce)',
+	);
+
+	const clearTaskScopeSlide = (
+		element: HTMLElement,
+		animationName?: string,
+	): void => {
+		const phase = resolveTaskScopeSlidePhase(element);
+
+		if (
+			!phase
+			|| (animationName && animationName !== createTaskScopeSlideAnimationName(phase))
+		) {
+			return;
+		}
+		element.classList.remove(...TASK_SCOPE_SLIDE_PHASES.map(
+			(candidate) => createTaskScopeSlideClassName(candidate),
+		));
+		element.removeAttribute(TASK_SCOPE_SLIDE_PHASE_ATTRIBUTE);
+		element.style.removeProperty('--task-scope-slide-from-transform');
+		element.style.removeProperty('--task-scope-slide-from-height');
+		element.style.removeProperty('--task-scope-slide-to-transform');
+		element.style.removeProperty('--task-scope-slide-to-height');
+	};
+	const clearTaskScopeSlidesForTask = (taskId: string): void => {
+		for (const element of scopeAreaElements.values()) {
+			if (element.getAttribute(TASK_ID_ATTRIBUTE) === taskId) {
+				clearTaskScopeSlide(element);
+			}
+		}
+	};
+	const handleTaskScopeSlideFinished = (event: AnimationEvent): void => {
+		if (!isTaskScopeSlideAnimationName(event.animationName)) {
+			return;
+		}
+		const element = resolveTaskAttributeElement(
+			event.target,
+			TASK_GRAPH_TARGET_AREA_ATTRIBUTE,
+		);
+
+		if (element) {
+			clearTaskScopeSlide(element, event.animationName);
+		}
+	};
+	const handleReducedMotionChange = (event: MediaQueryListEvent): void => {
+		if (!event.matches) {
+			return;
+		}
+		for (const element of scopeAreaElements.values()) {
+			clearTaskScopeSlide(element);
+		}
+	};
 
 	const resolveTaskNodeElement = (
 		target: EventTarget | null,
@@ -300,7 +373,12 @@ export function initializeTaskRenderer(
 		let nextArea = Number.POSITIVE_INFINITY;
 		let nextCenterDistance = Number.POSITIVE_INFINITY;
 
-		for (const [renderKey, element] of scopeAreaElements) {
+		for (const renderKey of scopeAreaTargets.keys()) {
+			const element = scopeAreaElements.get(renderKey);
+
+			if (!element) {
+				continue;
+			}
 			const bounds = element.getBoundingClientRect();
 
 			if (
@@ -556,6 +634,8 @@ export function initializeTaskRenderer(
 		}
 
 		event.preventDefault();
+		// 진행 중인 접기 slide가 inline world position을 덮지 않게 한 뒤 Drag한다.
+		clearTaskScopeSlidesForTask(node.taskId);
 		const sessionBase = {
 			pointerId: event.pointerId,
 			renderKey,
@@ -767,6 +847,16 @@ export function initializeTaskRenderer(
 				interactions.onTaskRemove?.(node.taskId);
 			} else if (node?.kind === 'work' && action === 'remove-work') {
 				interactions.onWorkRemove?.(node.taskId, node.id);
+			} else if (node && isTaskGraphScopeLayoutNode(node)) {
+				const area = resolveTaskGraphTargetToggleArea(action);
+
+				if (area && node.scopeAreas[area].sourceIds.length === 0) {
+					interactions.onGraphTargetAreaToggle?.(
+						node.taskId,
+						node.id,
+						area,
+					);
+				}
 			}
 			return;
 		}
@@ -893,6 +983,61 @@ export function initializeTaskRenderer(
 				))
 				: []
 		)));
+		const nextDroppableScopeAreaKeys = new Set(layout.nodes.flatMap((node) => (
+			isTaskGraphScopeLayoutNode(node)
+				? (['reference', 'work'] as const).flatMap((area) => (
+					node.scopeAreas[area].collapsed
+						? []
+						: [createTaskScopeAreaRenderKey(node.taskId, node.id, area)]
+				))
+				: []
+		)));
+		const scopeSlideFrames = new Map<string, TaskScopeSlideFrame>();
+		const canSlideScopeAreas = !(reducedMotionQuery?.matches ?? false);
+
+		if (!canSlideScopeAreas) {
+			for (const element of scopeAreaElements.values()) {
+				clearTaskScopeSlide(element);
+			}
+		} else {
+			// 한 Area의 접힘이 sibling의 world top도 바꾸므로 두 프레임을 먼저
+			// 함께 캡처한다. 빠른 역토글도 현재 보간 위치에서 자연스럽게 반전된다.
+			for (const node of layout.nodes) {
+				const nodeRenderKey = createTaskNodeRenderKey(node.taskId, node.id);
+				const previousNode = nodesByRenderKey.get(nodeRenderKey);
+
+				if (
+					!isTaskGraphScopeLayoutNode(node)
+					|| !previousNode
+					|| !isTaskGraphScopeLayoutNode(previousNode)
+					|| !didTaskScopeCollapseStateChange(previousNode, node)
+				) {
+					continue;
+				}
+				for (const area of ['reference', 'work'] as const) {
+					const renderKey = createTaskScopeAreaRenderKey(
+						node.taskId,
+						node.id,
+						area,
+					);
+					const element = scopeAreaElements.get(renderKey);
+
+					if (!element) {
+						continue;
+					}
+					const computedStyle = ownerDocument.defaultView
+						?.getComputedStyle?.(element);
+					const renderedTransform = computedStyle?.transform;
+
+					scopeSlideFrames.set(renderKey, {
+						transform: renderedTransform && renderedTransform !== 'none'
+							? renderedTransform
+							: element.style.transform,
+						height: computedStyle?.height || element.style.height,
+					});
+				}
+			}
+		}
 
 		if (dragSession && !nextNodeKeys.has(dragSession.renderKey)) {
 			stopTaskDrag(true);
@@ -904,7 +1049,10 @@ export function initializeTaskRenderer(
 		if (connectionSession && !nextNodeKeys.has(connectionSession.renderKey)) {
 			cancelTaskConnection();
 		}
-		if (hoveredScopeAreaKey && !nextScopeAreaKeys.has(hoveredScopeAreaKey)) {
+		if (
+			hoveredScopeAreaKey
+			&& !nextDroppableScopeAreaKeys.has(hoveredScopeAreaKey)
+		) {
 			clearGraphTargetDrag();
 		}
 
@@ -958,11 +1106,13 @@ export function initializeTaskRenderer(
 					nodeLayer.append(element);
 					scopeAreaElements.set(renderKey, element);
 				}
-				scopeAreaTargets.set(renderKey, {
-					taskId: node.taskId,
-					nodeId: node.id,
-					area: areaKind,
-				});
+				if (!area.collapsed) {
+					scopeAreaTargets.set(renderKey, {
+						taskId: node.taskId,
+						nodeId: node.id,
+						area: areaKind,
+					});
+				}
 				syncTaskScopeAreaElement(
 					element,
 					node,
@@ -974,6 +1124,7 @@ export function initializeTaskRenderer(
 						area.sourceIds,
 					) ?? { unavailableCount: area.sourceIds.length },
 					ownerDocument,
+					scopeSlideFrames.get(renderKey),
 				);
 				element.classList.toggle(
 					'is-drag-hover',
@@ -1030,6 +1181,7 @@ export function initializeTaskRenderer(
 	};
 
 	applyLayout(initialLayout);
+	nodeLayer.addEventListener('animationend', handleTaskScopeSlideFinished);
 	nodeLayer.addEventListener('pointerdown', handlePointerDown);
 	nodeLayer.addEventListener('pointermove', handlePointerMove);
 	nodeLayer.addEventListener('pointerup', handlePointerUp);
@@ -1043,6 +1195,7 @@ export function initializeTaskRenderer(
 	ownerDocument.addEventListener?.('keydown', handleDocumentKeyDown);
 	ownerDocument.addEventListener?.('visibilitychange', handleFocusChange);
 	ownerDocument.defaultView?.addEventListener('blur', handleFocusChange);
+	reducedMotionQuery?.addEventListener?.('change', handleReducedMotionChange);
 
 	return {
 		applyLayout,
@@ -1055,6 +1208,7 @@ export function initializeTaskRenderer(
 			}
 
 			disposed = true;
+			nodeLayer.removeEventListener('animationend', handleTaskScopeSlideFinished);
 			nodeLayer.removeEventListener('pointerdown', handlePointerDown);
 			nodeLayer.removeEventListener('pointermove', handlePointerMove);
 			nodeLayer.removeEventListener('pointerup', handlePointerUp);
@@ -1071,6 +1225,7 @@ export function initializeTaskRenderer(
 			ownerDocument.removeEventListener?.('keydown', handleDocumentKeyDown);
 			ownerDocument.removeEventListener?.('visibilitychange', handleFocusChange);
 			ownerDocument.defaultView?.removeEventListener('blur', handleFocusChange);
+			reducedMotionQuery?.removeEventListener?.('change', handleReducedMotionChange);
 			stopTaskDrag(true);
 			cancelTaskConnection();
 			clearGraphTargetDrag();
@@ -1120,6 +1275,7 @@ function syncTaskScopeAreaElement(
 	area: TaskGraphTargetAreaLayout,
 	status: TaskGraphTargetRegionStatus,
 	ownerDocument: Document,
+	slideFrom?: TaskScopeSlideFrame,
 ): void {
 	const isReference = area.kind === 'reference';
 	const areaTitle = isReference ? '참조 영역' : '작업 영역';
@@ -1128,10 +1284,32 @@ function syncTaskScopeAreaElement(
 	const title = ownerDocument.createElement('strong');
 	const body = ownerDocument.createElement('div');
 	const dropHint = ownerDocument.createElement('span');
+	const nextTransform = `translate(${area.position.x}px, ${area.position.y}px)`;
+	const nextHeight = `${area.height}px`;
+	let slidePhase = resolveTaskScopeSlidePhase(element);
+
+	if (slideFrom) {
+		slidePhase = slidePhase === 'a' ? 'b' : 'a';
+		element.setAttribute(TASK_SCOPE_SLIDE_PHASE_ATTRIBUTE, slidePhase);
+		element.style.setProperty(
+			'--task-scope-slide-from-transform',
+			slideFrom.transform || nextTransform,
+		);
+		element.style.setProperty(
+			'--task-scope-slide-from-height',
+			slideFrom.height || nextHeight,
+		);
+	}
+	if (slidePhase) {
+		element.style.setProperty('--task-scope-slide-to-transform', nextTransform);
+		element.style.setProperty('--task-scope-slide-to-height', nextHeight);
+	}
 
 	element.className = [
 		'task-scope-area',
 		isReference ? 'task-reference-area' : 'task-work-area',
+		...(area.collapsed ? ['is-collapsed'] : []),
+		...(slidePhase ? [createTaskScopeSlideClassName(slidePhase)] : []),
 	].join(' ');
 	element.setAttribute(TASK_ID_ATTRIBUTE, node.taskId);
 	element.setAttribute(TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE, node.id);
@@ -1142,9 +1320,10 @@ function syncTaskScopeAreaElement(
 	);
 	element.setAttribute('role', 'region');
 	element.setAttribute('aria-label', `${node.title} ${titleText}`);
+	element.setAttribute('aria-hidden', String(area.collapsed));
 	element.style.width = `${area.width}px`;
-	element.style.height = `${area.height}px`;
-	element.style.transform = `translate(${area.position.x}px, ${area.position.y}px)`;
+	element.style.height = nextHeight;
+	element.style.transform = nextTransform;
 	header.className = 'task-scope-header';
 	title.className = 'task-scope-title';
 	title.textContent = titleText;
@@ -1173,6 +1352,37 @@ function syncTaskScopeAreaElement(
 	}
 
 	element.replaceChildren(header, body, dropHint);
+}
+
+function didTaskScopeCollapseStateChange(
+	previous: TaskGraphScopeLayoutNode,
+	next: TaskGraphScopeLayoutNode,
+): boolean {
+	return previous.scopeAreas.reference.collapsed
+		!== next.scopeAreas.reference.collapsed
+		|| previous.scopeAreas.work.collapsed !== next.scopeAreas.work.collapsed;
+}
+
+function resolveTaskScopeSlidePhase(
+	element: HTMLElement,
+): TaskScopeSlidePhase | undefined {
+	const phase = element.getAttribute(TASK_SCOPE_SLIDE_PHASE_ATTRIBUTE);
+
+	return phase === 'a' || phase === 'b' ? phase : undefined;
+}
+
+function createTaskScopeSlideClassName(phase: TaskScopeSlidePhase): string {
+	return `is-scope-slide-${phase}`;
+}
+
+function createTaskScopeSlideAnimationName(phase: TaskScopeSlidePhase): string {
+	return `task-scope-area-slide-${phase}`;
+}
+
+function isTaskScopeSlideAnimationName(animationName: string): boolean {
+	return TASK_SCOPE_SLIDE_PHASES.some(
+		(phase) => animationName === createTaskScopeSlideAnimationName(phase),
+	);
 }
 
 function syncTaskNodeElement(
@@ -1220,8 +1430,13 @@ function createTaskNodeContents(
 			content,
 			createTaskNodeActions(
 				ownerDocument,
-				'start',
-				['add-work', 'remove-task'],
+				node,
+				[
+					'toggle-reference-area',
+					'toggle-work-area',
+					'add-work',
+					'remove-task',
+				],
 			),
 			createTaskPort(ownerDocument, node, 'output'),
 		];
@@ -1244,13 +1459,15 @@ function createTaskNodeContents(
 		prompt.textContent = node.prompt;
 		content.append(prompt);
 	}
-	if (node.canRemove) {
-		contents.push(createTaskNodeActions(
-			ownerDocument,
-			'work',
-			['remove-work'],
-		));
-	}
+	contents.push(createTaskNodeActions(
+		ownerDocument,
+		node,
+		[
+			'toggle-reference-area',
+			'toggle-work-area',
+			...(node.canRemove ? ['remove-work' as const] : []),
+		],
+	));
 	return contents;
 }
 
@@ -1274,35 +1491,56 @@ function createTaskPort(
 
 function createTaskNodeActions(
 	ownerDocument: Document,
-	nodeKind: 'start' | 'work',
+	node: TaskGraphScopeLayoutNode,
 	actionTypes: readonly TaskNodeAction[],
 ): HTMLElement {
 	const actions = ownerDocument.createElement('div');
 
-	actions.className = `task-node-actions task-${nodeKind}-actions`;
+	actions.className = `task-node-actions task-${node.kind}-actions`;
 	actions.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	actions.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	for (const action of actionTypes) {
 		const button = ownerDocument.createElement('button');
 		const icon = ownerDocument.createElement('span');
-		const label = action === 'add-work'
-			? 'Work 추가'
-			: action === 'remove-work' ? 'Work 삭제' : 'Task 삭제';
+		const scopeArea = resolveTaskGraphTargetToggleArea(action);
+		const scopeAreaLayout = scopeArea ? node.scopeAreas[scopeArea] : undefined;
+		const scopeAreaLabel = scopeArea
+			? `${node.kind === 'start' ? '기본 ' : ''}${
+				scopeArea === 'reference' ? '참조 영역' : '작업 영역'
+			}`
+			: '';
+		const label = scopeAreaLayout
+			? `${scopeAreaLabel} ${scopeAreaLayout.collapsed ? '열기' : '접기'}`
+			: action === 'add-work'
+				? 'Work 추가'
+				: action === 'remove-work' ? 'Work 삭제' : 'Task 삭제';
+		const isScopeToggleLocked = (scopeAreaLayout?.sourceIds.length ?? 0) > 0;
 
 		button.className = [
-			'graph-detached-root-action',
+			...(scopeArea ? [] : ['graph-detached-root-action']),
 			'task-node-action',
-			`task-${nodeKind}-action`,
+			`task-${node.kind}-action`,
 			`task-${action}-action`,
+			...(scopeArea ? [
+				'task-scope-area-toggle',
+				`task-${scopeArea}-area-toggle`,
+			] : []),
 		].join(' ');
 		button.type = 'button';
-		button.title = label;
+		button.title = isScopeToggleLocked
+			? `${scopeAreaLabel}에 할당된 노드가 있어 접을 수 없음`
+			: label;
 		button.setAttribute('aria-label', label);
 		button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, action);
 		button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 		button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 		icon.setAttribute('aria-hidden', 'true');
-		if (action === 'add-work') {
+		if (scopeAreaLayout) {
+			button.disabled = isScopeToggleLocked;
+			button.setAttribute('aria-disabled', String(isScopeToggleLocked));
+			button.setAttribute('aria-expanded', String(!scopeAreaLayout.collapsed));
+			icon.className = 'task-scope-area-toggle-indicator';
+		} else if (action === 'add-work') {
 			icon.className = 'task-node-action-symbol';
 			icon.textContent = '+';
 		} else {
@@ -1313,6 +1551,15 @@ function createTaskNodeActions(
 		actions.append(button);
 	}
 	return actions;
+}
+
+function resolveTaskGraphTargetToggleArea(
+	action: string | null,
+): TaskGraphTargetAreaKind | undefined {
+	if (action === 'toggle-reference-area') {
+		return 'reference';
+	}
+	return action === 'toggle-work-area' ? 'work' : undefined;
 }
 
 function createTaskNodeAriaLabel(node: TaskLayoutNode): string {

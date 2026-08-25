@@ -674,6 +674,379 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Start/Work hover Action은 비어 있는 Scope를 Area별로 접고 다시 연다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 420 });
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+		const end = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(start && work?.kind === 'work' && end);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		);
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			end.id,
+			task.id,
+		);
+		const startReferenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			start.id,
+			'reference',
+		);
+		const startWorkArea = getTaskScopeArea(root, task.id, start.id, 'work');
+		const workReferenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			work.id,
+			'reference',
+		);
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const startReferenceToggle = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-reference-area',
+		);
+		const startWorkToggle = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-work-area',
+		);
+		const workReferenceToggle = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-reference-area',
+		);
+		const workToggle = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-work-area',
+		);
+		const taskSnapshot = graphView.taskState.getTask(task.id);
+
+		assert.strictEqual(
+			getTaskElements(root, TASK_NODE_ACTION_ATTRIBUTE, 'toggle-reference-area').length,
+			2,
+		);
+		assert.strictEqual(
+			getTaskElements(root, TASK_NODE_ACTION_ATTRIBUTE, 'toggle-work-area').length,
+			2,
+		);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				endElement,
+				TASK_NODE_ACTION_ATTRIBUTE,
+				'toggle-reference-area',
+			),
+			undefined,
+		);
+		assert.strictEqual(startReferenceToggle.title, '기본 참조 영역 접기');
+		assert.strictEqual(startWorkToggle.title, '기본 작업 영역 접기');
+		assert.strictEqual(workReferenceToggle.title, '참조 영역 접기');
+		assert.strictEqual(workToggle.title, '작업 영역 접기');
+		assert.strictEqual(startReferenceToggle.getAttribute('aria-expanded'), 'true');
+		assert.strictEqual(startReferenceToggle.getAttribute('aria-disabled'), 'false');
+		assert.strictEqual(startReferenceToggle.disabled, false);
+		assert.strictEqual(startReferenceToggle.hasClass('task-reference-area-toggle'), true);
+		assert.strictEqual(workToggle.hasClass('task-work-area-toggle'), true);
+		assert.strictEqual(startReferenceArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(startReferenceArea.style.height, '72px');
+
+		startReferenceToggle.dispatch('click', createClickEvent(startReferenceToggle));
+		const collapsedStartReferenceToggle = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-reference-area',
+		);
+
+		assert.strictEqual(graphView.taskState.getTask(task.id), taskSnapshot);
+		assert.strictEqual(
+			getTaskScopeArea(root, task.id, start.id, 'reference'),
+			startReferenceArea,
+		);
+		assert.strictEqual(startReferenceArea.hasClass('is-collapsed'), true);
+		assert.strictEqual(startReferenceArea.hasClass('is-scope-slide-a'), true);
+		assert.strictEqual(startWorkArea.hasClass('is-scope-slide-a'), true);
+		assert.strictEqual(startReferenceArea.getAttribute('aria-hidden'), 'true');
+		assert.strictEqual(startReferenceArea.style.height, '0px');
+		assert.deepStrictEqual(
+			readTranslate(startReferenceArea.style.transform),
+			readTranslate(startWorkArea.style.transform),
+		);
+		assert.strictEqual(collapsedStartReferenceToggle.title, '기본 참조 영역 열기');
+		assert.strictEqual(
+			collapsedStartReferenceToggle.getAttribute('aria-expanded'),
+			'false',
+		);
+		assert.strictEqual(startWorkArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(workReferenceArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(workArea.hasClass('is-collapsed'), false);
+
+		const currentWorkToggle = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-work-area',
+		);
+
+		currentWorkToggle.dispatch('click', createClickEvent(currentWorkToggle));
+		assert.strictEqual(startReferenceArea.hasClass('is-collapsed'), true);
+		assert.strictEqual(workArea.hasClass('is-collapsed'), true);
+		assert.strictEqual(workArea.style.height, '0px');
+		assert.deepStrictEqual(
+			readTranslate(workArea.style.transform),
+			readTranslate(workElement.style.transform),
+		);
+		assert.strictEqual(
+			workArea.getAttribute('data-task-scope-slide-phase'),
+			'a',
+		);
+		workArea.dispatch(
+			'animationend',
+			createAnimationEvent(workArea, 'task-scope-area-slide-a'),
+		);
+		assert.strictEqual(
+			workArea.getAttribute('data-task-scope-slide-phase'),
+			null,
+		);
+
+		const currentCollapsedStartReferenceToggle = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-reference-area',
+		);
+
+		currentCollapsedStartReferenceToggle.dispatch(
+			'click',
+			createClickEvent(currentCollapsedStartReferenceToggle),
+		);
+		assert.strictEqual(startReferenceArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(startReferenceArea.hasClass('is-scope-slide-a'), false);
+		assert.strictEqual(startReferenceArea.hasClass('is-scope-slide-b'), true);
+		assert.strictEqual(startWorkArea.hasClass('is-scope-slide-b'), true);
+		assert.strictEqual(startReferenceArea.getAttribute('aria-hidden'), 'false');
+		assert.strictEqual(startReferenceArea.style.height, '72px');
+		assert.strictEqual(workArea.hasClass('is-collapsed'), true);
+		assert.deepStrictEqual(graphView.taskState.getTask(task.id), task);
+		// 이전 phase의 늦은 end event는 현재 역방향 slide를 정리하지 않는다.
+		startReferenceArea.dispatch(
+			'animationend',
+			createAnimationEvent(startReferenceArea, 'task-scope-area-slide-a'),
+		);
+		assert.strictEqual(
+			startReferenceArea.getAttribute('data-task-scope-slide-phase'),
+			'b',
+		);
+
+		// Slide keyframe가 남아 있어도 Task Drag 시작 시 world position을 즉시 돌려준다.
+		startElement.dispatch('pointerdown', createPointerEvent(startElement, 10, 10));
+		assert.strictEqual(
+			startReferenceArea.getAttribute('data-task-scope-slide-phase'),
+			null,
+		);
+		assert.strictEqual(
+			startReferenceArea.style.getPropertyValue(
+				'--task-scope-slide-from-transform',
+			),
+			'',
+		);
+		assert.strictEqual(
+			startWorkArea.getAttribute('data-task-scope-slide-phase'),
+			null,
+		);
+		startElement.dispatch('pointerup', createPointerEvent(startElement, 10, 10));
+
+		// Owner 삭제 시 transient 접힘 key를 버려 같은 ID를 다시 써도 펼쳐진다.
+		graphView.updateTasks([]);
+		graphView.updateTasks([task]);
+		assert.strictEqual(
+			getTaskScopeArea(root, task.id, start.id, 'reference')
+				.hasClass('is-collapsed'),
+			false,
+		);
+		assert.strictEqual(
+			getTaskScopeArea(root, task.id, work.id, 'work').hasClass('is-collapsed'),
+			false,
+		);
+
+		graphView.dispose();
+	});
+
+	test('할당된 Scope는 toggle을 무시하고 외부 할당 시 접힘 상태를 폐기한다', () => {
+		const source = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/scope-collapse-guard',
+			name: 'scope-collapse-guard',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:scope-collapse-guard',
+			name: 'workspace',
+			status: 'loaded',
+			children: [source],
+		};
+		const task = createRenderingTask({ x: 100, y: 500 });
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(start && work?.kind === 'work');
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				openedFolders: { [project.id]: true },
+			},
+			createSingleRootGraph(project),
+			{},
+			[task],
+		);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const workElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			work.id,
+			task.id,
+		);
+		const defaultReferenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			start.id,
+			'reference',
+		);
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const startToggle = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-reference-area',
+		);
+		startToggle.dispatch('click', createClickEvent(startToggle));
+		const currentWorkToggle = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-work-area',
+		);
+
+		currentWorkToggle.dispatch('click', createClickEvent(currentWorkToggle));
+		assert.strictEqual(defaultReferenceArea.hasClass('is-collapsed'), true);
+		assert.strictEqual(workArea.hasClass('is-collapsed'), true);
+
+		// 닫히는 transition 중 bounds가 남아도 invisible Area는 drop target이 아니다.
+		setClientBounds(defaultReferenceArea, 100, 100, 280, 72);
+		const sourceOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		);
+
+		performNodeDrop(sourceOccurrence, 140, 130);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(task.id)?.defaultGraphTargets,
+			{ reference: [], work: [] },
+		);
+
+		const unavailableReference = 'folder:file:///workspace/missing-reference';
+		const unavailableWork = 'file:file:///workspace/missing-work.ts';
+		const populatedTask: TaskBlueprint = {
+			...task,
+			defaultGraphTargets: {
+				reference: [unavailableReference],
+				work: [],
+			},
+			nodes: task.nodes.map((node) => node.id === work.id && node.kind === 'work'
+				? {
+					...node,
+					graphTargets: {
+						reference: [],
+						work: [unavailableWork],
+					},
+				}
+				: node),
+		};
+
+		graphView.updateTasks([populatedTask]);
+		const lockedStartToggle = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-reference-area',
+		);
+		const lockedWorkToggle = getDescendantByAttribute(
+			workElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'toggle-work-area',
+		);
+
+		assert.strictEqual(defaultReferenceArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(workArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(defaultReferenceArea.style.height, '72px');
+		assert.strictEqual(workArea.style.height, '72px');
+		assert.strictEqual(lockedStartToggle.disabled, true);
+		assert.strictEqual(lockedWorkToggle.disabled, true);
+		assert.strictEqual(lockedStartToggle.getAttribute('aria-disabled'), 'true');
+		assert.strictEqual(
+			lockedStartToggle.title,
+			'기본 참조 영역에 할당된 노드가 있어 접을 수 없음',
+		);
+		assert.strictEqual(
+			defaultReferenceArea.getAttribute(
+				TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE,
+			),
+			'1',
+		);
+		assert.strictEqual(
+			workArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
+			'1',
+		);
+		const lockedSnapshot = graphView.taskState.getTask(task.id);
+
+		lockedStartToggle.dispatch('click', createClickEvent(lockedStartToggle));
+		lockedWorkToggle.dispatch('click', createClickEvent(lockedWorkToggle));
+		assert.strictEqual(graphView.taskState.getTask(task.id), lockedSnapshot);
+		assert.strictEqual(defaultReferenceArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(workArea.hasClass('is-collapsed'), false);
+
+		graphView.updateTasks([task]);
+		assert.strictEqual(defaultReferenceArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(workArea.hasClass('is-collapsed'), false);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				startElement,
+				TASK_NODE_ACTION_ATTRIBUTE,
+				'toggle-reference-area',
+			).disabled,
+			false,
+		);
+
+		graphView.dispose();
+	});
+
 	test('START 기본 Scope는 Work 고유 Scope와 독립적으로 Drop·이동·해제된다', () => {
 		const source = {
 			kind: 'folder' as const,
@@ -5792,6 +6165,26 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			taskViewCss,
+			/\.task-scope-area\s*\{[^}]*clip-path:\s*inset\(0 0 0 0\);[^}]*clip-path 220ms[^}]*opacity 160ms[^}]*visibility 0s/s,
+		);
+		assert.doesNotMatch(
+			taskViewCss,
+			/\.task-scope-area\s*\{[^}]*transition:[^}]*transform 220ms/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-scope-area\.is-collapsed\s*\{[^}]*clip-path:\s*inset\(100% 0 0 0\);[^}]*opacity:\s*0;[^}]*visibility:\s*hidden;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-scope-area\.is-scope-slide-a\s*\{[^}]*animation:\s*task-scope-area-slide-a 220ms ease;[^}]*animation-fill-mode:\s*none;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/@keyframes task-scope-area-slide-a\s*\{[\s\S]*?height:\s*var\(--task-scope-slide-from-height\);[\s\S]*?transform:\s*var\(--task-scope-slide-from-transform\);[\s\S]*?height:\s*var\(--task-scope-slide-to-height\);[\s\S]*?transform:\s*var\(--task-scope-slide-to-transform\);/s,
+		);
+		assert.match(
+			taskViewCss,
 			/\.graph-node-layer\s*>\s*\.graph-node\s*\{[^}]*z-index:\s*1;/s,
 		);
 		assert.strictEqual(/\.task-scope-target(?:[-\s.:{])/.test(taskViewCss), false);
@@ -5900,6 +6293,22 @@ suite('Graph View', () => {
 		assert.match(
 			taskViewCss,
 			/\.task-node:has\(>\s*\.task-node-actions\):hover,[^{]*\{[^}]*z-index:\s*2;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-scope-area-toggle\s*\{[^}]*--task-scope-outline-color:\s*color-mix\([^}]*--task-scope-accent\) 58%[^}]*width:\s*28px;[^}]*height:\s*28px;[^}]*--task-scope-accent\) 5%[^}]*border:\s*1px dashed var\(--task-scope-outline-color\)/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-scope-area-toggle-indicator\s*\{[^}]*background:\s*var\(--task-scope-outline-color\);/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-scope-area-toggle\[aria-expanded=['"]true['"]\][^{]*>\s*\.task-scope-area-toggle-indicator\s*\{[^}]*opacity:\s*1;[^}]*scale\(1\)/s,
+		);
+		assert.match(
+			taskViewCss,
+			/@media \(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.task-scope-area,[^}]*transition:\s*none;[^}]*animation:\s*none;/s,
 		);
 		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);
 		const inspectorRule = taskViewCss.match(/\.task-inspector\s*\{[^}]*\}/s);
@@ -12720,6 +13129,7 @@ class FakeElement {
 	};
 	className = '';
 	checked = false;
+	disabled = false;
 	hidden = false;
 	indeterminate = false;
 	textContent = '';
@@ -13252,6 +13662,16 @@ function createPointerEvent(
 			return propagationStopped;
 		},
 	} as unknown as PointerEvent;
+}
+
+function createAnimationEvent(
+	target: FakeElement,
+	animationName: string,
+): AnimationEvent {
+	return {
+		target: target.asHtmlElement(),
+		animationName,
+	} as unknown as AnimationEvent;
 }
 
 function setClientBounds(

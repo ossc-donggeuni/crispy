@@ -1,5 +1,10 @@
 .task-scope-area {
 	--task-scope-accent: var(--vscode-descriptionForeground, #9d9d9d);
+	--task-scope-outline-color: color-mix(
+		in srgb,
+		var(--task-scope-accent) 58%,
+		var(--graph-node-default-border-color)
+	);
 
 	position: absolute;
 	top: 0;
@@ -16,27 +21,75 @@
 		var(--task-scope-accent) 5%,
 		transparent
 	);
-	border: 1px dashed color-mix(
-		in srgb,
-		var(--task-scope-accent) 58%,
-		var(--graph-node-default-border-color)
-	);
+	border: 1px dashed var(--task-scope-outline-color);
 	border-radius: 9px;
 	font-family: Inter, var(--vscode-font-family);
-	transform-origin: 0 0;
+	clip-path: inset(0 0 0 0);
 	pointer-events: none;
 	user-select: none;
 	transition:
+		clip-path 220ms ease,
+		opacity 160ms ease,
+		visibility 0s linear,
 		background 100ms ease,
 		border-color 100ms ease,
 		box-shadow 100ms ease;
 }
 
-.task-reference-area {
+.task-scope-area.is-collapsed {
+	clip-path: inset(100% 0 0 0);
+	opacity: 0;
+	visibility: hidden;
+	transition:
+		clip-path 220ms ease,
+		opacity 160ms ease,
+		visibility 0s linear 220ms,
+		background 100ms ease,
+		border-color 100ms ease,
+		box-shadow 100ms ease;
+}
+
+.task-scope-area.is-scope-slide-a {
+	animation: task-scope-area-slide-a 220ms ease;
+	animation-fill-mode: none;
+}
+
+.task-scope-area.is-scope-slide-b {
+	animation: task-scope-area-slide-b 220ms ease;
+	animation-fill-mode: none;
+}
+
+@keyframes task-scope-area-slide-a {
+	from {
+		height: var(--task-scope-slide-from-height);
+		transform: var(--task-scope-slide-from-transform);
+	}
+
+	to {
+		height: var(--task-scope-slide-to-height);
+		transform: var(--task-scope-slide-to-transform);
+	}
+}
+
+@keyframes task-scope-area-slide-b {
+	from {
+		height: var(--task-scope-slide-from-height);
+		transform: var(--task-scope-slide-from-transform);
+	}
+
+	to {
+		height: var(--task-scope-slide-to-height);
+		transform: var(--task-scope-slide-to-transform);
+	}
+}
+
+.task-reference-area,
+.task-reference-area-toggle {
 	--task-scope-accent: var(--vscode-charts-blue, var(--vscode-focusBorder, #007fd4));
 }
 
-.task-work-area {
+.task-work-area,
+.task-work-area-toggle {
 	--task-scope-accent: var(--vscode-charts-orange, #d18616);
 }
 
@@ -306,6 +359,75 @@
 .task-node:has(> .task-node-actions):hover,
 .task-node:has(> .task-node-actions):focus-within {
 	z-index: 2;
+}
+
+.task-scope-area-toggle {
+	--task-scope-outline-color: color-mix(
+		in srgb,
+		var(--task-scope-accent) 58%,
+		var(--graph-node-default-border-color)
+	);
+
+	position: relative;
+	display: flex;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	color: var(--task-scope-accent);
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 5%,
+		transparent
+	);
+	border: 1px dashed var(--task-scope-outline-color);
+	border-radius: 6px;
+	outline: none;
+	touch-action: none;
+	cursor: pointer;
+	transition:
+		background 100ms ease,
+		border-color 100ms ease;
+}
+
+.task-scope-area-toggle:hover:not(:disabled),
+.task-scope-area-toggle:focus-visible:not(:disabled) {
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 14%,
+		var(--graph-node-default-background)
+	);
+	border-color: var(--task-scope-accent);
+}
+
+.task-scope-area-toggle:disabled {
+	cursor: not-allowed;
+}
+
+.task-work-area-toggle {
+	margin-right: auto;
+}
+
+.task-scope-area-toggle-indicator {
+	display: block;
+	width: 8px;
+	height: 8px;
+	background: var(--task-scope-outline-color);
+	border-radius: 1px;
+	opacity: 0;
+	transform: scale(0.6);
+	pointer-events: none;
+	transition:
+		opacity 100ms ease,
+		transform 100ms ease;
+}
+
+.task-scope-area-toggle[aria-expanded='true']
+> .task-scope-area-toggle-indicator {
+	opacity: 1;
+	transform: scale(1);
 }
 
 .task-remove-task-action {
@@ -606,7 +728,26 @@ body.vscode-high-contrast-light .task-inspector {
 }
 
 body.vscode-high-contrast .task-scope-area,
-body.vscode-high-contrast-light .task-scope-area {
-	border-color: var(--vscode-contrastBorder, var(--task-scope-accent));
+body.vscode-high-contrast-light .task-scope-area,
+body.vscode-high-contrast .task-scope-area-toggle,
+body.vscode-high-contrast-light .task-scope-area-toggle {
+	--task-scope-outline-color: var(
+		--vscode-contrastBorder,
+		var(--task-scope-accent)
+	);
+
+	border-color: var(--task-scope-outline-color);
 	box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.task-scope-area,
+	.task-scope-area.is-collapsed,
+	.task-scope-area.is-scope-slide-a,
+	.task-scope-area.is-scope-slide-b,
+	.task-scope-area-toggle,
+	.task-scope-area-toggle-indicator {
+		transition: none;
+		animation: none;
+	}
 }
