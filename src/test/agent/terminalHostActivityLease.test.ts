@@ -525,6 +525,74 @@ suite('TerminalHost ActivityLease ownership', () => {
 		));
 	});
 
+	test('live detach는 exact lease cleanup을 Supervisor teardown보다 먼저 한 번 실행한다', async () => {
+		const fixture = createActivityFixture({ compatible: true });
+		const session = await beginCodex(fixture.host, 'tab-live-detach');
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime !== undefined);
+		fixture.host.handleMcpRuntimeEvent(activityEnvelope(runtime));
+		const lease = fixture.requests[0]?.lease;
+		assert.ok(lease !== undefined);
+
+		fixture.host.detach();
+		fixture.host.detach();
+
+		assert.deepStrictEqual(fixture.revoked, [lease]);
+		assert.deepStrictEqual(fixture.supervisor.sequence.slice(0, 2), [
+			'revoke',
+			'retire',
+		]);
+		await fixture.host.terminate();
+	});
+
+	test('tab close, reset과 assignment replacement는 각각 live lease를 한 번 회수한다', async () => {
+		for (const cause of ['tab-close', 'reset', 'replacement'] as const) {
+			const fixture = createActivityFixture({ compatible: true });
+			const tabId = `tab-${cause}`;
+			const session = await beginCodex(fixture.host, tabId);
+			const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+			assert.ok(runtime !== undefined);
+			fixture.host.handleMcpRuntimeEvent(activityEnvelope(runtime));
+			const lease = fixture.requests[0]?.lease;
+			assert.ok(lease !== undefined);
+
+			if (cause === 'tab-close') {
+				fixture.host.closeTab(tabId);
+			} else if (cause === 'reset') {
+				fixture.host.resetAgent(tabId);
+			} else {
+				await fixture.host.switchAgent(
+					tabId,
+					'codex',
+					WORKSPACE_ROOT_ID,
+					2,
+				);
+			}
+
+			assert.deepStrictEqual(fixture.revoked, [lease], cause);
+			assert.strictEqual(lease.revoked, true, cause);
+			await fixture.host.terminate();
+		}
+	});
+
+	test('MCP restart preflight reject는 running lease와 process를 건드리지 않는다', async () => {
+		const fixture = createActivityFixture({ compatible: true });
+		const session = await beginCodex(fixture.host, 'tab-restart-preflight');
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime !== undefined);
+		fixture.host.handleMcpRuntimeEvent(activityEnvelope(runtime));
+		const lease = fixture.requests[0]?.lease;
+		assert.ok(lease !== undefined);
+
+		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
+
+		assert.deepStrictEqual(fixture.revoked, []);
+		assert.strictEqual(lease.revoked, false);
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(fixture.adapter.handles[0].exitListenerCount, 1);
+		await fixture.host.terminate();
+	});
+
 	test('Trust revoke는 process ownership teardown 전에 exact lease를 revoke한다', async () => {
 		let trusted = true;
 		let listenersDuringRevoke: readonly number[] | undefined;
@@ -737,6 +805,61 @@ suite('TerminalHost ActivityLease ownership', () => {
 		assert.ok(!fixture.messages.some((message) =>
 			message.type === 'terminal.error'
 		));
+	});
+
+	test('Workspace Folder removal은 즉시 재등장한 selected root도 회수하고 unrelated root는 보존한다', async () => {
+		const fixture = createActivityFixture({ compatible: true });
+		const session = await beginCodex(fixture.host, 'tab-root-removal');
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime !== undefined);
+		fixture.host.handleMcpRuntimeEvent(activityEnvelope(runtime));
+		const lease = fixture.requests[0].lease;
+
+		fixture.host.handleAgentActivityWorkspaceFoldersChanged([
+			'workspace-root:file:///unrelated-root',
+		]);
+		assert.deepStrictEqual(fixture.revoked, []);
+
+		fixture.host.handleAgentActivityWorkspaceFoldersChanged([
+			WORKSPACE_ROOT_ID,
+		]);
+		fixture.host.handleAgentActivityWorkspaceFoldersChanged([
+			WORKSPACE_ROOT_ID,
+		]);
+
+		assert.deepStrictEqual(fixture.revoked, [lease]);
+		assert.strictEqual(lease.revoked, true);
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(
+			fixture.supervisor.getSessionRuntime(session.sessionId),
+			runtime,
+		);
+		assert.deepStrictEqual(fixture.supervisor.retireCalls, []);
+		assert.strictEqual(fixture.adapter.handles[0].dataListenerCount, 1);
+	});
+
+	test('Workspace Folder callback은 remaining lease를 fresh resolve하고 URI/fsPath mismatch를 exact revoke한다', async () => {
+		let currentRoot = workspaceRoot;
+		const fixture = createActivityFixture({
+			compatible: true,
+			workspaceResolver: () => ({ ok: true, root: currentRoot }),
+		});
+		const session = await beginCodex(fixture.host, 'tab-root-revalidation');
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime !== undefined);
+		fixture.host.handleMcpRuntimeEvent(activityEnvelope(runtime));
+		const lease = fixture.requests[0].lease;
+		currentRoot = {
+			...workspaceRoot,
+			fsPath: '/trusted/replaced-root' as ValidatedWorkspaceFsPath,
+		} as ValidatedWorkspaceRoot;
+
+		fixture.host.handleAgentActivityWorkspaceFoldersChanged([]);
+
+		assert.deepStrictEqual(fixture.revoked, [lease]);
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(fixture.adapter.handles[0].exitListenerCount, 1);
+		assert.deepStrictEqual(fixture.supervisor.retireCalls, []);
 	});
 
 	test('regular, MCP restart, terminal restart와 reset/switch가 panel allocator counter 하나를 공유한다', async () => {

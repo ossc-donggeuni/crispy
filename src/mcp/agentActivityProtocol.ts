@@ -50,6 +50,8 @@ export type AgentActivityPathResult =
 const URI_OR_SCHEME_PREFIX = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const WINDOWS_DRIVE_PREFIX = /^[A-Za-z]:/;
 const POST_CANONICAL_DEVICE_PREFIX = /^(?:\?|\?\?)(?:\/|$)/;
+const WINDOWS_RESERVED_DOS_DEVICE_BASENAME =
+	/^(?:CON|PRN|AUX|NUL|CON(?:IN|OUT)\$|COM[1-9¹²³]|LPT[1-9¹²³])$/i;
 
 /**
  * Workspace-relative Tool paths are lexical data here. The Host repeats this
@@ -58,6 +60,7 @@ const POST_CANONICAL_DEVICE_PREFIX = /^(?:\?|\?\?)(?:\/|$)/;
 export function normalizeAgentActivityPath(
 	rawPath: string,
 	targetKind: AgentActivityTargetKind,
+	platform: NodeJS.Platform = process.platform,
 ): AgentActivityPathResult {
 	if (Buffer.byteLength(rawPath, 'utf8') > PATH_MAX_UTF8_BYTES) {
 		return pathFailure('payload_too_large');
@@ -80,6 +83,12 @@ export function normalizeAgentActivityPath(
 			return pathFailure('invalid_path');
 		}
 		segments.push(segment);
+	}
+	if (
+		platform === 'win32'
+		&& segments.some(isWindowsReservedDosDeviceSegment)
+	) {
+		return pathFailure('invalid_path');
 	}
 
 	if (segments.length > PATH_MAX_SEGMENTS) {
@@ -154,11 +163,12 @@ export function isAgentActivityTargetKind(
 export function isCanonicalAgentActivityPath(
 	value: unknown,
 	targetKind: unknown,
+	platform: NodeJS.Platform = process.platform,
 ): value is string {
 	if (typeof value !== 'string' || !isAgentActivityTargetKind(targetKind)) {
 		return false;
 	}
-	const normalized = normalizeAgentActivityPath(value, targetKind);
+	const normalized = normalizeAgentActivityPath(value, targetKind, platform);
 	return normalized.ok && normalized.path === value;
 }
 
@@ -184,6 +194,19 @@ function isCanonicalSegment(segment: string): boolean {
 		&& !segment.includes('\\')
 		&& !segment.includes('\0')
 		&& !hasUnpairedSurrogate(segment);
+}
+
+/**
+ * Win32는 DOS device basename을 모든 directory component에서 case-insensitive하게
+ * 해석한다. Extension, stream suffix와 Win32가 제거하는 trailing space도 device
+ * identity를 바꾸지 않으므로 path를 보정하지 않고 전체 입력을 거부한다.
+ */
+function isWindowsReservedDosDeviceSegment(segment: string): boolean {
+	const extensionIndex = segment.search(/[.:]/u);
+	const basename = (
+		extensionIndex < 0 ? segment : segment.slice(0, extensionIndex)
+	).replace(/ +$/u, '');
+	return WINDOWS_RESERVED_DOS_DEVICE_BASENAME.test(basename);
 }
 
 function isIdempotentCanonicalPath(value: string): boolean {

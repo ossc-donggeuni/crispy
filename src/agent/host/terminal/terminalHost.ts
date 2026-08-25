@@ -2523,12 +2523,17 @@ export class TerminalHost {
 		}
 
 		this.lifecycleActive = false;
-		this.stopMessageDelivery();
 		this.stopWorkspaceTrustMonitor();
 		const ownedSessions = [...this.sessionsById.values()];
 		for (const session of ownedSessions) {
 			this.revokeExactActivityLease(session);
 		}
+		/**
+		 * Activity cleanup은 live Webview에 clear를 admission할 수 있어야 하므로
+		 * inbound lifecycle gate를 닫은 뒤 outbound delivery/Supervisor teardown보다
+		 * 먼저 exact lease를 회수한다.
+		 */
+		this.stopMessageDelivery();
 		this.beginMcpTermination();
 		const processes: PtyProcessHandle[] = [];
 		const preparationCleanups: Promise<void>[] = [];
@@ -3261,6 +3266,104 @@ export class TerminalHost {
 			/** Phase 4 cleanup consumer 실패도 권한 회수와 resource teardown을 막지 않는다. */
 		}
 		return lease;
+	}
+
+	/**
+	 * Phase 4 bridge가 fresh resolver 실패를 발견했을 때 Host-owned lease state와
+	 * epoch를 보존하며 exact current lease만 회수한다. Trust 상실은 기존 전역
+	 * Trust cleanup 경계로 보내고, 그 밖의 root 실패는 CLI/process를 유지한다.
+	 */
+	handleAgentActivityWorkspaceFailure(
+		lease: ActivityLease,
+		failure: WorkspaceValidationFailure,
+	): void {
+		if (!this.isExactCurrentActivityLease(lease)) {
+			return;
+		}
+		if (failure.code === 'workspace_untrusted') {
+			void this.handleWorkspaceTrustRevoke();
+			return;
+		}
+
+		this.revokeAgentActivityLease(lease);
+	}
+
+	/** Sequence/capability fail-closed 경로가 exact lease만 Host-owned 방식으로 회수한다. */
+	revokeAgentActivityLease(lease: ActivityLease): void {
+		if (!this.isExactCurrentActivityLease(lease)) {
+			return;
+		}
+
+		this.revokeExactActivityLease(lease.session, lease.runtime);
+	}
+
+	/**
+	 * Workspace Folder callback의 같은 turn에서 removed root를 먼저 회수하고,
+	 * 남은 lease도 fresh resolver로 exact launch identity와 다시 대조한다.
+	 * 일반 File watcher event에서는 이 진입점을 호출하지 않는다.
+	 */
+	handleAgentActivityWorkspaceFoldersChanged(
+		removedWorkspaceRootIds: readonly WorkspaceRootId[],
+	): void {
+		const states = this.activityLeaseStateBySession;
+		if (states === undefined || !this.agentActivityCompatible) {
+			return;
+		}
+		const removed = new Set<WorkspaceRootId>(removedWorkspaceRootIds);
+		const leases = [...states.values()]
+			.map((state) => state.lease)
+			.filter((lease): lease is ActivityLease => lease !== undefined);
+
+		for (const lease of leases) {
+			if (!this.isExactCurrentActivityLease(lease)) {
+				continue;
+			}
+			if (removed.has(lease.workspaceRootId)) {
+				this.handleAgentActivityWorkspaceFailure(lease, {
+					ok: false,
+					code: 'workspace_root_unavailable',
+				});
+				continue;
+			}
+
+			let resolution: WorkspaceValidationResult;
+			try {
+				resolution = this.workspaceResolver(lease.workspaceRootId);
+			} catch {
+				resolution = { ok: false, code: 'workspace_root_unavailable' };
+			}
+			if (!resolution.ok) {
+				this.handleAgentActivityWorkspaceFailure(lease, resolution);
+				continue;
+			}
+			const identity = captureWorkspaceLaunchIdentity(
+				resolution.root,
+				lease.workspaceRootId,
+			);
+			if (
+				identity === undefined
+				|| identity.uri !== lease.launchRootUri
+				|| identity.fsPath !== lease.launchRootFsPath
+			) {
+				this.handleAgentActivityWorkspaceFailure(lease, {
+					ok: false,
+					code: 'workspace_root_unavailable',
+				});
+			}
+		}
+	}
+
+	/** Host registry, lease object와 current epoch를 object identity로 함께 검사한다. */
+	private isExactCurrentActivityLease(lease: ActivityLease): boolean {
+		const state = this.activityLeaseStateBySession?.get(lease.session.sessionId);
+		return this.lifecycleActive
+			&& !lease.revoked
+			&& state?.lease === lease
+			&& state.session === lease.session
+			&& state.assignment === lease.assignment
+			&& this.sessionsById.get(lease.session.sessionId) === lease.session
+			&& this.assignmentBySession.get(lease.session.sessionId) === lease.assignment
+			&& this.assignmentByTab.get(lease.session.tabId) === lease.assignment;
 	}
 
 	/** Session registry 제거 시 current lease를 revoke하고 bounded epoch state도 폐기한다. */

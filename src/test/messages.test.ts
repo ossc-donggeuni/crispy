@@ -2,12 +2,16 @@ import * as assert from 'assert';
 import {
 	clearAgentActivitiesBySession,
 	clearAgentActivity,
+	parseAgentActivityClearAppliedReceipt,
 	parseAgentActivityEvent,
+	parseAgentActivityTrackedClearMessage,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
 	setAgentActivity,
+	type AgentActivityClearAppliedReceipt,
 	type AgentActivityKind,
+	type AgentActivityTrackedClearMessage,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
@@ -303,6 +307,134 @@ suite('Agent Activity messages', () => {
 				undefined,
 			);
 		}
+	});
+
+	test('tracked target/session clear와 applied receipt를 양방향 union에 연결한다', () => {
+		const trackedTargetClear = {
+			type: 'agent.activity.clearTracked',
+			receiptId: 0,
+			publicMessage: clearAgentActivity(sessionId, target),
+		} satisfies AgentActivityTrackedClearMessage;
+		const trackedSessionClear = {
+			type: 'agent.activity.clearTracked',
+			receiptId: Number.MAX_SAFE_INTEGER,
+			publicMessage: clearAgentActivitiesBySession(sessionId),
+		} satisfies AgentActivityTrackedClearMessage;
+		const extensionMessages: ExtensionToWebviewMessage[] = [
+			trackedTargetClear,
+			trackedSessionClear,
+		];
+
+		assert.deepStrictEqual(
+			parseAgentActivityTrackedClearMessage(extensionMessages[0]),
+			trackedTargetClear,
+		);
+		assert.deepStrictEqual(
+			parseAgentActivityTrackedClearMessage(extensionMessages[1]),
+			trackedSessionClear,
+		);
+
+		const receipts = [
+			{ type: 'agent.activity.clearApplied', receiptId: 0 },
+			{
+				type: 'agent.activity.clearApplied',
+				receiptId: Number.MAX_SAFE_INTEGER,
+			},
+		] satisfies readonly AgentActivityClearAppliedReceipt[];
+		const webviewMessages: WebviewToExtensionMessage[] = [...receipts];
+
+		assert.deepStrictEqual(
+			parseAgentActivityClearAppliedReceipt(webviewMessages[0]),
+			receipts[0],
+		);
+		assert.deepStrictEqual(
+			parseAgentActivityClearAppliedReceipt(webviewMessages[1]),
+			receipts[1],
+		);
+	});
+
+	test('tracked clear parser는 nested public parser를 재사용하고 nested set을 거부한다', () => {
+		assert.strictEqual(parseAgentActivityTrackedClearMessage({
+			type: 'agent.activity.clearTracked',
+			receiptId: 1,
+			publicMessage: setAgentActivity(sessionId, target, 'active'),
+		}), undefined);
+		assert.strictEqual(parseAgentActivityTrackedClearMessage({
+			type: 'agent.activity.clearTracked',
+			receiptId: 1,
+			publicMessage: {
+				type: 'agent.activity.clear',
+				sessionId,
+				target,
+				activity: 'active',
+			},
+		}), undefined);
+	});
+
+	test('tracked clear와 receipt는 nonnegative safe integer와 exact own key만 허용한다', () => {
+		for (const receiptId of [
+			-1,
+			1.5,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.MAX_SAFE_INTEGER + 1,
+			'1',
+		]) {
+			assert.strictEqual(parseAgentActivityTrackedClearMessage({
+				type: 'agent.activity.clearTracked',
+				receiptId,
+				publicMessage: clearAgentActivity(sessionId, target),
+			}), undefined);
+			assert.strictEqual(parseAgentActivityClearAppliedReceipt({
+				type: 'agent.activity.clearApplied',
+				receiptId,
+			}), undefined);
+		}
+
+		const trackedWithHiddenKey = {
+			type: 'agent.activity.clearTracked',
+			receiptId: 1,
+			publicMessage: clearAgentActivity(sessionId, target),
+		};
+		Object.defineProperty(trackedWithHiddenKey, 'hidden', {
+			value: true,
+			enumerable: false,
+		});
+		assert.strictEqual(
+			parseAgentActivityTrackedClearMessage(trackedWithHiddenKey),
+			undefined,
+		);
+
+		const nestedClearWithHiddenKey = clearAgentActivity(
+			sessionId,
+			target,
+		) as unknown as Record<string, unknown>;
+		Object.defineProperty(nestedClearWithHiddenKey, 'hidden', {
+			value: true,
+			enumerable: false,
+		});
+		assert.deepStrictEqual(
+			parseAgentActivityToWebviewMessage(nestedClearWithHiddenKey),
+			clearAgentActivity(sessionId, target),
+		);
+		assert.strictEqual(parseAgentActivityTrackedClearMessage({
+			type: 'agent.activity.clearTracked',
+			receiptId: 1,
+			publicMessage: nestedClearWithHiddenKey,
+		}), undefined);
+
+		const receiptWithHiddenKey = {
+			type: 'agent.activity.clearApplied',
+			receiptId: 1,
+		};
+		Object.defineProperty(receiptWithHiddenKey, 'hidden', {
+			value: true,
+			enumerable: false,
+		});
+		assert.strictEqual(
+			parseAgentActivityClearAppliedReceipt(receiptWithHiddenKey),
+			undefined,
+		);
 	});
 
 	test('기존 Workspace/Graph Effect 메시지 parser와 허용 범위를 섞지 않는다', () => {

@@ -31,11 +31,15 @@ const WORKSPACE_ENTRY_GLOB = '**/*';
  *
  * @param onChange 감지 대상 Workspace 구조 변경이 발생했을 때 호출할 callback
  * @param workspaceSource 감지에 사용할 VS Code Workspace API 경계
+ * @param onWorkspaceFoldersChange Root 변경을 일반 File event와 구분해 먼저 알릴 callback
  * @returns 모든 event listener와 FileSystemWatcher를 함께 해제하는 Disposable
  */
 export function watchWorkspaceChanges(
 	onChange: () => void,
 	workspaceSource: WorkspaceWatchSource = vscode.workspace,
+	onWorkspaceFoldersChange: (
+		event: vscode.WorkspaceFoldersChangeEvent,
+	) => void = () => undefined,
 ): vscode.Disposable {
 	const watcher = workspaceSource.createFileSystemWatcher(
 		WORKSPACE_ENTRY_GLOB,
@@ -53,8 +57,14 @@ export function watchWorkspaceChanges(
 	const subscriptions: vscode.Disposable[] = [
 		watcher.onDidCreate(notifyFileSystemChange),
 		watcher.onDidDelete(notifyFileSystemChange),
-		workspaceSource.onDidChangeWorkspaceFolders(() => {
+		workspaceSource.onDidChangeWorkspaceFolders((event) => {
 			if (!disposed) {
+				try {
+					onWorkspaceFoldersChange(event);
+				} catch {
+					/** Ownership 정리가 끝나지 않은 snapshot은 Graph에 publish하지 않는다. */
+					return;
+				}
 				onChange();
 			}
 		}),

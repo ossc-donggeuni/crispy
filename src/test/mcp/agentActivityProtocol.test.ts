@@ -30,6 +30,59 @@ suite('MCP Agent Activity lexical path protocol', () => {
 		}
 	});
 
+	test('Windows DOS reserved device basename을 모든 component와 extension에서 거부한다', () => {
+		for (const path of [
+			'NUL',
+			'devices/CON',
+			'devices/prn.txt',
+			'devices/AUX.log',
+			'devices/COM1.json',
+			'devices/com9:stream',
+			'devices/LPT1',
+			'devices/lpt9.txt',
+			'devices/COM¹.txt',
+			'devices/com²',
+			'devices/LPT³.log',
+			'devices/NUL .txt',
+			'CONIN$',
+			'devices/conout$',
+			'nested/devices/CONIN$.txt',
+			'nested/devices/conout$:stream',
+		]) {
+			assert.deepStrictEqual(
+				normalizeAgentActivityPath(path, 'file', 'win32'),
+				{ ok: false, error: 'invalid_path' },
+				path,
+			);
+			assert.strictEqual(
+				isCanonicalAgentActivityPath(path, 'file', 'win32'),
+				false,
+				path,
+			);
+		}
+	});
+
+	test('POSIX에서는 DOS device와 같은 합법적인 filename을 변경하지 않는다', () => {
+		for (const path of [
+			'NUL',
+			'devices/CON',
+			'devices/COM1.txt',
+			'devices/LPT³.log',
+			'CONIN$',
+			'devices/conout$.txt',
+			'nested/devices/CONIN$:stream',
+		]) {
+			assert.deepStrictEqual(
+				normalizeAgentActivityPath(path, 'file', 'linux'),
+				{ ok: true, path },
+			);
+			assert.strictEqual(
+				isCanonicalAgentActivityPath(path, 'file', 'linux'),
+				true,
+			);
+		}
+	});
+
 	test('traversal과 canonicalization 뒤 드러나는 drive/URI prefix를 거부한다', () => {
 		for (const invalidPath of [
 			'../file.ts',

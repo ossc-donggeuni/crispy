@@ -238,6 +238,50 @@ suite('Workspace Watcher', () => {
 		disposable.dispose();
 	});
 
+	test('Root ownership callback은 Root refresh보다 먼저이고 일반 File event에는 호출되지 않는다', () => {
+		const rootUri = vscode.Uri.file('/workspace/app');
+		const root = createWorkspaceFolder('app', rootUri, 0);
+		const fake = createFakeWorkspace([root]);
+		const timeline: string[] = [];
+		const disposable = watchWorkspaceChanges(
+			() => timeline.push('refresh'),
+			fake.source,
+			(event) => timeline.push(
+				`roots:${event.removed.length}/${event.added.length}`,
+			),
+		);
+
+		fake.watcher.fireCreate(vscode.Uri.joinPath(rootUri, 'ordinary.ts'));
+		assert.deepStrictEqual(timeline, ['refresh']);
+
+		/** 동일 URI가 added에도 즉시 재등장해도 removed ownership event를 먼저 보존한다. */
+		fake.fireWorkspaceFolderChange([root], [root]);
+		assert.deepStrictEqual(timeline, ['refresh', 'roots:1/1', 'refresh']);
+		disposable.dispose();
+	});
+
+	test('Root ownership callback 실패 시 정리 전 Graph refresh를 publish하지 않는다', () => {
+		const root = createWorkspaceFolder(
+			'app',
+			vscode.Uri.file('/workspace/app'),
+			0,
+		);
+		const fake = createFakeWorkspace([root]);
+		let refreshes = 0;
+		const disposable = watchWorkspaceChanges(
+			() => refreshes += 1,
+			fake.source,
+			() => {
+				throw new Error('ownership cleanup failed');
+			},
+		);
+
+		fake.fireWorkspaceFolderChange([], [root]);
+
+		assert.strictEqual(refreshes, 0);
+		disposable.dispose();
+	});
+
 	test('Workspace Trust grant는 같은 refresh callback으로 전달된다', () => {
 		const fake = createFakeWorkspace([]);
 		let changes = 0;

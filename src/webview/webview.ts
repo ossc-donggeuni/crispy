@@ -6,9 +6,12 @@ import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
+	parseAgentActivityTrackedClearMessage,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
+	type AgentActivityClearMessage,
+	type AgentActivityClearSessionMessage,
 	type WebviewToExtensionMessage,
 } from '../messages';
 import {
@@ -368,6 +371,16 @@ function handleHostMessage(message: unknown): void {
 		return;
 	}
 
+	const trackedClearMessage = parseAgentActivityTrackedClearMessage(message);
+	if (trackedClearMessage) {
+		applyAgentActivityClear(trackedClearMessage.publicMessage);
+		vscodeApi.postMessage({
+			type: 'agent.activity.clearApplied',
+			receiptId: trackedClearMessage.receiptId,
+		});
+		return;
+	}
+
 	const agentActivityMessage = parseAgentActivityToWebviewMessage(message);
 
 	if (agentActivityMessage) {
@@ -377,15 +390,8 @@ function handleHostMessage(message: unknown): void {
 				agentActivityMessage.target,
 				agentActivityMessage.activity,
 			);
-		} else if (agentActivityMessage.type === 'agent.activity.clear') {
-			agentActivityStore.clearAgentActivity(
-				agentActivityMessage.sessionId,
-				agentActivityMessage.target,
-			);
 		} else {
-			agentActivityStore.clearAgentActivitiesBySession(
-				agentActivityMessage.sessionId,
-			);
+			applyAgentActivityClear(agentActivityMessage);
 		}
 		return;
 	}
@@ -419,6 +425,18 @@ function handleHostMessage(message: unknown): void {
 			break;
 		}
 	}
+}
+
+/** Public/tracked clear가 같은 synchronous Store 적용 경계를 공유한다. */
+function applyAgentActivityClear(
+	message: AgentActivityClearMessage | AgentActivityClearSessionMessage,
+): void {
+	if (message.type === 'agent.activity.clear') {
+		agentActivityStore.clearAgentActivity(message.sessionId, message.target);
+		return;
+	}
+
+	agentActivityStore.clearAgentActivitiesBySession(message.sessionId);
 }
 
 /** Extension Host가 전송한 메시지를 Webview protocol 수신 경계로 전달한다. */
