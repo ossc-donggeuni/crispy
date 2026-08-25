@@ -278,6 +278,11 @@ suite('MCP session runtime lifecycle', () => {
 		assert.ok(!JSON.stringify(result.connection).includes(token));
 		assert.ok(!Object.keys(result.connection).includes('token'));
 		assert.strictEqual(runtime.lifecycle, 'running');
+		const defaultRegister = child.sent.find(
+			(message) => message.type === 'auth.register',
+		);
+		assert.ok(defaultRegister?.type === 'auth.register');
+		assert.strictEqual(defaultRegister.agentActivityCompatible, false);
 
 		const firstStop = runtime.stop();
 		assert.strictEqual(runtime.stop(), firstStop);
@@ -292,6 +297,21 @@ suite('MCP session runtime lifecycle', () => {
 		assert.strictEqual(child.listenerCount('exit'), 0);
 		const stoppedRestart = await runtime.start();
 		assert.strictEqual(stoppedRestart.ok, false);
+	});
+
+	test('Host-owned explicit Activity capability만 auth.register에 immutable 전달한다', async () => {
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime', port: 42_005,
+		});
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+			agentActivityCompatible: true,
+		});
+		assert.strictEqual((await runtime.start()).ok, true);
+		const register = child.sent.find((message) => message.type === 'auth.register');
+		assert.ok(register?.type === 'auth.register');
+		assert.strictEqual(register.agentActivityCompatible, true);
+		await runtime.stop();
 	});
 
 	test('revoke ACK와 shutdown timeout 뒤에도 kill fallback과 listener 정리를 완료한다', async () => {

@@ -1,3 +1,4 @@
+import type { AgentActivityRequested } from './agentActivityProtocol';
 import {
 	isValidMcpBearerToken,
 	isValidMcpOpaqueId,
@@ -12,6 +13,7 @@ export type HostToMcpChildMessage =
 		readonly sessionId: string;
 		readonly routeId: string;
 		readonly token: string;
+		readonly agentActivityCompatible: boolean;
 	}
 	| {
 		readonly type: 'auth.revoke';
@@ -36,7 +38,7 @@ export const MCP_CHILD_OPERATION_FAILURE_REASONS = Object.freeze([
 export type McpChildOperationFailureReason =
 	typeof MCP_CHILD_OPERATION_FAILURE_REASONS[number];
 
-export type McpChildToHostMessage =
+export type McpChildControlMessage =
 	| {
 		readonly type: 'server.ready';
 		readonly generation: string;
@@ -72,6 +74,9 @@ export type McpChildToHostMessage =
 		readonly reason: McpChildOperationFailureReason;
 	};
 
+/** Phase 2 wire union. Activity parsing/ownership remains quarantined until Phase 3. */
+export type McpChildToHostMessage = McpChildControlMessage | AgentActivityRequested;
+
 export type McpIpcValidationErrorCode =
 	| 'invalid_message'
 	| 'missing_field'
@@ -103,6 +108,7 @@ const port = field((value) => Number.isSafeInteger(value)
 	&& Number(value) <= 65535);
 const failureReason = field((value) => typeof value === 'string'
 	&& (MCP_CHILD_OPERATION_FAILURE_REASONS as readonly string[]).includes(value));
+const compatible = field((value) => typeof value === 'boolean');
 
 const HOST_TO_CHILD_SCHEMAS = registry({
 	'auth.register': {
@@ -111,6 +117,7 @@ const HOST_TO_CHILD_SCHEMAS = registry({
 		sessionId: id,
 		routeId: route,
 		token,
+		agentActivityCompatible: compatible,
 	},
 	'auth.revoke': {
 		requestId: id,
@@ -164,14 +171,14 @@ export function parseHostToMcpChildMessage(
 	) as McpIpcParseResult<HostToMcpChildMessage>;
 }
 
-/** Dedicated IPC channel에서 Host가 받는 unknown payload를 exact schema로 복사한다. */
+/** Phase 2 control parser. Per-call Activity source/ownership parsing starts in Phase 3. */
 export function parseMcpChildToHostMessage(
 	value: unknown,
-): McpIpcParseResult<McpChildToHostMessage> {
+): McpIpcParseResult<McpChildControlMessage> {
 	return parseMessage(
 		value,
 		CHILD_TO_HOST_SCHEMAS,
-	) as McpIpcParseResult<McpChildToHostMessage>;
+	) as McpIpcParseResult<McpChildControlMessage>;
 }
 
 function parseMessage(
@@ -190,8 +197,14 @@ function parseMessage(
 	if (!Object.hasOwn(schemas, value.type)) {
 		return failure('unknown_type', 'type');
 	}
+	return parseKnownMessage(value, value.type, schemas[value.type]);
+}
 
-	const fields = schemas[value.type];
+function parseKnownMessage(
+	value: Record<string, unknown>,
+	type: string,
+	fields: MessageFields,
+): McpIpcParseResult<Record<string, unknown>> {
 	for (const [name, schema] of Object.entries(fields)) {
 		if (!Object.hasOwn(value, name) && schema.optional !== true) {
 			return failure('missing_field', name);
@@ -203,7 +216,7 @@ function parseMessage(
 		}
 	}
 
-	const parsed: Record<string, unknown> = { type: value.type };
+	const parsed: Record<string, unknown> = { type };
 	for (const [name, schema] of Object.entries(fields)) {
 		if (!Object.hasOwn(value, name) && schema.optional === true) {
 			continue;

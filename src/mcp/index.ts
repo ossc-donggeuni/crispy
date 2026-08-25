@@ -5,18 +5,50 @@ export {
 } from './activityDetection';
 export {
 	isAllowedMcpContentType,
+	MCP_AUTHENTICATED_IN_FLIGHT_PER_REGISTRATION,
+	MCP_HTTP_HEADERS_TIMEOUT_MS,
+	MCP_HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS,
+	MCP_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+	MCP_HTTP_MAX_CONNECTIONS,
+	MCP_HTTP_MAX_REQUESTS_PER_SOCKET,
+	MCP_HTTP_REQUEST_TIMEOUT_MS,
 	MCP_LOOPBACK_HOST,
 	MCP_REQUEST_BODY_MAX_BYTES,
 	matchesBearerToken,
 } from './httpPolicy';
 export {
 	CrispyMcpProtocolServer,
+	type AgentActivityIpcTransport,
 	type McpActivityObservedEvent,
 	type McpPingObservedEvent,
 	type McpProtocolServerOptions,
 	type McpServerReady,
 	type RegisteredMcpSession,
 } from './protocolServer';
+export {
+	ACTIVITY_IPC_MAX_UTF8_BYTES,
+	AGENT_ACTIVITY_KINDS,
+	AGENT_ACTIVITY_TARGET_KINDS,
+	createClearAgentActivityRequested,
+	createSetAgentActivityRequested,
+	isAgentActivityKind,
+	isAgentActivityTargetKind,
+	isCanonicalAgentActivityPath,
+	normalizeAgentActivityPath,
+	PATH_MAX_SEGMENTS,
+	PATH_MAX_UTF8_BYTES,
+	type AgentActivityKind,
+	type AgentActivityPathResult,
+	type AgentActivityRequested,
+	type AgentActivityTargetKind,
+} from './agentActivityProtocol';
+export {
+	ACTIVITY_RATE_BURST,
+	ACTIVITY_RATE_PER_SECOND,
+	CHILD_IPC_PENDING_BYTES,
+	CHILD_IPC_PENDING_EVENTS,
+	type ActivityAdmissionState,
+} from './activityAdmission';
 export {
 	assertValidMcpSessionCredentials,
 	createMcpSessionCredentials,
@@ -40,6 +72,7 @@ export {
 	parseHostToMcpChildMessage,
 	parseMcpChildToHostMessage,
 	type HostToMcpChildMessage,
+	type McpChildControlMessage,
 	type McpChildOperationFailureReason,
 	type McpChildToHostMessage,
 	type McpIpcParseResult,
@@ -171,8 +204,16 @@ export {
 	type PreparedClaudeTerminalLaunch,
 } from './claudeTerminalLaunch';
 export {
+	ACTIVITY_TOOL_ERROR_CODES,
+	createActivityToolErrorResult,
+	createActivityToolSuccessResult,
 	createCrispyToolServer,
+	CRISPY_CLEAR_AGENT_ACTIVITY_INPUT_SCHEMA,
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_MCP_SERVER_NAME,
 	CRISPY_MCP_SERVER_VERSION,
 	CRISPY_PING_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_INPUT_SCHEMA,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	type ActivityToolErrorCode,
 } from './toolServer';

@@ -4,6 +4,14 @@ import { TextDecoder } from 'node:util';
 
 export const MCP_LOOPBACK_HOST = '127.0.0.1';
 export const MCP_REQUEST_BODY_MAX_BYTES = 64 * 1024;
+export const MCP_HTTP_MAX_CONNECTIONS = 96;
+export const MCP_HTTP_HEADERS_TIMEOUT_MS = 5_000;
+export const MCP_HTTP_REQUEST_TIMEOUT_MS = 15_000;
+export const MCP_HTTP_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+export const MCP_HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS = 0;
+export const MCP_HTTP_MAX_REQUESTS_PER_SOCKET = 256;
+export const MCP_AUTHENTICATED_IN_FLIGHT_PER_REGISTRATION = 64;
+export const MCP_TOO_MANY_REQUESTS_BODY = '{"error":"too_many_requests"}';
 
 export type McpBodyReadResult =
 	| { readonly ok: true; readonly parsedBody: unknown }
@@ -124,6 +132,19 @@ export function writeSafeHttpResponse(
 		...headers,
 	});
 	response.end(body);
+}
+
+export function writeTooManyRequestsResponse(response: ServerResponse): void {
+	if (response.headersSent || response.destroyed) {
+		return;
+	}
+	response.shouldKeepAlive = false;
+	response.writeHead(429, {
+		'Content-Type': 'application/json; charset=utf-8',
+		'Content-Length': Buffer.byteLength(MCP_TOO_MANY_REQUESTS_BODY, 'utf8'),
+		Connection: 'close',
+	});
+	response.end(MCP_TOO_MANY_REQUESTS_BODY);
 }
 
 function parseContentLength(

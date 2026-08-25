@@ -5,6 +5,7 @@ import {
 	type Server as HttpServer,
 	type ServerResponse,
 } from 'node:http';
+import { performance } from 'node:perf_hooks';
 import {
 	createMcpHandler,
 	hostHeaderValidationResponse,
@@ -12,24 +13,52 @@ import {
 	localhostAllowedOrigins,
 	originValidationResponse,
 	type McpHttpHandler,
+	type CallToolResult,
 } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
+import {
+	ACTIVITY_IPC_MAX_UTF8_BYTES,
+	createClearAgentActivityRequested,
+	createSetAgentActivityRequested,
+	normalizeAgentActivityPath,
+	type AgentActivityKind,
+	type AgentActivityRequested,
+	type AgentActivityTargetKind,
+} from './agentActivityProtocol';
+import {
+	RegistrationActivityAdmission,
+	type MonotonicClock,
+} from './activityAdmission';
 import { responseProvesMcpActivity } from './activityDetection';
 import {
+	MCP_AUTHENTICATED_IN_FLIGHT_PER_REGISTRATION,
+	MCP_HTTP_HEADERS_TIMEOUT_MS,
+	MCP_HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS,
+	MCP_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+	MCP_HTTP_MAX_CONNECTIONS,
+	MCP_HTTP_MAX_REQUESTS_PER_SOCKET,
+	MCP_HTTP_REQUEST_TIMEOUT_MS,
 	isAllowedMcpContentType,
 	MCP_LOOPBACK_HOST,
 	matchesBearerToken,
 	readBoundedJsonBody,
 	writeSafeHttpResponse,
+	writeTooManyRequestsResponse,
 } from './httpPolicy';
 import {
 	assertValidMcpSessionCredentials,
 	isValidMcpOpaqueId,
 	type McpSessionCredentials,
 } from './sessionCredentials';
+import { sanitizeMcpSdkResponse } from './sdkResponsePolicy';
 import {
+	createActivityToolErrorResult,
+	createActivityToolSuccessResult,
 	createCrispyToolServer,
 	CRISPY_PING_TOOL_NAME,
+	isCrispyToolValidationFailure,
+	normalizeCrispyToolCallArguments,
+	type AgentActivityToolOperation,
 } from './toolServer';
 
 export interface McpActivityObservedEvent {
@@ -48,6 +77,16 @@ export interface McpProtocolServerOptions {
 	readonly generation: string;
 	readonly onActivityObserved?: (event: McpActivityObservedEvent) => void;
 	readonly onPingObserved?: (event: McpPingObservedEvent) => void;
+	readonly monotonicClock?: MonotonicClock;
+	readonly agentActivityTransport?: AgentActivityIpcTransport;
+}
+
+export interface AgentActivityIpcTransport {
+	isConnected(): boolean;
+	send(
+		event: AgentActivityRequested,
+		callback: (error: Error | null) => void,
+	): boolean;
 }
 
 export interface McpServerReady {
@@ -63,11 +102,35 @@ export interface RegisteredMcpSession {
 
 type ServerLifecycle = 'idle' | 'starting' | 'running' | 'stopping' | 'stopped';
 
+interface AuthenticatedRequestSlot {
+	release(): void;
+}
+
 interface ActiveRegistration extends McpSessionCredentials {
+	readonly agentActivityCompatible: boolean;
+	readonly activityAdmission: RegistrationActivityAdmission | undefined;
+	readonly authenticatedRequestSlots: Set<AuthenticatedRequestSlot>;
+	authenticatedInFlight: number;
 	revoked: boolean;
 	activityObserved: boolean;
 	pingObserved: boolean;
 }
+
+interface SetActivityInput {
+	readonly path: string;
+	readonly targetKind: AgentActivityTargetKind;
+	readonly activity: AgentActivityKind;
+}
+
+interface ClearActivityInput {
+	readonly path: string;
+	readonly targetKind: AgentActivityTargetKind;
+}
+
+const CLOSED_AGENT_ACTIVITY_TRANSPORT: AgentActivityIpcTransport = Object.freeze({
+	isConnected: () => false,
+	send: () => false,
+});
 
 /**
  * C1의 in-process protocol core다. C2 child entry가 이 객체를 소유하고 strict IPC를
@@ -79,6 +142,9 @@ export class CrispyMcpProtocolServer {
 		event: McpActivityObservedEvent,
 	) => void;
 	private readonly onPingObserved: (event: McpPingObservedEvent) => void;
+	private readonly monotonicClock: MonotonicClock;
+	private readonly agentActivityTransport: AgentActivityIpcTransport;
+	private readonly requestRegistrations = new WeakMap<Request, ActiveRegistration>();
 	private readonly sdkHandler: McpHttpHandler;
 	private lifecycle: ServerLifecycle = 'idle';
 	private startPromise: Promise<McpServerReady> | undefined;
@@ -95,8 +161,22 @@ export class CrispyMcpProtocolServer {
 		this.generation = options.generation;
 		this.onActivityObserved = options.onActivityObserved ?? (() => undefined);
 		this.onPingObserved = options.onPingObserved ?? (() => undefined);
+		this.monotonicClock = options.monotonicClock ?? (() => performance.now());
+		this.agentActivityTransport = options.agentActivityTransport
+			?? CLOSED_AGENT_ACTIVITY_TRANSPORT;
 		this.sdkHandler = createMcpHandler(
-			() => createCrispyToolServer(),
+			(context) => {
+				const registration = context.requestInfo === undefined
+					? undefined
+					: this.requestRegistrations.get(context.requestInfo);
+				return createCrispyToolServer({
+					agentActivityCompatible:
+						registration?.agentActivityCompatible === true,
+					handleAgentActivity: (operation, input) => registration === undefined
+						? createActivityToolErrorResult('registration_inactive')
+						: this.handleAgentActivity(registration, operation, input),
+				});
+			},
 			{
 				legacy: 'stateless',
 				/** SDK 원문 오류는 token/path/UI/log로 전달하지 않는다. */
@@ -129,6 +209,12 @@ export class CrispyMcpProtocolServer {
 			});
 		});
 		server.maxHeadersCount = 64;
+		server.maxConnections = MCP_HTTP_MAX_CONNECTIONS;
+		server.headersTimeout = MCP_HTTP_HEADERS_TIMEOUT_MS;
+		server.requestTimeout = MCP_HTTP_REQUEST_TIMEOUT_MS;
+		server.keepAliveTimeout = MCP_HTTP_KEEP_ALIVE_TIMEOUT_MS;
+		server.keepAliveTimeoutBuffer = MCP_HTTP_KEEP_ALIVE_TIMEOUT_BUFFER_MS;
+		server.maxRequestsPerSocket = MCP_HTTP_MAX_REQUESTS_PER_SOCKET;
 		server.on('clientError', (_error, socket) => {
 			if (socket.writable) {
 				socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
@@ -170,19 +256,32 @@ export class CrispyMcpProtocolServer {
 	}
 
 	/** 한 generation에는 정확히 한 session credential만 등록한다. */
-	registerSession(credentials: McpSessionCredentials): RegisteredMcpSession {
+	registerSession(
+		credentials: McpSessionCredentials,
+		agentActivityCompatible: boolean,
+	): RegisteredMcpSession {
 		if (
 			this.lifecycle !== 'running'
 			|| this.ready === undefined
 			|| this.registrationAttempted
 			|| credentials.generation !== this.generation
+			|| typeof agentActivityCompatible !== 'boolean'
 		) {
 			throw new Error('MCP session registration failed.');
 		}
 		assertValidMcpSessionCredentials(credentials);
 		this.registrationAttempted = true;
 		this.registration = {
-			...credentials,
+			generation: credentials.generation,
+			sessionId: credentials.sessionId,
+			routeId: credentials.routeId,
+			token: credentials.token,
+			agentActivityCompatible,
+			activityAdmission: agentActivityCompatible
+				? new RegistrationActivityAdmission(this.monotonicClock)
+				: undefined,
+			authenticatedRequestSlots: new Set(),
+			authenticatedInFlight: 0,
 			revoked: false,
 			activityObserved: false,
 			pingObserved: false,
@@ -205,6 +304,7 @@ export class CrispyMcpProtocolServer {
 		) {
 			return false;
 		}
+		current.activityAdmission?.close();
 		current.revoked = true;
 		return true;
 	}
@@ -222,15 +322,24 @@ export class CrispyMcpProtocolServer {
 		const pendingStart = this.lifecycle === 'starting'
 			? this.startPromise
 			: undefined;
-		this.lifecycle = 'stopping';
-		if (this.registration !== undefined) {
-			this.registration.revoked = true;
+		const registration = this.registration;
+		if (registration !== undefined) {
+			registration.activityAdmission?.close();
+			registration.revoked = true;
 		}
+		this.lifecycle = 'stopping';
 		const server = this.httpServer;
 		this.httpServer = undefined;
+		const serverClose = server === undefined
+			? Promise.resolve()
+			: closeHttpServer(server, true);
+		/** closeAllConnections has synchronously terminalized the HTTP boundary. */
+		if (registration !== undefined) {
+			this.releaseAuthenticatedRequestSlots(registration);
+		}
 		await Promise.allSettled([
 			this.sdkHandler.close(),
-			server === undefined ? Promise.resolve() : closeHttpServer(server, true),
+			serverClose,
 			pendingStart ?? Promise.resolve(),
 		]);
 		this.ready = undefined;
@@ -247,71 +356,232 @@ export class CrispyMcpProtocolServer {
 			|| registration === undefined
 			|| request.url !== `/mcp/${registration.routeId}`
 		) {
-			request.resume();
-			writeSafeHttpResponse(response, 404, 'Not found.');
+			this.rejectWithoutBodyDrain(request, response, 404, 'Not found.');
 			return;
 		}
 		if (request.method !== 'POST') {
-			request.resume();
-			writeSafeHttpResponse(response, 405, 'Method not allowed.', { Allow: 'POST' });
+			this.rejectWithoutBodyDrain(
+				request,
+				response,
+				405,
+				'Method not allowed.',
+				{ Allow: 'POST' },
+			);
 			return;
 		}
 
 		const headerRejection = validateLoopbackHeaders(request.headers, request.url);
 		if (headerRejection !== undefined) {
-			request.resume();
-			await writeWebResponse(response, headerRejection);
+			request.pause();
+			writeSafeHttpResponse(
+				response,
+				headerRejection.status,
+				'Request headers rejected.',
+				{ Connection: 'close' },
+			);
 			return;
 		}
 		if (
 			registration.revoked
 			|| !matchesBearerToken(request.headers.authorization, registration.token)
 		) {
-			request.resume();
-			writeSafeHttpResponse(response, 401, 'Unauthorized.', {
+			this.rejectWithoutBodyDrain(request, response, 401, 'Unauthorized.', {
 				'WWW-Authenticate': 'Bearer',
 			});
 			return;
 		}
-		if (!isAllowedMcpContentType(request.headers['content-type'])) {
-			request.resume();
-			writeSafeHttpResponse(response, 415, 'Unsupported media type.');
+
+		const requestSlot = this.acquireAuthenticatedRequestSlot(registration);
+		if (requestSlot === undefined) {
+			request.pause();
+			writeTooManyRequestsResponse(response);
 			return;
 		}
+		try {
+			if (!isAllowedMcpContentType(request.headers['content-type'])) {
+				request.pause();
+				writeSafeHttpResponse(response, 415, 'Unsupported media type.', {
+					Connection: 'close',
+				});
+				return;
+			}
 
-		const body = await readBoundedJsonBody(request);
-		if (!body.ok) {
-			writeSafeHttpResponse(
-				response,
-				body.status,
-				body.status === 413 ? 'Request body too large.' : 'Bad request.',
-				body.closeConnection ? { Connection: 'close' } : undefined,
+			const body = await readBoundedJsonBody(request);
+			if (!body.ok) {
+				writeSafeHttpResponse(
+					response,
+					body.status,
+					body.status === 413 ? 'Request body too large.' : 'Bad request.',
+					body.closeConnection ? { Connection: 'close' } : undefined,
+				);
+				return;
+			}
+			const normalizedBody = normalizeCrispyToolCallArguments(
+				body.parsedBody,
+				registration.agentActivityCompatible,
 			);
-			return;
+
+			const nodeHandler = toNodeHandler({
+				fetch: async (webRequest, options) => {
+					this.requestRegistrations.set(webRequest, registration);
+					const rawSdkResponse = await this.sdkHandler.fetch(webRequest, {
+						...options,
+						parsedBody: normalizedBody,
+					});
+					const sdkResponse = await sanitizeMcpSdkResponse(rawSdkResponse);
+					if (
+						this.shouldObserveActivity(registration)
+						|| this.shouldObservePing(registration, body.parsedBody)
+					) {
+						try {
+							const observationResponse = sdkResponse.clone();
+							await this.observeMcpResponse(
+								registration,
+								body.parsedBody,
+								observationResponse,
+							).catch(() => undefined);
+						} catch {
+							/** Response clone 실패는 실제 MCP response 전달을 막지 않는다. */
+						}
+					}
+					return sdkResponse;
+				},
+			}, { onerror: () => undefined });
+			await nodeHandler(request, response, normalizedBody);
+		} finally {
+			requestSlot.release();
+		}
+	}
+
+	private rejectWithoutBodyDrain(
+		request: IncomingMessage,
+		response: ServerResponse,
+		status: number,
+		body: string,
+		headers?: Readonly<Record<string, string>>,
+	): void {
+		request.pause();
+		writeSafeHttpResponse(response, status, body, {
+			...headers,
+			Connection: 'close',
+		});
+	}
+
+	private acquireAuthenticatedRequestSlot(
+		registration: ActiveRegistration,
+	): AuthenticatedRequestSlot | undefined {
+		if (
+			registration.authenticatedInFlight
+			>= MCP_AUTHENTICATED_IN_FLIGHT_PER_REGISTRATION
+		) {
+			return undefined;
+		}
+		registration.authenticatedInFlight += 1;
+		let active = true;
+		const slot: AuthenticatedRequestSlot = Object.freeze({
+			release: (): void => {
+				if (!active) {
+					return;
+				}
+				active = false;
+				registration.authenticatedRequestSlots.delete(slot);
+				registration.authenticatedInFlight -= 1;
+			},
+		});
+		registration.authenticatedRequestSlots.add(slot);
+		return slot;
+	}
+
+	private releaseAuthenticatedRequestSlots(
+		registration: ActiveRegistration,
+	): void {
+		for (const slot of [...registration.authenticatedRequestSlots].reverse()) {
+			slot.release();
+		}
+	}
+
+	private handleAgentActivity(
+		registration: ActiveRegistration,
+		operation: AgentActivityToolOperation,
+		input: unknown,
+	): CallToolResult {
+		const admission = registration.activityAdmission;
+		if (
+			admission === undefined
+			|| admission.state.closed
+			|| registration.revoked
+			|| this.registration !== registration
+			|| this.lifecycle !== 'running'
+		) {
+			return createActivityToolErrorResult('registration_inactive');
+		}
+		if (!admission.acquireToken()) {
+			return admission.state.closed
+				? createActivityToolErrorResult('registration_inactive')
+				: createActivityToolErrorResult('busy');
+		}
+		if (isCrispyToolValidationFailure(input)) {
+			return createActivityToolErrorResult('invalid_input');
 		}
 
-		const nodeHandler = toNodeHandler({
-			fetch: async (webRequest, options) => {
-				const sdkResponse = await this.sdkHandler.fetch(webRequest, options);
-				if (
-					this.shouldObserveActivity(registration)
-					|| this.shouldObservePing(registration, body.parsedBody)
-				) {
-					try {
-						const observationResponse = sdkResponse.clone();
-						await this.observeMcpResponse(
-							registration,
-							body.parsedBody,
-							observationResponse,
-						).catch(() => undefined);
-					} catch {
-						/** Response clone 실패는 실제 MCP response 전달을 막지 않는다. */
-					}
+		try {
+			const pathInput = operation === 'set'
+				? input as SetActivityInput
+				: input as ClearActivityInput;
+			const normalized = normalizeAgentActivityPath(
+				pathInput.path,
+				pathInput.targetKind,
+			);
+			if (!normalized.ok) {
+				return createActivityToolErrorResult(normalized.error);
+			}
+			const event = operation === 'set'
+				? createSetAgentActivityRequested({
+					sessionId: registration.sessionId,
+					generation: registration.generation,
+					path: normalized.path,
+					targetKind: pathInput.targetKind,
+					activity: (pathInput as SetActivityInput).activity,
+				})
+				: createClearAgentActivityRequested({
+					sessionId: registration.sessionId,
+					generation: registration.generation,
+					path: normalized.path,
+					targetKind: pathInput.targetKind,
+				});
+			const serializedEvent = JSON.stringify(event);
+			const eventBytes = Buffer.byteLength(serializedEvent, 'utf8');
+			if (eventBytes > ACTIVITY_IPC_MAX_UTF8_BYTES) {
+				return createActivityToolErrorResult('payload_too_large');
+			}
+			const reservation = admission.reserveChildEvent(eventBytes);
+			if (reservation === undefined) {
+				return createActivityToolErrorResult('busy');
+			}
+
+			try {
+				if (!this.agentActivityTransport.isConnected()) {
+					reservation.release();
+					return createActivityToolErrorResult('registration_inactive');
 				}
-				return sdkResponse;
-			},
-		}, { onerror: () => undefined });
-		await nodeHandler(request, response, body.parsedBody);
+				if (
+					admission.state.closed
+					|| registration.revoked
+					|| this.registration !== registration
+					|| this.lifecycle !== 'running'
+				) {
+					reservation.release();
+					return createActivityToolErrorResult('registration_inactive');
+				}
+				this.agentActivityTransport.send(event, () => reservation.release());
+				return createActivityToolSuccessResult();
+			} catch {
+				reservation.release();
+				return createActivityToolErrorResult('internal_error');
+			}
+		} catch {
+			return createActivityToolErrorResult('internal_error');
+		}
 	}
 
 	private async observeMcpResponse(
@@ -484,20 +754,4 @@ function nodeHeadersToWebHeaders(headers: IncomingHttpHeaders): Headers {
 		}
 	}
 	return result;
-}
-
-async function writeWebResponse(
-	response: ServerResponse,
-	webResponse: Response,
-): Promise<void> {
-	if (response.headersSent || response.destroyed) {
-		return;
-	}
-	const body = await webResponse.text();
-	const headers: Record<string, string> = {};
-	webResponse.headers.forEach((value, name) => {
-		headers[name] = value;
-	});
-	response.writeHead(webResponse.status, headers);
-	response.end(body);
 }

@@ -1,10 +1,16 @@
 import * as assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import {
+	ACTIVITY_IPC_MAX_UTF8_BYTES,
+	AGENT_ACTIVITY_KINDS,
+	createClearAgentActivityRequested,
+	createSetAgentActivityRequested,
+} from '../../mcp/agentActivityProtocol';
+import {
 	parseHostToMcpChildMessage,
 	parseMcpChildToHostMessage,
 	type HostToMcpChildMessage,
-	type McpChildToHostMessage,
+	type McpChildControlMessage,
 	type McpIpcParseResult,
 } from '../../mcp/ipcProtocol';
 
@@ -23,6 +29,7 @@ suite('MCP strict IPC validator', () => {
 			sessionId,
 			routeId,
 			token,
+			agentActivityCompatible: false,
 		}, {
 			type: 'auth.revoke',
 			requestId,
@@ -42,8 +49,40 @@ suite('MCP strict IPC validator', () => {
 		}
 	});
 
+	test('auth.register capability는 required boolean이며 parsed clone에 exact 보존된다', () => {
+		for (const agentActivityCompatible of [false, true]) {
+			const message: HostToMcpChildMessage = {
+				type: 'auth.register',
+				requestId,
+				generation,
+				sessionId,
+				routeId,
+				token,
+				agentActivityCompatible,
+			};
+			const result = parseHostToMcpChildMessage(message);
+			assertSuccess(result);
+			assert.notStrictEqual(result.value, message);
+			assert.deepStrictEqual(result.value, message);
+			assert.strictEqual(Object.isFrozen(result.value), true);
+		}
+
+		assertFailure(parseHostToMcpChildMessage({
+			type: 'auth.register', requestId, generation, sessionId, routeId, token,
+		}), 'missing_field', 'agentActivityCompatible');
+		assertFailure(parseHostToMcpChildMessage({
+			type: 'auth.register',
+			requestId,
+			generation,
+			sessionId,
+			routeId,
+			token,
+			agentActivityCompatible: 'true',
+		}), 'invalid_field', 'agentActivityCompatible');
+	});
+
 	test('모든 Child→Host 메시지와 optional failure identity를 검증한다', () => {
-		const messages: McpChildToHostMessage[] = [{
+		const messages: McpChildControlMessage[] = [{
 			type: 'server.ready', generation, port: 41_001,
 		}, {
 			type: 'auth.registered', requestId, generation, sessionId,
@@ -70,6 +109,91 @@ suite('MCP strict IPC validator', () => {
 			assertSuccess(result);
 			assert.deepStrictEqual(result.value, message);
 		}
+	});
+
+	test('Agent Activity outbound set/clear는 exact frozen wire이며 inbound parser는 Phase 3까지 격리한다', () => {
+		const setEvent = createSetAgentActivityRequested({
+			sessionId,
+			generation,
+			path: 'src/mcp/toolServer.ts',
+			targetKind: 'file',
+			activity: 'editing',
+		});
+		const clearEvent = createClearAgentActivityRequested({
+			sessionId,
+			generation,
+			path: 'src/mcp',
+			targetKind: 'folder',
+		});
+
+		assert.deepStrictEqual(Object.keys(setEvent), [
+			'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind', 'activity',
+		]);
+		assert.deepStrictEqual(Object.keys(clearEvent), [
+			'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind',
+		]);
+		assert.strictEqual(Object.isFrozen(setEvent), true);
+		assert.strictEqual(Object.isFrozen(clearEvent), true);
+		assertFailure(
+			parseMcpChildToHostMessage(setEvent),
+			'unknown_type',
+			'type',
+		);
+		assertFailure(
+			parseMcpChildToHostMessage(clearEvent),
+			'unknown_type',
+			'type',
+		);
+
+		for (const activity of AGENT_ACTIVITY_KINDS) {
+			const event = createSetAgentActivityRequested({
+				sessionId,
+				generation,
+				path: 'src/file.ts',
+				targetKind: 'file',
+				activity,
+			});
+			assert.strictEqual(event.operation, 'set');
+			assert.strictEqual(event.activity, activity);
+			assert.deepStrictEqual(Object.keys(event), [
+				'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind', 'activity',
+			]);
+		}
+	});
+
+	test('Agent Activity outbound serialized IPC UTF-8 fixture는 8192/8193 exact다', () => {
+		const maxSessionId = 's'.repeat(128);
+		const maxGeneration = 'g'.repeat(128);
+		const atLimitPath = `${'"'.repeat(3_695)}${'a'.repeat(401)}`;
+		const overLimitPath = `${'"'.repeat(3_696)}${'a'.repeat(400)}`;
+		const atLimit = createSetAgentActivityRequested({
+			sessionId: maxSessionId,
+			generation: maxGeneration,
+			path: atLimitPath,
+			targetKind: 'folder',
+			activity: 'completed',
+		});
+		const overLimit = createSetAgentActivityRequested({
+			sessionId: maxSessionId,
+			generation: maxGeneration,
+			path: overLimitPath,
+			targetKind: 'folder',
+			activity: 'completed',
+		});
+
+		assert.strictEqual(Buffer.byteLength(atLimitPath, 'utf8'), 4_096);
+		assert.strictEqual(Buffer.byteLength(overLimitPath, 'utf8'), 4_096);
+		assert.strictEqual(
+			Buffer.byteLength(JSON.stringify(atLimit), 'utf8'),
+			ACTIVITY_IPC_MAX_UTF8_BYTES,
+		);
+		assert.strictEqual(
+			Buffer.byteLength(JSON.stringify(overLimit), 'utf8'),
+			ACTIVITY_IPC_MAX_UTF8_BYTES + 1,
+		);
+
+		assertFailure(parseMcpChildToHostMessage(atLimit), 'unknown_type', 'type');
+		assertFailure(parseMcpChildToHostMessage(overLimit), 'unknown_type', 'type');
 	});
 
 	test('null, array, primitive, unknown type와 누락 필드를 양방향에서 거부한다', () => {
@@ -110,6 +234,7 @@ suite('MCP strict IPC validator', () => {
 			sessionId,
 			routeId: 'short-route',
 			token,
+			agentActivityCompatible: false,
 		}), 'invalid_field', 'routeId');
 		assertFailure(parseHostToMcpChildMessage({
 			type: 'auth.register',
@@ -118,6 +243,7 @@ suite('MCP strict IPC validator', () => {
 			sessionId,
 			routeId,
 			token: 'short-token',
+			agentActivityCompatible: false,
 		}), 'invalid_field', 'token');
 		assertFailure(parseMcpChildToHostMessage({
 			type: 'operation.failed',
@@ -136,6 +262,7 @@ suite('MCP strict IPC validator', () => {
 			sessionId,
 			routeId: badRoute,
 			token: badToken,
+			agentActivityCompatible: false,
 		});
 		assertFailure(result, 'invalid_field', 'routeId');
 		const serialized = JSON.stringify(result);

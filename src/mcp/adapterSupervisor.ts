@@ -27,6 +27,7 @@ export interface McpAdapterSupervisorOptions {
 	readonly createGeneration?: () => string;
 	readonly createRuntime?: McpSessionRuntimeFactory;
 	readonly onEvent?: (event: McpSessionRuntimeEvent) => void;
+	readonly agentActivityCompatible?: boolean;
 }
 
 /** Panel 단위로 session별 adapter runtime ownership과 stale generation 방어를 제공한다. */
@@ -203,6 +204,8 @@ export class McpAdapterSupervisor {
 			randomBytes: this.options.randomBytes,
 			spawnChild: this.options.spawnChild,
 			createRequestId: this.options.createRequestId,
+			agentActivityCompatible:
+				this.options.agentActivityCompatible === true,
 			onEvent: (event) => this.handleRuntimeEvent(event),
 		});
 	}

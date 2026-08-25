@@ -169,6 +169,7 @@ async function runMcpChildSmoke(installedExtensionRoot) {
 						sessionId,
 						routeId,
 						token,
+						agentActivityCompatible: false,
 					});
 					return;
 				}

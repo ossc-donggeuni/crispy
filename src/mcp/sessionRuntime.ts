@@ -162,6 +162,7 @@ export interface McpSessionRuntimeOptions {
 	readonly spawnChild?: McpChildSpawner;
 	readonly createRequestId?: () => string;
 	readonly onEvent?: (event: McpSessionRuntimeEvent) => void;
+	readonly agentActivityCompatible?: boolean;
 }
 
 interface PendingOperation {
@@ -310,6 +311,7 @@ export class McpSessionRuntime {
 	private readonly spawnChild: McpChildSpawner;
 	private readonly createRequestId: () => string;
 	private readonly onEvent: (event: McpSessionRuntimeEvent) => void;
+	private readonly agentActivityCompatible: boolean;
 	private lifecycleValue: McpRuntimeLifecycle = 'stopped';
 	private startedOnce = false;
 	private stage: 'idle' | 'ready' | 'registering' | 'running' = 'idle';
@@ -362,6 +364,7 @@ export class McpSessionRuntime {
 		this.createRequestId = options.createRequestId
 			?? (() => `request-${randomUUID()}`);
 		this.onEvent = options.onEvent ?? (() => undefined);
+		this.agentActivityCompatible = options.agentActivityCompatible === true;
 	}
 
 	get lifecycle(): McpRuntimeLifecycle {
@@ -459,6 +462,7 @@ export class McpSessionRuntime {
 				sessionId: this.sessionId,
 				routeId: credentials.routeId,
 				token: credentials.token,
+				agentActivityCompatible: this.agentActivityCompatible,
 			}, 'auth.registered', this.timeouts.registrationMs);
 			this.assertCurrentStarting();
 
