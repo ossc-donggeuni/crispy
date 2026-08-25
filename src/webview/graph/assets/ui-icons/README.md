@@ -77,11 +77,6 @@ Author: IonutNeagu
 Attribution required: No
 
 - task-add.svg
-Source: SVG Repo / Asoka Interface Icons
-License: Public Domain (PD)
-Author: Asoka
-Attribution required: No
-
 - task-start.svg
 Source: SVG Repo / Sign And Symbols Icooon Mono Vectors
 License: Public Domain (CC0)

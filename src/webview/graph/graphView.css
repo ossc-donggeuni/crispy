@@ -2112,7 +2112,7 @@ body.vscode-high-contrast-light .graph-viewport {
 }
 
 .graph-navigator-action-icon[data-navigator-icon='navigator-filter.svg'] {
-	width: 24px;
+	width: 31.2px;
 	mask-image: url('./assets/ui-icons/navigator-filter.svg');
 	-webkit-mask-image: url('./assets/ui-icons/navigator-filter.svg');
 }
@@ -2125,7 +2125,7 @@ body.vscode-high-contrast-light .graph-viewport {
 .graph-navigator-action-icon[data-navigator-icon='task-add.svg'] {
 	mask-image: url('./assets/ui-icons/task-add.svg');
 	-webkit-mask-image: url('./assets/ui-icons/task-add.svg');
-	transform: scale(1.4);
+	transform: scale(0.98);
 }
 
 .graph-navigator-coordinate {

@@ -5776,7 +5776,11 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			graphViewCss,
-			/\.graph-navigator-action-icon\[data-navigator-icon=['"]task-add\.svg['"]\]\s*\{[^}]*task-add\.svg[^}]*transform:\s*scale\(1\.4\)[^}]*\}/s,
+			/\.graph-navigator-action-icon\[data-navigator-icon=['"]navigator-filter\.svg['"]\]\s*\{[^}]*width:\s*31\.2px;[^}]*navigator-filter\.svg[^}]*\}/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.graph-navigator-action-icon\[data-navigator-icon=['"]task-add\.svg['"]\]\s*\{[^}]*task-add\.svg[^}]*transform:\s*scale\(0\.98\)[^}]*\}/s,
 		);
 	});
 	test('Detached Hover Action은 absolute bridge로 hover를 유지하고 기존 SVG asset을 사용한다', () => {
