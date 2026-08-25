@@ -6,6 +6,7 @@ import {
 	type WorkspaceTaskRelocation,
 } from './workspaceMetadata';
 import {
+	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	writeWorkspacePersistentState,
 	type WorkspaceRootPersistentState,
@@ -75,16 +76,34 @@ export function createWorkspacePersistenceCoordinator(
 				}
 
 				lastAttemptedGeneration = target.generation;
+				const confirmedRootStates = new Map(
+					partitionWorkspacePersistentStateByRoot(
+						durableState ?? createDefaultWorkspacePersistentState(),
+						target.rootUris,
+					).map((rootState) => [
+						rootState.rootUri.toString(),
+						rootState,
+					]),
+				);
 				try {
 					await persistWorkspaceStateTransition(
 						durableState ?? createDefaultWorkspacePersistentState(),
 						target.state,
 						target.rootUris,
-						writeState,
+						async (rootUri, state) => {
+							await writeState(rootUri, state);
+							confirmedRootStates.set(rootUri.toString(), {
+								rootUri,
+								state: cloneWorkspaceState(state),
+							});
+						},
 					);
 					durableState = cloneWorkspaceState(target.state);
 					completedGeneration = target.generation;
 				} catch (error) {
+					durableState = mergeWorkspacePersistentStates([
+						...confirmedRootStates.values(),
+					]);
 					logger.warn('[Crispy] Failed to persist Workspace State.', error);
 					break;
 				}

@@ -214,6 +214,46 @@ suite('Workspace Persistence Coordinator', () => {
 		assert.strictEqual(warnings.length, 1);
 	});
 
+	test('부분 실패한 owner 이동을 원래 Root로 되돌려도 실제 write progress에서 복구한다', async () => {
+		const rootA = vscode.Uri.file('/workspace/a');
+		const rootB = vscode.Uri.file('/workspace/b');
+		const roots = [rootB, rootA];
+		const ownerA = createRootId(rootA);
+		const sourceRecord = createTaskRecord('owner-aba', ownerA, 1);
+		const movedRecord = moveTaskRecord(sourceRecord, createRootId(rootB));
+		const returnedRecord = moveTaskRecord(movedRecord, ownerA);
+		const initial = createState([sourceRecord]);
+		const fake = createFakeRootWriter(initial, roots, {
+			// 첫 이동의 source cleanup과 되돌림의 destination staging을 실패시킨다.
+			failWriteIndexes: new Set([3, 5]),
+		});
+		const warnings: unknown[][] = [];
+		const coordinator = createWorkspacePersistenceCoordinator({
+			writeState: fake.writeState,
+			logger: { warn: (...values) => warnings.push(values) },
+		});
+
+		coordinator.setInitialState(initial, roots);
+		await coordinator.acceptSnapshot(createState([movedRecord]), roots);
+		await coordinator.acceptSnapshot(createState([returnedRecord]), roots);
+
+		assert.deepStrictEqual(
+			fake.calls.map((call) => call.rootUri.toString()),
+			[rootA, rootB, rootB, rootA, rootB, rootA].map(
+				(rootUri) => rootUri.toString(),
+			),
+		);
+		assertTaskRecords(mergeFakeRootStates(fake, roots), [returnedRecord]);
+		assert.strictEqual(warnings.length, 2);
+
+		await coordinator.flush();
+
+		assertTaskRecords(fake.getRootState(rootA), [returnedRecord]);
+		assertTaskRecords(fake.getRootState(rootB), []);
+		assertTaskRelocations(fake.getRootState(rootA), []);
+		assertTaskRelocations(fake.getRootState(rootB), []);
+	});
+
 	test('cross-swap destination staging 단독 복구는 outgoing Task를 이전 owner로 부활시키지 않는다', async () => {
 		const rootA = vscode.Uri.file('/workspace/a');
 		const rootB = vscode.Uri.file('/workspace/b');
