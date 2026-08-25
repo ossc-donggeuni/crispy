@@ -5,6 +5,7 @@ import {
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
+	type TaskJsonCopyMessage,
 	type WebviewToExtensionMessage,
 	type WorkspaceOpenFileMessage,
 	type WorkspaceStateChangedMessage,
@@ -39,6 +40,16 @@ suite('Extension to Webview Workspace messages', () => {
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
 
 		assert.deepStrictEqual(webviewMessage, workspaceMessage);
+	});
+
+	test('Task JSON clipboard 요청은 전송 JSON만 Host union에 연결된다', () => {
+		const copyMessage = {
+			type: 'task.copyJson',
+			json: '{"format":"crispy.task","version":1}',
+		} satisfies TaskJsonCopyMessage;
+		const webviewMessage: WebviewToExtensionMessage = copyMessage;
+
+		assert.deepStrictEqual(webviewMessage, copyMessage);
 	});
 
 	test('Workspace 도메인 메시지가 기존 Graph 모델로 최상위 Host union에 연결된다', () => {

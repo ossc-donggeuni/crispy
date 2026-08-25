@@ -4,6 +4,7 @@ import {
 	CrispyExtensionApi,
 	DEBUG_NODE_EFFECTS_COMMAND_ID,
 	OPEN_CANVAS_COMMAND_ID,
+	TaskClipboardHost,
 	TerminalMessageHost,
 	WorkspaceFileHost,
 	createCanvasRuntime,
@@ -37,6 +38,7 @@ import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
 } from '../workspace/workspaceRefresh';
+import { TASK_TRANSFER_JSON_MAX_BYTES } from '../task/taskTransfer';
 
 import * as vscode from 'vscode';
 
@@ -1100,6 +1102,124 @@ suite('Crispy Extension Host', () => {
 
 		assert.strictEqual(result, undefined);
 		assert.deepStrictEqual(postedMessages, []);
+	});
+
+	test('task.copyJson은 검증된 전송 JSON만 clipboard에 기록하고 성공을 알린다', async () => {
+		const writes: string[] = [];
+		let successCount = 0;
+		let failureCount = 0;
+		const clipboardHost: TaskClipboardHost = {
+			writeText: (value) => {
+				writes.push(value);
+				return Promise.resolve();
+			},
+			reportCopySuccess: () => { successCount += 1; },
+			reportCopyFailure: () => { failureCount += 1; },
+		};
+		const json = JSON.stringify({
+			format: 'crispy.task',
+			version: 1,
+			task: {
+				title: '',
+				description: '',
+				nodes: [{ key: 'start', kind: 'start' }, {
+					key: 'end',
+					kind: 'end',
+					position: { x: 640, y: 0 },
+				}],
+				edges: [],
+			},
+		});
+		const result = handleHostWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{ type: 'task.copyJson', json },
+			undefined,
+			undefined,
+			undefined,
+			clipboardHost,
+		);
+
+		assert.strictEqual(result, undefined);
+		await Promise.resolve();
+		assert.deepStrictEqual(writes, [json]);
+		assert.strictEqual(successCount, 1);
+		assert.strictEqual(failureCount, 0);
+	});
+
+	test('task.copyJson은 malformed/oversized payload를 clipboard 경계 전에 거부한다', () => {
+		let writeCalls = 0;
+		const clipboardHost: TaskClipboardHost = {
+			writeText: () => {
+				writeCalls += 1;
+				return Promise.resolve();
+			},
+			reportCopySuccess: () => undefined,
+			reportCopyFailure: () => undefined,
+		};
+
+		for (const message of [
+			{ type: 'task.copyJson' },
+			{ type: 'task.copyJson', json: '' },
+			{ type: 'task.copyJson', json: 42 },
+			{ type: 'task.copyJson', json: '{}' },
+			{ type: 'task.copyJson', json: '{}', cwd: '/sensitive/workspace' },
+			{
+				type: 'task.copyJson',
+				json: 'x'.repeat(TASK_TRANSFER_JSON_MAX_BYTES + 1),
+			},
+		]) {
+			const result = handleHostWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				message,
+				undefined,
+				undefined,
+				undefined,
+				clipboardHost,
+			);
+
+			assert.strictEqual(result, undefined);
+		}
+
+		assert.strictEqual(writeCalls, 0);
+	});
+
+	test('task.copyJson clipboard 실패는 상태를 변경하지 않고 실패만 알린다', async () => {
+		let successCount = 0;
+		let failureCount = 0;
+		const clipboardHost: TaskClipboardHost = {
+			writeText: () => Promise.reject(new Error('clipboard unavailable')),
+			reportCopySuccess: () => { successCount += 1; },
+			reportCopyFailure: () => { failureCount += 1; },
+		};
+
+		handleHostWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'task.copyJson',
+				json: JSON.stringify({
+					format: 'crispy.task',
+					version: 1,
+					task: {
+						title: '',
+						description: '',
+						nodes: [{ key: 'start', kind: 'start' }, {
+							key: 'end',
+							kind: 'end',
+							position: { x: 640, y: 0 },
+						}],
+						edges: [],
+					},
+				}),
+			},
+			undefined,
+			undefined,
+			undefined,
+			clipboardHost,
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(successCount, 0);
+		assert.strictEqual(failureCount, 1);
 	});
 
 	test('workspace.openFile은 File ID URI를 복원해 Active 일반 Editor Tab으로 연다', () => {

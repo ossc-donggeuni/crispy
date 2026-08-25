@@ -506,6 +506,8 @@ suite('Webview State Wiring', () => {
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
 		let graphInitializeCount = 0;
 		let graphVisibleRefreshCount = 0;
+		let graphViewInteractions:
+			import('../webview/graph/graphView').GraphViewInteractions | undefined;
 		let graphUnsubscribed = false;
 		let graphDisposed = false;
 		let agentPanelUiInitialized = false;
@@ -551,8 +553,14 @@ suite('Webview State Wiring', () => {
 			'acquireVsCodeApi',
 		);
 
-		graphViewModule.initializeGraphView = ((_root, restoredGraphState, graph) => {
+		graphViewModule.initializeGraphView = ((
+			_root,
+			restoredGraphState,
+			graph,
+			interactions,
+		) => {
 			graphInitializeCount += 1;
+			graphViewInteractions = interactions;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
@@ -811,6 +819,13 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphVisibleRefreshCount, 1);
 			assert.ok(hostMessageHandler);
+
+			const taskJson = '{"format":"crispy.task"}';
+			graphViewInteractions?.onTaskJsonCopyRequest?.(taskJson);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'task.copyJson'),
+				[{ type: 'task.copyJson', json: taskJson }],
+			);
 
 			hostMessageHandler({
 				data: {

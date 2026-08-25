@@ -73,6 +73,11 @@ import {
 	type TaskStateStore,
 } from '../../task';
 import {
+	materializeTaskTransfer,
+	parseTaskTransferJson,
+	serializeTaskTransfer,
+} from '../../task/taskTransfer';
+import {
 	createTaskGraphLayout,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
@@ -94,6 +99,7 @@ import {
 	type FocusedTaskNode,
 	type TaskInspectorFieldInput,
 } from '../task/taskInspector';
+import { createTaskImportDialog } from '../task/taskImportDialog';
 
 /** Graph DOM 계층과 State, Camera lifecycle을 하나로 제공한다. */
 export interface GraphView {
@@ -155,6 +161,8 @@ export interface GraphViewInteractions {
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
 	/** 일반 File Row의 Editor 열기 요청을 안정적인 File ID로 전달한다. */
 	onFileOpenRequest?: (fileId: string) => void;
+	/** 생성한 Task 전송 JSON을 Host clipboard 경계로 전달한다. */
+	onTaskJsonCopyRequest?: (json: string) => void;
 	/** Floating Overlay를 제외한 현재 Graph 표시 영역을 Viewport local 좌표로 계산한다. */
 	resolveVisibleGraphArea?: (viewport: HTMLElement) => GraphVisibleArea;
 }
@@ -1073,6 +1081,7 @@ export function initializeGraphView(
 	root.append(viewport);
 	const reattachConfirmDialog = createGraphReattachConfirmDialog(overlayLayer);
 	const arrangeAllConfirmDialog = createGraphArrangeAllConfirmDialog(overlayLayer);
+	const taskImportDialog = createTaskImportDialog(overlayLayer);
 	const nodeEffects = createGraphNodeEffects(
 		ownerDocument,
 		undefined,
@@ -2815,6 +2824,78 @@ export function initializeGraphView(
 		}
 		handleTaskNodeFocus(addedLayoutNode);
 	};
+	const handleTaskExport = (taskId: string): void => {
+		const task = taskState.getTask(taskId);
+
+		if (!task) {
+			return;
+		}
+		interactions.onTaskJsonCopyRequest?.(serializeTaskTransfer(task));
+	};
+	const clearTaskGraphScopeAreaExpansion = (taskId: string): void => {
+		const prefix = `${taskId}\u0000`;
+
+		for (const key of expandedTaskGraphScopeAreaKeys) {
+			if (key.startsWith(prefix)) {
+				expandedTaskGraphScopeAreaKeys.delete(key);
+			}
+		}
+	};
+	const handleTaskImport = (taskId: string): void => {
+		const task = taskState.getTask(taskId);
+
+		if (!task) {
+			return;
+		}
+
+		taskImportDialog.open({
+			taskTitle: task.title,
+			onSubmit: (source) => {
+				const parsed = parseTaskTransferJson(source);
+
+				if (!parsed.ok) {
+					const issue = parsed.issues[0];
+
+					return {
+						ok: false,
+						message: issue
+							? `${issue.path}: ${issue.message}`
+							: 'Task JSON을 확인할 수 없습니다.',
+					};
+				}
+
+				const current = taskState.getTask(taskId);
+
+				if (!current) {
+					return {
+						ok: false,
+						message: '가져올 대상 Task가 더 이상 존재하지 않습니다.',
+					};
+				}
+
+				try {
+					const imported = materializeTaskTransfer(parsed.document, current);
+					const updated = taskState.updateTask(taskId, () => imported);
+
+					if (!updated) {
+						return {
+							ok: false,
+							message: 'Task를 가져오지 못했습니다.',
+						};
+					}
+
+					clearTaskGraphScopeAreaExpansion(taskId);
+					applyTaskState();
+					return { ok: true };
+				} catch {
+					return {
+						ok: false,
+						message: 'Task 구조가 올바르지 않아 가져오지 못했습니다.',
+					};
+				}
+			},
+		});
+	};
 	const handleTaskRemove = (taskId: string): void => {
 		if (taskState.removeTask(taskId)) {
 			applyTaskState();
@@ -2910,6 +2991,8 @@ export function initializeGraphView(
 			onNodeFocus: handleTaskNodeFocus,
 			onNodeSelectionChange: handleTaskNodeSelectionChange,
 			onWorkAdd: handleTaskWorkAdd,
+			onTaskExport: handleTaskExport,
+			onTaskImport: handleTaskImport,
 			onTaskRemove: handleTaskRemove,
 			onWorkRemove: handleTaskWorkRemove,
 			onGraphTargetAreaToggle: handleTaskGraphTargetAreaToggle,
@@ -3176,6 +3259,7 @@ export function initializeGraphView(
 			disposed = true;
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
+			taskImportDialog.dispose();
 			unsubscribeTaskGraphScope();
 			unsubscribeLayout();
 			unsubscribeTaskInspectorCamera();

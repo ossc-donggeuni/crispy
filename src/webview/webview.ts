@@ -80,6 +80,12 @@ const graphView = initializeGraphView(
 				fileId,
 			});
 		},
+		onTaskJsonCopyRequest: (json) => {
+			vscodeApi.postMessage({
+				type: 'task.copyJson',
+				json,
+			});
+		},
 		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
 			viewport,
 			chatPanel,

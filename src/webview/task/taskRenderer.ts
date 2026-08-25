@@ -90,6 +90,10 @@ export interface TaskRendererInteractions {
 	onNodeSelectionChange?: (node: TaskLayoutNode | undefined) => void;
 	/** Start Action으로 연결 전 Work 하나를 추가한다. */
 	onWorkAdd?: (taskId: string) => void;
+	/** Start Action으로 현재 Task를 전송 JSON으로 내보낸다. */
+	onTaskExport?: (taskId: string) => void;
+	/** Start Action으로 현재 Task를 교체할 JSON 입력을 요청한다. */
+	onTaskImport?: (taskId: string) => void;
 	/** Start Action으로 Task 전체를 제거한다. */
 	onTaskRemove?: (taskId: string) => void;
 	/** Work Node와 incident Edge를 제거한다. */
@@ -154,6 +158,8 @@ type TaskNodeAction =
 	| 'toggle-reference-area'
 	| 'toggle-work-area'
 	| 'add-work'
+	| 'import-task'
+	| 'export-task'
 	| 'remove-work'
 	| 'remove-task';
 
@@ -844,6 +850,10 @@ export function initializeTaskRenderer(
 			cancelTaskConnection();
 			if (node?.kind === 'start' && action === 'add-work') {
 				interactions.onWorkAdd?.(node.taskId);
+			} else if (node?.kind === 'start' && action === 'import-task') {
+				interactions.onTaskImport?.(node.taskId);
+			} else if (node?.kind === 'start' && action === 'export-task') {
+				interactions.onTaskExport?.(node.taskId);
 			} else if (node?.kind === 'start' && action === 'remove-task') {
 				interactions.onTaskRemove?.(node.taskId);
 			} else if (node?.kind === 'work' && action === 'remove-work') {
@@ -1450,6 +1460,8 @@ function createTaskNodeContents(
 					'toggle-reference-area',
 					'toggle-work-area',
 					'add-work',
+					'import-task',
+					'export-task',
 					'remove-task',
 				],
 			),
@@ -1528,7 +1540,11 @@ function createTaskNodeActions(
 			? `${scopeAreaLabel} ${scopeAreaLayout.collapsed ? '열기' : '접기'}`
 			: action === 'add-work'
 				? 'Work 추가'
-				: action === 'remove-work' ? 'Work 삭제' : 'Task 삭제';
+				: action === 'import-task'
+					? 'Task JSON 가져오기'
+					: action === 'export-task'
+						? 'Task JSON 내보내기'
+						: action === 'remove-work' ? 'Work 삭제' : 'Task 삭제';
 		const isScopeToggleLocked = (scopeAreaLayout?.sourceIds.length ?? 0) > 0;
 
 		button.className = [
@@ -1558,6 +1574,9 @@ function createTaskNodeActions(
 		} else if (action === 'add-work') {
 			icon.className = 'task-node-action-symbol';
 			icon.textContent = '+';
+		} else if (action === 'import-task' || action === 'export-task') {
+			icon.className = 'task-node-action-symbol';
+			icon.textContent = action === 'import-task' ? '↑' : '↓';
 		} else {
 			icon.className = 'graph-detached-root-action-icon';
 			icon.setAttribute('data-ui-icon', 'delete.svg');

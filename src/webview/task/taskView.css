@@ -749,8 +749,117 @@ select.task-inspector-control {
 	outline-offset: -1px;
 }
 
+.task-import-dialog-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: rgb(0 0 0 / 46%);
+	pointer-events: auto;
+}
+
+.task-import-dialog-overlay[hidden] {
+	display: none;
+}
+
+.task-import-dialog-panel {
+	display: grid;
+	width: min(640px, 100%);
+	max-height: min(680px, 100%);
+	gap: 12px;
+	padding: 20px;
+	color: var(--vscode-foreground);
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 8px;
+	box-shadow: 0 8px 28px rgb(0 0 0 / 36%);
+}
+
+.task-import-dialog-title,
+.task-import-dialog-message,
+.task-import-dialog-error {
+	margin: 0;
+}
+
+.task-import-dialog-title {
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.task-import-dialog-message {
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.45;
+}
+
+.task-import-dialog-input {
+	width: 100%;
+	min-height: 300px;
+	padding: 10px;
+	resize: vertical;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+	border-radius: 3px;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 13px);
+	line-height: 1.45;
+	outline: none;
+}
+
+.task-import-dialog-input:focus,
+.task-import-dialog-input:focus-visible {
+	border-color: var(--vscode-focusBorder);
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.task-import-dialog-input[aria-invalid='true'] {
+	border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+.task-import-dialog-error {
+	color: var(--vscode-errorForeground, #f14c4c);
+	line-height: 1.4;
+}
+
+.task-import-dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.task-import-dialog-accept,
+.task-import-dialog-cancel {
+	padding: 5px 14px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	cursor: pointer;
+}
+
+.task-import-dialog-accept {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+.task-import-dialog-accept:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.task-import-dialog-cancel {
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+.task-import-dialog-cancel:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
 body.vscode-high-contrast .task-inspector,
-body.vscode-high-contrast-light .task-inspector {
+body.vscode-high-contrast-light .task-inspector,
+body.vscode-high-contrast .task-import-dialog-panel,
+body.vscode-high-contrast-light .task-import-dialog-panel {
 	border-color: var(--vscode-contrastBorder, var(--vscode-widget-border));
 	box-shadow: none;
 }

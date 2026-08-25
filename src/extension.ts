@@ -23,6 +23,7 @@ import type {
 	GraphNodeEffectKind,
 	GraphNodeEffectSetMessage,
 	GraphNodeEffectTarget,
+	TaskJsonCopyMessage,
 	WorkspaceOpenFileMessage,
 	WorkspaceToWebviewMessage,
 } from './messages';
@@ -40,6 +41,10 @@ import {
 import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
 import type { GraphState } from './webview/graph/graphState';
+import {
+	parseTaskTransferJson,
+	TASK_TRANSFER_JSON_MAX_BYTES,
+} from './task/taskTransfer';
 import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
@@ -229,9 +234,31 @@ export interface WorkspaceFileHost {
 	): Thenable<unknown>;
 }
 
+/** Task JSON clipboard 기록과 사용자 피드백을 제공하는 VS Code Host 경계다. */
+export interface TaskClipboardHost {
+	writeText(value: string): Thenable<void>;
+	reportCopySuccess(): void;
+	reportCopyFailure(): void;
+}
+
 const defaultWorkspaceFileHost: WorkspaceFileHost = {
 	getWorkspaceFolder: (uri) => vscode.workspace.getWorkspaceFolder(uri),
 	showTextDocument: (uri, options) => vscode.window.showTextDocument(uri, options),
+};
+
+const defaultTaskClipboardHost: TaskClipboardHost = {
+	writeText: (value) => vscode.env.clipboard.writeText(value),
+	reportCopySuccess: () => {
+		vscode.window.setStatusBarMessage(
+			'Crispy: Task JSON을 클립보드에 복사했습니다.',
+			2_000,
+		);
+	},
+	reportCopyFailure: () => {
+		void vscode.window.showErrorMessage(
+			'Crispy: Task JSON을 복사하지 못했습니다.',
+		);
+	},
 };
 
 /** VS Code가 실제 활성화한 extension module instance에서 제공하는 공개 API다. */
@@ -244,6 +271,7 @@ export interface CrispyExtensionApi {
 		terminalHost?: TerminalMessageHost,
 		onWebviewReady?: () => void,
 		workspaceFileHost?: WorkspaceFileHost,
+		taskClipboardHost?: TaskClipboardHost,
 	): Thenable<boolean> | undefined;
 }
 
@@ -581,6 +609,7 @@ function releaseCanvasRuntime(runtime: CanvasRuntime): void {
  * @param terminalHost 검증된 Terminal 메시지를 전달할 Host 경계
  * @param onWebviewReady 검증된 ready 뒤 Canvas 초기화 대기를 해제할 callback
  * @param workspaceFileHost Workspace 검증 및 Editor 열기를 수행할 Host 경계
+ * @param taskClipboardHost 검증된 Task JSON을 clipboard에 기록할 Host 경계
  * @returns 메시지를 Webview에 전달한 결과 또는 처리 대상이 아닐 때 `undefined`
  */
 export function handleWebviewMessage(
@@ -589,6 +618,7 @@ export function handleWebviewMessage(
 	terminalHost?: TerminalMessageHost,
 	onWebviewReady?: () => void,
 	workspaceFileHost: WorkspaceFileHost = defaultWorkspaceFileHost,
+	taskClipboardHost: TaskClipboardHost = defaultTaskClipboardHost,
 ): Thenable<boolean> | undefined {
 	if (message && typeof message === 'object') {
 		const candidate = message as Record<string, unknown>;
@@ -598,6 +628,16 @@ export function handleWebviewMessage(
 
 			if (openFileMessage) {
 				openWorkspaceFile(openFileMessage, workspaceFileHost);
+			}
+
+			return undefined;
+		}
+
+		if (candidate.type === 'task.copyJson') {
+			const copyMessage = parseTaskJsonCopyMessage(candidate);
+
+			if (copyMessage) {
+				copyTaskJsonToClipboard(copyMessage, taskClipboardHost);
 			}
 
 			return undefined;
@@ -677,6 +717,40 @@ export function handleWebviewMessage(
 			} satisfies ExtensionToWebviewMessage);
 		default:
 			return handleTerminalMessage(parseResult.value, terminalHost);
+	}
+}
+
+/** Task JSON clipboard 요청의 exact field, 문자열 및 크기 제한을 검증한다. */
+function parseTaskJsonCopyMessage(
+	value: Record<string, unknown>,
+): TaskJsonCopyMessage | undefined {
+	if (
+		value.type !== 'task.copyJson'
+		|| Object.keys(value).length !== 2
+		|| typeof value.json !== 'string'
+		|| value.json.length === 0
+		|| new TextEncoder().encode(value.json).byteLength
+			> TASK_TRANSFER_JSON_MAX_BYTES
+		|| !parseTaskTransferJson(value.json).ok
+	) {
+		return undefined;
+	}
+
+	return { type: 'task.copyJson', json: value.json };
+}
+
+/** 검증된 Task JSON만 clipboard에 기록하고 완료 상태만 사용자에게 알린다. */
+function copyTaskJsonToClipboard(
+	message: TaskJsonCopyMessage,
+	host: TaskClipboardHost,
+): void {
+	try {
+		void Promise.resolve(host.writeText(message.json)).then(
+			() => host.reportCopySuccess(),
+			() => host.reportCopyFailure(),
+		);
+	} catch {
+		host.reportCopyFailure();
 	}
 }
 

@@ -25,12 +25,19 @@ export interface WorkspaceOpenFileMessage {
 	fileId: string;
 }
 
+/** 생성한 Task 전송 JSON을 Extension Host clipboard에 기록하도록 요청한다. */
+export interface TaskJsonCopyMessage {
+	type: 'task.copyJson';
+	json: string;
+}
+
 /** Webview에서 Extension Host로 전송하는 Agent wire 및 상태 경계 메시지다. */
 export type WebviewToExtensionMessage =
 	| WebviewToHostWireMessage
 	| WebviewStateChangedMessage
 	| WorkspaceStateChangedMessage
-	| WorkspaceOpenFileMessage;
+	| WorkspaceOpenFileMessage
+	| TaskJsonCopyMessage;
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {

@@ -8,6 +8,7 @@ import {
 	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	type TaskBlueprint,
 } from '../../task';
+import { serializeTaskTransfer } from '../../task/taskTransfer';
 import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE,
@@ -90,6 +91,11 @@ import {
 	TASK_INSPECTOR_NODE_ID_ATTRIBUTE,
 	TASK_INSPECTOR_TASK_ID_ATTRIBUTE,
 } from '../../webview/task/taskInspector';
+import {
+	TASK_IMPORT_DIALOG_ATTRIBUTE,
+	TASK_IMPORT_ERROR_ATTRIBUTE,
+	TASK_IMPORT_INPUT_ATTRIBUTE,
+} from '../../webview/task/taskImportDialog';
 
 suite('Graph View', () => {
 	test('Navigator Task 추가는 viewport 중심에 식별 가능한 incomplete Start/End를 생성한다', () => {
@@ -382,6 +388,231 @@ suite('Graph View', () => {
 			0,
 		);
 		assert.ok(getTaskElements(root, 'data-task-id', preserved.id).length > 0);
+
+		graphView.dispose();
+	});
+
+	test('Start Task 내보내기 Action은 해당 Task 전송 JSON만 clipboard 경계로 전달한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 80 });
+		let copiedJson: string | undefined;
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{ onTaskJsonCopyRequest: (json) => { copiedJson = json; } },
+			[task],
+		);
+		const start = task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(start);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const exportButton = getDescendantByAttribute(
+			startElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'export-task',
+		);
+
+		assert.strictEqual(exportButton.title, 'Task JSON 내보내기');
+		assert.strictEqual(
+			getDescendantByClass(exportButton, 'task-node-action-symbol').textContent,
+			'↓',
+		);
+		assert.strictEqual(
+			exportButton.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
+			true,
+		);
+		exportButton.dispatch('click', createClickEvent(exportButton));
+		assert.ok(copiedJson);
+		const document = JSON.parse(copiedJson) as Record<string, unknown>;
+
+		assert.strictEqual(document.format, 'crispy.task');
+		assert.strictEqual(document.version, 1);
+		assert.strictEqual(copiedJson.includes('graphTargets'), false);
+		assert.strictEqual(copiedJson.includes(task.id), false);
+
+		graphView.dispose();
+	});
+
+	test('Start Task 가져오기는 오류를 inline 표시하고 대상 하나를 원자적으로 교체한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const baseTarget = createRenderingTask({ x: 100, y: 80 });
+		const targetWork = baseTarget.nodes.find((node) => node.kind === 'work');
+		const target: TaskBlueprint = {
+			...baseTarget,
+			defaultGraphTargets: {
+				reference: [GRAPH_MOCK_FOLDER_ROOT.id],
+				work: [],
+			},
+			nodes: baseTarget.nodes.map((node) => node.kind === 'work'
+				? {
+					...node,
+					graphTargets: {
+						reference: [],
+						work: [GRAPH_MOCK_FILE_ROOT.id],
+					},
+				}
+				: node),
+		};
+		const preserved = createCollidingRenderingTask(
+			'task:import-preserved',
+			'Import Preserved',
+			{ x: 900, y: 80 },
+		);
+		const sourceBase = createSerialRenderingTask(
+			'task:external-source',
+			{ x: -900, y: -700 },
+			2,
+		);
+		let workIndex = 0;
+		const source: TaskBlueprint = {
+			...sourceBase,
+			title: 'Imported Task',
+			description: 'Imported description',
+			nodes: sourceBase.nodes.map((node) => {
+				if (node.kind !== 'work') {
+					return node;
+				}
+				workIndex += 1;
+				return {
+					...node,
+					title: `Imported Work ${workIndex}`,
+					description: `Imported Work ${workIndex} description`,
+					prompt: `Imported prompt ${workIndex}`,
+					agentProviderId: workIndex === 1 ? 'claude' : 'codex',
+				};
+			}),
+		};
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[target, preserved],
+		);
+		const targetSnapshot = graphView.taskState.getTask(target.id);
+		const preservedSnapshot = graphView.taskState.getTask(preserved.id);
+		const targetStart = target.nodes.find((node) => node.kind === 'start');
+		const targetEnd = target.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(targetSnapshot && preservedSnapshot && targetStart && targetEnd && targetWork);
+		const importButton = getDescendantByAttribute(
+			getTaskElement(root, 'data-task-node-id', targetStart.id, target.id),
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'import-task',
+		);
+
+		assert.strictEqual(importButton.title, 'Task JSON 가져오기');
+		assert.strictEqual(
+			getDescendantByClass(importButton, 'task-node-action-symbol').textContent,
+			'↑',
+		);
+		importButton.dispatch('click', createClickEvent(importButton));
+		const dialog = getDescendantByAttribute(
+			root,
+			TASK_IMPORT_DIALOG_ATTRIBUTE,
+			'',
+		);
+		const input = getDescendantByAttribute(
+			dialog,
+			TASK_IMPORT_INPUT_ATTRIBUTE,
+			'',
+		);
+		const error = getDescendantByAttribute(
+			dialog,
+			TASK_IMPORT_ERROR_ATTRIBUTE,
+			'',
+		);
+		const accept = getDescendantByClass(dialog, 'task-import-dialog-accept');
+
+		assert.strictEqual(dialog.hidden, false);
+		assert.strictEqual(ownerDocument.activeElement, input);
+		input.value = '{';
+		accept.dispatch('click', createClickEvent(accept));
+		assert.strictEqual(dialog.hidden, false);
+		assert.strictEqual(error.hidden, false);
+		assert.strictEqual(input.getAttribute('aria-invalid'), 'true');
+		assert.strictEqual(graphView.taskState.getTask(target.id), targetSnapshot);
+
+		input.value = serializeTaskTransfer(source);
+		input.dispatch('input', createInputEvent(input));
+		assert.strictEqual(error.hidden, true);
+		accept.dispatch('click', createClickEvent(accept));
+		assert.strictEqual(dialog.hidden, true);
+
+		const updated = graphView.taskState.getTask(target.id);
+		const updatedStart = updated?.nodes.find((node) => node.kind === 'start');
+		const updatedEnd = updated?.nodes.find((node) => node.kind === 'end');
+		const updatedWorks = updated?.nodes.filter((node) => node.kind === 'work');
+
+		assert.ok(updated && updatedStart && updatedEnd && updatedWorks?.length === 2);
+		assert.strictEqual(updated.id, target.id);
+		assert.deepStrictEqual(updated.origin, target.origin);
+		assert.strictEqual(updatedStart.id, targetStart.id);
+		assert.strictEqual(updatedEnd.id, targetEnd.id);
+		assert.strictEqual(updated.title, 'Imported Task');
+		assert.strictEqual(updated.description, 'Imported description');
+		assert.deepStrictEqual(updated.defaultGraphTargets, { reference: [], work: [] });
+		assert.strictEqual(updated.nodes.some((node) => node.id === targetWork.id), false);
+		assert.deepStrictEqual(updatedWorks.map((work) => ({
+			title: work.title,
+			description: work.description,
+			prompt: work.prompt,
+			agentProviderId: work.agentProviderId,
+			graphTargets: work.graphTargets,
+			position: updated.nodePositions[work.id],
+		})), [{
+			title: 'Imported Work 1',
+			description: 'Imported Work 1 description',
+			prompt: 'Imported prompt 1',
+			agentProviderId: 'claude',
+			graphTargets: { reference: [], work: [] },
+			position: { x: 320, y: 0 },
+		}, {
+			title: 'Imported Work 2',
+			description: 'Imported Work 2 description',
+			prompt: 'Imported prompt 2',
+			agentProviderId: 'codex',
+			graphTargets: { reference: [], work: [] },
+			position: { x: 640, y: 0 },
+		}]);
+		assert.deepStrictEqual(updated.nodePositions[updatedEnd.id], { x: 960, y: 0 });
+		assert.deepStrictEqual(updated.edges.map((edge) => [
+			updated.nodes.find((node) => node.id === edge.source)?.kind,
+			updated.nodes.find((node) => node.id === edge.target)?.kind,
+		]), [
+			['start', 'work'],
+			['work', 'work'],
+			['work', 'end'],
+		]);
+		assert.strictEqual(graphView.taskState.getTask(preserved.id), preservedSnapshot);
+
+		const currentStart = getTaskElement(
+			root,
+			'data-task-node-id',
+			updatedStart.id,
+			updated.id,
+		);
+		const currentImportButton = getDescendantByAttribute(
+			currentStart,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'import-task',
+		);
+
+		currentImportButton.dispatch(
+			'click',
+			createClickEvent(currentImportButton),
+		);
+		assert.strictEqual(dialog.hidden, false);
+		dialog.dispatch('keydown', createKeyboardEvent('Escape'));
+		assert.strictEqual(dialog.hidden, true);
 
 		graphView.dispose();
 	});
