@@ -35,6 +35,7 @@ export const TASK_TRANSFER_LIMITS = Object.freeze({
 	maxEdges: 4096,
 	maxNodeKeyLength: 256,
 	maxTextLength: 1024 * 1024,
+	maxAbsCoordinate: 1_000_000,
 });
 
 /** 전송 문서 안에서만 유효한 Start 표현이다. */
@@ -613,7 +614,7 @@ function parseTransferEdge(
 		: undefined;
 }
 
-/** x/y 외 필드를 허용하지 않고 두 좌표 모두 finite number인지 검사한다. */
+/** x/y 외 필드를 허용하지 않고 두 좌표 모두 bounded finite number인지 검사한다. */
 function parsePosition(
 	input: unknown,
 	path: string,
@@ -626,8 +627,8 @@ function parsePosition(
 	}
 
 	validateProperties(position, path, ['x', 'y'], ['x', 'y'], issues);
-	const x = readFiniteNumber(position, 'x', `${path}.x`, issues);
-	const y = readFiniteNumber(position, 'y', `${path}.y`, issues);
+	const x = readBoundedCoordinate(position, 'x', `${path}.x`, issues);
+	const y = readBoundedCoordinate(position, 'y', `${path}.y`, issues);
 
 	return issues.length === issueCount && x !== undefined && y !== undefined
 		? { x, y }
@@ -934,8 +935,8 @@ function readAgentProvider(
 	return providerId;
 }
 
-/** JSON number가 finite 좌표인지 읽는다. */
-function readFiniteNumber(
+/** JSON number가 렌더링 가능한 유한 좌표 범위 안인지 읽는다. */
+function readBoundedCoordinate(
 	value: Record<string, unknown>,
 	key: string,
 	path: string,
@@ -950,6 +951,14 @@ function readFiniteNumber(
 			code: 'invalid_type',
 			path,
 			message: `${path} must be a finite number.`,
+		});
+		return undefined;
+	}
+	if (Math.abs(number) > TASK_TRANSFER_LIMITS.maxAbsCoordinate) {
+		issues.push({
+			code: 'limit_exceeded',
+			path,
+			message: `${path} must be between -${TASK_TRANSFER_LIMITS.maxAbsCoordinate} and ${TASK_TRANSFER_LIMITS.maxAbsCoordinate}.`,
 		});
 		return undefined;
 	}

@@ -291,6 +291,72 @@ suite('Task Transfer', () => {
 		}), 'invalid_value', '$.task.nodes[0].key');
 	});
 
+	test('parser와 export는 Task local 좌표를 안전한 절댓값 범위로 제한한다', () => {
+		const valid = createExpectedTransferDocument();
+		const withEndX = (x: number): TaskTransferDocument => ({
+			...valid,
+			task: {
+				...valid.task,
+				nodes: valid.task.nodes.map((node) => node.kind === 'end'
+					? { ...node, position: { ...node.position, x } }
+					: node),
+			},
+		});
+
+		for (const coordinate of [
+			-TASK_TRANSFER_LIMITS.maxAbsCoordinate,
+			TASK_TRANSFER_LIMITS.maxAbsCoordinate,
+		]) {
+			requireSuccess(parseUnknown(withEndX(coordinate)));
+		}
+		for (const coordinate of [
+			-(TASK_TRANSFER_LIMITS.maxAbsCoordinate + 1),
+			TASK_TRANSFER_LIMITS.maxAbsCoordinate + 1,
+			-Number.MAX_VALUE,
+			Number.MAX_VALUE,
+		]) {
+			assertIssuePath(
+				parseUnknown(withEndX(coordinate)),
+				'limit_exceeded',
+				'$.task.nodes[3].position.x',
+			);
+		}
+		assertIssuePath(parseUnknown({
+			...valid,
+			task: {
+				...valid.task,
+				nodes: valid.task.nodes.map((node) => node.kind === 'end'
+					? {
+						...node,
+						position: {
+							...node.position,
+							y: TASK_TRANSFER_LIMITS.maxAbsCoordinate + 1,
+						},
+					}
+					: node),
+			},
+		}), 'limit_exceeded', '$.task.nodes[3].position.y');
+
+		const source = createSourceTask();
+		const end = requireNode(source, 'end');
+		const outOfBounds: TaskBlueprint = {
+			...source,
+			nodePositions: {
+				...source.nodePositions,
+				[end.id]: {
+					x: TASK_TRANSFER_LIMITS.maxAbsCoordinate + 1,
+					y: 0,
+				},
+			},
+		};
+
+		assert.deepStrictEqual(validateTaskBlueprint(outOfBounds), []);
+		assert.deepStrictEqual(trySerializeTaskTransfer(outOfBounds), {
+			ok: false,
+			reason: 'transfer_limit',
+		});
+	});
+
 	test('parser는 중복/dangling/direct/self/cycle Edge를 기존 Task 규칙으로 거부한다', () => {
 		const valid = createExpectedTransferDocument();
 
