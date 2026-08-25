@@ -1,5 +1,19 @@
+import type { ProviderId } from '../agent/protocol';
+
 /** 현재 해석할 수 있는 Task Blueprint 형식 버전이다. */
 export const TASK_BLUEPRINT_VERSION = 1;
+
+/** Work에서 선택할 수 있는 실행 Agent provider 식별자다. */
+export const WORK_AGENT_PROVIDER_IDS = [
+	'codex',
+	'claude',
+] as const satisfies readonly ProviderId[];
+
+/** Work 하나에 배정하는 실행 Agent provider다. */
+export type WorkAgentProviderId = typeof WORK_AGENT_PROVIDER_IDS[number];
+
+/** 새 Work와 legacy Work에 적용하는 기본 Agent provider다. */
+export const DEFAULT_WORK_AGENT_PROVIDER_ID: WorkAgentProviderId = 'codex';
 
 /** Task 전체를 Graph World에 배치하는 기준 좌표다. */
 export interface TaskOrigin {
@@ -49,6 +63,7 @@ export interface WorkNode extends TaskNodeBase {
 	readonly title: string;
 	readonly description: string;
 	readonly prompt: string;
+	readonly agentProviderId: WorkAgentProviderId;
 	readonly graphTargets: WorkGraphTargets;
 }
 
@@ -87,6 +102,7 @@ export interface CreateWorkNodeInput {
 	readonly title?: string;
 	readonly description?: string;
 	readonly prompt?: string;
+	readonly agentProviderId?: WorkAgentProviderId;
 }
 
 /** Start와 End만 가진 기본 Blueprint 생성 입력이다. */
@@ -203,6 +219,22 @@ function readWorkGraphTargets(work: WorkNode): TaskGraphTargets {
 	return (
 		work as WorkNode & { readonly graphTargets?: TaskGraphTargets }
 	).graphTargets ?? { reference: [], work: [] };
+}
+
+/** 외부 입력이 Work에서 지원하는 Agent provider인지 판별한다. */
+export function isWorkAgentProviderId(
+	value: unknown,
+): value is WorkAgentProviderId {
+	return WORK_AGENT_PROVIDER_IDS.some((providerId) => providerId === value);
+}
+
+/** version 1 legacy Work의 누락된 Agent provider를 Codex로 해석한다. */
+export function resolveWorkAgentProviderId(
+	work: WorkNode,
+): WorkAgentProviderId {
+	return (
+		work as WorkNode & { readonly agentProviderId?: WorkAgentProviderId }
+	).agentProviderId ?? DEFAULT_WORK_AGENT_PROVIDER_ID;
 }
 
 /** Browser와 Extension Host에서 공통으로 사용할 UUID를 생성한다. */

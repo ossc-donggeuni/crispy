@@ -1,3 +1,5 @@
+import { AGENT_PROVIDER_LABELS } from '../../agent/UI/agentProviders';
+import type { TaskNodePosition, TaskOrigin } from '../../task';
 import {
 	createTaskEdgeGeometry,
 	getTaskPortCenter,
@@ -10,7 +12,6 @@ import {
 	type TaskLayoutNode,
 	type TaskLayoutPosition,
 } from './taskLayout';
-import type { TaskNodePosition, TaskOrigin } from '../../task';
 import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../graph/graphNodeDrag';
 
@@ -1422,7 +1423,21 @@ function createTaskNodeContents(
 	title.textContent = node.title;
 	description.className = 'task-node-description';
 	description.textContent = node.description;
-	content.append(title, description);
+	if (node.kind === 'work') {
+		const titleRow = ownerDocument.createElement('span');
+		const agent = ownerDocument.createElement('span');
+		const agentLabel = AGENT_PROVIDER_LABELS[node.agentProviderId];
+
+		titleRow.className = 'task-node-title-row';
+		title.title = node.title;
+		agent.className = 'task-node-agent';
+		agent.textContent = `[${agentLabel}]`;
+		agent.setAttribute('aria-label', `AI Agent: ${agentLabel}`);
+		titleRow.append(title, agent);
+		content.append(titleRow, description);
+	} else {
+		content.append(title, description);
+	}
 
 	if (node.kind === 'start') {
 		return [
@@ -1563,9 +1578,14 @@ function resolveTaskGraphTargetToggleArea(
 }
 
 function createTaskNodeAriaLabel(node: TaskLayoutNode): string {
+	if (node.kind === 'work') {
+		const agentLabel = AGENT_PROVIDER_LABELS[node.agentProviderId];
+
+		return `Task Work: ${node.title}, AI Agent: ${agentLabel}`;
+	}
 	const kind = node.kind === 'start'
 		? 'Start'
-		: node.kind === 'work' ? 'Work' : 'End';
+		: 'End';
 
 	return `Task ${kind}: ${node.title}`;
 }

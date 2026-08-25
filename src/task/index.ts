@@ -3,10 +3,14 @@ export {
 	createTaskEdgeId,
 	createTaskId,
 	createTaskNodeId,
+	isWorkAgentProviderId,
 	resolveEffectiveWorkGraphTargets,
+	resolveWorkAgentProviderId,
+	DEFAULT_WORK_AGENT_PROVIDER_ID,
 	TASK_DEFAULT_END_POSITION,
 	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	TASK_BLUEPRINT_VERSION,
+	WORK_AGENT_PROVIDER_IDS,
 	type CreateTaskBlueprintInput,
 	type CreateWorkNodeInput,
 	type EndNode,
@@ -19,6 +23,7 @@ export {
 	type TaskNodePosition,
 	type TaskOrigin,
 	type WorkNode,
+	type WorkAgentProviderId,
 	type WorkGraphTargets,
 } from './taskModel';
 export {

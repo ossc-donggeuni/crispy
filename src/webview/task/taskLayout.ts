@@ -1,10 +1,12 @@
 import {
 	assertValidTaskBlueprint,
 	getTaskFlowAnalysis,
+	resolveWorkAgentProviderId,
 	type TaskBlueprint,
 	type TaskFlowStatus,
 	type TaskGraphTargets,
 	type TaskNode,
+	type WorkAgentProviderId,
 } from '../../task';
 
 /** Task Graph World에서 사용하는 좌표다. */
@@ -94,6 +96,7 @@ export interface TaskWorkLayoutNode extends TaskGraphScopeLayoutNodeBase {
 	readonly title: string;
 	readonly description: string;
 	readonly prompt: string;
+	readonly agentProviderId: WorkAgentProviderId;
 	readonly canRemove: boolean;
 	readonly connectionState: TaskNodeConnectionState;
 }
@@ -256,6 +259,7 @@ function createTaskLayout(
 				title: node.title,
 				description: node.description,
 				prompt: node.prompt,
+				agentProviderId: resolveWorkAgentProviderId(node),
 				canRemove: true,
 				connectionState: flowAnalysis.connectedNodeIds.has(node.id)
 					? 'connected'

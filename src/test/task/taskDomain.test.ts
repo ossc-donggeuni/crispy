@@ -3,6 +3,7 @@ import {
 	assertValidTaskBlueprint,
 	createDefaultTaskBlueprint,
 	createTaskState,
+	DEFAULT_WORK_AGENT_PROVIDER_ID,
 	getTaskFlowAnalysis,
 	getTaskFlowStatus,
 	resolveEffectiveWorkGraphTargets,
@@ -100,7 +101,10 @@ suite('Task Domain', () => {
 	test('Work를 Edge 없이 deterministic vertical lane에 추가한다', () => {
 		const state = createTaskState([], createSequentialIdSource());
 		const task = state.createTask({ title: 'Placement Task' });
-		const first = state.addWork(task.id, { title: 'First' });
+		const first = state.addWork(task.id, {
+			title: 'First',
+			agentProviderId: 'claude',
+		});
 		const second = state.addWork(task.id);
 		const third = state.addWork(task.id);
 		const fourth = state.addWork(task.id);
@@ -116,6 +120,12 @@ suite('Task Domain', () => {
 		]);
 		assert.strictEqual(works[0]?.title, 'First');
 		assert.strictEqual(works[1]?.title, 'New Work');
+		assert.deepStrictEqual(works.map((node) => node.agentProviderId), [
+			'claude',
+			DEFAULT_WORK_AGENT_PROVIDER_ID,
+			DEFAULT_WORK_AGENT_PROVIDER_ID,
+			DEFAULT_WORK_AGENT_PROVIDER_ID,
+		]);
 		assert.deepStrictEqual(works.map((node) => fourth.nodePositions[node.id]), [
 			{ x: 320, y: 0 },
 			{ x: 320, y: TASK_DEFAULT_WORK_VERTICAL_STRIDE },
@@ -187,6 +197,7 @@ suite('Task Domain', () => {
 
 		const legacyWork = {
 			...work,
+			agentProviderId: undefined,
 			graphTargets: undefined,
 		};
 		const legacyTask = {
@@ -205,6 +216,42 @@ suite('Task Domain', () => {
 			{ reference: [], work: [] },
 		);
 		assert.deepStrictEqual(normalized.graphTargets, { reference: [], work: [] });
+		assert.strictEqual(
+			normalized.agentProviderId,
+			DEFAULT_WORK_AGENT_PROVIDER_ID,
+		);
+	});
+
+	test('Work Agent provider는 Codex/Claude만 허용하고 잘못된 갱신을 commit하지 않는다', () => {
+		const task = addWorks(createTask(), ['Agent Work']);
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(work?.kind === 'work');
+		const invalidTask = {
+			...task,
+			nodes: task.nodes.map((node) => node.id === work.id
+				? { ...node, agentProviderId: 'gemini' }
+				: node),
+		} as unknown as TaskBlueprint;
+
+		assertIssueCodes(invalidTask, ['invalid_work_agent_provider']);
+		const state = createTaskState([task]);
+		const snapshot = state.getSnapshot();
+
+		assert.throws(
+			() => state.updateTask(task.id, () => invalidTask),
+			/Work agent provider is invalid/,
+		);
+		assert.strictEqual(state.getSnapshot(), snapshot);
+		const preservedWork = state.getTask(task.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+
+		assert.ok(preservedWork?.kind === 'work');
+		assert.strictEqual(
+			preservedWork.agentProviderId,
+			DEFAULT_WORK_AGENT_PROVIDER_ID,
+		);
 	});
 
 	test('Work 유효 범위는 Task 기본값과 Work 고유값을 Area별 stable union으로 파생한다', () => {

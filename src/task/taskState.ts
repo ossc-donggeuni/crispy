@@ -2,6 +2,8 @@ import {
 	createDefaultTaskBlueprint,
 	createTaskEdgeId,
 	createTaskNodeId,
+	DEFAULT_WORK_AGENT_PROVIDER_ID,
+	resolveWorkAgentProviderId,
 	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	type CreateTaskBlueprintInput,
 	type CreateWorkNodeInput,
@@ -263,6 +265,7 @@ function createWorkNode(
 		title: work?.title ?? 'New Work',
 		description: work?.description ?? '',
 		prompt: work?.prompt ?? '',
+		agentProviderId: work?.agentProviderId ?? DEFAULT_WORK_AGENT_PROVIDER_ID,
 		graphTargets: {
 			reference: [],
 			work: [],
@@ -487,6 +490,7 @@ function createNodeSnapshot(node: TaskNode): TaskNode {
 			title: node.title,
 			description: node.description,
 			prompt: node.prompt,
+			agentProviderId: resolveWorkAgentProviderId(node),
 			graphTargets: createGraphTargetsSnapshot(node.graphTargets),
 		});
 	}

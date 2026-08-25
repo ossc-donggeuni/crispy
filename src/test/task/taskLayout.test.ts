@@ -55,6 +55,7 @@ suite('Task Layout', () => {
 		assert.strictEqual(workLayout.title, 'Work');
 		assert.strictEqual(workLayout.description, 'Work description');
 		assert.strictEqual(workLayout.prompt, 'Run the work.\nKeep the result concise.');
+		assert.strictEqual(workLayout.agentProviderId, 'claude');
 		assert.strictEqual(startLayout.connectionState, 'connected');
 		assert.strictEqual(workLayout.connectionState, 'connected');
 		assert.strictEqual(endLayout.connectionState, 'connected');
@@ -840,6 +841,7 @@ function createReadyTask(
 		title: 'Work',
 		description: 'Work description',
 			prompt: 'Run the work.\nKeep the result concise.',
+			agentProviderId: 'claude' as const,
 			graphTargets: { reference: [], work: [] },
 	};
 	const end = { id: 'task-node:same-end', kind: 'end' as const };
@@ -991,6 +993,7 @@ function createWorkNode(id: string, title: string) {
 		title,
 		description: '',
 			prompt: '',
+			agentProviderId: 'codex' as const,
 			graphTargets: { reference: [], work: [] },
 		};
 }

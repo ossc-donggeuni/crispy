@@ -5911,6 +5911,14 @@ suite('Graph View', () => {
 			findDescendantByAttribute(inspector, TASK_INSPECTOR_FIELD_ATTRIBUTE, 'prompt'),
 			undefined,
 		);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				inspector,
+				TASK_INSPECTOR_FIELD_ATTRIBUTE,
+				'agentProviderId',
+			),
+			undefined,
+		);
 		const firstInspector = inspector;
 
 		startElement.dispatch('dblclick', createClickEvent(startElement));
@@ -5925,6 +5933,20 @@ suite('Graph View', () => {
 		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_NODE_ID_ATTRIBUTE), work.id);
 		assert.strictEqual(inspector.getAttribute(TASK_INSPECTOR_KIND_ATTRIBUTE), 'work');
 		assert.ok(getTaskInspectorControl(inspector, 'prompt'));
+		const agentSelect = getTaskInspectorControl(inspector, 'agentProviderId');
+
+		assert.strictEqual(agentSelect.closest('select'), agentSelect);
+		assert.strictEqual(agentSelect.value, 'codex');
+		assert.deepStrictEqual(agentSelect.children.map((option) => ({
+			value: option.value,
+			label: option.textContent,
+		})), [{
+			value: 'codex',
+			label: 'Codex',
+		}, {
+			value: 'claude',
+			label: 'Claude Code',
+		}]);
 		assert.strictEqual(getDescendantsByClass(root, 'task-inspector').length, 1);
 		const firstWorkInspector = inspector;
 
@@ -6214,6 +6236,122 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('WORK Agent 선택은 Node별 State와 제목 행 표시를 독립적으로 갱신한다', () => {
+		const longTitle = '로그인과 보안 정책을 함께 구현하는 매우 긴 작업 제목';
+		const baseTask = createSerialRenderingTask(
+			'task:work-agent-selection',
+			{ x: 100, y: 50 },
+			2,
+		);
+		const [baseFirstWork] = baseTask.nodes.filter((node) => node.kind === 'work');
+
+		assert.ok(baseFirstWork?.kind === 'work');
+		const task: TaskBlueprint = {
+			...baseTask,
+			nodes: baseTask.nodes.map((node) => node.id === baseFirstWork.id
+				? { ...node, title: longTitle }
+				: node),
+		};
+		const [firstWork, secondWork] = task.nodes.filter(
+			(node) => node.kind === 'work',
+		);
+
+		assert.ok(firstWork?.kind === 'work' && secondWork?.kind === 'work');
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+		const firstWorkElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			firstWork.id,
+			task.id,
+		);
+		const secondWorkElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			secondWork.id,
+			task.id,
+		);
+		const firstTitleRow = getDescendantByClass(
+			firstWorkElement,
+			'task-node-title-row',
+		);
+		const firstTitle = getDescendantByClass(firstTitleRow, 'task-node-title');
+
+		assert.strictEqual(firstTitle.textContent, longTitle);
+		assert.strictEqual(firstTitle.title, longTitle);
+		assert.strictEqual(
+			getDescendantByClass(firstTitleRow, 'task-node-agent').textContent,
+			'[Codex]',
+		);
+		assert.strictEqual(
+			getDescendantByClass(secondWorkElement, 'task-node-agent').textContent,
+			'[Codex]',
+		);
+		assert.match(firstWorkElement.getAttribute('aria-label') ?? '', /AI Agent: Codex/);
+
+		firstWorkElement.dispatch('dblclick', createClickEvent(firstWorkElement));
+		const inspector = getTaskInspector(root);
+		const agentSelect = getTaskInspectorControl(inspector, 'agentProviderId');
+
+		assert.strictEqual(agentSelect.value, 'codex');
+		agentSelect.value = 'claude';
+		agentSelect.dispatch('change', createChangeEvent(agentSelect));
+		assert.strictEqual(getTaskInspector(root), inspector);
+		assert.strictEqual(
+			getTaskInspectorControl(inspector, 'agentProviderId'),
+			agentSelect,
+		);
+		assert.strictEqual(agentSelect.value, 'claude');
+		const updatedTask = graphView.taskState.getTask(task.id);
+		const updatedWorks = updatedTask?.nodes.filter((node) => node.kind === 'work');
+
+		assert.ok(updatedTask && updatedWorks?.length === 2);
+		assert.deepStrictEqual(
+			updatedWorks.map((node) => node.agentProviderId),
+			['claude', 'codex'],
+		);
+		const updatedLayout = createTaskGraphLayout([updatedTask]).nodes.find(
+			(node) => node.id === firstWork.id,
+		);
+
+		assert.ok(updatedLayout?.kind === 'work');
+		assert.strictEqual(updatedLayout.agentProviderId, 'claude');
+		assert.strictEqual(
+			getDescendantByClass(firstWorkElement, 'task-node-agent').textContent,
+			'[Claude Code]',
+		);
+		assert.strictEqual(
+			getDescendantByClass(secondWorkElement, 'task-node-agent').textContent,
+			'[Codex]',
+		);
+		assert.match(
+			firstWorkElement.getAttribute('aria-label') ?? '',
+			/AI Agent: Claude Code/,
+		);
+
+		graphView.updateTasks([...graphView.taskState.getSnapshot().tasks]);
+		assert.strictEqual(getTaskInspector(root), inspector);
+		assert.strictEqual(agentSelect.value, 'claude');
+		assert.strictEqual(
+			getDescendantByClass(firstWorkElement, 'task-node-agent').textContent,
+			'[Claude Code]',
+		);
+		secondWorkElement.dispatch('dblclick', createClickEvent(secondWorkElement));
+		assert.strictEqual(
+			getTaskInspectorControl(getTaskInspector(root), 'agentProviderId').value,
+			'codex',
+		);
+
+		graphView.dispose();
+	});
+
 	test('Task Inspector는 Camera/Layout 변화 뒤 재배치되며 panel 크기를 scale하지 않는다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -6302,10 +6440,12 @@ suite('Graph View', () => {
 		const titleAtDispose = graphView.taskState.getTask(task.id)?.title;
 
 		assert.strictEqual(inspector.getEventListenerCount('input'), 1);
+		assert.strictEqual(inspector.getEventListenerCount('change'), 1);
 		assert.strictEqual(inspector.getEventListenerCount('pointerdown'), 1);
 		graphView.dispose();
 		assert.strictEqual(root.children.length, 0);
 		assert.strictEqual(inspector.getEventListenerCount('input'), 0);
+		assert.strictEqual(inspector.getEventListenerCount('change'), 0);
 		assert.strictEqual(inspector.getEventListenerCount('pointerdown'), 0);
 
 		titleInput.value = 'Ignored after dispose';
@@ -6430,6 +6570,18 @@ suite('Graph View', () => {
 		assert.match(taskViewCss, /\.task-node-content\s*\{[^}]*flex-direction:\s*column;/s);
 		assert.match(
 			taskViewCss,
+			/\.task-node-title-row\s*\{[^}]*display:\s*flex;[^}]*min-width:\s*0;[^}]*align-items:\s*baseline;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node-title-row\s*>\s*\.task-node-title\s*\{[^}]*display:\s*block;[^}]*flex:\s*1 1 auto;[^}]*min-width:\s*0;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node-agent\s*\{[^}]*flex:\s*0 0 auto;[^}]*--vscode-foreground[^}]*font-weight:\s*600;[^}]*white-space:\s*nowrap;/s,
+		);
+		assert.match(
+			taskViewCss,
 			/\.task-node-description\s*\{[^}]*--vscode-descriptionForeground[^}]*-webkit-line-clamp:\s*1;/s,
 		);
 		assert.match(
@@ -6467,6 +6619,10 @@ suite('Graph View', () => {
 		assert.match(
 			taskViewCss,
 			/\.task-node:has\(>\s*\.task-node-actions\):hover,[^{]*\{[^}]*z-index:\s*2;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/select\.task-inspector-control\s*\{[^}]*cursor:\s*pointer;/s,
 		);
 		assert.match(
 			taskViewCss,
@@ -13627,7 +13783,7 @@ function getTaskInspector(element: FakeElement): FakeElement {
 
 function getTaskInspectorControl(
 	element: FakeElement,
-	field: 'title' | 'description' | 'prompt',
+	field: 'title' | 'description' | 'prompt' | 'agentProviderId',
 ): FakeElement {
 	return getDescendantByAttribute(
 		element,
@@ -13821,6 +13977,14 @@ function createInputEvent(target: FakeElement): InputEvent {
 		preventDefault: () => undefined,
 		stopPropagation: () => undefined,
 	} as unknown as InputEvent;
+}
+
+function createChangeEvent(target: FakeElement): Event {
+	return {
+		target: target.asHtmlElement(),
+		preventDefault: () => undefined,
+		stopPropagation: () => undefined,
+	} as unknown as Event;
 }
 
 function createKeyboardEvent(key: string): KeyboardEvent {
@@ -14160,6 +14324,7 @@ function createSerialRenderingTask(
 		title: 'Work ' + (index + 1),
 		description: '',
 			prompt: '',
+			agentProviderId: 'codex' as const,
 			graphTargets: { reference: [], work: [] },
 		}));
 	const nodes = [start, ...works, end];
@@ -14254,6 +14419,7 @@ function createCollidingRenderingTask(
 		title: `${title} Work`,
 		description: `${title} Work description`,
 			prompt: `${title} prompt`,
+			agentProviderId: 'codex' as const,
 			graphTargets: { reference: [], work: [] },
 		};
 

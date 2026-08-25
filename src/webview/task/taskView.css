@@ -299,6 +299,13 @@
 	min-width: 0;
 }
 
+.task-node-title-row {
+	display: flex;
+	min-width: 0;
+	align-items: baseline;
+	gap: 8px;
+}
+
 .task-node-title {
 	display: -webkit-box;
 	overflow: hidden;
@@ -307,6 +314,23 @@
 	line-height: 19px;
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 1;
+}
+
+.task-node-title-row > .task-node-title {
+	display: block;
+	flex: 1 1 auto;
+	min-width: 0;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-node-agent {
+	flex: 0 0 auto;
+	color: var(--vscode-foreground, #f2f2f2);
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 19px;
+	white-space: nowrap;
 }
 
 .task-node-description {
@@ -706,6 +730,10 @@
 textarea.task-inspector-control {
 	min-height: 96px;
 	resize: none;
+}
+
+select.task-inspector-control {
+	cursor: pointer;
 }
 
 .task-inspector-control:focus,

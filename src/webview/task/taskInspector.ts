@@ -1,3 +1,9 @@
+import { AGENT_PROVIDER_LABELS } from '../../agent/UI/agentProviders';
+import {
+	isWorkAgentProviderId,
+	WORK_AGENT_PROVIDER_IDS,
+	type WorkAgentProviderId,
+} from '../../task';
 import {
 	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
 	type GraphCamera,
@@ -24,11 +30,18 @@ export interface TaskStartInspectorFieldInput extends FocusedTaskNode {
 }
 
 /** WORK Inspector가 WorkNode에 반영할 수 있는 입력이다. */
-export interface TaskWorkInspectorFieldInput extends FocusedTaskNode {
-	readonly kind: 'work';
-	readonly field: 'title' | 'description' | 'prompt';
-	readonly value: string;
-}
+export type TaskWorkInspectorFieldInput = FocusedTaskNode & (
+	| {
+		readonly kind: 'work';
+		readonly field: 'title' | 'description' | 'prompt';
+		readonly value: string;
+	}
+	| {
+		readonly kind: 'work';
+		readonly field: 'agentProviderId';
+		readonly value: WorkAgentProviderId;
+	}
+);
 
 /** Inspector의 즉시 편집 요청을 kind와 field로 구분한다. */
 export type TaskInspectorFieldInput =
@@ -73,11 +86,21 @@ export const TASK_INSPECTOR_VIEWPORT_INSET = 12;
 
 type InspectableTaskLayoutNode = TaskStartLayoutNode | TaskWorkLayoutNode;
 type TaskInspectorField = TaskInspectorFieldInput['field'];
+type TaskInspectorControl =
+	| HTMLInputElement
+	| HTMLTextAreaElement
+	| HTMLSelectElement;
+
+interface TaskInspectorSelectOption {
+	readonly value: WorkAgentProviderId;
+	readonly label: string;
+}
 
 interface TaskInspectorFieldDescriptor {
 	readonly field: TaskInspectorField;
 	readonly label: string;
 	readonly multiline?: boolean;
+	readonly options?: readonly TaskInspectorSelectOption[];
 	getValue(node: InspectableTaskLayoutNode): string;
 }
 
@@ -85,7 +108,7 @@ interface MountedTaskInspector {
 	readonly renderKey: string;
 	readonly kind: InspectableTaskLayoutNode['kind'];
 	readonly root: HTMLElement;
-	readonly controls: ReadonlyMap<TaskInspectorField, HTMLInputElement | HTMLTextAreaElement>;
+	readonly controls: ReadonlyMap<TaskInspectorField, TaskInspectorControl>;
 }
 
 const START_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
@@ -102,6 +125,15 @@ const START_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
 ];
 
 const WORK_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
+	{
+		field: 'agentProviderId',
+		label: 'AI Agent',
+		options: WORK_AGENT_PROVIDER_IDS.map((providerId) => ({
+			value: providerId,
+			label: AGENT_PROVIDER_LABELS[providerId],
+		})),
+		getValue: (node) => node.kind === 'work' ? node.agentProviderId : '',
+	},
 	...START_FIELD_DESCRIPTORS,
 	{
 		field: 'prompt',
@@ -177,7 +209,10 @@ export function initializeTaskInspector(
 		event.stopPropagation();
 	};
 
-	const handleInput = (event: Event): void => {
+	const handleControlEvent = (
+		event: Event,
+		controlKind: 'text' | 'select',
+	): void => {
 		if (!mounted || !isTaskInspectorControl(event.target)) {
 			return;
 		}
@@ -189,8 +224,14 @@ export function initializeTaskInspector(
 		if (!taskId || !nodeId || !isTaskInspectorField(field)) {
 			return;
 		}
+		if ((field === 'agentProviderId') !== (controlKind === 'select')) {
+			return;
+		}
 
-		if (mounted.kind === 'start' && field !== 'prompt') {
+		if (
+			mounted.kind === 'start'
+			&& (field === 'title' || field === 'description')
+		) {
 			interactions.onFieldInput?.({
 				kind: mounted.kind,
 				taskId,
@@ -198,7 +239,22 @@ export function initializeTaskInspector(
 				field,
 				value: event.target.value,
 			});
-		} else if (mounted.kind === 'work') {
+		} else if (
+			mounted.kind === 'work'
+			&& field === 'agentProviderId'
+			&& isWorkAgentProviderId(event.target.value)
+		) {
+			interactions.onFieldInput?.({
+				kind: mounted.kind,
+				taskId,
+				nodeId,
+				field,
+				value: event.target.value,
+			});
+		} else if (
+			mounted.kind === 'work'
+			&& (field === 'title' || field === 'description' || field === 'prompt')
+		) {
 			interactions.onFieldInput?.({
 				kind: mounted.kind,
 				taskId,
@@ -208,6 +264,12 @@ export function initializeTaskInspector(
 			});
 		}
 	};
+	const handleInput = (event: Event): void => {
+		handleControlEvent(event, 'text');
+	};
+	const handleChange = (event: Event): void => {
+		handleControlEvent(event, 'select');
+	};
 
 	const removeMountedInspector = (): void => {
 		if (!mounted) {
@@ -216,6 +278,7 @@ export function initializeTaskInspector(
 		}
 
 		mounted.root.removeEventListener('input', handleInput);
+		mounted.root.removeEventListener('change', handleChange);
 		for (const eventType of INSPECTOR_PROPAGATION_EVENT_TYPES) {
 			mounted.root.removeEventListener(eventType, stopInteractionPropagation);
 		}
@@ -227,10 +290,7 @@ export function initializeTaskInspector(
 	const mountInspector = (node: InspectableTaskLayoutNode): void => {
 		const root = ownerDocument.createElement('aside');
 		const heading = ownerDocument.createElement('strong');
-		const controls = new Map<
-			TaskInspectorField,
-			HTMLInputElement | HTMLTextAreaElement
-		>();
+		const controls = new Map<TaskInspectorField, TaskInspectorControl>();
 		const descriptors = node.kind === 'start'
 			? START_FIELD_DESCRIPTORS
 			: WORK_FIELD_DESCRIPTORS;
@@ -249,9 +309,11 @@ export function initializeTaskInspector(
 		for (const descriptor of descriptors) {
 			const label = ownerDocument.createElement('label');
 			const labelText = ownerDocument.createElement('span');
-			const control = descriptor.multiline
-				? ownerDocument.createElement('textarea')
-				: ownerDocument.createElement('input');
+			const control = descriptor.options
+				? ownerDocument.createElement('select')
+				: descriptor.multiline
+					? ownerDocument.createElement('textarea')
+					: ownerDocument.createElement('input');
 
 			label.className = 'task-inspector-field';
 			labelText.className = 'task-inspector-field-label';
@@ -259,11 +321,21 @@ export function initializeTaskInspector(
 			control.className = 'task-inspector-control';
 			control.setAttribute(TASK_INSPECTOR_FIELD_ATTRIBUTE, descriptor.field);
 			control.setAttribute('aria-label', descriptor.label);
-			control.setAttribute('autocomplete', 'off');
-			if (descriptor.multiline) {
+			if (descriptor.options) {
+				for (const descriptorOption of descriptor.options) {
+					const option = ownerDocument.createElement('option');
+
+					option.value = descriptorOption.value;
+					option.textContent = descriptorOption.label;
+					control.append(option);
+				}
+			} else if (descriptor.multiline) {
 				(control as HTMLTextAreaElement).rows = 5;
 			} else {
 				(control as HTMLInputElement).type = 'text';
+			}
+			if (!descriptor.options) {
+				control.setAttribute('autocomplete', 'off');
 			}
 			control.value = descriptor.getValue(node);
 			label.append(labelText, control);
@@ -272,6 +344,7 @@ export function initializeTaskInspector(
 		}
 
 		root.addEventListener('input', handleInput);
+		root.addEventListener('change', handleChange);
 		for (const eventType of INSPECTOR_PROPAGATION_EVENT_TYPES) {
 			root.addEventListener(eventType, stopInteractionPropagation);
 		}
@@ -297,7 +370,7 @@ export function initializeTaskInspector(
 
 		mounted.root.style.width = `${width}px`;
 		const measuredHeight = mounted.root.offsetHeight;
-		const fallbackHeight = mounted.kind === 'work' ? 304 : 192;
+		const fallbackHeight = mounted.kind === 'work' ? 368 : 192;
 		const position = calculateTaskInspectorPosition(
 			currentNode,
 			camera,
@@ -393,7 +466,7 @@ function createTaskNodeRenderKey(taskId: string, nodeId: string): string {
 
 function isTaskInspectorControl(
 	target: EventTarget | null,
-): target is HTMLInputElement | HTMLTextAreaElement {
+): target is TaskInspectorControl {
 	return target !== null
 		&& typeof (target as Element).getAttribute === 'function'
 		&& (target as Element).hasAttribute(TASK_INSPECTOR_FIELD_ATTRIBUTE)
@@ -401,7 +474,10 @@ function isTaskInspectorControl(
 }
 
 function isTaskInspectorField(value: string | null): value is TaskInspectorField {
-	return value === 'title' || value === 'description' || value === 'prompt';
+	return value === 'title'
+		|| value === 'description'
+		|| value === 'prompt'
+		|| value === 'agentProviderId';
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

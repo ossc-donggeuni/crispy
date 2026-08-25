@@ -1,10 +1,16 @@
-import type { TaskBlueprint, TaskEdge, TaskGraphTargets } from './taskModel';
+import {
+	isWorkAgentProviderId,
+	type TaskBlueprint,
+	type TaskEdge,
+	type TaskGraphTargets,
+} from './taskModel';
 
 /** Task Blueprint validation에서 구분하는 구조 오류다. */
 export type TaskValidationIssueCode =
 	| 'start_node_count'
 	| 'end_node_count'
 	| 'duplicate_node_id'
+	| 'invalid_work_agent_provider'
 	| 'invalid_graph_targets'
 	| 'duplicate_graph_target'
 	| 'node_position_missing'
@@ -87,6 +93,13 @@ export function validateTaskBlueprint(
 		nodeIds.add(node.id);
 
 		if (node.kind === 'work') {
+			validateWorkAgentProvider(
+				(node as typeof node & {
+					readonly agentProviderId?: unknown;
+				}).agentProviderId,
+				issues,
+				node.id,
+			);
 			validateGraphTargets(
 				(node as typeof node & { readonly graphTargets?: unknown }).graphTargets,
 				issues,
@@ -225,6 +238,24 @@ export function validateTaskBlueprint(
 	}
 
 	return issues;
+}
+
+/** legacy 누락은 허용하고 명시된 Work Agent provider만 allowlist로 검증한다. */
+function validateWorkAgentProvider(
+	agentProviderId: unknown,
+	issues: TaskValidationIssue[],
+	nodeId: string,
+): void {
+	if (
+		agentProviderId !== undefined
+		&& !isWorkAgentProviderId(agentProviderId)
+	) {
+		issues.push({
+			code: 'invalid_work_agent_provider',
+			message: `Work agent provider is invalid: ${nodeId}.`,
+			nodeId,
+		});
+	}
 }
 
 /** legacy 누락은 허용하되 저장된 Graph Target의 배열/중복 불변성은 검사한다. */
