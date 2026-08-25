@@ -1071,6 +1071,64 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(writeCount, 3);
 	});
 
+	test('full state 전달 실패는 현재 epoch 확인 전까지 다음 Refresh에서도 state를 유지한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/delivery-retry');
+		const contextKey = JSON.stringify([rootUri.toString()]);
+		const currentGeneration = 4;
+		const state = createWorkspacePersistentState();
+
+		for (const failure of ['false', 'rejection'] as const) {
+			const messages: Array<Extract<
+				ExtensionToWebviewMessage,
+				{ type: 'workspace.graphUpdated' }
+			>> = [];
+			let latestAcknowledgedGeneration = currentGeneration - 1;
+			let postMessageCalls = 0;
+			const coordinator = createWorkspaceRefreshCoordinator({
+				async createWorkspaceSnapshot() {
+					return { roots: [] };
+				},
+				convertWorkspaceSnapshotToGraph: () => ({ roots: [], rootNodes: {} }),
+				getWorkspaceContextGeneration: () => currentGeneration,
+				async loadWorkspaceState() {
+					return shouldLoadWorkspacePersistenceState(
+						[rootUri],
+						contextKey,
+						undefined,
+						latestAcknowledgedGeneration < currentGeneration,
+					)
+						? state
+						: undefined;
+				},
+				async postMessage(message) {
+					messages.push(message);
+					postMessageCalls += 1;
+					if (postMessageCalls === 1) {
+						if (failure === 'rejection') {
+							throw new Error('delivery failed');
+						}
+						return false;
+					}
+					if (postMessageCalls === 2) {
+						latestAcknowledgedGeneration = currentGeneration;
+					}
+					return true;
+				},
+			});
+
+			await coordinator.requestWorkspaceRefresh();
+			await coordinator.requestWorkspaceRefresh();
+			await coordinator.requestWorkspaceRefresh();
+
+			assert.deepStrictEqual(
+				messages.map((message) => message.state !== undefined),
+				[true, true, false],
+				failure,
+			);
+			coordinator.dispose();
+		}
+	});
+
 	test('aborted Canvas는 topology materialization을 예약하지 않는다', async () => {
 		const controller = new AbortController();
 		const writes: WorkspacePersistentState[] = [];

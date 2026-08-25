@@ -416,6 +416,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 					rootUris,
 					workspacePersistenceContextKey,
 					pendingWorkspaceMaterializationGeneration,
+					latestAcknowledgedWorkspaceContextGeneration
+						< workspaceContextGeneration,
 				)
 					? refreshWorkspacePersistenceContext(
 						workspacePersistence,
@@ -1043,14 +1045,16 @@ function createWorkspaceContextKey(rootUris: readonly vscode.Uri[]): string {
 	return JSON.stringify(rootUris.map((uri) => uri.toString()).sort());
 }
 
-/** 새 Root context 또는 미완료 materialization만 full Workspace state를 다시 읽는다. */
+/** 새 Root context, 미완료 materialization 또는 Webview 미확인 epoch만 full state를 싣는다. */
 export function shouldLoadWorkspacePersistenceState(
 	rootUris: readonly vscode.Uri[],
 	currentContextKey: string | undefined,
 	pendingMaterializationGeneration: number | undefined,
+	hasUnacknowledgedContext = false,
 ): boolean {
 	return createWorkspaceContextKey(rootUris) !== currentContextKey
-		|| pendingMaterializationGeneration !== undefined;
+		|| pendingMaterializationGeneration !== undefined
+		|| hasUnacknowledgedContext;
 }
 
 /** Project Root semantic IDs를 URI 배열로 엄격히 복원한다. */
