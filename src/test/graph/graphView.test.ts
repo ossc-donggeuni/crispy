@@ -5511,6 +5511,10 @@ suite('Graph View', () => {
 			taskViewCss,
 			/\.task-node-description\s*\{[^}]*--vscode-descriptionForeground[^}]*-webkit-line-clamp:\s*1;/s,
 		);
+		assert.match(
+			taskViewCss,
+			/\.task-node-prompt\s*\{[^}]*display:\s*-webkit-box;[^}]*--vscode-charts-blue[^}]*-webkit-line-clamp:\s*1;/s,
+		);
 		assert.doesNotMatch(
 			taskViewCss,
 			/\.task-work-node\s*>\s*\.task-node-description[^{]*\{[^}]*display:\s*none;/s,

@@ -267,7 +267,13 @@
 }
 
 .task-node-prompt {
-	display: none;
+	display: -webkit-box;
+	overflow: hidden;
+	color: var(--vscode-charts-blue, #3794ff);
+	font-size: 12px;
+	line-height: 15px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
 }
 
 .task-node-actions {
