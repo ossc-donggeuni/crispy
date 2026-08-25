@@ -66,9 +66,15 @@ suite('Workspace Root Transition', () => {
 
 	test('nested Root 경계의 File Group 합성 ID도 disk partition과 같은 owner를 사용한다', () => {
 		const current = createGraphState({
+			nodePositions: {
+				[ROOT_A_NESTED_FILE_GROUP]: { x: 100, y: 100 },
+			},
 			fileGroupPages: { [ROOT_A_NESTED_FILE_GROUP]: 1 },
 		});
 		const incoming = createGraphState({
+			nodePositions: {
+				[ROOT_A_NESTED_FILE_GROUP]: { x: 700, y: 700 },
+			},
 			fileGroupPages: { [ROOT_A_NESTED_FILE_GROUP]: 7 },
 		});
 
@@ -82,6 +88,9 @@ suite('Workspace Root Transition', () => {
 		assert.deepStrictEqual(transitioned.fileGroupPages, {
 			[ROOT_A_NESTED_FILE_GROUP]: 7,
 		});
+		assert.deepStrictEqual(transitioned.nodePositions, {
+			[ROOT_A_NESTED_FILE_GROUP]: { x: 700, y: 700 },
+		});
 
 		const delayed = mergeContinuouslyRetainedWorkspaceGraphState(
 			incoming,
@@ -93,6 +102,9 @@ suite('Workspace Root Transition', () => {
 
 		assert.deepStrictEqual(delayed.fileGroupPages, {
 			[ROOT_A_NESTED_FILE_GROUP]: 7,
+		});
+		assert.deepStrictEqual(delayed.nodePositions, {
+			[ROOT_A_NESTED_FILE_GROUP]: { x: 700, y: 700 },
 		});
 	});
 

@@ -134,7 +134,11 @@ export function mergeWorkspaceStateForRootTransition(
 
 	return {
 		version: WORKSPACE_PERSISTENT_STATE_VERSION,
-		nodePositions: mergeEntries(current.nodePositions, incoming.nodePositions),
+		nodePositions: mergeEntries(
+			current.nodePositions,
+			incoming.nodePositions,
+			true,
+		),
 		fileGroupPages: mergeEntries(
 			current.fileGroupPages,
 			incoming.fileGroupPages,
@@ -206,7 +210,11 @@ export function mergeContinuouslyRetainedWorkspaceGraphState(
 	};
 
 	return {
-		nodePositions: mergeEntries(current.nodePositions, previous.nodePositions),
+		nodePositions: mergeEntries(
+			current.nodePositions,
+			previous.nodePositions,
+			true,
+		),
 		fileGroupPages: mergeEntries(
 			current.fileGroupPages,
 			previous.fileGroupPages,
