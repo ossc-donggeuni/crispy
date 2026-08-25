@@ -17,6 +17,8 @@ import {
 	mergeWorkspacePersistenceRootTransition,
 	persistWorkspacePersistentStateForRoots,
 	preserveUnresolvedTaskRelocations,
+	refreshWorkspacePersistenceContext,
+	shouldLoadWorkspacePersistenceState,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
@@ -1030,6 +1032,43 @@ suite('Crispy Extension Host', () => {
 		);
 		assert.deepStrictEqual(writes[0]?.state.taskRelocations, [relocation]);
 		assert.deepStrictEqual(writes[1]?.state.tasks, [relocation.record]);
+	});
+
+	test('materialization 실패 context는 같은 Panel refresh에서 write와 state 전달을 재시도한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/materialize-retry');
+		const contextKey = JSON.stringify([rootUri.toString()]);
+		let failWrites = true;
+		let writeCount = 0;
+		const coordinator = createWorkspacePersistenceCoordinator({
+			async writeState() {
+				writeCount += 1;
+				if (failWrites) {
+					throw new Error('write failed');
+				}
+			},
+			logger: { warn: () => undefined },
+		});
+
+		assert.strictEqual(
+			shouldLoadWorkspacePersistenceState([rootUri], contextKey, 1),
+			true,
+		);
+		assert.strictEqual(
+			shouldLoadWorkspacePersistenceState([rootUri], contextKey, undefined),
+			false,
+		);
+		await assert.rejects(
+			refreshWorkspacePersistenceContext(coordinator, [rootUri]),
+			/flush did not reach desired state/,
+		);
+		assert.strictEqual(writeCount, 2);
+
+		failWrites = false;
+		assert.deepStrictEqual(
+			await refreshWorkspacePersistenceContext(coordinator, [rootUri]),
+			createDefaultWorkspacePersistentState(),
+		);
+		assert.strictEqual(writeCount, 3);
 	});
 
 	test('aborted Canvas는 topology materialization을 예약하지 않는다', async () => {

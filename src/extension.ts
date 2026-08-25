@@ -102,6 +102,8 @@ let lastWebviewState: PersistedWebviewState | undefined;
 let lastWorkspaceState: WorkspacePersistentState | undefined;
 /** Persistence coordinator가 현재 desired/durable로 관리하는 Root context다. */
 let workspacePersistenceContextKey: string | undefined;
+/** 아직 모든 Root에 materialize되지 않은 공개 context generation이다. */
+let pendingWorkspaceMaterializationGeneration: number | undefined;
 let workspacePersistenceRootUris: readonly vscode.Uri[] = [];
 /** Webview가 새 context snapshot으로 응답하기 전까지만 이전 context 편집을 병합한다. */
 let workspaceContextGeneration = 0;
@@ -410,14 +412,17 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			loadWorkspaceState: async (graph, _rootIds, signal) => {
 				const rootUris = getWorkspaceRootUrisFromGraph(graph);
 
-				return createWorkspaceContextKey(rootUris)
-					=== workspacePersistenceContextKey
-					? undefined
-					: refreshWorkspacePersistenceContext(
+				return shouldLoadWorkspacePersistenceState(
+					rootUris,
+					workspacePersistenceContextKey,
+					pendingWorkspaceMaterializationGeneration,
+				)
+					? refreshWorkspacePersistenceContext(
 						workspacePersistence,
 						rootUris,
 						signal,
-					);
+					)
+					: undefined;
 			},
 			postMessage: (message: WorkspaceToWebviewMessage) => (
 				panel.webview.postMessage(message)
@@ -1038,6 +1043,16 @@ function createWorkspaceContextKey(rootUris: readonly vscode.Uri[]): string {
 	return JSON.stringify(rootUris.map((uri) => uri.toString()).sort());
 }
 
+/** 새 Root context 또는 미완료 materialization만 full Workspace state를 다시 읽는다. */
+export function shouldLoadWorkspacePersistenceState(
+	rootUris: readonly vscode.Uri[],
+	currentContextKey: string | undefined,
+	pendingMaterializationGeneration: number | undefined,
+): boolean {
+	return createWorkspaceContextKey(rootUris) !== currentContextKey
+		|| pendingMaterializationGeneration !== undefined;
+}
+
 /** Project Root semantic IDs를 URI 배열로 엄격히 복원한다. */
 function parseWorkspaceRootUris(
 	rootIds: readonly string[],
@@ -1308,7 +1323,7 @@ export function mergeWorkspacePersistenceRootTransition(
  * 사용해 하나의 canonical snapshot으로 합친다. 단순 파일 변화나 Root reorder는
  * 현재 desired snapshot을 그대로 유지해 pending Webview 편집을 되돌리지 않는다.
  */
-async function refreshWorkspacePersistenceContext(
+export async function refreshWorkspacePersistenceContext(
 	coordinator: WorkspacePersistenceCoordinator,
 	rootUris: readonly vscode.Uri[],
 	signal?: AbortSignal,
@@ -1333,6 +1348,9 @@ async function refreshWorkspacePersistenceContext(
 			contextKey,
 			rootUris: [...rootUris],
 		});
+		if (pendingWorkspaceMaterializationGeneration === currentGeneration) {
+			pendingWorkspaceMaterializationGeneration = undefined;
+		}
 		return coordinator.getDesiredState() ?? desired;
 	}
 
@@ -1368,6 +1386,7 @@ async function refreshWorkspacePersistenceContext(
 		() => {
 			// accept 예약과 다음 await 사이에 epoch를 공개한다. 이 구간의 old
 			// Webview snapshot은 새 context로 retained merge되어 desired를 갱신한다.
+			pendingWorkspaceMaterializationGeneration = nextGeneration;
 			lastWorkspaceState = merged;
 			workspacePersistenceContextKey = contextKey;
 			workspacePersistenceRootUris = [...rootUris];
@@ -1386,6 +1405,9 @@ async function refreshWorkspacePersistenceContext(
 		throw new Error('Workspace persistence context was superseded.');
 	}
 
+	if (pendingWorkspaceMaterializationGeneration === nextGeneration) {
+		pendingWorkspaceMaterializationGeneration = undefined;
+	}
 	lastWorkspaceState = persisted;
 	return persisted;
 }
@@ -1576,6 +1598,7 @@ export async function deactivate(): Promise<void> {
 	lastWebviewState = undefined;
 	lastWorkspaceState = undefined;
 	workspacePersistenceContextKey = undefined;
+	pendingWorkspaceMaterializationGeneration = undefined;
 	workspacePersistenceRootUris = [];
 	workspaceContextGeneration = 0;
 	nextWorkspaceContextGeneration = 0;
