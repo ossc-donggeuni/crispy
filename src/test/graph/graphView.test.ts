@@ -5535,7 +5535,18 @@ suite('Graph View', () => {
 			taskViewCss,
 			/\.task-remove-task-action\s*\{[^}]*--vscode-errorForeground[^}]*14%[^}]*--graph-floating-control-background/s,
 		);
-		assert.match(taskViewCss, /\.task-work-node:hover\s*>\s*\.task-work-actions/s);
+		assert.match(
+			taskViewCss,
+			/\.task-node-actions\s*\{[^}]*top:\s*100%;[^}]*width:\s*100%;[^}]*padding-top:\s*12px;[^}]*pointer-events:\s*none;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-work-node:hover\s*>\s*\.task-work-actions,[^{]*\{[^}]*pointer-events:\s*auto;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node:has\(>\s*\.task-node-actions\):hover,[^{]*\{[^}]*z-index:\s*2;/s,
+		);
 		assert.match(taskViewCss, /\.task-edge-actions:hover\s*>\s*\.task-edge-action-list/s);
 		const inspectorRule = taskViewCss.match(/\.task-inspector\s*\{[^}]*\}/s);
 

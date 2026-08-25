@@ -278,14 +278,19 @@
 
 .task-node-actions {
 	position: absolute;
-	top: 8px;
-	right: 8px;
+	top: 100%;
+	right: 0;
 	z-index: 3;
 	display: flex;
+	width: 100%;
+	box-sizing: border-box;
 	gap: 4px;
+	justify-content: flex-end;
+	padding-top: 12px;
 	opacity: 0;
 	visibility: hidden;
 	pointer-events: none;
+	touch-action: none;
 	transition: opacity 100ms ease;
 }
 
@@ -296,6 +301,11 @@
 	opacity: 1;
 	visibility: visible;
 	pointer-events: auto;
+}
+
+.task-node:has(> .task-node-actions):hover,
+.task-node:has(> .task-node-actions):focus-within {
+	z-index: 2;
 }
 
 .task-remove-task-action {
