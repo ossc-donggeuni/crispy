@@ -849,6 +849,17 @@ suite('Graph View', () => {
 
 		assert.strictEqual(dialog.hidden, false);
 		assert.strictEqual(ownerDocument.activeElement, input);
+		assert.strictEqual(dialog.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE), true);
+		assert.strictEqual(
+			dialog.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			false,
+		);
+		const cameraBeforeWheel = graphView.camera.getState();
+		const wheelEvent = createWheelEvent(input, 0, 120);
+
+		input.dispatch('wheel', wheelEvent);
+		assert.deepStrictEqual(graphView.camera.getState(), cameraBeforeWheel);
+		assert.strictEqual(wheelEvent.defaultPrevented, false);
 		input.value = '{';
 		accept.dispatch('click', createClickEvent(accept));
 		assert.strictEqual(dialog.hidden, false);
@@ -14523,6 +14534,33 @@ function createInputEvent(target: FakeElement): InputEvent {
 		preventDefault: () => undefined,
 		stopPropagation: () => undefined,
 	} as unknown as InputEvent;
+}
+
+function createWheelEvent(
+	target: FakeElement,
+	deltaX: number,
+	deltaY: number,
+): WheelEvent & { readonly defaultPrevented: boolean } {
+	let defaultPrevented = false;
+
+	return {
+		target: target.asHtmlElement(),
+		clientX: 0,
+		clientY: 0,
+		deltaMode: 0,
+		deltaX,
+		deltaY,
+		ctrlKey: false,
+		metaKey: false,
+		shiftKey: false,
+		preventDefault: () => {
+			defaultPrevented = true;
+		},
+		stopPropagation: () => undefined,
+		get defaultPrevented() {
+			return defaultPrevented;
+		},
+	} as unknown as WheelEvent & { readonly defaultPrevented: boolean };
 }
 
 function createChangeEvent(target: FakeElement): Event {

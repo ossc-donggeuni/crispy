@@ -1,4 +1,4 @@
-import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
+import { GRAPH_CAMERA_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
 
 /** Task Import 팝업 root를 식별하는 DOM attribute다. */
 export const TASK_IMPORT_DIALOG_ATTRIBUTE = 'data-task-import-dialog';
@@ -53,7 +53,7 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 	overlay.setAttribute('aria-modal', 'true');
 	overlay.setAttribute('aria-label', TASK_IMPORT_DIALOG_TITLE);
 	overlay.setAttribute(TASK_IMPORT_DIALOG_ATTRIBUTE, '');
-	overlay.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	overlay.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
 	panel.className = 'task-import-dialog-panel';
 	title.className = 'task-import-dialog-title';
 	title.textContent = TASK_IMPORT_DIALOG_TITLE;
