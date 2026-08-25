@@ -7,6 +7,7 @@ import {
 	type CreateWorkNodeInput,
 	type TaskBlueprint,
 	type TaskEdge,
+	type TaskGraphTargets,
 	type TaskIdSource,
 	type TaskNode,
 	type TaskNodePosition,
@@ -465,6 +466,11 @@ function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 		id: task.id,
 		title: task.title,
 		description: task.description,
+		defaultGraphTargets: createGraphTargetsSnapshot((
+			task as TaskBlueprint & {
+				readonly defaultGraphTargets?: TaskGraphTargets;
+			}
+		).defaultGraphTargets),
 		origin: Object.freeze({ x: task.origin.x, y: task.origin.y }),
 		nodePositions: Object.freeze(nodePositions),
 		nodes: Object.freeze(task.nodes.map(createNodeSnapshot)),
@@ -475,25 +481,27 @@ function createTaskSnapshot(task: TaskBlueprint): TaskBlueprint {
 /** kind별 필드만 복사해 Task Node snapshot을 생성한다. */
 function createNodeSnapshot(node: TaskNode): TaskNode {
 	if (node.kind === 'work') {
-		const graphTargets = node.graphTargets ?? {
-			reference: [],
-			work: [],
-		};
-
 		return Object.freeze({
 			id: node.id,
 			kind: node.kind,
 			title: node.title,
 			description: node.description,
 			prompt: node.prompt,
-			graphTargets: Object.freeze({
-				reference: Object.freeze([...graphTargets.reference]),
-				work: Object.freeze([...graphTargets.work]),
-			}),
+			graphTargets: createGraphTargetsSnapshot(node.graphTargets),
 		});
 	}
 
 	return Object.freeze({ id: node.id, kind: node.kind });
+}
+
+/** Graph Target 배열을 입력과 분리해 중첩 값까지 고정한다. */
+function createGraphTargetsSnapshot(
+	graphTargets: TaskGraphTargets | undefined,
+): TaskGraphTargets {
+	return Object.freeze({
+		reference: Object.freeze([...(graphTargets?.reference ?? [])]),
+		work: Object.freeze([...(graphTargets?.work ?? [])]),
+	});
 }
 
 /** Task Edge를 입력 객체와 분리된 snapshot으로 복사한다. */

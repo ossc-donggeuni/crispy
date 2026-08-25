@@ -1,4 +1,4 @@
-import type { TaskBlueprint, TaskEdge } from './taskModel';
+import type { TaskBlueprint, TaskEdge, TaskGraphTargets } from './taskModel';
 
 /** Task Blueprint validation에서 구분하는 구조 오류다. */
 export type TaskValidationIssueCode =
@@ -52,6 +52,14 @@ export function validateTaskBlueprint(
 	const startCount = blueprint.nodes.filter((node) => node.kind === 'start').length;
 	const endCount = blueprint.nodes.filter((node) => node.kind === 'end').length;
 
+	validateGraphTargets(
+		(blueprint as TaskBlueprint & {
+			readonly defaultGraphTargets?: unknown;
+		}).defaultGraphTargets,
+		issues,
+		{ label: 'Task default' },
+	);
+
 	if (startCount !== 1) {
 		issues.push({
 			code: 'start_node_count',
@@ -79,7 +87,11 @@ export function validateTaskBlueprint(
 		nodeIds.add(node.id);
 
 		if (node.kind === 'work') {
-			validateWorkGraphTargets(node, issues);
+			validateGraphTargets(
+				(node as typeof node & { readonly graphTargets?: unknown }).graphTargets,
+				issues,
+				{ label: 'Work', nodeId: node.id },
+			);
 		}
 	}
 
@@ -215,15 +227,12 @@ export function validateTaskBlueprint(
 	return issues;
 }
 
-/** legacy 누락은 허용하되 저장된 Work Graph Target의 배열/중복 불변성은 검사한다. */
-function validateWorkGraphTargets(
-	node: TaskBlueprint['nodes'][number] & { readonly kind: 'work' },
+/** legacy 누락은 허용하되 저장된 Graph Target의 배열/중복 불변성은 검사한다. */
+function validateGraphTargets(
+	graphTargets: unknown,
 	issues: TaskValidationIssue[],
+	owner: { readonly label: string; readonly nodeId?: string },
 ): void {
-	const graphTargets: unknown = (
-		node as typeof node & { readonly graphTargets?: unknown }
-	).graphTargets;
-
 	if (graphTargets === undefined) {
 		return;
 	}
@@ -235,14 +244,14 @@ function validateWorkGraphTargets(
 	) {
 		issues.push({
 			code: 'invalid_graph_targets',
-			message: `Work graphTargets must contain reference/work arrays: ${node.id}.`,
-			nodeId: node.id,
+			message: `${owner.label} graphTargets must contain reference/work arrays.`,
+			...(owner.nodeId ? { nodeId: owner.nodeId } : {}),
 		});
 		return;
 	}
 
-	const reference = (graphTargets as { readonly reference: readonly unknown[] }).reference;
-	const work = (graphTargets as { readonly work: readonly unknown[] }).work;
+	const reference = (graphTargets as TaskGraphTargets).reference;
+	const work = (graphTargets as TaskGraphTargets).work;
 	const invalidTarget = [...reference, ...work].some((target) => (
 		typeof target !== 'string' || target.length === 0
 	));
@@ -250,8 +259,8 @@ function validateWorkGraphTargets(
 	if (invalidTarget) {
 		issues.push({
 			code: 'invalid_graph_targets',
-			message: `Work graphTargets must contain non-empty Source IDs: ${node.id}.`,
-			nodeId: node.id,
+			message: `${owner.label} graphTargets must contain non-empty Source IDs.`,
+			...(owner.nodeId ? { nodeId: owner.nodeId } : {}),
 		});
 	}
 
@@ -263,8 +272,8 @@ function validateWorkGraphTargets(
 		if (new Set(sourceIds).size !== sourceIds.length) {
 			issues.push({
 				code: 'duplicate_graph_target',
-				message: `Work graph target must be unique inside an area: ${node.id}.`,
-				nodeId: node.id,
+				message: `${owner.label} graph target must be unique inside an area.`,
+				...(owner.nodeId ? { nodeId: owner.nodeId } : {}),
 			});
 			break;
 		}

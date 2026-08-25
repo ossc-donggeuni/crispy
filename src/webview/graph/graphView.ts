@@ -76,6 +76,7 @@ import {
 	createTaskGraphLayout,
 	TASK_NODE_HEIGHT,
 	TASK_NODE_WIDTH,
+	isTaskGraphScopeLayoutNode,
 	type TaskGraphLayout,
 	type TaskGraphTargetAreaKind,
 	type TaskLayoutNode,
@@ -164,7 +165,7 @@ interface DescendantDetachedRoot {
 	readonly depth: number;
 }
 
-/** Work Scope 영역 하나를 가리키는 Domain 주소다. */
+/** Start 기본 Scope 또는 Work 고유 Scope 영역 하나를 가리키는 Domain 주소다. */
 interface TaskGraphScopeAddress {
 	readonly taskId: string;
 	readonly nodeId: string;
@@ -1821,11 +1822,15 @@ export function initializeGraphView(
 
 		for (const task of taskState.getSnapshot().tasks) {
 			for (const node of task.nodes) {
-				if (node.kind !== 'work') {
+				if (node.kind === 'end') {
 					continue;
 				}
+				const graphTargets = node.kind === 'start'
+					? task.defaultGraphTargets
+					: node.graphTargets;
+
 				for (const area of ['reference', 'work'] as const) {
-					for (const sourceId of node.graphTargets[area]) {
+					for (const sourceId of graphTargets[area]) {
 						bindings.push({
 							taskId: task.id,
 							nodeId: node.id,
@@ -2056,7 +2061,7 @@ export function initializeGraphView(
 		const scopeBoundaryNodeIds = collectTaskGraphScopeOccurrenceIds();
 
 		for (const node of layout.nodes) {
-			if (node.kind !== 'work') {
+			if (!isTaskGraphScopeLayoutNode(node)) {
 				continue;
 			}
 			for (const area of ['reference', 'work'] as const) {
@@ -2106,7 +2111,7 @@ export function initializeGraphView(
 		let changed = false;
 
 		for (const node of layout.nodes) {
-			if (node.kind !== 'work') {
+			if (!isTaskGraphScopeLayoutNode(node)) {
 				continue;
 			}
 			for (const area of ['reference', 'work'] as const) {
@@ -2273,7 +2278,7 @@ export function initializeGraphView(
 			applyingTaskState = false;
 		}
 	};
-	const updateWorkGraphTargetMemberships = (
+	const updateTaskGraphTargetMemberships = (
 		changes: readonly {
 			readonly binding: TaskGraphScopeBinding;
 			readonly included: boolean;
@@ -2286,14 +2291,46 @@ export function initializeGraphView(
 
 		for (const { binding } of effectiveChanges) {
 			const task = taskState.getTask(binding.taskId);
-			const workNode = task?.nodes.find((node) => (
-				node.id === binding.nodeId && node.kind === 'work'
-			));
+			const scopeOwner = task?.nodes.find((node) => node.id === binding.nodeId);
 
-			if (workNode?.kind !== 'work') {
+			if (!scopeOwner || scopeOwner.kind === 'end') {
 				return false;
 			}
 		}
+		const applyChanges = (
+			graphTargets: TaskBlueprint['defaultGraphTargets'],
+			nodeId: string,
+			changesForTask: typeof effectiveChanges,
+		): TaskBlueprint['defaultGraphTargets'] => {
+			let nextGraphTargets = graphTargets;
+
+			for (const { binding, included } of changesForTask) {
+				if (binding.nodeId !== nodeId) {
+					continue;
+				}
+				const areaTargets = nextGraphTargets[binding.area];
+				const nextAreaTargets = included
+					? areaTargets.includes(binding.sourceId)
+						? areaTargets
+						: sortTaskGraphTargetIds(taskGraphTargetIndex, [
+							...areaTargets,
+							binding.sourceId,
+						])
+					: areaTargets.includes(binding.sourceId)
+						? areaTargets.filter((sourceId) => sourceId !== binding.sourceId)
+						: areaTargets;
+
+				if (nextAreaTargets === areaTargets) {
+					continue;
+				}
+
+				nextGraphTargets = {
+					...nextGraphTargets,
+					[binding.area]: nextAreaTargets,
+				};
+			}
+			return nextGraphTargets;
+		};
 
 		for (const taskId of new Set(effectiveChanges.map(
 			(change) => change.binding.taskId,
@@ -2301,38 +2338,30 @@ export function initializeGraphView(
 			const taskChanges = effectiveChanges.filter(
 				(change) => change.binding.taskId === taskId,
 			);
-			const updated = taskState.updateTask(taskId, (current) => ({
-				...current,
-				nodes: current.nodes.map((node) => {
-					if (node.kind !== 'work') {
-						return node;
-					}
-					let graphTargets = node.graphTargets;
+			const updated = taskState.updateTask(taskId, (current) => {
+				const start = current.nodes.find((node) => node.kind === 'start');
 
-					for (const { binding, included } of taskChanges) {
-						if (binding.nodeId !== node.id) {
-							continue;
+				return {
+					...current,
+					defaultGraphTargets: start
+						? applyChanges(current.defaultGraphTargets, start.id, taskChanges)
+						: current.defaultGraphTargets,
+					nodes: current.nodes.map((node) => {
+						if (node.kind !== 'work') {
+							return node;
 						}
-						const areaTargets = graphTargets[binding.area];
-						const nextAreaTargets = included
-							? sortTaskGraphTargetIds(taskGraphTargetIndex, [
-								...areaTargets,
-								binding.sourceId,
-							])
-							: areaTargets.filter(
-								(sourceId) => sourceId !== binding.sourceId,
-							);
+						const graphTargets = applyChanges(
+							node.graphTargets,
+							node.id,
+							taskChanges,
+						);
 
-						graphTargets = {
-							...graphTargets,
-							[binding.area]: nextAreaTargets,
-						};
-					}
-					return graphTargets === node.graphTargets
-						? node
-						: { ...node, graphTargets };
-				}),
-			}));
+						return graphTargets === node.graphTargets
+							? node
+							: { ...node, graphTargets };
+					}),
+				};
+			});
 
 			if (!updated) {
 				return false;
@@ -2354,7 +2383,7 @@ export function initializeGraphView(
 			)?.size === 1
 		));
 
-		if (!updateWorkGraphTargetMemberships(removedMemberships.map((binding) => ({
+		if (!updateTaskGraphTargetMemberships(removedMemberships.map((binding) => ({
 			binding,
 			included: false,
 		})))) {
@@ -2497,7 +2526,7 @@ export function initializeGraphView(
 
 				if (
 					occurrenceCount <= 1
-					&& !updateWorkGraphTargetMemberships([{
+					&& !updateTaskGraphTargetMemberships([{
 						binding,
 						included: false,
 					}])
@@ -2538,11 +2567,9 @@ export function initializeGraphView(
 		}
 
 		const task = taskState.getTask(dropTarget.taskId);
-		const workNode = task?.nodes.find((node) => (
-			node.id === dropTarget.nodeId && node.kind === 'work'
-		));
+		const scopeOwner = task?.nodes.find((node) => node.id === dropTarget.nodeId);
 
-		if (!task || workNode?.kind !== 'work') {
+		if (!task || !scopeOwner || scopeOwner.kind === 'end') {
 			return false;
 		}
 
@@ -2586,7 +2613,7 @@ export function initializeGraphView(
 			{ binding: targetBinding, included: true },
 		];
 
-		if (!updateWorkGraphTargetMemberships(membershipChanges)) {
+		if (!updateTaskGraphTargetMemberships(membershipChanges)) {
 			return false;
 		}
 		if (originBinding) {

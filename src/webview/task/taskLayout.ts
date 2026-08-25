@@ -3,8 +3,8 @@ import {
 	getTaskFlowAnalysis,
 	type TaskBlueprint,
 	type TaskFlowStatus,
+	type TaskGraphTargets,
 	type TaskNode,
-	type WorkGraphTargets,
 } from '../../task';
 
 /** Task Graph World에서 사용하는 좌표다. */
@@ -20,10 +20,10 @@ export interface TaskLayoutBounds {
 	readonly height: number;
 }
 
-/** Work 위 두 Scope Area의 의미 역할이다. */
+/** Start/Work 위 두 Scope Area의 의미 역할이다. */
 export type TaskGraphTargetAreaKind = 'reference' | 'work';
 
-/** Work 좌표와 Target 수에서 파생한 Scope Area geometry다. */
+/** Scope 소유 Node 좌표와 Target 수에서 파생한 Area geometry다. */
 export interface TaskGraphTargetAreaLayout extends TaskLayoutBounds {
 	readonly kind: TaskGraphTargetAreaKind;
 	readonly sourceIds: readonly string[];
@@ -61,8 +61,18 @@ interface TaskLayoutNodeBase {
 /** Node가 START→END 완성 경로에 참여하는지 나타내는 파생 상태다. */
 export type TaskNodeConnectionState = 'connected' | 'disconnected';
 
-/** TaskBlueprint 제목을 표시하는 시작 Layout Node다. */
-export interface TaskStartLayoutNode extends TaskLayoutNodeBase {
+/** Start/Work가 공통으로 가지는 Scope 영역과 전체 visual footprint다. */
+interface TaskGraphScopeLayoutNodeBase extends TaskLayoutNodeBase {
+	readonly graphTargets: TaskGraphTargets;
+	readonly scopeAreas: Readonly<Record<
+		TaskGraphTargetAreaKind,
+		TaskGraphTargetAreaLayout
+	>>;
+	readonly visualBounds: TaskLayoutBounds;
+}
+
+/** TaskBlueprint 제목과 기본 Scope를 표시하는 시작 Layout Node다. */
+export interface TaskStartLayoutNode extends TaskGraphScopeLayoutNodeBase {
 	readonly kind: 'start';
 	readonly title: string;
 	readonly description: string;
@@ -70,18 +80,11 @@ export interface TaskStartLayoutNode extends TaskLayoutNodeBase {
 }
 
 /** Work Node의 표시 정보와 prompt를 제공하는 Layout Node다. */
-export interface TaskWorkLayoutNode extends TaskLayoutNodeBase {
+export interface TaskWorkLayoutNode extends TaskGraphScopeLayoutNodeBase {
 	readonly kind: 'work';
 	readonly title: string;
 	readonly description: string;
 	readonly prompt: string;
-	readonly graphTargets: WorkGraphTargets;
-	readonly scopeAreas: Readonly<Record<
-		TaskGraphTargetAreaKind,
-		TaskGraphTargetAreaLayout
-	>>;
-	/** 두 Scope Area와 실제 Work Card를 모두 포함하는 충돌 계산용 footprint다. */
-	readonly visualBounds: TaskLayoutBounds;
 	readonly canRemove: boolean;
 	readonly connectionState: TaskNodeConnectionState;
 }
@@ -99,6 +102,18 @@ export type TaskLayoutNode =
 	| TaskStartLayoutNode
 	| TaskWorkLayoutNode
 	| TaskEndLayoutNode;
+
+/** Reference/Work Scope Area를 소유할 수 있는 Start/Work Layout Node다. */
+export type TaskGraphScopeLayoutNode =
+	| TaskStartLayoutNode
+	| TaskWorkLayoutNode;
+
+/** End를 제외한 Scope Area 소유 Layout Node인지 판별한다. */
+export function isTaskGraphScopeLayoutNode(
+	node: TaskLayoutNode,
+): node is TaskGraphScopeLayoutNode {
+	return node.kind === 'start' || node.kind === 'work';
+}
 
 /** Renderer Path와 Hover Action이 함께 사용하는 하나의 cubic Bézier geometry다. */
 export interface TaskEdgeGeometry {
@@ -192,8 +207,21 @@ function createTaskLayout(
 		};
 
 		if (node.kind === 'start') {
+			const scope = createTaskGraphScopeLayoutFields(
+				task.id,
+				node.id,
+				base.position,
+				(
+					task as TaskBlueprint & {
+						readonly defaultGraphTargets?: TaskGraphTargets;
+					}
+				).defaultGraphTargets ?? { reference: [], work: [] },
+				options,
+			);
+
 			return {
 				...base,
+				...scope,
 				kind: node.kind,
 				title: task.title,
 				description: task.description,
@@ -204,31 +232,21 @@ function createTaskLayout(
 				reference: [],
 				work: [],
 			};
-			const scopeAreas = createTaskGraphTargetAreaLayouts(
+			const scope = createTaskGraphScopeLayoutFields(
 				task.id,
 				node.id,
 				base.position,
 				graphTargets,
 				options,
 			);
-			const referenceArea = scopeAreas.reference;
-			const synchronizedWidth = referenceArea.width;
 
 			return {
 				...base,
-				width: synchronizedWidth,
+				...scope,
 				kind: node.kind,
 				title: node.title,
 				description: node.description,
 				prompt: node.prompt,
-				graphTargets,
-				scopeAreas,
-				visualBounds: {
-					position: referenceArea.position,
-					width: synchronizedWidth,
-					height: base.position.y + TASK_NODE_HEIGHT
-						- referenceArea.position.y,
-				},
 				canRemove: true,
 				connectionState: flowAnalysis.connectedNodeIds.has(node.id)
 					? 'connected'
@@ -270,12 +288,46 @@ function createTaskLayout(
 	};
 }
 
-/** Work Card top-left 하나에서 Work/Reference Area 위치를 역방향으로 파생한다. */
+/** Scope Area 두 개와 Card를 하나의 동기화된 visual group으로 파생한다. */
+function createTaskGraphScopeLayoutFields(
+	taskId: string,
+	nodeId: string,
+	nodePosition: TaskLayoutPosition,
+	graphTargets: TaskGraphTargets,
+	options: TaskGraphLayoutOptions,
+): Pick<
+	TaskGraphScopeLayoutNodeBase,
+	'width' | 'graphTargets' | 'scopeAreas' | 'visualBounds'
+> {
+	const scopeAreas = createTaskGraphTargetAreaLayouts(
+		taskId,
+		nodeId,
+		nodePosition,
+		graphTargets,
+		options,
+	);
+	const referenceArea = scopeAreas.reference;
+	const synchronizedWidth = referenceArea.width;
+
+	return {
+		width: synchronizedWidth,
+		graphTargets,
+		scopeAreas,
+		visualBounds: {
+			position: referenceArea.position,
+			width: synchronizedWidth,
+			height: nodePosition.y + TASK_NODE_HEIGHT
+				- referenceArea.position.y,
+		},
+	};
+}
+
+/** Scope 소유 Card top-left에서 Work/Reference Area 위치를 역방향으로 파생한다. */
 function createTaskGraphTargetAreaLayouts(
 	taskId: string,
 	nodeId: string,
-	workPosition: TaskLayoutPosition,
-	graphTargets: WorkGraphTargets,
+	nodePosition: TaskLayoutPosition,
+	graphTargets: TaskGraphTargets,
 	options: TaskGraphLayoutOptions,
 ): Readonly<Record<TaskGraphTargetAreaKind, TaskGraphTargetAreaLayout>> {
 	const resolveFootprintSize = (
@@ -303,14 +355,14 @@ function createTaskGraphTargetAreaLayouts(
 	// 단일 폭으로 사용한다. 어느 한쪽의 subtree가 열리고 닫힐 때 두 Region과
 	// 실제 WORK Card가 항상 같은 left/right boundary를 공유한다.
 	const synchronizedWidth = Math.max(referenceSize.width, workSize.width);
-	const workTop = workPosition.y - TASK_SCOPE_AREA_GAP - workSize.height;
+	const workTop = nodePosition.y - TASK_SCOPE_AREA_GAP - workSize.height;
 	const referenceTop = workTop - TASK_SCOPE_AREA_GAP - referenceSize.height;
 
 	return {
 		reference: {
 			kind: 'reference',
 			position: {
-				x: workPosition.x,
+				x: nodePosition.x,
 				y: referenceTop,
 			},
 			width: synchronizedWidth,
@@ -320,7 +372,7 @@ function createTaskGraphTargetAreaLayouts(
 		work: {
 			kind: 'work',
 			position: {
-				x: workPosition.x,
+				x: nodePosition.x,
 				y: workTop,
 			},
 			width: synchronizedWidth,

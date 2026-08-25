@@ -1,13 +1,14 @@
 import {
 	createTaskEdgeGeometry,
 	getTaskPortCenter,
+	isTaskGraphScopeLayoutNode,
 	type TaskGraphLayout,
+	type TaskGraphScopeLayoutNode,
 	type TaskGraphTargetAreaKind,
 	type TaskGraphTargetAreaLayout,
 	type TaskLayoutEdge,
 	type TaskLayoutNode,
 	type TaskLayoutPosition,
-	type TaskWorkLayoutNode,
 } from './taskLayout';
 import type { TaskNodePosition, TaskOrigin } from '../../task';
 import { GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE } from '../graph/graphCamera';
@@ -35,14 +36,16 @@ export const TASK_PORT_DIRECTION_ATTRIBUTE = 'data-task-port-direction';
 export const TASK_FLOW_STATE_ATTRIBUTE = 'data-task-flow-state';
 /** START/END의 Work Edge 연결 파생 상태를 DOM에 전달하는 attribute다. */
 export const TASK_CONNECTION_STATE_ATTRIBUTE = 'data-task-connection-state';
-/** Work 부속 Scope Area의 reference/work 역할을 식별한다. */
+/** Start/Work 부속 Scope Area의 reference/work 역할을 식별한다. */
 export const TASK_GRAPH_TARGET_AREA_ATTRIBUTE = 'data-task-graph-target-area';
-/** Scope Area를 소유한 실제 Work Node ID를 Task Node 선택과 분리해 저장한다. */
-export const TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE = 'data-task-graph-target-work-node-id';
+/** Scope Area를 소유한 Start/Work Node ID를 Task Node 선택과 분리해 저장한다. */
+export const TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE = 'data-task-graph-target-node-id';
+/** @deprecated TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE를 사용한다. */
+export const TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE = TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE;
 /** Region에서 실제 occurrence로 resolve하지 못한 semantic binding 개수다. */
 export const TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE = 'data-task-graph-target-unavailable-count';
 
-/** Graph Pointer Drop이 적중한 Work Scope Area의 Domain 주소다. */
+/** Graph Pointer Drop이 적중한 Start/Work Scope Area의 Domain 주소다. */
 export interface TaskGraphTargetDropTarget {
 	readonly taskId: string;
 	readonly nodeId: string;
@@ -294,6 +297,8 @@ export function initializeTaskRenderer(
 		point: TaskLayoutPosition,
 	): TaskGraphTargetDropTarget | undefined => {
 		let nextKey: string | undefined;
+		let nextArea = Number.POSITIVE_INFINITY;
+		let nextCenterDistance = Number.POSITIVE_INFINITY;
 
 		for (const [renderKey, element] of scopeAreaElements) {
 			const bounds = element.getBoundingClientRect();
@@ -304,8 +309,22 @@ export function initializeTaskRenderer(
 				&& point.y >= bounds.top
 				&& point.y < bounds.bottom
 			) {
-				nextKey = renderKey;
-				break;
+				const area = bounds.width * bounds.height;
+				const centerDistance = Math.hypot(
+					point.x - (bounds.left + bounds.right) / 2,
+					point.y - (bounds.top + bounds.bottom) / 2,
+				);
+
+				// 넓은 Scope가 다른 영역을 덮더라도 더 구체적인 작은 영역을
+				// 우선하고, 같은 크기면 pointer에 가까운 영역을 선택한다.
+				if (
+					area < nextArea
+					|| (area === nextArea && centerDistance < nextCenterDistance)
+				) {
+					nextKey = renderKey;
+					nextArea = area;
+					nextCenterDistance = centerDistance;
+				}
 			}
 		}
 
@@ -868,7 +887,7 @@ export function initializeTaskRenderer(
 			createTaskEdgeRenderKey(edge.taskId, edge.id)
 		)));
 		const nextScopeAreaKeys = new Set(layout.nodes.flatMap((node) => (
-			node.kind === 'work'
+			isTaskGraphScopeLayoutNode(node)
 				? (['reference', 'work'] as const).map((area) => (
 					createTaskScopeAreaRenderKey(node.taskId, node.id, area)
 				))
@@ -922,7 +941,7 @@ export function initializeTaskRenderer(
 		scopeAreaTargets.clear();
 
 		for (const node of layout.nodes) {
-			if (node.kind !== 'work') {
+			if (!isTaskGraphScopeLayoutNode(node)) {
 				continue;
 			}
 			for (const areaKind of ['reference', 'work'] as const) {
@@ -1094,16 +1113,17 @@ function createTaskScopeAreaRenderKey(
 	return `${createTaskNodeRenderKey(taskId, nodeId)}:scope:${area}`;
 }
 
-/** Work Card와 별도 sibling인 World Scope Region DOM을 최신 geometry/상태로 동기화한다. */
+/** Start/Work Card와 별도 sibling인 Scope Region DOM을 최신 상태로 동기화한다. */
 function syncTaskScopeAreaElement(
 	element: HTMLElement,
-	node: TaskWorkLayoutNode,
+	node: TaskGraphScopeLayoutNode,
 	area: TaskGraphTargetAreaLayout,
 	status: TaskGraphTargetRegionStatus,
 	ownerDocument: Document,
 ): void {
 	const isReference = area.kind === 'reference';
-	const titleText = isReference ? '참조 영역' : '작업 영역';
+	const areaTitle = isReference ? '참조 영역' : '작업 영역';
+	const titleText = node.kind === 'start' ? `기본 ${areaTitle}` : areaTitle;
 	const header = ownerDocument.createElement('header');
 	const title = ownerDocument.createElement('strong');
 	const body = ownerDocument.createElement('div');
@@ -1114,7 +1134,7 @@ function syncTaskScopeAreaElement(
 		isReference ? 'task-reference-area' : 'task-work-area',
 	].join(' ');
 	element.setAttribute(TASK_ID_ATTRIBUTE, node.taskId);
-	element.setAttribute(TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE, node.id);
+	element.setAttribute(TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE, node.id);
 	element.setAttribute(TASK_GRAPH_TARGET_AREA_ATTRIBUTE, area.kind);
 	element.setAttribute(
 		TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE,

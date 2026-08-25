@@ -5,6 +5,7 @@ import {
 	createTaskState,
 	getTaskFlowAnalysis,
 	getTaskFlowStatus,
+	resolveEffectiveWorkGraphTargets,
 	TASK_BLUEPRINT_VERSION,
 	TASK_DEFAULT_END_POSITION,
 	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
@@ -26,6 +27,7 @@ suite('Task Domain', () => {
 		assert.strictEqual(task.id, 'task:id-1');
 		assert.strictEqual(task.title, 'Direct Task Graph');
 		assert.strictEqual(task.description, 'Connect ports directly.');
+		assert.deepStrictEqual(task.defaultGraphTargets, { reference: [], work: [] });
 		assert.deepStrictEqual(task.origin, { x: 120, y: -40 });
 		assert.deepStrictEqual(task.nodes, [
 			{ id: 'task-node:id-2', kind: 'start' },
@@ -49,6 +51,9 @@ suite('Task Domain', () => {
 		assert.strictEqual(Object.isFrozen(created), true);
 		assert.strictEqual(Object.isFrozen(created.nodes), true);
 		assert.strictEqual(Object.isFrozen(created.nodePositions), true);
+		assert.strictEqual(Object.isFrozen(created.defaultGraphTargets), true);
+		assert.strictEqual(Object.isFrozen(created.defaultGraphTargets.reference), true);
+		assert.strictEqual(Object.isFrozen(created.defaultGraphTargets.work), true);
 
 		const updated = state.updateTask(created.id, (task) => ({
 			...task,
@@ -129,27 +134,38 @@ suite('Task Domain', () => {
 		assert.strictEqual(state.addWork('task:missing'), undefined);
 	});
 
-	test('Work Graph Target은 immutable snapshot으로 교체하고 legacy 누락은 빈 배열로 정규화한다', () => {
+	test('Task 기본/Work Graph Target은 immutable snapshot으로 교체하고 legacy 누락을 정규화한다', () => {
 		const state = createTaskState([], createSequentialIdSource());
 		const task = state.createTask({ title: 'Target Snapshot' });
 		const withWork = state.addWork(task.id);
 		const work = withWork?.nodes.find((node) => node.kind === 'work');
-		const reference = ['folder:file:///workspace/src'];
-		const workTargets = ['file:file:///workspace/src/main.ts'];
+		const defaultReference = ['folder:file:///workspace/docs'];
+		const localReference = ['folder:file:///workspace/src'];
+		const localWorkTargets = ['file:file:///workspace/src/main.ts'];
 
 		assert.ok(withWork && work);
 		const updated = state.updateTask(task.id, (current) => ({
 			...current,
+			defaultGraphTargets: {
+				reference: defaultReference,
+				work: [],
+			},
 			nodes: current.nodes.map((node) => node.id === work.id && node.kind === 'work'
 				? {
 					...node,
-					graphTargets: { reference, work: workTargets },
+					graphTargets: { reference: localReference, work: localWorkTargets },
 				}
 				: node),
 		}));
 		const updatedWork = updated?.nodes.find((node) => node.id === work.id);
 
 		assert.ok(updatedWork?.kind === 'work');
+		assert.deepStrictEqual(updated?.defaultGraphTargets, {
+			reference: ['folder:file:///workspace/docs'],
+			work: [],
+		});
+		assert.strictEqual(Object.isFrozen(updated?.defaultGraphTargets), true);
+		assert.strictEqual(Object.isFrozen(updated?.defaultGraphTargets.reference), true);
 		assert.deepStrictEqual(updatedWork.graphTargets, {
 			reference: ['folder:file:///workspace/src'],
 			work: ['file:file:///workspace/src/main.ts'],
@@ -157,8 +173,13 @@ suite('Task Domain', () => {
 		assert.strictEqual(Object.isFrozen(updatedWork.graphTargets), true);
 		assert.strictEqual(Object.isFrozen(updatedWork.graphTargets.reference), true);
 		assert.strictEqual(Object.isFrozen(updatedWork.graphTargets.work), true);
-		reference.push('folder:file:///workspace/docs');
-		workTargets.length = 0;
+		defaultReference.length = 0;
+		localReference.push('folder:file:///workspace/docs');
+		localWorkTargets.length = 0;
+		assert.deepStrictEqual(updated?.defaultGraphTargets, {
+			reference: ['folder:file:///workspace/docs'],
+			work: [],
+		});
 		assert.deepStrictEqual(updatedWork.graphTargets, {
 			reference: ['folder:file:///workspace/src'],
 			work: ['file:file:///workspace/src/main.ts'],
@@ -170,6 +191,7 @@ suite('Task Domain', () => {
 		};
 		const legacyTask = {
 			...withWork,
+			defaultGraphTargets: undefined,
 			nodes: withWork.nodes.map((node) => node.id === work.id ? legacyWork : node),
 		} as unknown as TaskBlueprint;
 		const legacyState = createTaskState([legacyTask]);
@@ -178,10 +200,53 @@ suite('Task Domain', () => {
 		);
 
 		assert.ok(normalized?.kind === 'work');
+		assert.deepStrictEqual(
+			legacyState.getTask(legacyTask.id)?.defaultGraphTargets,
+			{ reference: [], work: [] },
+		);
 		assert.deepStrictEqual(normalized.graphTargets, { reference: [], work: [] });
 	});
 
-	test('Work Graph Target은 Area 내부 중복을 거부하고 양쪽 Area membership은 허용한다', () => {
+	test('Work 유효 범위는 Task 기본값과 Work 고유값을 Area별 stable union으로 파생한다', () => {
+		const state = createTaskState([], createSequentialIdSource());
+		const task = state.createTask({
+			title: 'Inherited Targets',
+			defaultGraphTargets: {
+				reference: ['folder:shared', 'file:default'],
+				work: ['folder:shared'],
+			},
+		});
+		const withWork = state.addWork(task.id);
+		const work = withWork?.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(withWork && work?.kind === 'work');
+		const updated = state.updateTask(task.id, (current) => ({
+			...current,
+			nodes: current.nodes.map((node) => node.id === work.id && node.kind === 'work'
+				? {
+					...node,
+					graphTargets: {
+						reference: ['folder:shared', 'file:local'],
+						work: ['file:local', 'folder:shared'],
+					},
+				}
+				: node),
+		}));
+		const updatedWork = updated?.nodes.find((node) => node.id === work.id);
+
+		assert.ok(updated && updatedWork?.kind === 'work');
+		assert.deepStrictEqual(resolveEffectiveWorkGraphTargets(updated, work.id), {
+			reference: ['folder:shared', 'file:default', 'file:local'],
+			work: ['folder:shared', 'file:local'],
+		});
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: ['folder:shared', 'file:local'],
+			work: ['file:local', 'folder:shared'],
+		});
+		assert.strictEqual(resolveEffectiveWorkGraphTargets(updated, 'task-node:missing'), undefined);
+	});
+
+	test('Task 기본/Work Graph Target은 Area 내부 중복을 거부하고 양쪽 Area membership은 허용한다', () => {
 		const base = addWorks(createTask(), ['Target Work']);
 		const work = base.nodes.find((node) => node.kind === 'work');
 
@@ -204,6 +269,17 @@ suite('Task Domain', () => {
 			reference: ['folder:src'],
 			work: ['folder:src'],
 		})), []);
+		assertIssueCodes({
+			...base,
+			defaultGraphTargets: { reference: ['folder:src', 'folder:src'], work: [] },
+		}, ['duplicate_graph_target']);
+		assert.deepStrictEqual(validateTaskBlueprint({
+			...base,
+			defaultGraphTargets: {
+				reference: ['folder:src'],
+				work: ['folder:src'],
+			},
+		}), []);
 	});
 
 	test('삭제로 빈 Work 기본 위치를 다음 추가에서 재사용한다', () => {

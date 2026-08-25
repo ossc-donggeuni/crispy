@@ -32,13 +32,16 @@ export interface StartNode extends TaskNodeBase {
 	readonly kind: 'start';
 }
 
-/** 실제 작업 지시와 표시 정보를 가지는 Task 단계다. */
-export interface WorkGraphTargets {
-	/** Work가 의미상 읽기 대상으로 참고하는 Workspace Graph Source ID다. */
+/** Task 또는 Work가 참조·수정 대상으로 사용하는 Workspace Graph 범위다. */
+export interface TaskGraphTargets {
+	/** 의미상 읽기 대상으로 참고하는 Workspace Graph Source ID다. */
 	readonly reference: readonly string[];
-	/** Work가 의미상 수정 대상으로 사용하는 Workspace Graph Source ID다. */
+	/** 의미상 수정 대상으로 사용하는 Workspace Graph Source ID다. */
 	readonly work: readonly string[];
 }
+
+/** 기존 Work 범위 타입 이름을 유지하는 호환 alias다. */
+export type WorkGraphTargets = TaskGraphTargets;
 
 /** 실제 작업 지시와 표시 정보 및 Workspace Graph 범위를 가지는 Task 단계다. */
 export interface WorkNode extends TaskNodeBase {
@@ -70,6 +73,8 @@ export interface TaskBlueprint {
 	readonly id: string;
 	readonly title: string;
 	readonly description: string;
+	/** Start가 표시하며 모든 Work에 공통 적용되는 Task 기본 범위다. */
+	readonly defaultGraphTargets: TaskGraphTargets;
 	readonly origin: TaskOrigin;
 	/** Work와 End의 명시적 task-local 위치다. Start는 origin을 사용한다. */
 	readonly nodePositions: Readonly<Record<string, TaskNodePosition>>;
@@ -88,6 +93,7 @@ export interface CreateWorkNodeInput {
 export interface CreateTaskBlueprintInput {
 	readonly title: string;
 	readonly description?: string;
+	readonly defaultGraphTargets?: TaskGraphTargets;
 	readonly origin?: TaskOrigin;
 }
 
@@ -142,6 +148,10 @@ export function createDefaultTaskBlueprint(
 		id: taskId,
 		title: input.title,
 		description: input.description ?? '',
+		defaultGraphTargets: {
+			reference: [...(input.defaultGraphTargets?.reference ?? [])],
+			work: [...(input.defaultGraphTargets?.work ?? [])],
+		},
 		origin: {
 			x: input.origin?.x ?? 0,
 			y: input.origin?.y ?? 0,
@@ -152,6 +162,47 @@ export function createDefaultTaskBlueprint(
 		nodes: [startNode, endNode],
 		edges: [],
 	};
+}
+
+/** Task 기본 범위와 Work 고유 범위를 Area별 순서를 보존한 합집합으로 파생한다. */
+export function resolveEffectiveWorkGraphTargets(
+	task: TaskBlueprint,
+	workNodeId: string,
+): TaskGraphTargets | undefined {
+	const workNode = task.nodes.find((node) => (
+		node.id === workNodeId && node.kind === 'work'
+	));
+
+	if (workNode?.kind !== 'work') {
+		return undefined;
+	}
+	const defaults = readTaskDefaultGraphTargets(task);
+	const localTargets = readWorkGraphTargets(workNode);
+
+	return {
+		reference: [...new Set([
+			...defaults.reference,
+			...localTargets.reference,
+		])],
+		work: [...new Set([
+			...defaults.work,
+			...localTargets.work,
+		])],
+	};
+}
+
+/** version 1 legacy Task의 누락된 기본 범위를 빈 값으로 해석한다. */
+function readTaskDefaultGraphTargets(task: TaskBlueprint): TaskGraphTargets {
+	return (
+		task as TaskBlueprint & { readonly defaultGraphTargets?: TaskGraphTargets }
+	).defaultGraphTargets ?? { reference: [], work: [] };
+}
+
+/** version 1 legacy Work의 누락된 고유 범위를 빈 값으로 해석한다. */
+function readWorkGraphTargets(work: WorkNode): TaskGraphTargets {
+	return (
+		work as WorkNode & { readonly graphTargets?: TaskGraphTargets }
+	).graphTargets ?? { reference: [], work: [] };
 }
 
 /** Browser와 Extension Host에서 공통으로 사용할 UUID를 생성한다. */

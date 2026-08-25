@@ -82,36 +82,74 @@ suite('Task Layout', () => {
 		}]);
 	});
 
-	test('모든 Work의 Reference → Work → Card geometry와 전체 visual bounds를 파생한다', () => {
+	test('Start와 Work의 Reference → Work → Card geometry와 전체 visual bounds를 파생한다', () => {
 		const task = createReadyTask('task:scope-empty', { x: 120, y: -40 });
 		const layout = createTaskGraphLayout([task]);
 		const work = layout.nodes.find((node) => node.kind === 'work');
 		const start = layout.nodes.find((node) => node.kind === 'start');
 		const end = layout.nodes.find((node) => node.kind === 'end');
 
-		assert.ok(work?.kind === 'work' && start && end);
-		assert.deepStrictEqual(work.graphTargets, { reference: [], work: [] });
-		assert.strictEqual(work.scopeAreas.reference.height, TASK_SCOPE_AREA_MIN_HEIGHT);
-		assert.strictEqual(work.scopeAreas.work.height, TASK_SCOPE_AREA_MIN_HEIGHT);
-		assert.strictEqual(
-			work.scopeAreas.reference.position.y + work.scopeAreas.reference.height
-				+ TASK_SCOPE_AREA_GAP,
-			work.scopeAreas.work.position.y,
-		);
-		assert.strictEqual(
-			work.scopeAreas.work.position.y + work.scopeAreas.work.height
-				+ TASK_SCOPE_AREA_GAP,
-			work.position.y,
-		);
-		assert.deepStrictEqual(work.visualBounds, {
-			position: work.scopeAreas.reference.position,
-			width: TASK_NODE_WIDTH,
-			height: TASK_SCOPE_AREA_MIN_HEIGHT * 2
-				+ TASK_SCOPE_AREA_GAP * 2
-				+ TASK_NODE_HEIGHT,
-		});
-		assert.strictEqual('scopeAreas' in start, false);
+		assert.ok(work?.kind === 'work' && start?.kind === 'start' && end);
+		for (const scopedNode of [start, work]) {
+			assert.deepStrictEqual(scopedNode.graphTargets, { reference: [], work: [] });
+			assert.strictEqual(
+				scopedNode.scopeAreas.reference.height,
+				TASK_SCOPE_AREA_MIN_HEIGHT,
+			);
+			assert.strictEqual(scopedNode.scopeAreas.work.height, TASK_SCOPE_AREA_MIN_HEIGHT);
+			assert.strictEqual(
+				scopedNode.scopeAreas.reference.position.y
+					+ scopedNode.scopeAreas.reference.height
+					+ TASK_SCOPE_AREA_GAP,
+				scopedNode.scopeAreas.work.position.y,
+			);
+			assert.strictEqual(
+				scopedNode.scopeAreas.work.position.y + scopedNode.scopeAreas.work.height
+					+ TASK_SCOPE_AREA_GAP,
+				scopedNode.position.y,
+			);
+			assert.deepStrictEqual(scopedNode.visualBounds, {
+				position: scopedNode.scopeAreas.reference.position,
+				width: TASK_NODE_WIDTH,
+				height: TASK_SCOPE_AREA_MIN_HEIGHT * 2
+					+ TASK_SCOPE_AREA_GAP * 2
+					+ TASK_NODE_HEIGHT,
+			});
+		}
 		assert.strictEqual('scopeAreas' in end, false);
+	});
+
+	test('Task 기본 Scope footprint는 Start Card 폭과 outgoing Edge anchor를 동기화한다', () => {
+		const task: TaskBlueprint = {
+			...createReadyTask('task:start-scope-sized', { x: 100, y: 200 }),
+			defaultGraphTargets: {
+				reference: ['folder:default-reference'],
+				work: ['folder:default-work'],
+			},
+		};
+		const start = task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(start);
+		const layout = createTaskGraphLayout([task], {
+			resolveGraphTargetAreaSize: (_taskId, nodeId, area) => (
+				nodeId === start.id
+					? area === 'reference'
+						? { width: 440, height: 112 }
+						: { width: 520, height: 160 }
+					: undefined
+			),
+		});
+		const startLayout = layout.nodes.find((node) => node.id === start.id);
+		const outgoingEdge = layout.edges.find((edge) => edge.sourceId === start.id);
+
+		assert.ok(startLayout?.kind === 'start' && outgoingEdge);
+		assert.strictEqual(startLayout.width, 520);
+		assert.strictEqual(startLayout.scopeAreas.reference.width, 520);
+		assert.strictEqual(startLayout.scopeAreas.work.width, 520);
+		assert.deepStrictEqual(outgoingEdge.geometry.start, {
+			x: startLayout.position.x + startLayout.width,
+			y: startLayout.position.y + startLayout.height / 2,
+		});
 	});
 
 	test('Reference/Work/WORK 폭을 가장 넓은 actual footprint로 동기화한다', () => {
@@ -333,6 +371,19 @@ suite('Task Layout', () => {
 				x: moved.position.x - initial.position.x,
 				y: moved.position.y - initial.position.y,
 			}, { x: 300, y: 200 });
+			if (
+				(initial.kind === 'start' || initial.kind === 'work')
+				&& (moved.kind === 'start' || moved.kind === 'work')
+			) {
+				for (const area of ['reference', 'work'] as const) {
+					assert.deepStrictEqual({
+						x: moved.scopeAreas[area].position.x
+							- initial.scopeAreas[area].position.x,
+						y: moved.scopeAreas[area].position.y
+							- initial.scopeAreas[area].position.y,
+					}, { x: 300, y: 200 });
+				}
+			}
 		}
 		assertLayoutEdgesUsePortCenters(initialLayout);
 		assertLayoutEdgesUsePortCenters(movedLayout);
@@ -686,6 +737,7 @@ function createReadyTask(
 		id: taskId,
 		title: 'Ready Task',
 		description: 'Ready Task description',
+		defaultGraphTargets: { reference: [], work: [] },
 		origin,
 		nodePositions: {
 			[work.id]: { x: 320, y: 0 },
@@ -721,6 +773,7 @@ function createBranchTask(
 		id: 'task:branch',
 		title: 'Branch Task',
 		description: '',
+		defaultGraphTargets: { reference: [], work: [] },
 		origin,
 		nodePositions: {
 			[workA.id]: { x: 320, y: -TASK_DEFAULT_WORK_VERTICAL_STRIDE },
@@ -790,6 +843,7 @@ function createSerialTask(
 		id: 'task:serial',
 		title: 'Serial Task',
 		description: '',
+		defaultGraphTargets: { reference: [], work: [] },
 		origin,
 		nodePositions: {
 			[workA.id]: { x: 320, y: 0 },

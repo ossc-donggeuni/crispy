@@ -73,8 +73,8 @@ import {
 	TASK_CONNECTION_STATE_ATTRIBUTE,
 	TASK_FLOW_STATE_ATTRIBUTE,
 	TASK_GRAPH_TARGET_AREA_ATTRIBUTE,
+	TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE,
 	TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE,
-	TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE,
 	TASK_NODE_ACTION_ATTRIBUTE,
 	TASK_PORT_DIRECTION_ATTRIBUTE,
 } from '../../webview/task/taskRenderer';
@@ -531,13 +531,14 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('모든 WORK 위에 World Reference/Work Area를 렌더링하고 Work 위치에 함께 종속한다', () => {
+	test('START와 WORK 위에 각 Reference/Work Area를 렌더링하고 소유 Node 위치에 종속한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const task = createRenderingTask({ x: 100, y: 300 });
+		const start = task.nodes.find((node) => node.kind === 'start');
 		const work = task.nodes.find((node) => node.kind === 'work');
 
-		assert.ok(work?.kind === 'work');
+		assert.ok(start && work?.kind === 'work');
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
 			INITIAL_GRAPH_STATE,
@@ -547,6 +548,13 @@ suite('Graph View', () => {
 		);
 		const referenceArea = getTaskScopeArea(root, task.id, work.id, 'reference');
 		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const defaultReferenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			start.id,
+			'reference',
+		);
+		const defaultWorkArea = getTaskScopeArea(root, task.id, start.id, 'work');
 		const workElement = getTaskElement(
 			root,
 			'data-task-node-id',
@@ -556,19 +564,24 @@ suite('Graph View', () => {
 		const layoutWork = createTaskGraphLayout([task]).nodes.find(
 			(node) => node.id === work.id,
 		);
+		const layoutStart = createTaskGraphLayout([task]).nodes.find(
+			(node) => node.id === start.id,
+		);
 
-		assert.ok(layoutWork?.kind === 'work');
+		assert.ok(layoutStart?.kind === 'start' && layoutWork?.kind === 'work');
 		assert.strictEqual(
 			getTaskElements(root, TASK_GRAPH_TARGET_AREA_ATTRIBUTE, 'reference').length,
-			1,
+			2,
 		);
 		assert.strictEqual(
 			getTaskElements(root, TASK_GRAPH_TARGET_AREA_ATTRIBUTE, 'work').length,
-			1,
+			2,
 		);
 		assert.strictEqual(referenceArea.getAttribute('data-task-node-id'), null);
 		assert.strictEqual(workArea.getAttribute('data-task-node-id'), null);
 		assert.strictEqual(getText(referenceArea).includes('참조 영역'), true);
+		assert.strictEqual(getText(defaultReferenceArea).includes('기본 참조 영역'), true);
+		assert.strictEqual(getText(defaultWorkArea).includes('기본 작업 영역'), true);
 		assert.strictEqual(getText(referenceArea).includes('읽기 대상'), false);
 		assert.strictEqual(
 			getText(referenceArea).includes('폴더 또는 파일을'),
@@ -584,6 +597,14 @@ suite('Graph View', () => {
 		assert.strictEqual(referenceArea.style.width, `${TASK_NODE_WIDTH}px`);
 		assert.strictEqual(workArea.style.width, `${TASK_NODE_WIDTH}px`);
 		assert.strictEqual(workElement.style.width, `${TASK_NODE_WIDTH}px`);
+		assert.deepStrictEqual(
+			readTranslate(defaultReferenceArea.style.transform),
+			layoutStart.scopeAreas.reference.position,
+		);
+		assert.deepStrictEqual(
+			readTranslate(defaultWorkArea.style.transform),
+			layoutStart.scopeAreas.work.position,
+		);
 		assert.deepStrictEqual(
 			readTranslate(referenceArea.style.transform),
 			layoutWork.scopeAreas.reference.position,
@@ -650,6 +671,134 @@ suite('Graph View', () => {
 		workElement.dispatch('dblclick', createClickEvent(workElement));
 		assert.strictEqual(focusPoints.length, 1);
 		assert.ok(getTaskInspector(root));
+		graphView.dispose();
+	});
+
+	test('START 기본 Scope는 Work 고유 Scope와 독립적으로 Drop·이동·해제된다', () => {
+		const source = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/task-default-scope',
+			name: 'task-default-scope',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:task-default-scope',
+			name: 'workspace',
+			status: 'loaded',
+			children: [source],
+		};
+		const task = createRenderingTask({ x: 100, y: 500 });
+		const start = task.nodes.find((node) => node.kind === 'start');
+		const work = task.nodes.find((node) => node.kind === 'work');
+
+		assert.ok(start && work?.kind === 'work');
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				openedFolders: { [project.id]: true },
+			},
+			createSingleRootGraph(project),
+			{},
+			[task],
+		);
+		const defaultReferenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			start.id,
+			'reference',
+		);
+		const defaultWorkArea = getTaskScopeArea(root, task.id, start.id, 'work');
+		const workReferenceArea = getTaskScopeArea(
+			root,
+			task.id,
+			work.id,
+			'reference',
+		);
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			task.id,
+		);
+		const sourceOccurrence = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			source.id,
+		);
+		const setScopeBounds = (): void => {
+			setClientBounds(defaultReferenceArea, 100, 100, 280, 72);
+			setClientBounds(defaultWorkArea, 100, 220, 280, 72);
+			setClientBounds(workReferenceArea, 420, 100, 280, 72);
+			setClientBounds(workArea, 420, 220, 280, 72);
+		};
+		const readTargets = () => {
+			const current = graphView.taskState.getTask(task.id);
+			const currentWork = current?.nodes.find((node) => node.id === work.id);
+
+			assert.ok(current && currentWork?.kind === 'work');
+			return {
+				defaults: current.defaultGraphTargets,
+				local: currentWork.graphTargets,
+			};
+		};
+
+		setScopeBounds();
+		performNodeDrop(sourceOccurrence, 140, 130);
+		assert.deepStrictEqual(readTargets(), {
+			defaults: { reference: [source.id], work: [] },
+			local: { reference: [], work: [] },
+		});
+		assertElementPositionInsideArea(sourceOccurrence, defaultReferenceArea);
+
+		const originBeforeDrag = graphView.taskState.getTask(task.id)?.origin;
+		const sourcePositionBeforeDrag = readTranslate(sourceOccurrence.style.transform);
+		const areaPositionBeforeDrag = readTranslate(defaultReferenceArea.style.transform);
+
+		assert.ok(originBeforeDrag);
+		performTaskDrag(startElement, { x: 20, y: 20 }, { x: 100, y: 80 });
+		assert.deepStrictEqual(
+			subtractPositions(
+				graphView.taskState.getTask(task.id)?.origin ?? assert.fail(),
+				originBeforeDrag,
+			),
+			{ x: 80, y: 60 },
+		);
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(sourceOccurrence.style.transform),
+			sourcePositionBeforeDrag,
+		), { x: 80, y: 60 });
+		assert.deepStrictEqual(subtractPositions(
+			readTranslate(defaultReferenceArea.style.transform),
+			areaPositionBeforeDrag,
+		), { x: 80, y: 60 });
+
+		setScopeBounds();
+		performNodeDrop(sourceOccurrence, 460, 250);
+		assert.deepStrictEqual(readTargets(), {
+			defaults: { reference: [], work: [] },
+			local: { reference: [], work: [source.id] },
+		});
+		assertElementPositionInsideArea(sourceOccurrence, workArea);
+
+		performNodeDrop(sourceOccurrence, 140, 250);
+		assert.deepStrictEqual(readTargets(), {
+			defaults: { reference: [], work: [source.id] },
+			local: { reference: [], work: [] },
+		});
+		assertElementPositionInsideArea(sourceOccurrence, defaultWorkArea);
+
+		performNodeDrop(sourceOccurrence, 900, 900);
+		assert.deepStrictEqual(readTargets(), {
+			defaults: { reference: [], work: [] },
+			local: { reference: [], work: [] },
+		});
+
 		graphView.dispose();
 	});
 
@@ -12582,6 +12731,7 @@ class FakeElement {
 	clientHeight = 800;
 	boundsLeft = 0;
 	boundsTop = 0;
+	hasExplicitClientBounds = false;
 	private readonly classNames = new Set<string>();
 	private readonly attributes = new Map<string, string>();
 	private readonly listeners = new Map<string, Set<GraphEventListener>>();
@@ -12741,15 +12891,20 @@ class FakeElement {
 	}
 
 	getBoundingClientRect(): DOMRect {
+		const hasImplicitScopeBounds =
+			this.hasClass('task-scope-area') && !this.hasExplicitClientBounds;
+		const width = hasImplicitScopeBounds ? 0 : this.clientWidth;
+		const height = hasImplicitScopeBounds ? 0 : this.clientHeight;
+
 		return {
 			x: this.boundsLeft,
 			y: this.boundsTop,
 			left: this.boundsLeft,
 			top: this.boundsTop,
-			right: this.boundsLeft + this.clientWidth,
-			bottom: this.boundsTop + this.clientHeight,
-			width: this.clientWidth,
-			height: this.clientHeight,
+			right: this.boundsLeft + width,
+			bottom: this.boundsTop + height,
+			width,
+			height,
 			toJSON: () => ({}),
 		};
 	}
@@ -12833,7 +12988,7 @@ function getTaskElement(
 function getTaskScopeArea(
 	element: FakeElement,
 	taskId: string,
-	workNodeId: string,
+	nodeId: string,
 	area: 'reference' | 'work',
 ): FakeElement {
 	const scopeArea = getTaskElements(
@@ -12842,11 +12997,11 @@ function getTaskScopeArea(
 		area,
 	).find((candidate) => (
 		candidate.getAttribute('data-task-id') === taskId
-		&& candidate.getAttribute(TASK_GRAPH_TARGET_WORK_NODE_ID_ATTRIBUTE)
-			=== workNodeId
+		&& candidate.getAttribute(TASK_GRAPH_TARGET_NODE_ID_ATTRIBUTE)
+			=== nodeId
 	));
 
-	assert.ok(scopeArea, `${taskId}/${workNodeId} ${area} Area가 있어야 한다.`);
+	assert.ok(scopeArea, `${taskId}/${nodeId} ${area} Area가 있어야 한다.`);
 	return scopeArea;
 }
 
@@ -13106,6 +13261,7 @@ function setClientBounds(
 	width: number,
 	height: number,
 ): void {
+	element.hasExplicitClientBounds = true;
 	element.boundsLeft = left;
 	element.boundsTop = top;
 	element.clientWidth = width;
