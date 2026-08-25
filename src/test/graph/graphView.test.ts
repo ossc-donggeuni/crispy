@@ -849,6 +849,17 @@ suite('Graph View', () => {
 
 		assert.strictEqual(dialog.hidden, false);
 		assert.strictEqual(ownerDocument.activeElement, input);
+		accept.focus();
+		const forwardTab = createKeyboardEvent('Tab');
+
+		accept.dispatch('keydown', forwardTab);
+		assert.strictEqual(forwardTab.defaultPrevented, true);
+		assert.strictEqual(ownerDocument.activeElement, input);
+		const reverseTab = createKeyboardEvent('Tab', true);
+
+		input.dispatch('keydown', reverseTab);
+		assert.strictEqual(reverseTab.defaultPrevented, true);
+		assert.strictEqual(ownerDocument.activeElement, accept);
 		assert.strictEqual(dialog.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE), true);
 		assert.strictEqual(
 			dialog.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
@@ -932,6 +943,7 @@ suite('Graph View', () => {
 			'import-task',
 		);
 
+		assert.strictEqual(ownerDocument.activeElement, currentImportButton);
 		currentImportButton.dispatch(
 			'click',
 			createClickEvent(currentImportButton),
@@ -939,8 +951,12 @@ suite('Graph View', () => {
 		assert.strictEqual(dialog.hidden, false);
 		dialog.dispatch('keydown', createKeyboardEvent('Escape'));
 		assert.strictEqual(dialog.hidden, true);
+		assert.strictEqual(ownerDocument.activeElement, currentImportButton);
 
+		currentImportButton.dispatch('click', createClickEvent(currentImportButton));
+		assert.strictEqual(ownerDocument.activeElement, input);
 		graphView.dispose();
+		assert.notStrictEqual(ownerDocument.activeElement, currentImportButton);
 	});
 
 	test('Start Action은 겹치지 않는 Work를 추가하고 새 Work에 Focus하며 Node kind별 Port를 노출한다', () => {
@@ -14571,19 +14587,31 @@ function createChangeEvent(target: FakeElement): Event {
 	} as unknown as Event;
 }
 
-function createKeyboardEvent(key: string): KeyboardEvent {
+function createKeyboardEvent(
+	key: string,
+	shiftKey = false,
+): KeyboardEvent & { readonly defaultPrevented: boolean } {
 	let propagationStopped = false;
+	let defaultPrevented = false;
 
 	return {
 		key,
-		preventDefault: () => undefined,
+		shiftKey,
+		ctrlKey: false,
+		metaKey: false,
+		preventDefault: () => {
+			defaultPrevented = true;
+		},
 		stopPropagation: () => {
 			propagationStopped = true;
+		},
+		get defaultPrevented() {
+			return defaultPrevented;
 		},
 		get propagationStopped() {
 			return propagationStopped;
 		},
-	} as unknown as KeyboardEvent;
+	} as unknown as KeyboardEvent & { readonly defaultPrevented: boolean };
 }
 
 function createPointerEvent(

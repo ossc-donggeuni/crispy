@@ -64,6 +64,8 @@ export interface TaskRenderer {
 	applyLayout(layout: TaskGraphLayout): void;
 	/** Task/Node ID가 일치하는 Node를 현재 선택으로 전환한다. */
 	selectNode(taskId: string, nodeId: string): boolean;
+	/** 현재 렌더된 Start Node의 import action에 focus를 복원한다. */
+	focusImportAction(taskId: string, nodeId: string): boolean;
 	/** client pointer로 Scope Area를 hit-test하고 단 하나의 hover를 동기화한다. */
 	updateGraphTargetDrag(point: TaskLayoutPosition): TaskGraphTargetDropTarget | undefined;
 	/** Drag cancel/focus 전환/dispose 때 남은 Scope hover를 즉시 지운다. */
@@ -454,6 +456,24 @@ export function initializeTaskRenderer(
 		}
 
 		selectTaskNode(renderKey);
+		return true;
+	};
+	const focusImportAction = (taskId: string, nodeId: string): boolean => {
+		if (disposed) {
+			return false;
+		}
+		const nodeElement = nodeElements.get(
+			createTaskNodeRenderKey(taskId, nodeId),
+		);
+		const action = nodeElement
+			? findTaskNodeActionElement(nodeElement, 'import-task')
+			: undefined;
+
+		if (!action) {
+			return false;
+		}
+
+		action.focus();
 		return true;
 	};
 
@@ -1211,6 +1231,7 @@ export function initializeTaskRenderer(
 	return {
 		applyLayout,
 		selectNode,
+		focusImportAction,
 		updateGraphTargetDrag,
 		clearGraphTargetDrag,
 		dispose(): void {
@@ -1265,6 +1286,27 @@ export function initializeTaskRenderer(
 
 function createTaskNodeRenderKey(taskId: string, nodeId: string): string {
 	return `${taskId}:${nodeId}`;
+}
+
+/** rerender 뒤 현재 Node subtree에서 지정 action을 재탐색한다. */
+function findTaskNodeActionElement(
+	element: HTMLElement,
+	action: TaskNodeAction,
+): HTMLElement | undefined {
+	for (const child of Array.from(element.children)) {
+		const childElement = child as HTMLElement;
+
+		if (childElement.getAttribute(TASK_NODE_ACTION_ATTRIBUTE) === action) {
+			return childElement;
+		}
+		const descendant = findTaskNodeActionElement(childElement, action);
+
+		if (descendant) {
+			return descendant;
+		}
+	}
+
+	return undefined;
 }
 
 function createTaskEdgeRenderKey(taskId: string, edgeId: string): string {

@@ -20,6 +20,8 @@ export type TaskImportSubmitResult =
 export interface TaskImportDialogRequest {
 	readonly taskTitle: string;
 	onSubmit(source: string): TaskImportSubmitResult;
+	/** 팝업이 정상적으로 닫힌 뒤 최신 호출 UI에 focus를 복원한다. */
+	restoreFocus?: () => void;
 }
 
 /** Graph Overlay에 마운트하는 Task Import 팝업 lifecycle이다. */
@@ -86,11 +88,21 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 		error.hidden = true;
 		input.removeAttribute('aria-invalid');
 	};
-	const close = (): void => {
+	const reset = (): void => {
 		activeRequest = undefined;
 		overlay.hidden = true;
 		input.value = '';
 		clearError();
+	};
+	const close = (): void => {
+		const request = activeRequest;
+
+		reset();
+		try {
+			request?.restoreFocus?.();
+		} catch {
+			// Focus 복원 실패는 이미 완료된 dialog close를 되돌리지 않는다.
+		}
 	};
 	const submit = (): void => {
 		if (!activeRequest) {
@@ -114,6 +126,9 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 		}
 	};
 	const handleKeyDown = (event: KeyboardEvent): void => {
+		if (!activeRequest) {
+			return;
+		}
 		if (event.key === 'Escape') {
 			event.preventDefault();
 			close();
@@ -122,6 +137,24 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 		if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
 			event.preventDefault();
 			submit();
+			return;
+		}
+		if (
+			event.key === 'Tab'
+			&& event.shiftKey
+			&& ownerDocument.activeElement === input
+		) {
+			event.preventDefault();
+			acceptButton.focus();
+			return;
+		}
+		if (
+			event.key === 'Tab'
+			&& !event.shiftKey
+			&& ownerDocument.activeElement === acceptButton
+		) {
+			event.preventDefault();
+			input.focus();
 		}
 	};
 
@@ -151,7 +184,7 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 			}
 
 			disposed = true;
-			close();
+			reset();
 			cancelButton.removeEventListener('click', close);
 			acceptButton.removeEventListener('click', submit);
 			input.removeEventListener('input', handleInput);

@@ -3220,13 +3220,17 @@ export function initializeGraphView(
 	};
 	const handleTaskImport = (taskId: string): void => {
 		const task = taskState.getTask(taskId);
+		const startNodeId = task?.nodes.find((node) => node.kind === 'start')?.id;
 
-		if (!task) {
+		if (!task || !startNodeId) {
 			return;
 		}
 
 		taskImportDialog.open({
 			taskTitle: task.title,
+			restoreFocus: () => {
+				taskRenderer.focusImportAction(taskId, startNodeId);
+			},
 			onSubmit: (source) => {
 				const parsed = parseTaskTransferJson(source);
 
