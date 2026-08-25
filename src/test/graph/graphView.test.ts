@@ -7230,14 +7230,26 @@ suite('Graph View', () => {
 			taskViewCss,
 			/\.task-remove-task-action\s*\{[^}]*--vscode-errorForeground[^}]*14%[^}]*--graph-floating-control-background/s,
 		);
-		assert.match(
-			taskViewCss,
-			/\.task-node-actions\s*\{[^}]*top:\s*100%;[^}]*width:\s*100%;[^}]*padding-top:\s*12px;[^}]*pointer-events:\s*none;/s,
+		const taskNodeActionsRule = taskViewCss.match(
+			/\.task-node-actions\s*\{[^}]*\}/s,
 		);
+
+		assert.ok(taskNodeActionsRule);
 		assert.match(
-			taskViewCss,
-			/\.task-work-node:hover\s*>\s*\.task-work-actions,[^{]*\{[^}]*pointer-events:\s*auto;/s,
+			taskNodeActionsRule[0],
+			/top:\s*100%;[^}]*width:\s*100%;[^}]*padding-top:\s*12px;[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/s,
 		);
+		assert.doesNotMatch(taskNodeActionsRule[0], /visibility:\s*hidden;/);
+		const visibleTaskNodeActionsRule = taskViewCss.match(
+			/\.task-start-node:hover\s*>\s*\.task-start-actions,\s*\.task-start-node:focus-within\s*>\s*\.task-start-actions,\s*\.task-work-node:hover\s*>\s*\.task-work-actions,\s*\.task-work-node:focus-within\s*>\s*\.task-work-actions\s*\{[^}]*\}/s,
+		);
+
+		assert.ok(visibleTaskNodeActionsRule);
+		assert.match(
+			visibleTaskNodeActionsRule[0],
+			/opacity:\s*1;[^}]*pointer-events:\s*auto;/s,
+		);
+		assert.doesNotMatch(visibleTaskNodeActionsRule[0], /visibility:\s*visible;/);
 		assert.match(
 			taskViewCss,
 			/\.task-node:has\(>\s*\.task-node-actions\):hover,[^{]*\{[^}]*z-index:\s*2;/s,

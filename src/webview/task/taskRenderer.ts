@@ -474,7 +474,7 @@ export function initializeTaskRenderer(
 		}
 
 		action.focus();
-		return true;
+		return action.ownerDocument.activeElement === action;
 	};
 
 	const stopTaskDrag = (releaseCapture: boolean): TaskDragSession | undefined => {

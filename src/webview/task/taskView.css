@@ -365,7 +365,6 @@
 	justify-content: flex-end;
 	padding-top: 12px;
 	opacity: 0;
-	visibility: hidden;
 	pointer-events: none;
 	touch-action: none;
 	transition: opacity 100ms ease;
@@ -376,7 +375,6 @@
 .task-work-node:hover > .task-work-actions,
 .task-work-node:focus-within > .task-work-actions {
 	opacity: 1;
-	visibility: visible;
 	pointer-events: auto;
 }
 
