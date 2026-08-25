@@ -1420,23 +1420,17 @@ function assertWorkspacePersistenceRefreshActive(signal?: AbortSignal): void {
 	}
 }
 
-/** Root별 metadata를 독립적으로 읽고 기존 ownership 검증으로 병합한다. */
+/** Root별 metadata를 모두 읽은 뒤 기존 ownership 검증으로 병합한다. */
 export async function loadWorkspacePersistentStateForRoots(
 	rootUris: readonly vscode.Uri[],
 	readState: (
 		rootUri: vscode.Uri,
 	) => Promise<WorkspacePersistentState> = readWorkspacePersistentState,
 ): Promise<WorkspacePersistentState> {
-	const rootStates = await Promise.all(rootUris.map(async (rootUri) => {
-		try {
-			return { rootUri, state: await readState(rootUri) };
-		} catch {
-			return {
-				rootUri,
-				state: createDefaultWorkspacePersistentState(),
-			};
-		}
-	}));
+	const rootStates = await Promise.all(rootUris.map(async (rootUri) => ({
+		rootUri,
+		state: await readState(rootUri),
+	})));
 
 	return mergeWorkspacePersistentStates(rootStates);
 }

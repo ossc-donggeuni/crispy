@@ -27,21 +27,35 @@ const textEncoder = new TextEncoder();
 
 /**
  * Workspace Root의 `.crispy/state.json`을 읽고 현재 metadata 형식으로 검증한다.
- * 파일이 없거나 읽기, JSON 또는 schema 검증이 실패하면 새 기본 상태를 반환한다.
+ * 파일이 없을 때만 새 기본 상태를 반환하고, 읽기 또는 검증 실패는 호출자에게 전파한다.
  */
 export async function readWorkspacePersistentState(
 	rootUri: vscode.Uri,
 	fileSystem: WorkspacePersistenceFileSystem = vscode.workspace.fs,
 ): Promise<WorkspacePersistentState> {
-	try {
-		const content = await fileSystem.readFile(getWorkspaceStateUri(rootUri));
-		const value = JSON.parse(textDecoder.decode(content)) as unknown;
+	let content: Uint8Array;
 
-		return parseWorkspacePersistentState(value)
-			?? createDefaultWorkspacePersistentState();
-	} catch {
-		return createDefaultWorkspacePersistentState();
+	try {
+		content = await fileSystem.readFile(getWorkspaceStateUri(rootUri));
+	} catch (error) {
+		if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') {
+			return createDefaultWorkspacePersistentState();
+		}
+		throw error;
 	}
+	let value: unknown;
+
+	try {
+		value = JSON.parse(textDecoder.decode(content)) as unknown;
+	} catch {
+		throw new Error('Workspace persistent state JSON is invalid.');
+	}
+	const state = parseWorkspacePersistentState(value);
+
+	if (!state) {
+		throw new Error('Workspace persistent state schema is invalid.');
+	}
+	return state;
 }
 
 /**

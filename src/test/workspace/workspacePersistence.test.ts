@@ -55,7 +55,7 @@ suite('Workspace Persistence', () => {
 			assert.deepStrictEqual(fake.getJson(getStateUri(rootUri)), state);
 		});
 
-		test('잘못된 JSON, schema와 version은 Root 기본 상태로 fallback한다', async () => {
+		test('잘못된 JSON, schema와 version은 읽기 실패로 전파한다', async () => {
 			const roots = [
 				vscode.Uri.file('/workspace/invalid-json'),
 				vscode.Uri.file('/workspace/invalid-schema'),
@@ -73,14 +73,13 @@ suite('Workspace Persistence', () => {
 			});
 
 			for (const rootUri of roots) {
-				assert.deepStrictEqual(
-					await readWorkspacePersistentState(rootUri, fake.fileSystem),
-					createDefaultWorkspacePersistentState(),
+				await assert.rejects(
+					readWorkspacePersistentState(rootUri, fake.fileSystem),
 				);
 			}
 		});
 
-		test('read 실패 Root만 기본 상태로 격리하고 다른 Root는 정상 복원한다', async () => {
+		test('read 실패를 전파하고 독립적인 다른 Root read는 정상 복원한다', async () => {
 			const failedRootUri = vscode.Uri.file('/workspace/frontend');
 			const normalRootUri = vscode.Uri.file('/workspace/backend');
 			const normalState = createState(normalRootUri, 4);
@@ -89,13 +88,14 @@ suite('Workspace Persistence', () => {
 			});
 			fake.setJson(getStateUri(normalRootUri), normalState);
 
-			const [failed, normal] = await Promise.all([
+			await assert.rejects(
 				readWorkspacePersistentState(failedRootUri, fake.fileSystem),
-				readWorkspacePersistentState(normalRootUri, fake.fileSystem),
-			]);
-
-			assert.deepStrictEqual(failed, createDefaultWorkspacePersistentState());
-			assert.deepStrictEqual(normal, normalState);
+				/read failed/,
+			);
+			assert.deepStrictEqual(
+				await readWorkspacePersistentState(normalRootUri, fake.fileSystem),
+				normalState,
+			);
 		});
 
 		test('write 실패를 호출자에게 전달한다', async () => {

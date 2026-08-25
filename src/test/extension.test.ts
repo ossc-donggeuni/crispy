@@ -886,7 +886,7 @@ suite('Crispy Extension Host', () => {
 		);
 	});
 
-	test('Multi-root metadata를 병합하고 한 Root의 read 실패를 격리한다', async () => {
+	test('Multi-root metadata를 병합하고 한 Root의 read 실패면 전체 전환을 중단한다', async () => {
 		const frontendUri = vscode.Uri.file('/workspace/frontend');
 		const backendUri = vscode.Uri.file('/workspace/backend');
 		const frontendState = createWorkspacePersistentStateForRoot(
@@ -909,7 +909,7 @@ suite('Crispy Extension Host', () => {
 			backendState,
 		));
 
-		const isolated = await loadWorkspacePersistentStateForRoots(
+		await assert.rejects(loadWorkspacePersistentStateForRoots(
 			[frontendUri, backendUri],
 			async (rootUri) => {
 				if (rootUri.toString() === frontendUri.toString()) {
@@ -918,9 +918,7 @@ suite('Crispy Extension Host', () => {
 
 				return backendState;
 			},
-		);
-
-		assert.deepStrictEqual(isolated, backendState);
+		), /frontend read failed/);
 	});
 
 	test('acknowledged generation floor는 이전 epoch만 거부하고 직전 epoch는 current ack 전 허용한다', () => {
