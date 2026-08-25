@@ -181,7 +181,7 @@ suite('Task Domain', () => {
 		assert.deepStrictEqual(normalized.graphTargets, { reference: [], work: [] });
 	});
 
-	test('Work Graph Target validation은 배열 shape와 Area 내부/교차 중복을 거부한다', () => {
+	test('Work Graph Target은 Area 내부 중복을 거부하고 양쪽 Area membership은 허용한다', () => {
 		const base = addWorks(createTask(), ['Target Work']);
 		const work = base.nodes.find((node) => node.kind === 'work');
 
@@ -200,10 +200,10 @@ suite('Task Domain', () => {
 			reference: ['folder:src', 'folder:src'],
 			work: [],
 		}), ['duplicate_graph_target']);
-		assertIssueCodes(replaceTargets({
+		assert.deepStrictEqual(validateTaskBlueprint(replaceTargets({
 			reference: ['folder:src'],
 			work: ['folder:src'],
-		}), ['graph_target_area_conflict']);
+		})), []);
 	});
 
 	test('삭제로 빈 Work 기본 위치를 다음 추가에서 재사용한다', () => {

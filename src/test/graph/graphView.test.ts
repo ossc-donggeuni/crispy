@@ -3040,15 +3040,6 @@ suite('Graph View', () => {
 		const [firstWork, secondWork] = works;
 
 		assert.ok(firstWork?.kind === 'work' && secondWork?.kind === 'work');
-		const boundTask: TaskBlueprint = {
-			...task,
-			nodes: task.nodes.map((node) => node.id === firstWork.id
-				? {
-					...node,
-					graphTargets: { reference: [source.id], work: [] },
-				}
-				: node),
-		};
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
@@ -3056,10 +3047,11 @@ suite('Graph View', () => {
 			{
 				...INITIAL_GRAPH_STATE,
 				openedFolders: { [project.id]: true },
+				nodePositions: { [source.id]: { x: 760, y: 320 } },
 			},
 			createSingleRootGraph(project),
 			{},
-			[boundTask],
+			[task],
 		);
 		const firstArea = getTaskScopeArea(
 			root,
@@ -3096,6 +3088,17 @@ suite('Graph View', () => {
 		setClientBounds(secondArea, 420, 100, 280, 90);
 		setClientBounds(firstWorkArea, 0, 0, 0, 0);
 		setClientBounds(secondWorkArea, 0, 0, 0, 0);
+		assert.deepStrictEqual(
+			readTranslate(firstOccurrence.style.transform),
+			{ x: 760, y: 320 },
+		);
+		performNodeDrop(firstOccurrence, 140, 130);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(task.id)?.nodes
+				.filter((node) => node.kind === 'work')
+				.map((node) => node.graphTargets.reference),
+			[[source.id], []],
+		);
 		beginNodeDrag(firstOccurrence, 460, 130);
 		assert.strictEqual(firstArea.hasClass('is-drag-hover'), false);
 		assert.strictEqual(secondArea.hasClass('is-drag-hover'), true);
@@ -3111,8 +3114,14 @@ suite('Graph View', () => {
 		const updatedSecond = updatedWorks?.find((node) => node.id === secondWork.id);
 
 		assert.ok(updatedFirst?.kind === 'work' && updatedSecond?.kind === 'work');
-		assert.deepStrictEqual(updatedFirst.graphTargets.reference, [source.id]);
-		assert.deepStrictEqual(updatedSecond.graphTargets.reference, [source.id]);
+		assert.deepStrictEqual(updatedFirst.graphTargets, {
+			reference: [],
+			work: [],
+		});
+		assert.deepStrictEqual(updatedSecond.graphTargets, {
+			reference: [source.id],
+			work: [],
+		});
 		assert.strictEqual(
 			getDescendantByAttribute(root, 'data-graph-node-id', firstOccurrenceId),
 			firstOccurrence,
@@ -3136,13 +3145,58 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(
 			firstArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
-			'1',
+			'0',
 		);
 		assert.strictEqual(
 			secondArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
 			'0',
 		);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
+
+		const beforeOutsidePosition = readTranslate(firstOccurrence.style.transform);
+
+		setClientBounds(firstArea, 0, 0, 0, 0);
+		setClientBounds(secondArea, 0, 0, 0, 0);
+		performNodeDrop(firstOccurrence, 900, 700);
+		const movedOutsideWorks = graphView.taskState.getTask(task.id)?.nodes.filter(
+			(node) => node.kind === 'work',
+		);
+		const movedOutsidePosition = readTranslate(firstOccurrence.style.transform);
+
+		assert.deepStrictEqual(
+			movedOutsideWorks?.map((node) => node.graphTargets),
+			[
+				{ reference: [], work: [] },
+				{ reference: [], work: [] },
+			],
+		);
+		assert.notDeepStrictEqual(movedOutsidePosition, beforeOutsidePosition);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[firstOccurrenceId],
+			movedOutsidePosition,
+		);
+		graphView.updateTasks([...graphView.taskState.getSnapshot().tasks]);
+		assert.deepStrictEqual(
+			graphView.taskState.getTask(task.id)?.nodes
+				.filter((node) => node.kind === 'work')
+				.map((node) => node.graphTargets),
+			[
+				{ reference: [], work: [] },
+				{ reference: [], work: [] },
+			],
+		);
+		assert.deepStrictEqual(
+			readTranslate(firstOccurrence.style.transform),
+			movedOutsidePosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[firstOccurrenceId],
+			movedOutsidePosition,
+		);
+		assert.strictEqual(
+			getDescendantByAttribute(root, 'data-graph-node-id', firstOccurrenceId),
+			firstOccurrence,
+		);
 		graphView.dispose();
 	});
 
@@ -3659,7 +3713,7 @@ suite('Graph View', () => {
 
 		assert.ok(updatedFirst?.kind === 'work' && updatedSecond?.kind === 'work');
 		assert.deepStrictEqual(updatedFirst.graphTargets, {
-			reference: [parent.id],
+			reference: [],
 			work: [child.id],
 		});
 		assert.deepStrictEqual(updatedSecond.graphTargets.reference, [parent.id]);
@@ -3691,7 +3745,7 @@ suite('Graph View', () => {
 			firstReferenceArea.getAttribute(
 				TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE,
 			),
-			'1',
+			'0',
 		);
 		assert.strictEqual(
 			secondReferenceArea.getAttribute(
@@ -4094,7 +4148,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('여러 Detached visual Drop은 동일 canonical Source ID 하나로 정규화한다', () => {
+	test('동일 Source의 Detached occurrence를 swap 없이 영역 간 이동한다', () => {
 		const source = {
 			kind: 'folder' as const,
 			id: 'folder:file:///workspace/src',
@@ -4126,8 +4180,10 @@ suite('Graph View', () => {
 			},
 		}, createSingleRootGraph(project), {}, [task]);
 		const referenceArea = getTaskScopeArea(root, task.id, work.id, 'reference');
+		const workArea = getTaskScopeArea(root, task.id, work.id, 'work');
 
 		setClientBounds(referenceArea, 100, 100, 280, 72);
+		setClientBounds(workArea, 100, 220, 280, 72);
 		const firstOccurrenceId = createGraphLayoutNodeId(firstRootId, source.id);
 		const secondOccurrenceId = createGraphLayoutNodeId(secondRootId, source.id);
 		const firstDetached = getDescendantByAttribute(
@@ -4139,6 +4195,14 @@ suite('Graph View', () => {
 			root,
 			'data-graph-node-id',
 			secondOccurrenceId,
+		);
+		const firstBadge = getDescendantByClass(
+			firstDetached,
+			'graph-detached-root-badge',
+		);
+		const secondBadge = getDescendantByClass(
+			secondDetached,
+			'graph-detached-root-badge',
 		);
 		const backlink = getDescendantByAttribute(
 			root,
@@ -4165,14 +4229,134 @@ suite('Graph View', () => {
 		);
 
 		performNodeDrop(firstDetached, 140, 130);
-		performNodeDrop(secondDetached, 140, 130);
-		const updatedWork = graphView.taskState.getTask(task.id)?.nodes.find(
+		performNodeDrop(secondDetached, 140, 250);
+		let updatedWork = graphView.taskState.getTask(task.id)?.nodes.find(
 			(node) => node.id === work.id,
 		);
 
 		assert.ok(updatedWork?.kind === 'work');
-		assert.deepStrictEqual(updatedWork.graphTargets.reference, [source.id]);
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: [source.id],
+			work: [source.id],
+		});
+		assertElementPositionInsideArea(firstDetached, referenceArea);
+		assertElementPositionInsideArea(secondDetached, workArea);
+		assert.strictEqual(
+			referenceArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
+			'0',
+		);
+		assert.strictEqual(
+			workArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
+			'0',
+		);
+
+		// 목적지에 동일 Source occurrence가 있어도 둘의 위치를
+		// 바꾸지 않고, 끌고 온 occurrence를 그 영역에 추가한다.
+		performNodeDrop(secondDetached, 140, 130);
+		updatedWork = graphView.taskState.getTask(task.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+		assert.ok(updatedWork?.kind === 'work');
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: [source.id],
+			work: [],
+		});
+		assertElementPositionInsideArea(firstDetached, referenceArea);
+		assertElementPositionInsideArea(secondDetached, referenceArea);
+		assertElementsDoNotOverlap([firstDetached, secondDetached]);
 		assert.strictEqual(getDescendantsByClass(root, 'task-scope-target').length, 0);
+		assert.strictEqual(
+			getDescendantByAttribute(root, 'data-graph-node-id', firstOccurrenceId),
+			firstDetached,
+		);
+		assert.strictEqual(
+			getDescendantByAttribute(root, 'data-graph-node-id', secondOccurrenceId),
+			secondDetached,
+		);
+		assert.strictEqual(
+			getDescendantByClass(firstDetached, 'graph-detached-root-badge'),
+			firstBadge,
+		);
+		assert.strictEqual(firstBadge.textContent, '1');
+		assert.strictEqual(
+			getDescendantByClass(secondDetached, 'graph-detached-root-badge'),
+			secondBadge,
+		);
+		assert.strictEqual(secondBadge.textContent, '2');
+
+		// Task snapshot이 다시 적용되어도 한 semantic membership을
+		// 공유하는 두 actual occurrence 소유권은 그대로다.
+		graphView.updateTasks([...graphView.taskState.getSnapshot().tasks]);
+		assertElementPositionInsideArea(firstDetached, referenceArea);
+		assertElementPositionInsideArea(secondDetached, referenceArea);
+		assertElementsDoNotOverlap([firstDetached, secondDetached]);
+
+		// 두 번째 occurrence만 영역 밖으로 빼면 첫 번째
+		// occurrence의 reference membership은 유지되고 이전 영역으로 복귀하지 않는다.
+		const beforeOutsidePosition = readTranslate(secondDetached.style.transform);
+
+		setClientBounds(referenceArea, 0, 0, 0, 0);
+		setClientBounds(workArea, 0, 0, 0, 0);
+		setClientBounds(backlink, 0, 0, 0, 0);
+		beginNodeDrag(secondDetached, 900, 700);
+		const transientOutsidePosition = readTranslate(
+			secondDetached.style.transform,
+		);
+
+		assert.notDeepStrictEqual(transientOutsidePosition, beforeOutsidePosition);
+		secondDetached.dispatch(
+			'pointerup',
+			createPointerEvent(secondDetached, 900, 700),
+		);
+		const outsidePosition = readTranslate(secondDetached.style.transform);
+
+		updatedWork = graphView.taskState.getTask(task.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+		assert.ok(updatedWork?.kind === 'work');
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: [source.id],
+			work: [],
+		});
+		assert.deepStrictEqual(outsidePosition, transientOutsidePosition);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[secondOccurrenceId],
+			outsidePosition,
+		);
+		assertElementPositionInsideArea(firstDetached, referenceArea);
+		graphView.updateTasks([...graphView.taskState.getSnapshot().tasks]);
+		assert.deepStrictEqual(
+			readTranslate(secondDetached.style.transform),
+			outsidePosition,
+		);
+		assert.deepStrictEqual(
+			graphView.state.getState().nodePositions[secondOccurrenceId],
+			outsidePosition,
+		);
+
+		// 영역 밖 occurrence를 같은 Work의 work에 다시 놓으면
+		// reference/work가 같은 Source를 서로 다른 occurrence로 소유한다.
+		setClientBounds(referenceArea, 100, 100, 280, 72);
+		setClientBounds(workArea, 100, 220, 280, 72);
+		performNodeDrop(secondDetached, 140, 250);
+		updatedWork = graphView.taskState.getTask(task.id)?.nodes.find(
+			(node) => node.id === work.id,
+		);
+		assert.ok(updatedWork?.kind === 'work');
+		assert.deepStrictEqual(updatedWork.graphTargets, {
+			reference: [source.id],
+			work: [source.id],
+		});
+		assertElementPositionInsideArea(firstDetached, referenceArea);
+		assertElementPositionInsideArea(secondDetached, workArea);
+		assert.strictEqual(
+			referenceArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
+			'0',
+		);
+		assert.strictEqual(
+			workArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
+			'0',
+		);
 		assert.strictEqual(
 			getDescendantByAttribute(root, 'data-graph-node-id', firstOccurrenceId),
 			firstDetached,

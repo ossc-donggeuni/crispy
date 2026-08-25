@@ -7,7 +7,6 @@ export type TaskValidationIssueCode =
 	| 'duplicate_node_id'
 	| 'invalid_graph_targets'
 	| 'duplicate_graph_target'
-	| 'graph_target_area_conflict'
 	| 'node_position_missing'
 	| 'node_position_extra'
 	| 'start_node_position'
@@ -271,17 +270,6 @@ function validateWorkGraphTargets(
 		}
 	}
 
-	const referenceIds = new Set(reference.filter((target): target is string => (
-		typeof target === 'string'
-	)));
-
-	if (work.some((target) => typeof target === 'string' && referenceIds.has(target))) {
-		issues.push({
-			code: 'graph_target_area_conflict',
-			message: `Work graph target cannot exist in both areas: ${node.id}.`,
-			nodeId: node.id,
-		});
-	}
 }
 
 /** Source와 target 문자열 경계를 보존하는 Edge 연결 identity다. */

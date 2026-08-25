@@ -164,20 +164,36 @@ interface DescendantDetachedRoot {
 	readonly depth: number;
 }
 
-/** Work Domain binding과 실제 Graph occurrence를 연결하는 View-local 주소다. */
-interface TaskGraphScopeBinding {
+/** Work Scope 영역 하나를 가리키는 Domain 주소다. */
+interface TaskGraphScopeAddress {
 	readonly taskId: string;
 	readonly nodeId: string;
 	readonly area: TaskGraphTargetAreaKind;
+}
+
+/** 영역의 canonical Source membership과 실제 occurrence 소유권을 연결한다. */
+interface TaskGraphScopeBinding extends TaskGraphScopeAddress {
 	readonly sourceId: string;
 }
 
 function createTaskGraphScopeBindingKey(
-	taskId: string,
-	nodeId: string,
-	sourceId: string,
+	binding: TaskGraphScopeBinding,
 ): string {
-	return `${taskId}\u0000${nodeId}\u0000${sourceId}`;
+	return [
+		binding.taskId,
+		binding.nodeId,
+		binding.area,
+		binding.sourceId,
+	].join('\u0000');
+}
+
+function isSameTaskGraphScopeAddress(
+	left: TaskGraphScopeAddress,
+	right: TaskGraphScopeAddress,
+): boolean {
+	return left.taskId === right.taskId
+		&& left.nodeId === right.nodeId
+		&& left.area === right.area;
 }
 
 function createTaskGraphScopeAreaKey(
@@ -1164,7 +1180,7 @@ export function initializeGraphView(
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
 	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
-	const taskScopeOccurrenceByBinding = new Map<string, string>();
+	const taskScopeOccurrencesByBinding = new Map<string, Set<string>>();
 	let applyingTaskState = false;
 	let handleGraphSourceDragMove = (_request: GraphSourceDragRequest): void => {
 		return;
@@ -1450,7 +1466,6 @@ export function initializeGraphView(
 		);
 		const nextLogicalParentByChild = createGraphLogicalParentByChild(nextGraph);
 
-		currentManualUnarrangedNodeIds = unarrangedNodeIds;
 		const nextLayout = createLayout(
 			nextGraph,
 			nextSnapshot,
@@ -1488,7 +1503,10 @@ export function initializeGraphView(
 		const detachedRootNodeIds = { ...snapshot.detachedRootNodeIds };
 
 		delete detachedRootNodeIds[rootId];
-		removeTaskGraphScopeBindingsForOccurrence(detachedRootNodeId);
+		if (!removeTaskGraphScopeBindingsForOccurrence(detachedRootNodeId)) {
+			return false;
+		}
+		currentManualUnarrangedNodeIds = unarrangedNodeIds;
 		currentGraph = nextGraph;
 		currentLogicalParentByChild = nextLogicalParentByChild;
 		currentLayout = nextLayout;
@@ -1820,6 +1838,55 @@ export function initializeGraphView(
 		}
 		return bindings;
 	};
+	const collectTaskGraphScopeOccurrenceIds = (): Set<string> => new Set(
+		[...taskScopeOccurrencesByBinding.values()].flatMap(
+			(occurrenceIds) => [...occurrenceIds],
+		),
+	);
+	const findTaskGraphScopeBindingForOccurrence = (
+		occurrenceNodeId: string,
+		bindings: readonly TaskGraphScopeBinding[] = collectTaskGraphScopeBindings(),
+	): TaskGraphScopeBinding | undefined => {
+		const bindingsByKey = new Map(bindings.map((binding) => [
+			createTaskGraphScopeBindingKey(binding),
+			binding,
+		]));
+
+		for (const [bindingKey, occurrenceIds] of taskScopeOccurrencesByBinding) {
+			if (occurrenceIds.has(occurrenceNodeId)) {
+				const binding = bindingsByKey.get(bindingKey);
+
+				if (binding) {
+					return binding;
+				}
+			}
+		}
+		return undefined;
+	};
+	const addTaskGraphScopeOccurrence = (
+		binding: TaskGraphScopeBinding,
+		occurrenceNodeId: string,
+	): void => {
+		const key = createTaskGraphScopeBindingKey(binding);
+		const occurrenceIds = new Set(taskScopeOccurrencesByBinding.get(key));
+
+		occurrenceIds.add(occurrenceNodeId);
+		taskScopeOccurrencesByBinding.set(key, occurrenceIds);
+	};
+	const removeTaskGraphScopeOccurrence = (
+		binding: TaskGraphScopeBinding,
+		occurrenceNodeId: string,
+	): void => {
+		const key = createTaskGraphScopeBindingKey(binding);
+		const occurrenceIds = new Set(taskScopeOccurrencesByBinding.get(key));
+
+		occurrenceIds.delete(occurrenceNodeId);
+		if (occurrenceIds.size === 0) {
+			taskScopeOccurrencesByBinding.delete(key);
+		} else {
+			taskScopeOccurrencesByBinding.set(key, occurrenceIds);
+		}
+	};
 	/** 현재 Layout에 실제 Card로 존재하는 Folder/standalone File occurrence만 해석한다. */
 	const resolveVisibleTaskGraphScopeOccurrenceSourceId = (
 		occurrenceNodeId: string,
@@ -1869,18 +1936,12 @@ export function initializeGraphView(
 	const findAvailableScopeOccurrence = (
 		sourceId: string,
 		claimedOccurrenceIds: ReadonlySet<string>,
-		bindingKey: string,
-		reservedOwnerByOccurrenceId: ReadonlyMap<string, string>,
 	): string | undefined => {
 		for (const node of currentLayout.nodes) {
 			const occurrenceNodeId = node.id;
 
 			if (
 				!claimedOccurrenceIds.has(occurrenceNodeId)
-				&& (
-					!reservedOwnerByOccurrenceId.has(occurrenceNodeId)
-					|| reservedOwnerByOccurrenceId.get(occurrenceNodeId) === bindingKey
-				)
 				&& resolveVisibleTaskGraphScopeOccurrenceSourceId(occurrenceNodeId)
 					=== sourceId
 			) {
@@ -1893,75 +1954,55 @@ export function initializeGraphView(
 		bindings: readonly TaskGraphScopeBinding[],
 	): boolean => {
 		const activeKeys = new Set(bindings.map((binding) => (
-			createTaskGraphScopeBindingKey(
-				binding.taskId,
-				binding.nodeId,
-				binding.sourceId,
-			)
+			createTaskGraphScopeBindingKey(binding)
 		)));
 
-		for (const key of [...taskScopeOccurrenceByBinding.keys()]) {
+		for (const key of [...taskScopeOccurrencesByBinding.keys()]) {
 			if (!activeKeys.has(key)) {
-				taskScopeOccurrenceByBinding.delete(key);
+				taskScopeOccurrencesByBinding.delete(key);
 			}
-		}
-		const reservedOwnerByOccurrenceId = new Map<string, string>();
-
-		for (const binding of bindings) {
-			const key = createTaskGraphScopeBindingKey(
-				binding.taskId,
-				binding.nodeId,
-				binding.sourceId,
-			);
-			const occurrenceNodeId = taskScopeOccurrenceByBinding.get(key);
-
-			if (
-				!occurrenceNodeId
-				|| !isKnownTaskGraphScopeOccurrence(
-					occurrenceNodeId,
-					binding.sourceId,
-				)
-			) {
-				taskScopeOccurrenceByBinding.delete(key);
-				continue;
-			}
-			const reservedOwner = reservedOwnerByOccurrenceId.get(occurrenceNodeId);
-
-			if (reservedOwner && reservedOwner !== key) {
-				taskScopeOccurrenceByBinding.delete(key);
-				continue;
-			}
-			reservedOwnerByOccurrenceId.set(occurrenceNodeId, key);
 		}
 		const claimedOccurrenceIds = new Set<string>();
 
+		// 명시적으로 Drop된 occurrence 집합을 먼저 보존한다. 그래야 앞선
+		// unresolved binding이 뒤 binding의 실제 occurrence를 빼앗지 않는다.
 		for (const binding of bindings) {
-			const key = createTaskGraphScopeBindingKey(
-				binding.taskId,
-				binding.nodeId,
-				binding.sourceId,
-			);
-			let occurrenceNodeId = taskScopeOccurrenceByBinding.get(key);
+			const key = createTaskGraphScopeBindingKey(binding);
+			const validOccurrenceIds = new Set<string>();
 
-			if (
-				occurrenceNodeId
-				&& (
-					claimedOccurrenceIds.has(occurrenceNodeId)
-					|| !isKnownTaskGraphScopeOccurrence(
+			for (const occurrenceNodeId of taskScopeOccurrencesByBinding.get(key) ?? []) {
+				if (
+					!claimedOccurrenceIds.has(occurrenceNodeId)
+					&& isKnownTaskGraphScopeOccurrence(
 						occurrenceNodeId,
 						binding.sourceId,
 					)
-				)
-			) {
-				occurrenceNodeId = undefined;
-				taskScopeOccurrenceByBinding.delete(key);
+				) {
+					validOccurrenceIds.add(occurrenceNodeId);
+					claimedOccurrenceIds.add(occurrenceNodeId);
+				}
 			}
+			if (validOccurrenceIds.size > 0) {
+				taskScopeOccurrencesByBinding.set(key, validOccurrenceIds);
+			} else {
+				taskScopeOccurrencesByBinding.delete(key);
+			}
+		}
+
+		// 저장된 semantic binding에는 occurrence 주소가 없으므로, 소유 occurrence가
+		// 하나도 없는 binding에만 현재 Graph의 가용 occurrence 하나를 배정한다.
+		for (const binding of bindings) {
+			const key = createTaskGraphScopeBindingKey(binding);
+
+			if ((taskScopeOccurrencesByBinding.get(key)?.size ?? 0) > 0) {
+				continue;
+			}
+			let occurrenceNodeId: string | undefined;
+
 			if (!occurrenceNodeId && taskGraphTargetIndex.has(binding.sourceId)) {
 				occurrenceNodeId = findAvailableScopeOccurrence(
 					binding.sourceId,
 					claimedOccurrenceIds,
-					key,
-					reservedOwnerByOccurrenceId,
 				);
 			}
 			if (!occurrenceNodeId && taskGraphTargetIndex.has(binding.sourceId)) {
@@ -1973,17 +2014,19 @@ export function initializeGraphView(
 				if (
 					topologyOccurrenceNodeId
 					&& !claimedOccurrenceIds.has(topologyOccurrenceNodeId)
-					&& !reservedOwnerByOccurrenceId.has(topologyOccurrenceNodeId)
 				) {
 					occurrenceNodeId = topologyOccurrenceNodeId;
 				}
 			}
 			if (occurrenceNodeId) {
-				taskScopeOccurrenceByBinding.set(key, occurrenceNodeId);
+				taskScopeOccurrencesByBinding.set(
+					key,
+					new Set([occurrenceNodeId]),
+				);
 				claimedOccurrenceIds.add(occurrenceNodeId);
 			}
 		}
-		const nextBoundaryNodeIds = new Set(taskScopeOccurrenceByBinding.values());
+		const nextBoundaryNodeIds = collectTaskGraphScopeOccurrenceIds();
 		const scopeBoundariesChanged = (
 			nextBoundaryNodeIds.size !== currentTaskScopeBoundaryNodeIds.size
 			|| [...nextBoundaryNodeIds].some(
@@ -2010,9 +2053,7 @@ export function initializeGraphView(
 		graphNodePositions: GraphStateSnapshot['nodePositions'],
 	): Map<string, TaskGraphScopeLayout> => {
 		const scopeLayouts = new Map<string, TaskGraphScopeLayout>();
-		const scopeBoundaryNodeIds = new Set(
-			taskScopeOccurrenceByBinding.values(),
-		);
+		const scopeBoundaryNodeIds = collectTaskGraphScopeOccurrenceIds();
 
 		for (const node of layout.nodes) {
 			if (node.kind !== 'work') {
@@ -2024,13 +2065,18 @@ export function initializeGraphView(
 					node.scopeAreas[area].sourceIds,
 				);
 				const inputs = sourceIds.flatMap((sourceId) => {
-					const occurrenceNodeId = taskScopeOccurrenceByBinding.get(
-						createTaskGraphScopeBindingKey(node.taskId, node.id, sourceId),
-					);
+					const binding: TaskGraphScopeBinding = {
+						taskId: node.taskId,
+						nodeId: node.id,
+						area,
+						sourceId,
+					};
 
-					return occurrenceNodeId
-						? [{ sourceId, occurrenceNodeId }]
-						: [];
+					return [...(
+						taskScopeOccurrencesByBinding.get(
+							createTaskGraphScopeBindingKey(binding),
+						) ?? []
+					)].map((occurrenceNodeId) => ({ sourceId, occurrenceNodeId }));
 				});
 
 				scopeLayouts.set(
@@ -2056,9 +2102,7 @@ export function initializeGraphView(
 		readonly changed: boolean;
 	} => {
 		const nodePositions = { ...graphNodePositions };
-		const scopeBoundaryNodeIds = new Set(
-			taskScopeOccurrenceByBinding.values(),
-		);
+		const scopeBoundaryNodeIds = collectTaskGraphScopeOccurrenceIds();
 		let changed = false;
 
 		for (const node of layout.nodes) {
@@ -2229,70 +2273,97 @@ export function initializeGraphView(
 			applyingTaskState = false;
 		}
 	};
-	const updateWorkGraphTargetBinding = (
-		taskId: string,
-		nodeId: string,
-		sourceId: string,
-		area: TaskGraphTargetAreaKind | undefined,
-	): boolean => taskState.updateTask(taskId, (current) => ({
-		...current,
-		nodes: current.nodes.map((node) => {
-			if (node.id !== nodeId || node.kind !== 'work') {
-				return node;
+	const updateWorkGraphTargetMemberships = (
+		changes: readonly {
+			readonly binding: TaskGraphScopeBinding;
+			readonly included: boolean;
+		}[],
+	): boolean => {
+		const effectiveChanges = [...new Map(changes.map((change) => [
+			createTaskGraphScopeBindingKey(change.binding),
+			change,
+		])).values()];
+
+		for (const { binding } of effectiveChanges) {
+			const task = taskState.getTask(binding.taskId);
+			const workNode = task?.nodes.find((node) => (
+				node.id === binding.nodeId && node.kind === 'work'
+			));
+
+			if (workNode?.kind !== 'work') {
+				return false;
 			}
-			return {
-				...node,
-				graphTargets: {
-					reference: area === 'reference'
-						? sortTaskGraphTargetIds(taskGraphTargetIndex, [
-							...node.graphTargets.reference,
-							sourceId,
-						])
-						: node.graphTargets.reference.filter(
-							(targetId) => targetId !== sourceId,
-						),
-					work: area === 'work'
-						? sortTaskGraphTargetIds(taskGraphTargetIndex, [
-							...node.graphTargets.work,
-							sourceId,
-						])
-						: node.graphTargets.work.filter(
-							(targetId) => targetId !== sourceId,
-						),
-				},
-			};
-		}),
-	})) !== undefined;
+		}
+
+		for (const taskId of new Set(effectiveChanges.map(
+			(change) => change.binding.taskId,
+		))) {
+			const taskChanges = effectiveChanges.filter(
+				(change) => change.binding.taskId === taskId,
+			);
+			const updated = taskState.updateTask(taskId, (current) => ({
+				...current,
+				nodes: current.nodes.map((node) => {
+					if (node.kind !== 'work') {
+						return node;
+					}
+					let graphTargets = node.graphTargets;
+
+					for (const { binding, included } of taskChanges) {
+						if (binding.nodeId !== node.id) {
+							continue;
+						}
+						const areaTargets = graphTargets[binding.area];
+						const nextAreaTargets = included
+							? sortTaskGraphTargetIds(taskGraphTargetIndex, [
+								...areaTargets,
+								binding.sourceId,
+							])
+							: areaTargets.filter(
+								(sourceId) => sourceId !== binding.sourceId,
+							);
+
+						graphTargets = {
+							...graphTargets,
+							[binding.area]: nextAreaTargets,
+						};
+					}
+					return graphTargets === node.graphTargets
+						? node
+						: { ...node, graphTargets };
+				}),
+			}));
+
+			if (!updated) {
+				return false;
+			}
+		}
+		return true;
+	};
 	function removeTaskGraphScopeBindingsForOccurrence(
 		occurrenceNodeId: string,
-	): void {
-		const bindingByKey = new Map(collectTaskGraphScopeBindings().map((binding) => [
-			createTaskGraphScopeBindingKey(
-				binding.taskId,
-				binding.nodeId,
-				binding.sourceId,
-			),
+	): boolean {
+		const bindings = collectTaskGraphScopeBindings().filter((binding) => (
+			taskScopeOccurrencesByBinding.get(
+				createTaskGraphScopeBindingKey(binding),
+			)?.has(occurrenceNodeId) === true
+		));
+		const removedMemberships = bindings.filter((binding) => (
+			taskScopeOccurrencesByBinding.get(
+				createTaskGraphScopeBindingKey(binding),
+			)?.size === 1
+		));
+
+		if (!updateWorkGraphTargetMemberships(removedMemberships.map((binding) => ({
 			binding,
-		]));
-
-		for (const [bindingKey, mappedOccurrenceNodeId] of [
-			...taskScopeOccurrenceByBinding.entries(),
-		]) {
-			if (mappedOccurrenceNodeId !== occurrenceNodeId) {
-				continue;
-			}
-			const binding = bindingByKey.get(bindingKey);
-
-			if (binding) {
-				updateWorkGraphTargetBinding(
-					binding.taskId,
-					binding.nodeId,
-					binding.sourceId,
-					undefined,
-				);
-			}
-			taskScopeOccurrenceByBinding.delete(bindingKey);
+			included: false,
+		})))) {
+			return false;
 		}
+		for (const binding of bindings) {
+			removeTaskGraphScopeOccurrence(binding, occurrenceNodeId);
+		}
+		return true;
 	}
 	const translateScopeLogicalSubtreePositions = (
 		graphLayout: GraphLayout,
@@ -2409,55 +2480,56 @@ export function initializeGraphView(
 			return false;
 		}
 		if (!dropTarget) {
-			const boundEntry = [...taskScopeOccurrenceByBinding.entries()].find(
-				([, occurrenceNodeId]) => (
-					occurrenceNodeId === request.occurrenceNodeId
-				),
+			const binding = findTaskGraphScopeBindingForOccurrence(
+				request.occurrenceNodeId,
 			);
 
-			if (boundEntry) {
+			if (binding) {
 				if (
 					request.reattachTargetRootId
 					&& request.occurrenceRootId === request.reattachTargetRootId
 				) {
 					return false;
 				}
-				const binding = collectTaskGraphScopeBindings().find((candidate) => (
-					createTaskGraphScopeBindingKey(
-						candidate.taskId,
-						candidate.nodeId,
-						candidate.sourceId,
-					) === boundEntry[0]
-				));
+				const occurrenceCount = taskScopeOccurrencesByBinding.get(
+					createTaskGraphScopeBindingKey(binding),
+				)?.size ?? 0;
 
-				if (binding) {
-					// Region 밖 실제 Drag는 semantic binding을 해제하면서 그
-					// occurrence의 현재 World 위치를 사용자 manual arrangement로
-					// 넘긴다. Task/Work 삭제에 의한 해제와 이 경로를 구분한다.
-					currentManualUnarrangedNodeIds = new Set(
-						currentManualUnarrangedNodeIds,
-					);
-					currentManualUnarrangedNodeIds.add(request.occurrenceNodeId);
-					updateWorkGraphTargetBinding(
-						binding.taskId,
-						binding.nodeId,
-						binding.sourceId,
-						undefined,
-					);
-					taskScopeOccurrenceByBinding.delete(boundEntry[0]);
-					if (request.currentPosition) {
-						translateScopeOccurrenceTo(
-							request.occurrenceNodeId,
-							request.currentPosition,
-							new Set(taskScopeOccurrenceByBinding.values()),
-						);
-					}
-					applyTaskState();
-					// 원래 File Group 같은 기존 arrangement target은 Scope 해제만
-					// 처리한 뒤 Renderer의 실제 standalone → grouped 전환을 계속한다.
-					// 그 밖의 Region-out은 이 경로가 최종 World 위치를 소유한다.
-					return request.isArrangementTarget ? false : {};
+				if (
+					occurrenceCount <= 1
+					&& !updateWorkGraphTargetMemberships([{
+						binding,
+						included: false,
+					}])
+				) {
+					return false;
 				}
+				// Region 밖 실제 Drag는 이 occurrence만 영역에서 제거한다. 같은
+				// Source occurrence가 남아 있으면 semantic membership은 유지한다.
+				currentManualUnarrangedNodeIds = new Set(
+					currentManualUnarrangedNodeIds,
+				);
+				currentManualUnarrangedNodeIds.add(request.occurrenceNodeId);
+				removeTaskGraphScopeOccurrence(
+					binding,
+					request.occurrenceNodeId,
+				);
+				if (request.currentPosition) {
+					translateScopeOccurrenceTo(
+						request.occurrenceNodeId,
+						request.currentPosition,
+						collectTaskGraphScopeOccurrenceIds(),
+					);
+				}
+				applyTaskState();
+				// 원래 File Group 같은 기존 arrangement target은 Scope 해제만
+				// 처리한 뒤 Renderer의 실제 standalone → grouped 전환을 계속한다.
+				// 그 밖의 Region-out은 이 경로가 최종 World 위치를 소유한다.
+				return request.isArrangementTarget
+					? false
+					: request.currentPosition
+						? { targetPosition: request.currentPosition }
+						: {};
 			}
 			return false;
 		}
@@ -2474,16 +2546,18 @@ export function initializeGraphView(
 			return false;
 		}
 
-		const bindingKey = createTaskGraphScopeBindingKey(
-			dropTarget.taskId,
-			dropTarget.nodeId,
-			sourceNodeId,
+		const targetBinding: TaskGraphScopeBinding = {
+			taskId: dropTarget.taskId,
+			nodeId: dropTarget.nodeId,
+			area: dropTarget.area,
+			sourceId: sourceNodeId,
+		};
+		const originBinding = findTaskGraphScopeBindingForOccurrence(
+			request.occurrenceNodeId,
 		);
-		const previousOccurrenceId = taskScopeOccurrenceByBinding.get(bindingKey);
-		const alreadyOwnedByDropArea = (
-			previousOccurrenceId === request.occurrenceNodeId
-			&& workNode.graphTargets[dropTarget.area].includes(sourceNodeId)
-		);
+		const alreadyOwnedByDropArea = originBinding
+			? isSameTaskGraphScopeAddress(originBinding, targetBinding)
+			: false;
 
 		if (alreadyOwnedByDropArea) {
 			// 같은 actual occurrence를 같은 Region 안에서 다시 놓는 것은 semantic
@@ -2497,53 +2571,40 @@ export function initializeGraphView(
 			sourceNodeId,
 		);
 
-		if (draggedOccurrenceIsActual) {
-			const displacedEntry = [...taskScopeOccurrenceByBinding.entries()].find(
-				([key, occurrenceNodeId]) => (
-					key !== bindingKey
-					&& occurrenceNodeId === request.occurrenceNodeId
-				),
-			);
+		if (!draggedOccurrenceIsActual) {
+			return false;
+		}
+		const originOccurrenceCount = originBinding
+			? taskScopeOccurrencesByBinding.get(
+				createTaskGraphScopeBindingKey(originBinding),
+			)?.size ?? 0
+			: 0;
+		const membershipChanges = [
+			...(originBinding && originOccurrenceCount <= 1
+				? [{ binding: originBinding, included: false }]
+				: []),
+			{ binding: targetBinding, included: true },
+		];
 
-			if (displacedEntry) {
-				if (previousOccurrenceId) {
-					taskScopeOccurrenceByBinding.set(
-						displacedEntry[0],
-						previousOccurrenceId,
-					);
-				} else {
-					taskScopeOccurrenceByBinding.delete(displacedEntry[0]);
-				}
-			}
-			if (
-				previousOccurrenceId
-				&& previousOccurrenceId !== request.occurrenceNodeId
-				&& !displacedEntry
-				&& request.startPosition
-			) {
-				translateScopeOccurrenceTo(
-					previousOccurrenceId,
-					request.startPosition,
-					new Set(taskScopeOccurrenceByBinding.values()),
-				);
-			}
-			taskScopeOccurrenceByBinding.set(
-				bindingKey,
+		if (!updateWorkGraphTargetMemberships(membershipChanges)) {
+			return false;
+		}
+		if (originBinding) {
+			removeTaskGraphScopeOccurrence(
+				originBinding,
 				request.occurrenceNodeId,
 			);
 		}
-		if (!updateWorkGraphTargetBinding(
-			dropTarget.taskId,
-			dropTarget.nodeId,
-			sourceNodeId,
-			dropTarget.area,
-		)) {
-			return false;
-		}
+		addTaskGraphScopeOccurrence(
+			targetBinding,
+			request.occurrenceNodeId,
+		);
 		applyTaskState();
-		const occurrenceNodeId = taskScopeOccurrenceByBinding.get(bindingKey);
+		const occurrenceIds = taskScopeOccurrencesByBinding.get(
+			createTaskGraphScopeBindingKey(targetBinding),
+		);
 
-		if (!occurrenceNodeId) {
+		if (!occurrenceIds?.has(request.occurrenceNodeId)) {
 			return false;
 		}
 		// applyTaskState가 Scope boundary를 반영한 실제 occurrence 좌표와 Edge를
@@ -2736,17 +2797,26 @@ export function initializeGraphView(
 			resolveGraphTargetRegionStatus: (
 				taskId,
 				nodeId,
-				_area,
+				area,
 				sourceIds,
 			) => ({
-				unavailableCount: [...new Set(sourceIds)].filter((sourceId) => {
-					const occurrenceNodeId = taskScopeOccurrenceByBinding.get(
-						createTaskGraphScopeBindingKey(taskId, nodeId, sourceId),
+				unavailableCount: sourceIds.filter((sourceId) => {
+					const binding: TaskGraphScopeBinding = {
+						taskId,
+						nodeId,
+						area,
+						sourceId,
+					};
+					const occurrenceIds = taskScopeOccurrencesByBinding.get(
+						createTaskGraphScopeBindingKey(binding),
 					);
 
-					return !occurrenceNodeId
-						|| resolveVisibleTaskGraphScopeOccurrenceSourceId(occurrenceNodeId)
-							!== sourceId;
+					return !occurrenceIds || ![...occurrenceIds].some(
+						(occurrenceNodeId) => (
+							resolveVisibleTaskGraphScopeOccurrenceSourceId(occurrenceNodeId)
+								=== sourceId
+						),
+					);
 				}).length,
 			}),
 			canConnectNodes: (...connection) => taskState.canConnect(...connection),
@@ -2994,7 +3064,7 @@ export function initializeGraphView(
 			taskInspector?.dispose();
 			taskInspector = undefined;
 			focusedTaskNode = undefined;
-			taskScopeOccurrenceByBinding.clear();
+			taskScopeOccurrencesByBinding.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
 			nodeEffects.dispose();
