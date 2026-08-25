@@ -355,6 +355,45 @@ suite('Workspace Persistence Coordinator', () => {
 		assertTaskRecords(fake.getRootState(rootA), [latestRecord]);
 		assertTaskRecords(fake.getRootState(rootB), []);
 	});
+
+	test('untrusted write deferral은 desired를 pending으로 유지하고 Trust 복구 후 flush로 확정한다', async () => {
+		const root = vscode.Uri.file('/workspace/trust-retry');
+		const initial = createState([]);
+		const record = createTaskRecord('trust-retry', createRootId(root), 1);
+		const desired = createState([record]);
+		const persisted: WorkspacePersistentState[] = [];
+		const warnings: unknown[][] = [];
+		let trusted = false;
+		let attempts = 0;
+		const writeState: WorkspaceRootStateWriter = async (_rootUri, state) => {
+			attempts += 1;
+			if (!trusted) {
+				return 'deferred-untrusted';
+			}
+			persisted.push(cloneState(state));
+			return 'written';
+		};
+		const coordinator = createWorkspacePersistenceCoordinator({
+			writeState,
+			logger: { warn: (...values) => warnings.push(values) },
+		});
+
+		coordinator.setInitialState(initial, [root]);
+		await coordinator.acceptSnapshot(desired, [root]);
+
+		assert.strictEqual(attempts, 1);
+		assert.strictEqual(coordinator.hasPendingPersistence(), true);
+		assert.deepStrictEqual(persisted, []);
+		assert.deepStrictEqual(warnings, []);
+
+		trusted = true;
+		await coordinator.flush();
+
+		assert.strictEqual(attempts, 2);
+		assert.strictEqual(coordinator.hasPendingPersistence(), false);
+		assertTaskRecords(persisted[0], [record]);
+		assert.deepStrictEqual(warnings, []);
+	});
 });
 
 interface FakeRootWriterOptions {

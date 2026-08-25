@@ -3,10 +3,13 @@ import {
 	type AgentPanelUiController,
 } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
+import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
 	getWorkspaceGraphRootIds,
+	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
+	parseWorkspaceRootIds,
 	parseWorkspaceToWebviewMessage,
 	type WebviewToExtensionMessage,
 } from '../messages';
@@ -16,11 +19,12 @@ import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
+import { deserializeWorkspacePresentationFromWebview } from '../workspace/workspacePresentation';
+import { createAgentActivityEffectReconciler } from './graph/agentActivityEffects';
 import {
 	initializeGraphView,
 	type GraphViewWorkspaceSnapshot,
 } from './graph/graphView';
-import { deserializeGraphFromWebview } from './graph/graphTransport';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
 import {
 	haveSameWorkspaceRoots,
@@ -87,22 +91,39 @@ const vscodeApi = acquireVsCodeApi();
 const currentScript = document.currentScript;
 const serializedInitialState = currentScript?.getAttribute('data-webview-state')
 	?? undefined;
-const serializedWorkspaceGraph = currentScript?.getAttribute('data-workspace-graph')
-	?? undefined;
 const serializedWorkspaceState = currentScript?.getAttribute('data-workspace-state')
 	?? undefined;
 const serializedWorkspaceContextGeneration = currentScript?.getAttribute(
 	'data-workspace-context-generation',
 ) ?? null;
+const app = getRequiredElement<HTMLElement>('#app');
+const serializedWorkspacePresentation = app.getAttribute(
+	'data-workspace-presentation',
+) ?? undefined;
 const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
-const workspaceGraph = deserializeGraphFromWebview(serializedWorkspaceGraph);
+let workspacePresentation = deserializeWorkspacePresentationFromWebview(
+	serializedWorkspacePresentation,
+);
 const initialWorkspaceState = parseSerializedWorkspaceState(
 	serializedWorkspaceState,
 );
-let currentWorkspaceRootIds = getWorkspaceGraphRootIds(workspaceGraph);
+const initialWorkspaceRootIds = parseWorkspaceRootIds(getWorkspaceGraphRootIds(
+	workspacePresentation.graph,
+));
+if (
+	!initialWorkspaceRootIds
+	|| !haveSameWorkspaceRoots(
+		initialWorkspaceRootIds,
+		workspacePresentation.rootCatalog.map(({ id }) => id),
+	)
+) {
+	throw new Error('Invalid initial Workspace root context');
+}
+let currentWorkspaceRootIds = initialWorkspaceRootIds;
 let currentWorkspaceContextGeneration = parseWorkspaceContextGeneration(
 	serializedWorkspaceContextGeneration,
 );
+let lastIssuedSwitchAttemptId = 0;
 const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
@@ -115,10 +136,12 @@ const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
+/** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
+const agentActivityStore = createAgentActivityStore();
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
-	workspaceGraph,
+	workspacePresentation.graph,
 	{
 		onFileOpenRequest: (fileId) => {
 			vscodeApi.postMessage({
@@ -147,12 +170,31 @@ const graphView = initializeGraphView(
 	},
 	initialWorkspaceState.tasks.map((record) => record.task),
 	initialWorkspaceState.tasks,
+	{ agentActivityStore },
 );
+
+const agentActivityEffects = createAgentActivityEffectReconciler(
+	agentActivityStore,
+	graphView.createNodeEffectOwner(),
+);
+
+let agentPanelUi: AgentPanelUiController | undefined;
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
 	terminalArea,
 	(message) => vscodeApi.postMessage(message),
+	{
+		isEligible: (tabId, sessionId) =>
+			agentPanelUi?.model.canAttemptAutomaticTitle(tabId, sessionId) ?? false,
+		onCandidate: ({ tabId, sessionId, candidates }) => {
+			agentPanelUi?.model.applyAutomaticTitleCandidates(
+				tabId,
+				sessionId,
+				candidates,
+			);
+		},
+	},
 );
 
 /** 현재 Panel과 Camera를 Webview Session snapshot으로 복사한다. */
@@ -221,16 +263,22 @@ const activateTab = (tabId: string): void => {
 	terminalPool.setActiveTab(tabId);
 };
 
-let agentPanelUi: AgentPanelUiController | undefined;
 try {
 	agentPanelUi = initializeAgentPanelUi(
 		{
 			topBar: getRequiredElement<HTMLElement>('#agent-top-bar'),
 			tabStrip: getRequiredElement<HTMLElement>('#agent-tab-strip'),
+			tabMenuHost: getRequiredElement<HTMLElement>('#agent-tab-menu-host'),
 			providerPicker: getRequiredElement<HTMLElement>(
 				'#agent-provider-picker-host',
 			),
+			workspaceStatusBar: getRequiredElement<HTMLElement>(
+				'#agent-workspace-status-bar',
+			),
 			dialogHost: getRequiredElement<HTMLElement>('#agent-dialog-host'),
+			renameDialogHost: getRequiredElement<HTMLElement>(
+				'#agent-rename-dialog-host',
+			),
 		},
 		{
 			onTabCreated(tabId): void {
@@ -244,14 +292,25 @@ try {
 				activateTab(tabId);
 			},
 
-			onProviderSelected(tabId, providerId): void {
-				postAgentMessage({ type: 'agent.switch', tabId, providerId });
+			onProviderSelected(tabId, providerId, workspaceRootId) {
+				lastIssuedSwitchAttemptId += 1;
+				const posted = postAgentMessage({
+					type: 'agent.switch',
+					tabId,
+					providerId,
+					workspaceRootId,
+					switchAttemptId: lastIssuedSwitchAttemptId,
+				});
+				return posted ? lastIssuedSwitchAttemptId : false;
 			},
 
-			onAgentReselectionRequested(tabId): void {
-				/** Host PTY와 기존 xterm을 정리한 뒤 같은 탭에 빈 표면을 다시 만든다. */
-				postAgentMessage({ type: 'agent.reset', tabId });
+			onAgentReselectionRequested(tabId): boolean {
+				if (!postAgentMessage({ type: 'agent.reset', tabId })) {
+					return false;
+				}
+				/** Reset 요청과 동시에 이전 xterm input을 끊고 logical commit을 기다린다. */
 				terminalPool.resetTab(tabId);
+				return true;
 			},
 
 			onMcpRestartRequested(tabId, sessionId): boolean {
@@ -272,6 +331,8 @@ try {
 			/** 탭 strip 높이 변화가 xterm 크기에 반영되도록 fit을 다시 예약한다. */
 			onLayoutChange: () => terminalPool.scheduleActiveTerminalFit(),
 		},
+		undefined,
+		{ initialWorkspaceRootCatalog: workspacePresentation.rootCatalog },
 	);
 } catch {
 	agentPanelUi = undefined;
@@ -368,6 +429,7 @@ if (
 window.addEventListener('unload', () => {
 	unsubscribeGraphState();
 	unsubscribeWorkspaceSnapshot();
+	agentActivityEffects.dispose();
 	graphView.dispose();
 	terminalPool.dispose();
 	agentPanelUi?.dispose();
@@ -392,6 +454,28 @@ function handleHostMessage(message: unknown): void {
 			graphView.clearNodeEffect(
 				graphEffectMessage.target,
 				graphEffectMessage.kind,
+			);
+		}
+		return;
+	}
+
+	const agentActivityMessage = parseAgentActivityToWebviewMessage(message);
+
+	if (agentActivityMessage) {
+		if (agentActivityMessage.type === 'agent.activity.set') {
+			agentActivityStore.setAgentActivity(
+				agentActivityMessage.sessionId,
+				agentActivityMessage.target,
+				agentActivityMessage.activity,
+			);
+		} else if (agentActivityMessage.type === 'agent.activity.clear') {
+			agentActivityStore.clearAgentActivity(
+				agentActivityMessage.sessionId,
+				agentActivityMessage.target,
+			);
+		} else {
+			agentActivityStore.clearAgentActivitiesBySession(
+				agentActivityMessage.sessionId,
 			);
 		}
 		return;
@@ -430,8 +514,9 @@ function handleHostMessage(message: unknown): void {
 			// updateWorkspace의 final subscriber가 새 epoch로 응답하도록 먼저 바꾼다.
 			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
 			currentWorkspaceContextGeneration = workspaceMessage.contextGeneration;
+			workspacePresentation = workspaceMessage.presentation;
 			graphView.updateWorkspace(
-				workspaceMessage.graph,
+				workspaceMessage.presentation.graph,
 				{
 					graph: {
 						nodePositions: workspaceState.nodePositions,
@@ -444,12 +529,19 @@ function handleHostMessage(message: unknown): void {
 					tasks: workspaceState.tasks,
 				},
 			);
+			agentPanelUi?.updateWorkspaceRootCatalog(
+				workspaceMessage.presentation.rootCatalog,
+			);
 		} else {
 			if (rootContextChanged) {
 				return;
 			}
 			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
-			graphView.updateGraph(workspaceMessage.graph);
+			workspacePresentation = workspaceMessage.presentation;
+			graphView.updateGraph(workspaceMessage.presentation.graph);
+			agentPanelUi?.updateWorkspaceRootCatalog(
+				workspaceMessage.presentation.rootCatalog,
+			);
 		}
 		return;
 	}
@@ -463,9 +555,14 @@ function handleHostMessage(message: unknown): void {
 		case 'extension.ready':
 			console.log('[Crispy] Extension ready');
 			break;
-		default:
-			agentPanelUi?.handleHostMessage(parseResult.value);
-			terminalPool.handleHostMessage(parseResult.value);
+		default: {
+			const shouldForwardToTerminal =
+				agentPanelUi?.handleHostMessage(parseResult.value) ?? true;
+			if (shouldForwardToTerminal) {
+				terminalPool.handleHostMessage(parseResult.value);
+			}
+			break;
+		}
 	}
 }
 

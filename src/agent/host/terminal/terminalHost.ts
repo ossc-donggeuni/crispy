@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto';
 import type {
+	AgentAssignment,
 	HostToWebviewMessage,
 	SessionId,
+	SwitchAttemptId,
 	TabId,
 	WebviewToHostMessage,
+	WorkspaceRootId,
 } from '../../protocol/messages';
 import type { ProviderId } from '../../protocol/providers';
 import {
@@ -62,6 +65,20 @@ import {
 	prepareTerminalLaunch,
 	type PrepareTerminalLaunch,
 } from './prepareTerminalLaunch';
+import { WORKSPACE_EXECUTION_ERROR_CODES } from '../../protocol/errors';
+import {
+	mapWorkspaceFailureToMcpRestartRejected,
+	mapWorkspaceFailureToTerminalError,
+} from '../workspace/workspaceErrorMessage';
+import {
+	resolveWorkspaceForExecution,
+	type WorkspaceResolver,
+} from '../workspace/workspaceResolver';
+import { readVsCodeWorkspaceTrust } from '../workspace/workspaceContext';
+import type {
+	WorkspaceValidationFailure,
+	WorkspaceValidationResult,
+} from '../workspace/types';
 import {
 	TerminalProcessExitedBeforeReadyError,
 	TerminalSession,
@@ -91,6 +108,32 @@ export interface McpSupervisor {
 
 /** Backward-compatible test/public type name retained while orchestration becomes provider-neutral. */
 export type CodexMcpSupervisor = McpSupervisor;
+
+/** Terminal I/O와 monitor가 VS Code의 현재 Workspace Trust만 읽는 경계다. */
+export type WorkspaceTrustReader = () => boolean;
+
+/** Active-session Trust monitor를 테스트에서 결정적으로 구동하는 interval 경계다. */
+export interface WorkspaceTrustMonitorScheduler {
+	setInterval(callback: () => void, intervalMs: number): object | number;
+	clearInterval(handle: object | number): void;
+}
+
+/** Revoke 후 Presentation refresh를 예약하는 Host 외부 알림 경계다. */
+export type WorkspaceTrustRevokedObserver = () => void;
+
+/** 실행 중 autonomous CLI도 revoke 뒤 오래 남지 않게 하는 polling 상한이다. */
+export const WORKSPACE_TRUST_MONITOR_INTERVAL_MS = 1000;
+
+const systemWorkspaceTrustMonitorScheduler: WorkspaceTrustMonitorScheduler = {
+	setInterval: (callback, intervalMs) => {
+		const handle = setInterval(callback, intervalMs);
+		handle.unref();
+		return handle;
+	},
+	clearInterval: (handle) => clearInterval(
+		handle as ReturnType<typeof setInterval>,
+	),
+};
 
 export type CodexMcpLaunchPlanBuilder = (
 	options: BuildCodexMcpLaunchPlanOptions,
@@ -146,6 +189,8 @@ interface StructuredMcpProviderStartOptions<
 	readonly prepare: (
 		tabId: TabId,
 		sessionId: SessionId,
+		workspaceRootId: WorkspaceRootId,
+		signal?: AbortSignal,
 	) => Promise<StructuredProviderPreparation<TPreparation>>;
 	readonly canUseMcp: (preparation: TPreparation) => boolean;
 	readonly buildMcpPlan: (
@@ -179,6 +224,12 @@ function isMcpProviderId(
 	return providerId === 'codex' || providerId === 'claude';
 }
 
+function isWorkspaceExecutionErrorCode(
+	code: string,
+): code is WorkspaceValidationFailure['code'] {
+	return workspaceExecutionErrorCodes.has(code);
+}
+
 /**
  * `TerminalHost` 생성에 필요한 Host 소유 의존성이다.
  */
@@ -188,6 +239,18 @@ export interface TerminalHostOptions {
 
 	/** 작업공간과 셸 정책을 적용하는 시작 및 재시작 공통 준비 함수다. */
 	readonly prepareLaunch?: PrepareTerminalLaunch;
+
+	/** assignment commit 및 native spawn 직전에 fresh Workspace를 검증한다. */
+	readonly workspaceResolver?: WorkspaceResolver;
+
+	/** Terminal I/O와 active-session monitor가 fresh Trust만 읽는 경계다. */
+	readonly readWorkspaceTrust?: WorkspaceTrustReader;
+
+	/** Active-session Trust polling을 테스트 가능한 interval로 예약한다. */
+	readonly workspaceTrustMonitorScheduler?: WorkspaceTrustMonitorScheduler;
+
+	/** Trust revoke 관찰 시 atomic Workspace Presentation refresh를 예약한다. */
+	readonly onWorkspaceTrustRevoked?: WorkspaceTrustRevokedObserver;
 
 	/** 생성된 생명주기 메시지를 Webview 전송 계층으로 넘기는 함수다. */
 	readonly emitMessage: TerminalHostMessageEmitter;
@@ -229,10 +292,16 @@ const START_ERROR_MESSAGES = Object.freeze({
 	restartInProgress: 'Terminal restart is already in progress.',
 	restartUnavailable: 'Terminal session can no longer be restarted.',
 	unknownTab: 'Terminal tab is not registered.',
+	workspaceLocked: 'Reset the Agent before changing its Workspace.',
+	resetting: 'Agent reset is still being committed.',
+	mcpRestartUnavailable: 'MCP restart is no longer valid for the current session.',
 });
 
 /** 재시작 시 마지막으로 확인된 크기가 없을 때 사용하는 Host 기본 terminal 크기다. */
 const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
+const workspaceExecutionErrorCodes = new Set<string>(
+	WORKSPACE_EXECUTION_ERROR_CODES,
+);
 /** 3초 deactivate budget에서 2초 process-tree cleanup을 남기는 PID 준비 상한이다. */
 export const DETACHED_PID_READY_TIMEOUT_MS = 500;
 
@@ -269,8 +338,17 @@ export class TerminalHost {
 	/** Webview가 만들어 Host에 등록한, 아직 살아 있는 탭 식별자 집합이다. */
 	private readonly registeredTabs = new Set<TabId>();
 
-	/** 탭별로 마지막에 선택된 provider이며 세션 시작과 재시작에 함께 사용한다. */
-	private readonly providerByTab = new Map<TabId, ProviderId>();
+	/** 탭별 provider와 Workspace root를 함께 고정하는 불변 실행 배정이다. */
+	private readonly assignmentByTab = new Map<TabId, AgentAssignment>();
+
+	/** Webview ordering에만 사용하는 탭별 성공 commit revision이다. */
+	private readonly assignmentRevisionByTab = new Map<TabId, number>();
+
+	/** 각 session이 생성될 때 capture한 assignment object identity다. */
+	private readonly assignmentBySession = new Map<SessionId, AgentAssignment>();
+
+	/** logical Reset commit 중 reentrant switch mutation을 차단하는 탭 집합이다. */
+	private readonly resettingTabs = new Set<TabId>();
 
 	/** 세션 시작 전에 탐색을 마친 provider CLI 입력을 현재 session에 연결한다. */
 	private readonly providerAutoRunInputBySession = new Map<SessionId, string>();
@@ -286,6 +364,36 @@ export class TerminalHost {
 
 	/** 작업공간과 셸 실행 정책을 순서대로 적용하는 준비 경계다. */
 	private readonly prepareLaunch: PrepareTerminalLaunch;
+
+	/** 매 호출마다 VS Code의 현재 Workspace 상태를 다시 읽는 실행 resolver다. */
+	private readonly workspaceResolver: WorkspaceResolver;
+
+	/** Root 상태와 분리해 Terminal/MCP 경계에서 현재 Trust만 fresh하게 읽는다. */
+	private readonly readWorkspaceTrust: WorkspaceTrustReader;
+
+	/** Active session이 있는 동안 하나의 bounded Trust interval만 소유한다. */
+	private readonly workspaceTrustMonitorScheduler: WorkspaceTrustMonitorScheduler;
+
+	/** Trust revoke 관찰을 Presentation refresh coordinator에 알리는 callback이다. */
+	private readonly onWorkspaceTrustRevoked: WorkspaceTrustRevokedObserver;
+
+	/** 현재 Panel runtime이 소유한 단일 Trust monitor handle이다. */
+	private workspaceTrustMonitorHandle: object | number | undefined;
+
+	/** 같은 untrusted epoch에서 revoke cleanup과 오류 발행을 한 번으로 제한한다. */
+	private workspaceTrustRevokedObserved = false;
+
+	/** Revoke가 분리한 Agent/MCP process tree 정리 완료를 공유한다. */
+	private workspaceTrustRevokeCleanup: Promise<void> | undefined;
+
+	/** Trust revoke로 error 전이된 session의 stale async continuation을 차단한다. */
+	private readonly workspaceTrustFailedSessions = new Set<SessionId>();
+
+	/** Session 준비 중 별도 child process를 만드는 probe의 취소 및 완료 ownership이다. */
+	private readonly preparationBySession = new Map<SessionId, Readonly<{
+		readonly controller: AbortController;
+		readonly completion: Promise<void>;
+	}>>();
 
 	/** Host 생명주기 메시지를 Webview 전송 계층으로 넘기는 경계다. */
 	private readonly emitMessage: TerminalHostMessageEmitter;
@@ -334,8 +442,11 @@ export class TerminalHost {
 		InternalMcpStatusRecord
 	>();
 
-	/** 같은 탭의 명시적 MCP+Agent restart 연타를 Host에서도 직렬화한다. */
-	private readonly mcpRestartByTab = new Map<TabId, Promise<void>>();
+	/** 같은 탭의 명시적 MCP+Agent restart 연타를 요청 session과 함께 직렬화한다. */
+	private readonly mcpRestartByTab = new Map<TabId, {
+		readonly sessionId: SessionId;
+		readonly completion: Promise<void>;
+	}>();
 
 	/** Session 종료 경로에서 root-only kill을 피하는 process-tree controller다. */
 	private readonly processTreeController: ProcessTreeController;
@@ -352,6 +463,9 @@ export class TerminalHost {
 	/** detach에서 native 호출 없이 넘겨받아 비동기 종료까지 보존하는 PTY ownership이다. */
 	private detachedProcesses: readonly PtyProcessHandle[] = [];
 
+	/** detach가 취소한 provider preparation child cleanup을 terminate까지 보존한다. */
+	private detachedPreparationCleanups: readonly Promise<void>[] = [];
+
 	/** 반복 terminate 호출이 공유하는 최초 비동기 cleanup Promise다. */
 	private terminationPromise: Promise<void> | undefined;
 
@@ -361,8 +475,8 @@ export class TerminalHost {
 	/** reset/reselect/restart/tab close가 분리한 session별 process-tree cleanup이다. */
 	private readonly processCleanupBySession = new Map<SessionId, Promise<void>>();
 
-	/** 같은 탭의 다음 CLI 시작이 이전 process tree 종료를 기다리는 경계다. */
-	private readonly processCleanupByTab = new Map<TabId, Promise<void>>();
+	/** 같은 탭의 다음 CLI 시작이 앞선 모든 resource cleanup을 기다리는 경계다. */
+	private readonly tabCleanupBarrier = new Map<TabId, Promise<void>>();
 
 	/**
 	 * 비어 있는 세션 저장소와 Host 소유 의존성을 초기화한다.
@@ -373,6 +487,14 @@ export class TerminalHost {
 	constructor(options: TerminalHostOptions) {
 		this.ptyAdapter = options.ptyAdapter;
 		this.prepareLaunch = options.prepareLaunch ?? prepareTerminalLaunch;
+		this.workspaceResolver = options.workspaceResolver
+			?? resolveWorkspaceForExecution;
+		this.readWorkspaceTrust = options.readWorkspaceTrust
+			?? readVsCodeWorkspaceTrust;
+		this.workspaceTrustMonitorScheduler = options.workspaceTrustMonitorScheduler
+			?? systemWorkspaceTrustMonitorScheduler;
+		this.onWorkspaceTrustRevoked = options.onWorkspaceTrustRevoked
+			?? (() => undefined);
 		this.emitMessage = options.emitMessage;
 		this.resolveProviderAutoRunInput = options.resolveAgentAutoRunInput
 			?? resolveDetectedAgentAutoRunInput;
@@ -456,12 +578,15 @@ export class TerminalHost {
 		}
 
 		this.registeredTabs.delete(tabId);
-		this.providerByTab.delete(tabId);
+		this.assignmentByTab.delete(tabId);
+		this.assignmentRevisionByTab.delete(tabId);
+		this.resettingTabs.delete(tabId);
 		this.lastDimensionsByTab.delete(tabId);
 		this.activeSessionByTab.delete(tabId);
 		if (this.activeTabId === tabId) {
 			this.activeTabId = undefined;
 		}
+		this.updateWorkspaceTrustMonitor();
 	}
 
 	/**
@@ -484,16 +609,28 @@ export class TerminalHost {
 			);
 			return;
 		}
+		if (this.resettingTabs.has(tabId)) {
+			return;
+		}
 
+		this.resettingTabs.add(tabId);
 		const session = this.getActiveSession(tabId);
+		this.assignmentByTab.delete(tabId);
 		if (session !== undefined) {
 			void this.cleanupSessionProcessTree(session);
 			this.removeSession(session.sessionId);
 		}
 
-		this.providerByTab.delete(tabId);
 		this.lastDimensionsByTab.delete(tabId);
 		this.activeSessionByTab.delete(tabId);
+		const assignmentRevision = this.incrementAssignmentRevision(tabId);
+		this.publish({
+			type: 'agent.resetCompleted',
+			tabId,
+			assignmentRevision,
+		});
+		this.resettingTabs.delete(tabId);
+		this.updateWorkspaceTrustMonitor();
 	}
 
 	/**
@@ -504,9 +641,16 @@ export class TerminalHost {
 	 *
 	 * @param tabId 프로토콜 검증을 통과한 Webview 소유 탭 식별자
 	 * @param providerId 프로토콜 allowlist를 통과한 provider 식별자
+	 * @param workspaceRootId Host Catalog에서 round-trip한 Workspace root 식별자
+	 * @param switchAttemptId Webview가 발급한 switch correlation 식별자
 	 * @returns 정리와 시작 흐름이 끝나면 완료되는 Promise
 	 */
-	async switchAgent(tabId: TabId, providerId: ProviderId): Promise<void> {
+	async switchAgent(
+		tabId: TabId,
+		providerId: ProviderId,
+		workspaceRootId: WorkspaceRootId,
+		switchAttemptId: SwitchAttemptId,
+	): Promise<void> {
 		if (!this.lifecycleActive) {
 			return;
 		}
@@ -520,22 +664,95 @@ export class TerminalHost {
 			);
 			return;
 		}
+		if (this.resettingTabs.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'invalid_session_state',
+				START_ERROR_MESSAGES.resetting,
+				false,
+				switchAttemptId,
+			);
+			return;
+		}
 
-		this.providerByTab.set(tabId, providerId);
+		const previousAssignment = this.assignmentByTab.get(tabId);
+		if (
+			previousAssignment !== undefined
+			&& previousAssignment.workspaceRootId !== workspaceRootId
+		) {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'workspace_change_requires_reset',
+				START_ERROR_MESSAGES.workspaceLocked,
+				false,
+				switchAttemptId,
+			);
+			return;
+		}
+
+		let preflight: WorkspaceValidationResult;
+		try {
+			preflight = this.workspaceResolver(workspaceRootId);
+		} catch {
+			this.failWithoutTransition(
+				tabId,
+				null,
+				'internal_error',
+				START_ERROR_MESSAGES.preparation,
+				false,
+				switchAttemptId,
+			);
+			return;
+		}
+		if (!preflight.ok) {
+			const trustCleanup = preflight.code === 'workspace_untrusted'
+				? this.handleWorkspaceTrustRevoke()
+				: undefined;
+			const error = mapWorkspaceFailureToTerminalError(
+				preflight,
+				tabId,
+				null,
+			);
+			this.publish({
+				...error,
+				canRestart: false,
+				switchAttemptId,
+			});
+			await trustCleanup;
+			return;
+		}
+		this.observeWorkspaceTrustGranted();
+
+		const assignment = Object.freeze({
+			providerId,
+			workspaceRootId,
+		}) satisfies AgentAssignment;
+		this.assignmentByTab.set(tabId, assignment);
+		const assignmentRevision = this.incrementAssignmentRevision(tabId);
 
 		const current = this.getActiveSession(tabId);
-		let pendingCleanup = this.getTabProcessCleanup(tabId);
+		let pendingCleanup = this.getTabCleanupBarrier(tabId);
 		if (current !== undefined) {
 			pendingCleanup = this.cleanupSessionProcessTree(current);
 			this.removeSession(current.sessionId);
 		}
+		this.publish({
+			type: 'agent.switchAccepted',
+			tabId,
+			providerId,
+			workspaceRootId,
+			switchAttemptId,
+			assignmentRevision,
+		});
 		if (pendingCleanup !== undefined) {
 			await pendingCleanup;
 		}
 		if (
 			!this.lifecycleActive
 			|| !this.registeredTabs.has(tabId)
-			|| this.providerByTab.get(tabId) !== providerId
+			|| this.assignmentByTab.get(tabId) !== assignment
 			|| this.getActiveSession(tabId) !== undefined
 		) {
 			return;
@@ -547,7 +764,12 @@ export class TerminalHost {
 			return;
 		}
 
-		await this.startSession(tabId, dimensions.cols, dimensions.rows);
+		await this.startSessionForAssignment(
+			tabId,
+			dimensions.cols,
+			dimensions.rows,
+			assignment,
+		);
 	}
 
 	/**
@@ -580,18 +802,19 @@ export class TerminalHost {
 		}
 
 		this.lastDimensionsByTab.set(tabId, { cols, rows });
-		if (!this.providerByTab.has(tabId)) {
+		const assignment = this.assignmentByTab.get(tabId);
+		if (assignment === undefined) {
 			return;
 		}
 
-		const pendingCleanup = this.getTabProcessCleanup(tabId);
+		const pendingCleanup = this.getTabCleanupBarrier(tabId);
 		if (pendingCleanup !== undefined) {
 			await pendingCleanup;
 		}
 		if (
 			!this.lifecycleActive
 			|| !this.registeredTabs.has(tabId)
-			|| !this.providerByTab.has(tabId)
+			|| this.assignmentByTab.get(tabId) !== assignment
 		) {
 			return;
 		}
@@ -608,7 +831,7 @@ export class TerminalHost {
 			return;
 		}
 
-		await this.startSession(tabId, cols, rows);
+		await this.startSessionForAssignment(tabId, cols, rows, assignment);
 	}
 
 	/**
@@ -618,7 +841,17 @@ export class TerminalHost {
 	 * @returns 배정된 provider 또는 아직 선택되지 않았으면 `undefined`
 	 */
 	getTabProvider(tabId: TabId): ProviderId | undefined {
-		return this.providerByTab.get(tabId);
+		return this.assignmentByTab.get(tabId)?.providerId;
+	}
+
+	/** 탭의 현재 불변 assignment object를 조회한다. */
+	getTabAssignment(tabId: TabId): AgentAssignment | undefined {
+		return this.assignmentByTab.get(tabId);
+	}
+
+	/** Webview ordering용 현재 assignment revision을 조회한다. */
+	getAssignmentRevision(tabId: TabId): number {
+		return this.assignmentRevisionByTab.get(tabId) ?? 0;
 	}
 
 	/**
@@ -655,7 +888,25 @@ export class TerminalHost {
 		cols: number,
 		rows: number,
 	): Promise<void> {
+		return this.startSessionForAssignment(
+			tabId,
+			cols,
+			rows,
+			this.assignmentByTab.get(tabId),
+		);
+	}
+
+	/** 내부 transaction이 capture한 assignment identity로만 새 session을 시작한다. */
+	private async startSessionForAssignment(
+		tabId: TabId,
+		cols: number,
+		rows: number,
+		capturedAssignment: AgentAssignment | undefined,
+	): Promise<void> {
 		if (!this.lifecycleActive) {
+			return;
+		}
+		if (!this.isCurrentAssignment(tabId, capturedAssignment)) {
 			return;
 		}
 		const current = this.getActiveSession(tabId);
@@ -685,7 +936,7 @@ export class TerminalHost {
 				this.clearMcpStatus(current);
 				this.activeSessionByTab.delete(tabId);
 			}
-			session = this.createSession(tabId);
+			session = this.createSession(tabId, capturedAssignment);
 		}
 		if (session === undefined) {
 			this.failWithoutTransition(
@@ -711,17 +962,23 @@ export class TerminalHost {
 			return;
 		}
 
-		const providerId = this.providerByTab.get(tabId);
+		const providerId = capturedAssignment?.providerId;
 		if (isMcpProviderId(providerId)) {
 			this.mcpStatusBySession.set(session.sessionId, {
 				status: 'preparing',
 				published: false,
 			});
 		}
-		this.publish({ type: 'terminal.starting', tabId });
+		this.publish({
+			type: 'terminal.starting',
+			tabId,
+			sessionId: session.sessionId,
+		});
+		this.updateWorkspaceTrustMonitor();
 
 		if (
 			providerId === 'codex'
+			&& capturedAssignment !== undefined
 			&& this.prepareCodexLaunch !== undefined
 			&& this.mcpSupervisor !== undefined
 		) {
@@ -730,6 +987,7 @@ export class TerminalHost {
 		}
 		if (
 			providerId === 'claude'
+			&& capturedAssignment !== undefined
 			&& this.prepareClaudeLaunch !== undefined
 			&& this.mcpSupervisor !== undefined
 		) {
@@ -739,9 +997,13 @@ export class TerminalHost {
 
 		let preparation: Awaited<ReturnType<PrepareTerminalLaunch>>;
 		try {
-			preparation = await this.prepareLaunch(tabId, session.sessionId);
+			preparation = await this.prepareLaunch(
+				tabId,
+				session.sessionId,
+				capturedAssignment?.workspaceRootId,
+			);
 		} catch {
-			if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+			if (!this.isCurrentAssignmentSession(session, capturedAssignment)) {
 				return;
 			}
 			this.failSession(
@@ -753,13 +1015,25 @@ export class TerminalHost {
 			return;
 		}
 
-		if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+		if (!this.isCurrentAssignmentSession(session, capturedAssignment)) {
 			/** detach 중 완료된 준비 작업이 session 상태나 native PTY를 변경하지 못하게 한다. */
 			return;
 		}
 
 		if (!preparation.ok) {
+			if (
+				capturedAssignment !== undefined
+				&& isWorkspaceExecutionErrorCode(preparation.error.code)
+			) {
+				await this.failWorkspaceStart(
+					session,
+					capturedAssignment,
+					{ ok: false, code: preparation.error.code },
+				);
+				return;
+			}
 			session.markError(preparation.error.code);
+			this.updateWorkspaceTrustMonitor();
 			this.publish(preparation.error);
 			return;
 		}
@@ -767,9 +1041,46 @@ export class TerminalHost {
 		let autoRunInput: string | undefined;
 		if (providerId !== undefined) {
 			try {
-				autoRunInput = await this.resolveProviderAutoRunInput(
-					providerId,
-					preparation.policy,
+				autoRunInput = await this.runSessionPreparation(
+					session,
+					(signal) => this.resolveProviderAutoRunInput(
+						providerId,
+						preparation.policy,
+						signal,
+						() => {
+							if (
+								capturedAssignment === undefined
+								|| !this.isCurrentAssignmentSession(
+									session,
+									capturedAssignment,
+								)
+							) {
+								return undefined;
+							}
+							let freshWorkspace: WorkspaceValidationResult;
+							try {
+								freshWorkspace = this.workspaceResolver(
+									capturedAssignment.workspaceRootId,
+								);
+							} catch {
+								return undefined;
+							}
+							if (!freshWorkspace.ok) {
+								if (freshWorkspace.code === 'workspace_untrusted') {
+									void this.handleWorkspaceTrustRevoke();
+								}
+								return undefined;
+							}
+							if (!this.isCurrentAssignmentSession(
+								session,
+								capturedAssignment,
+							)) {
+								return undefined;
+							}
+							this.observeWorkspaceTrustGranted();
+							return freshWorkspace.root.fsPath;
+						},
+					),
 				);
 			} catch {
 				/** 탐색 경계 자체의 실패는 기존 기본 command로 안전하게 복구한다. */
@@ -777,7 +1088,7 @@ export class TerminalHost {
 			}
 		}
 
-		if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+		if (!this.isCurrentAssignmentSession(session, capturedAssignment)) {
 			/** stale 탐색 결과가 교체되거나 닫힌 session에 입력되지 않게 한다. */
 			return;
 		}
@@ -786,11 +1097,47 @@ export class TerminalHost {
 		}
 
 		this.lastDimensionsByTab.set(tabId, { cols, rows });
+		let finalPolicy = preparation.policy;
+		if (capturedAssignment !== undefined) {
+			let finalWorkspace: WorkspaceValidationResult;
+			try {
+				finalWorkspace = this.workspaceResolver(
+					capturedAssignment.workspaceRootId,
+				);
+			} catch {
+				this.providerAutoRunInputBySession.delete(session.sessionId);
+				this.failSession(
+					session,
+					'internal_error',
+					START_ERROR_MESSAGES.preparation,
+					true,
+				);
+				return;
+			}
+			if (!finalWorkspace.ok) {
+				this.providerAutoRunInputBySession.delete(session.sessionId);
+				await this.failWorkspaceStart(
+					session,
+					capturedAssignment,
+					finalWorkspace,
+				);
+				return;
+			}
+			if (!this.isCurrentAssignmentSession(session, capturedAssignment)) {
+				return;
+			}
+			this.observeWorkspaceTrustGranted();
+			finalPolicy = {
+				...preparation.policy,
+				cwd: finalWorkspace.root.fsPath,
+			};
+		}
 		try {
-			await session.start(preparation.policy, cols, rows);
+			const started = session.start(finalPolicy, cols, rows);
+			await started;
 		} catch {
 			this.providerAutoRunInputBySession.delete(session.sessionId);
-			if (!this.lifecycleActive || !this.isCurrentSession(session)) {
+			if (!this.isCurrentAssignmentSession(session, capturedAssignment)) {
 				return;
 			}
 			this.failSession(
@@ -888,15 +1235,28 @@ export class TerminalHost {
 		if (supervisor === undefined) {
 			return;
 		}
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment === undefined
+			|| assignment.providerId !== options.providerId
+			|| this.assignmentByTab.get(session.tabId) !== assignment
+		) {
+			return;
+		}
 		const recordStartupFailure = (reason: McpFailureReason): void => {
 			this.recordMcpFailure(session, reason);
 		};
 
 		let preparationResult: StructuredProviderPreparation<TPreparation>;
 		try {
-			preparationResult = await options.prepare(
-				session.tabId,
-				session.sessionId,
+			preparationResult = await this.runSessionPreparation(
+				session,
+				(signal) => options.prepare(
+					session.tabId,
+					session.sessionId,
+					assignment.workspaceRootId,
+					signal,
+				),
 			);
 		} catch {
 			if (this.isCurrentProviderSession(session, options.providerId)) {
@@ -914,7 +1274,16 @@ export class TerminalHost {
 			return;
 		}
 		if (!preparationResult.ok) {
+			if (isWorkspaceExecutionErrorCode(preparationResult.error.code)) {
+				await this.failWorkspaceStart(
+					session,
+					assignment,
+					{ ok: false, code: preparationResult.error.code },
+				);
+				return;
+			}
 			session.markError(preparationResult.error.code);
+			this.updateWorkspaceTrustMonitor();
 			this.publish(preparationResult.error);
 			return;
 		}
@@ -923,6 +1292,9 @@ export class TerminalHost {
 		const canUseMcp = options.canUseMcp(preparation);
 		let prepared: McpPrepareResult | undefined;
 		if (canUseMcp) {
+			if (!this.guardWorkspaceTrust(session, assignment)) {
+				return;
+			}
 			try {
 				prepared = await supervisor.prepareSession(session.sessionId);
 			} catch {
@@ -1124,9 +1496,47 @@ export class TerminalHost {
 			});
 			this.setMcpAwaitingActivity(session);
 		}
+		let finalWorkspace: WorkspaceValidationResult;
+		try {
+			finalWorkspace = this.workspaceResolver(assignment.workspaceRootId);
+		} catch {
+			await this.cleanupMcpSession(session.sessionId);
+			if (this.isCurrentProviderSession(session, options.providerId)) {
+				this.failSession(
+					session,
+					'internal_error',
+					START_ERROR_MESSAGES.preparation,
+					true,
+				);
+			}
+			return;
+		}
+		if (!finalWorkspace.ok) {
+			await this.failWorkspaceStart(session, assignment, finalWorkspace);
+			return;
+		}
+		if (
+			!this.isCurrentProviderSession(session, options.providerId)
+			|| (generation !== undefined && !this.isCurrentMcpRuntime(
+				session,
+				options.providerId,
+				generation,
+			))
+		) {
+			if (generation !== undefined) {
+				await this.cleanupMcpSession(session.sessionId);
+			}
+			return;
+		}
+		this.observeWorkspaceTrustGranted();
+		const finalRequest = Object.freeze({
+			...request,
+			cwd: finalWorkspace.root.fsPath,
+		});
 		this.mcpPtySpawnStarted.add(session.sessionId);
 		try {
-			await this.spawnProviderPty(session, request, cols, rows);
+			const spawned = this.spawnProviderPty(session, finalRequest, cols, rows);
+			await spawned;
 		} catch (error: unknown) {
 			if (error instanceof TerminalProcessExitedBeforeReadyError) {
 				if (!this.isCurrentProviderSession(session, options.providerId)) {
@@ -1168,14 +1578,45 @@ export class TerminalHost {
 					return;
 				}
 				if (bareRequest !== undefined) {
+					let fallbackWorkspace: WorkspaceValidationResult;
+					try {
+						fallbackWorkspace = this.workspaceResolver(
+							assignment.workspaceRootId,
+						);
+					} catch {
+						this.failSession(
+							session,
+							'internal_error',
+							START_ERROR_MESSAGES.preparation,
+							true,
+						);
+						return;
+					}
+					if (!fallbackWorkspace.ok) {
+						await this.failWorkspaceStart(
+							session,
+							assignment,
+							fallbackWorkspace,
+						);
+						return;
+					}
+					if (!this.isCurrentProviderSession(session, options.providerId)) {
+						return;
+					}
+					this.observeWorkspaceTrustGranted();
+					const finalBareRequest = Object.freeze({
+						...bareRequest,
+						cwd: fallbackWorkspace.root.fsPath,
+					});
 					this.mcpPtySpawnStarted.add(session.sessionId);
 					try {
-						await this.spawnProviderPty(
+						const spawned = this.spawnProviderPty(
 							session,
-							bareRequest,
+							finalBareRequest,
 							cols,
 							rows,
 						);
+						await spawned;
 						return;
 					} catch {
 						this.mcpPtySpawnStarted.delete(session.sessionId);
@@ -1199,10 +1640,21 @@ export class TerminalHost {
 
 	/** 실제 PID가 준비된 현재 session에만 started와 provider 입력을 한 번 전달한다. */
 	private handleSessionRunning(session: TerminalSession): void {
+		const assignment = this.assignmentBySession.get(session.sessionId);
 		if (
 			!this.lifecycleActive
 			|| !this.isCurrentSession(session)
+			|| (
+				assignment !== undefined
+				&& this.assignmentByTab.get(session.tabId) !== assignment
+			)
 			|| session.state.kind !== 'running'
+		) {
+			return;
+		}
+		if (
+			assignment !== undefined
+			&& !this.guardWorkspaceTrust(session, assignment)
 		) {
 			return;
 		}
@@ -1241,6 +1693,13 @@ export class TerminalHost {
 		if (session.state.kind !== 'running') {
 			return;
 		}
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment !== undefined
+			&& !this.guardWorkspaceTrust(session, assignment)
+		) {
+			return;
+		}
 
 		const autoRunInput = this.providerAutoRunInputBySession.get(session.sessionId);
 		this.providerAutoRunInputBySession.delete(session.sessionId);
@@ -1270,6 +1729,13 @@ export class TerminalHost {
 		if (session === undefined) {
 			return;
 		}
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment !== undefined
+			&& !this.guardWorkspaceTrust(session, assignment)
+		) {
+			return;
+		}
 		const claudeStartup = this.claudeStartupBySession.get(session.sessionId);
 		if (claudeStartup !== undefined) {
 			claudeStartup.interactiveInputObserved = true;
@@ -1295,6 +1761,13 @@ export class TerminalHost {
 			message.sessionId,
 		);
 		if (session === undefined) {
+			return;
+		}
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment !== undefined
+			&& !this.guardWorkspaceTrust(session, assignment)
+		) {
 			return;
 		}
 
@@ -1359,8 +1832,41 @@ export class TerminalHost {
 			return;
 		}
 
+		const assignmentAtRestart = this.assignmentByTab.get(tabId);
+		if (assignmentAtRestart !== undefined) {
+			let workspace: WorkspaceValidationResult;
+			try {
+				workspace = this.workspaceResolver(
+					assignmentAtRestart.workspaceRootId,
+				);
+			} catch {
+				this.failWithoutTransition(
+					tabId,
+					session,
+					'internal_error',
+					START_ERROR_MESSAGES.preparation,
+					true,
+				);
+				return;
+			}
+			if (!workspace.ok) {
+				if (workspace.code === 'workspace_untrusted') {
+					await this.handleWorkspaceTrustRevoke();
+				}
+				this.publish(mapWorkspaceFailureToTerminalError(
+					workspace,
+					tabId,
+					sessionId,
+				));
+				return;
+			}
+			this.observeWorkspaceTrustGranted();
+			if (this.assignmentByTab.get(tabId) !== assignmentAtRestart) {
+				return;
+			}
+		}
+
 		const registeredAtRestart = this.registeredTabs.has(tabId);
-		const providerAtRestart = this.providerByTab.get(tabId);
 		const pendingCleanup = this.cleanupSessionProcessTree(session);
 		this.removeSession(sessionId);
 		await pendingCleanup;
@@ -1371,7 +1877,7 @@ export class TerminalHost {
 				registeredAtRestart
 				&& (
 					!this.registeredTabs.has(tabId)
-					|| this.providerByTab.get(tabId) !== providerAtRestart
+					|| this.assignmentByTab.get(tabId) !== assignmentAtRestart
 				)
 			)
 		) {
@@ -1380,7 +1886,12 @@ export class TerminalHost {
 
 		const dimensions = this.lastDimensionsByTab.get(tabId)
 			?? RESTART_FALLBACK_DIMENSIONS;
-		await this.startSession(tabId, dimensions.cols, dimensions.rows);
+		await this.startSessionForAssignment(
+			tabId,
+			dimensions.cols,
+			dimensions.rows,
+			assignmentAtRestart,
+		);
 	}
 
 	/**
@@ -1390,27 +1901,32 @@ export class TerminalHost {
 	restartMcpSession(tabId: TabId, sessionId: SessionId): Promise<void> {
 		const existing = this.mcpRestartByTab.get(tabId);
 		if (existing !== undefined) {
-			return existing;
+			if (existing.sessionId !== sessionId) {
+				this.rejectMcpRestartForInvalidState(tabId, sessionId);
+				return Promise.resolve();
+			}
+			return existing.completion;
 		}
 		if (!this.canRestartMcpSession(tabId, sessionId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return Promise.resolve();
 		}
 
 		const restart = Promise.resolve().then(() =>
 			this.performMcpRestart(tabId, sessionId)
 		).finally(() => {
-			if (this.mcpRestartByTab.get(tabId) === restart) {
+			if (this.mcpRestartByTab.get(tabId)?.completion === restart) {
 				this.mcpRestartByTab.delete(tabId);
 			}
 		});
-		this.mcpRestartByTab.set(tabId, restart);
+		this.mcpRestartByTab.set(tabId, { sessionId, completion: restart });
 		return restart;
 	}
 
 	private canRestartMcpSession(tabId: TabId, sessionId: SessionId): boolean {
 		const session = this.sessionsById.get(sessionId);
 		const status = this.mcpStatusBySession.get(sessionId);
-		const providerId = this.providerByTab.get(tabId);
+		const providerId = this.assignmentByTab.get(tabId)?.providerId;
 		return this.lifecycleActive
 			&& session !== undefined
 			&& this.ownsSession(tabId, sessionId)
@@ -1421,21 +1937,103 @@ export class TerminalHost {
 			&& retryabilityByFailureReason[status.failure.reason];
 	}
 
+	/** stale 요청도 Webview pending을 끝낼 수 있도록 기존 CLI를 건드리지 않는 응답을 보낸다. */
+	private rejectMcpRestartForInvalidState(
+		tabId: TabId,
+		sessionId: SessionId,
+	): void {
+		this.publish({
+			type: 'mcp.restartRejected',
+			tabId,
+			sessionId,
+			code: 'invalid_session_state',
+			message: START_ERROR_MESSAGES.mcpRestartUnavailable,
+		});
+	}
+
 	private async performMcpRestart(
 		tabId: TabId,
 		sessionId: SessionId,
 	): Promise<void> {
 		if (!this.canRestartMcpSession(tabId, sessionId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
 		const session = this.sessionsById.get(sessionId);
 		if (session === undefined) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
-		const providerId = this.providerByTab.get(tabId);
-		if (!isMcpProviderId(providerId)) {
+		const assignment = this.assignmentByTab.get(tabId);
+		if (assignment === undefined || !isMcpProviderId(assignment.providerId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
 			return;
 		}
+		let workspace: WorkspaceValidationResult;
+		try {
+			workspace = this.workspaceResolver(assignment.workspaceRootId);
+		} catch {
+			await this.failMcpRestartInternally(session, assignment);
+			return;
+		}
+		if (!workspace.ok) {
+			if (workspace.code === 'workspace_untrusted') {
+				await this.handleWorkspaceTrustRevoke();
+				return;
+			}
+			this.publish(mapWorkspaceFailureToMcpRestartRejected(
+				workspace,
+				tabId,
+				sessionId,
+			));
+			return;
+		}
+		this.observeWorkspaceTrustGranted();
+		if (
+			!this.canRestartMcpSession(tabId, sessionId)
+			|| this.assignmentByTab.get(tabId) !== assignment
+			|| this.sessionsById.get(sessionId) !== session
+		) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
+			return;
+		}
+
+		/**
+		 * 실패한 adapter/runtime을 먼저 폐기하되 CLI process와 visible failure는 유지한다.
+		 * 이 await 중 Workspace가 바뀌면 Agent process를 종료하지 않고 거부할 수 있다.
+		 */
+		await this.cleanupMcpSession(sessionId);
+		if (
+			!this.lifecycleActive
+			|| !this.registeredTabs.has(tabId)
+			|| this.assignmentByTab.get(tabId) !== assignment
+			|| this.sessionsById.get(sessionId) !== session
+			|| !this.ownsSession(tabId, sessionId)
+			|| session.state.kind !== 'running'
+			|| !this.mcpRestartByTab.has(tabId)
+		) {
+			return;
+		}
+
+		try {
+			workspace = this.workspaceResolver(assignment.workspaceRootId);
+		} catch {
+			await this.failMcpRestartInternally(session, assignment);
+			return;
+		}
+		if (!workspace.ok) {
+			if (workspace.code === 'workspace_untrusted') {
+				await this.handleWorkspaceTrustRevoke();
+				return;
+			}
+			this.publish(mapWorkspaceFailureToMcpRestartRejected(
+				workspace,
+				tabId,
+				sessionId,
+			));
+			return;
+		}
+		this.observeWorkspaceTrustGranted();
 
 		const dimensions = this.lastDimensionsByTab.get(tabId)
 			?? RESTART_FALLBACK_DIMENSIONS;
@@ -1446,14 +2044,19 @@ export class TerminalHost {
 		if (
 			!this.lifecycleActive
 			|| !this.registeredTabs.has(tabId)
-			|| this.providerByTab.get(tabId) !== providerId
+			|| this.assignmentByTab.get(tabId) !== assignment
 			|| this.getActiveSession(tabId) !== undefined
 			|| !this.mcpRestartByTab.has(tabId)
 		) {
 			return;
 		}
 
-		await this.startSession(tabId, dimensions.cols, dimensions.rows);
+		await this.startSessionForAssignment(
+			tabId,
+			dimensions.cols,
+			dimensions.rows,
+			assignment,
+		);
 	}
 
 	/**
@@ -1463,7 +2066,10 @@ export class TerminalHost {
 	 * @param tabId Webview가 생성하고 프로토콜 검증을 통과한 탭 식별자
 	 * @returns 대기 상태로 등록된 새 `TerminalSession` 또는 등록할 수 없으면 `undefined`
 	 */
-	private createSession(tabId: TabId): TerminalSession | undefined {
+	private createSession(
+		tabId: TabId,
+		assignment: AgentAssignment | undefined = this.assignmentByTab.get(tabId),
+	): TerminalSession | undefined {
 		if (this.activeSessionByTab.has(tabId)) {
 			return undefined;
 		}
@@ -1484,6 +2090,9 @@ export class TerminalHost {
 		});
 		this.sessionsById.set(generatedSessionId, session);
 		this.activeSessionByTab.set(tabId, generatedSessionId);
+		if (assignment !== undefined) {
+			this.assignmentBySession.set(generatedSessionId, assignment);
+		}
 		return session;
 	}
 
@@ -1504,9 +2113,14 @@ export class TerminalHost {
 
 		this.lifecycleActive = false;
 		this.stopMessageDelivery();
+		this.stopWorkspaceTrustMonitor();
 		this.beginMcpTermination();
 		const processes: PtyProcessHandle[] = [];
+		const preparationCleanups: Promise<void>[] = [];
 		for (const session of [...this.sessionsById.values()]) {
+			preparationCleanups.push(
+				this.cancelSessionPreparation(session.sessionId),
+			);
 			if (session.state.kind === 'running') {
 				try {
 					session.markStopping();
@@ -1532,6 +2146,7 @@ export class TerminalHost {
 		}
 
 		this.detachedProcesses = Object.freeze([...new Set(processes)]);
+		this.detachedPreparationCleanups = Object.freeze(preparationCleanups);
 		this.sessionsById.clear();
 		this.activeSessionByTab.clear();
 		this.providerAutoRunInputBySession.clear();
@@ -1542,7 +2157,12 @@ export class TerminalHost {
 		this.mcpRestartByTab.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
-		this.providerByTab.clear();
+		this.assignmentByTab.clear();
+		this.assignmentRevisionByTab.clear();
+		this.assignmentBySession.clear();
+		this.workspaceTrustFailedSessions.clear();
+		this.preparationBySession.clear();
+		this.resettingTabs.clear();
 		this.activeTabId = undefined;
 	}
 
@@ -1557,6 +2177,7 @@ export class TerminalHost {
 		this.terminationPromise ??= Promise.all([
 			this.mcpTerminationPromise ?? Promise.resolve(),
 			...this.processCleanupBySession.values(),
+			...this.detachedPreparationCleanups,
 			...this.detachedProcesses.map((process) =>
 				this.terminateProcessTree(process)
 			),
@@ -1612,14 +2233,16 @@ export class TerminalHost {
 	}
 
 	/**
-	 * 실행 중 session을 routing에서 즉시 분리하고 전체 process tree를 비동기로 종료한다.
+	 * 실행 중 session을 routing에서 즉시 분리하고 provider 준비 child, MCP와 전체 process
+	 * tree 정리를 같은 탭 barrier에서 기다린다.
 	 * 유효 PID를 확보할 수 없거나 capture/terminate가 실패하면 root handle kill로 수렴한다.
 	 * 같은 session의 반복 요청은 최초 cleanup Promise를 재사용한다.
 	 */
 	private cleanupSessionProcessTree(session: TerminalSession): Promise<void> {
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
 		const existing = this.processCleanupBySession.get(session.sessionId);
 		if (existing !== undefined) {
-			return existing;
+			return this.getTabCleanupBarrier(session.tabId) ?? existing;
 		}
 
 		const mcpCleanup = this.cleanupMcpSession(session.sessionId);
@@ -1643,29 +2266,46 @@ export class TerminalHost {
 		} catch {
 			/** 상태 전이 실패도 이미 분리한 handle 정리를 막지 않는다. */
 		}
+		this.updateWorkspaceTrustMonitor();
 
 		const cleanup = Promise.all([
+			preparationCleanup,
 			mcpCleanup,
 			process === undefined
 				? Promise.resolve()
 				: this.terminateProcessTree(process),
 		]).then(() => undefined, () => undefined);
 		this.processCleanupBySession.set(session.sessionId, cleanup);
-		this.processCleanupByTab.set(session.tabId, cleanup);
+		const barrier = this.registerTabCleanup(session.tabId, cleanup);
 		void cleanup.then(() => {
 			if (this.processCleanupBySession.get(session.sessionId) === cleanup) {
 				this.processCleanupBySession.delete(session.sessionId);
 			}
-			if (this.processCleanupByTab.get(session.tabId) === cleanup) {
-				this.processCleanupByTab.delete(session.tabId);
-			}
 		});
-		return cleanup;
+		return barrier;
 	}
 
-	/** 같은 탭에서 앞서 분리한 process tree가 끝날 때까지만 다음 시작을 보류한다. */
-	private getTabProcessCleanup(tabId: TabId): Promise<void> | undefined {
-		return this.processCleanupByTab.get(tabId);
+	/** 앞선 barrier와 새 cleanup을 결합해 같은 탭의 cleanup을 빠짐없이 직렬화한다. */
+	private registerTabCleanup(
+		tabId: TabId,
+		cleanup: Promise<void>,
+	): Promise<void> {
+		const previous = this.tabCleanupBarrier.get(tabId);
+		const barrier = previous === undefined
+			? cleanup
+			: Promise.all([previous, cleanup]).then(() => undefined, () => undefined);
+		this.tabCleanupBarrier.set(tabId, barrier);
+		void barrier.then(() => {
+			if (this.tabCleanupBarrier.get(tabId) === barrier) {
+				this.tabCleanupBarrier.delete(tabId);
+			}
+		});
+		return barrier;
+	}
+
+	/** 같은 탭에서 앞서 분리한 모든 resource가 끝날 때까지 다음 시작을 보류한다. */
+	private getTabCleanupBarrier(tabId: TabId): Promise<void> | undefined {
+		return this.tabCleanupBarrier.get(tabId);
 	}
 
 	/**
@@ -1675,12 +2315,13 @@ export class TerminalHost {
 	 * 마지막으로 세션 및 탭 참조를 제거한다. 반복 호출해도 안전하다.
 	 * 개별 세션 정리 실패는 남은 세션 정리나 호출자에게 전파하지 않는다.
 	 */
-	dispose(): void {
+		dispose(): void {
 		if (!this.lifecycleActive) {
 			return;
 		}
 		this.lifecycleActive = false;
 		this.stopMessageDelivery();
+		this.stopWorkspaceTrustMonitor();
 		this.beginMcpTermination();
 
 		for (const session of [...this.sessionsById.values()]) {
@@ -1697,7 +2338,12 @@ export class TerminalHost {
 		this.mcpRestartByTab.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
-		this.providerByTab.clear();
+		this.assignmentByTab.clear();
+		this.assignmentRevisionByTab.clear();
+		this.assignmentBySession.clear();
+		this.workspaceTrustFailedSessions.clear();
+		this.preparationBySession.clear();
+		this.resettingTabs.clear();
 		this.activeTabId = undefined;
 	}
 
@@ -1709,6 +2355,13 @@ export class TerminalHost {
 				session.state.kind !== 'running'
 				&& session.state.kind !== 'stopping'
 			)
+		) {
+			return;
+		}
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment !== undefined
+			&& !this.guardWorkspaceTrust(session, assignment)
 		) {
 			return;
 		}
@@ -1740,6 +2393,7 @@ export class TerminalHost {
 			event,
 		);
 		session.markExited(event.exitCode, signal);
+		this.updateWorkspaceTrustMonitor();
 		if (claudeFallback !== undefined) {
 			void this.relaunchClaudeBareAfterStartupRejection(
 				session,
@@ -1852,6 +2506,10 @@ export class TerminalHost {
 		if (!this.isCurrentProviderSession(oldSession, 'claude')) {
 			return;
 		}
+		const assignment = this.assignmentBySession.get(oldSession.sessionId);
+		if (assignment?.providerId !== 'claude') {
+			return;
+		}
 		const tabId = oldSession.tabId;
 		const dimensions = this.lastDimensionsByTab.get(tabId)
 			?? RESTART_FALLBACK_DIMENSIONS;
@@ -1868,13 +2526,13 @@ export class TerminalHost {
 		if (
 			!this.lifecycleActive
 			|| !this.registeredTabs.has(tabId)
-			|| this.providerByTab.get(tabId) !== 'claude'
+			|| this.assignmentByTab.get(tabId) !== assignment
 			|| this.getActiveSession(tabId) !== undefined
 		) {
 			return;
 		}
 
-		const session = this.createSession(tabId);
+		const session = this.createSession(tabId, assignment);
 		if (session === undefined) {
 			this.failWithoutTransition(
 				tabId,
@@ -1897,7 +2555,12 @@ export class TerminalHost {
 			return;
 		}
 		this.recordMcpFailure(session, reason);
-		this.publish({ type: 'terminal.starting', tabId });
+		this.publish({
+			type: 'terminal.starting',
+			tabId,
+			sessionId: session.sessionId,
+		});
+		this.updateWorkspaceTrustMonitor();
 
 		let request: AgentProcessSpawnRequest | undefined;
 		try {
@@ -1928,16 +2591,38 @@ export class TerminalHost {
 			);
 			return;
 		}
+		let finalWorkspace: WorkspaceValidationResult;
+		try {
+			finalWorkspace = this.workspaceResolver(assignment.workspaceRootId);
+		} catch {
+			this.failSession(
+				session,
+				'internal_error',
+				START_ERROR_MESSAGES.preparation,
+				true,
+			);
+			return;
+		}
+		if (!finalWorkspace.ok) {
+			await this.failWorkspaceStart(session, assignment, finalWorkspace);
+			return;
+		}
+		this.observeWorkspaceTrustGranted();
+		const finalRequest = Object.freeze({
+			...request,
+			cwd: finalWorkspace.root.fsPath,
+		});
 
 		this.lastDimensionsByTab.set(tabId, dimensions);
 		this.mcpPtySpawnStarted.add(session.sessionId);
 		try {
-			await this.spawnProviderPty(
+			const spawned = this.spawnProviderPty(
 				session,
-				request,
+				finalRequest,
 				dimensions.cols,
 				dimensions.rows,
 			);
+			await spawned;
 		} catch {
 			this.mcpPtySpawnStarted.delete(session.sessionId);
 			if (this.isCurrentProviderSession(session, 'claude')) {
@@ -1957,6 +2642,34 @@ export class TerminalHost {
 			&& this.activeSessionByTab.get(session.tabId) === session.sessionId;
 	}
 
+	/** 값이 같은 재할당도 구분하도록 현재 assignment object identity를 검사한다. */
+	private isCurrentAssignment(
+		tabId: TabId,
+		assignment: AgentAssignment | undefined,
+	): boolean {
+		return this.lifecycleActive
+			&& this.assignmentByTab.get(tabId) === assignment;
+	}
+
+	/** current session과 그 시작 시 capture한 assignment identity를 함께 검사한다. */
+	private isCurrentAssignmentSession(
+		session: TerminalSession,
+		assignment: AgentAssignment | undefined,
+	): boolean {
+		return this.lifecycleActive
+			&& this.isCurrentSession(session)
+			&& !this.workspaceTrustFailedSessions.has(session.sessionId)
+			&& this.assignmentByTab.get(session.tabId) === assignment
+			&& this.assignmentBySession.get(session.sessionId) === assignment;
+	}
+
+	/** 성공한 assignment/reset commit의 Webview ordering revision을 한 번 증가시킨다. */
+	private incrementAssignmentRevision(tabId: TabId): number {
+		const revision = (this.assignmentRevisionByTab.get(tabId) ?? 0) + 1;
+		this.assignmentRevisionByTab.set(tabId, revision);
+		return revision;
+	}
+
 	/** Session object identity와 현재 provider 배정을 하나의 attempt gate로 검사한다. */
 	private isCurrentProviderSession(
 		session: TerminalSession,
@@ -1964,7 +2677,10 @@ export class TerminalHost {
 	): boolean {
 		return this.lifecycleActive
 			&& this.isCurrentSession(session)
-			&& this.providerByTab.get(session.tabId) === providerId;
+			&& !this.workspaceTrustFailedSessions.has(session.sessionId)
+			&& this.assignmentBySession.get(session.sessionId)?.providerId === providerId
+			&& this.assignmentByTab.get(session.tabId)
+				=== this.assignmentBySession.get(session.sessionId);
 	}
 
 	/** Current provider attempt와 supervisor runtime generation을 함께 검사한다. */
@@ -1987,14 +2703,20 @@ export class TerminalHost {
 	handleMcpRuntimeEvent(event: McpSessionRuntimeEvent): void {
 		const session = this.sessionsById.get(event.sessionId);
 		const ownership = this.mcpRuntimeBySession.get(event.sessionId);
+		const assignment = this.assignmentBySession.get(event.sessionId);
 		if (
 			!this.lifecycleActive
 			|| session === undefined
 			|| ownership === undefined
+			|| assignment === undefined
 			|| !this.isCurrentSession(session)
-			|| this.providerByTab.get(session.tabId) !== ownership.providerId
+			|| this.assignmentByTab.get(session.tabId) !== assignment
+			|| assignment.providerId !== ownership.providerId
 			|| ownership.generation !== event.generation
 		) {
+			return;
+		}
+		if (!this.guardWorkspaceTrust(session, assignment)) {
 			return;
 		}
 
@@ -2072,7 +2794,15 @@ export class TerminalHost {
 
 	/** terminal.started 이후의 current session에만 visible status를 한 번 발행한다. */
 	private publishCurrentMcpStatus(session: TerminalSession): void {
-		if (!this.isCurrentSession(session) || session.state.kind !== 'running') {
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (
+			assignment === undefined
+			|| !this.isCurrentAssignmentSession(session, assignment)
+			|| session.state.kind !== 'running'
+		) {
+			return;
+		}
+		if (!this.guardWorkspaceTrust(session, assignment)) {
 			return;
 		}
 		const record = this.mcpStatusBySession.get(session.sessionId);
@@ -2109,7 +2839,13 @@ export class TerminalHost {
 			return;
 		}
 		this.mcpStatusBySession.delete(session.sessionId);
-		if (!this.isCurrentSession(session)) {
+		if (!record.published || !this.isCurrentSession(session)) {
+			return;
+		}
+		const assignment = this.assignmentBySession.get(session.sessionId);
+		if (assignment !== undefined && !this.readWorkspaceTrustFresh()) {
+			/** 현재 lifecycle transition이 끝난 뒤 revoke cleanup이 안전하게 error를 commit한다. */
+			queueMicrotask(() => void this.handleWorkspaceTrustRevoke());
 			return;
 		}
 		this.publish({
@@ -2172,11 +2908,15 @@ export class TerminalHost {
 
 		this.clearMcpStatus(session);
 		this.sessionsById.delete(sessionId);
+		this.assignmentBySession.delete(sessionId);
+		this.workspaceTrustFailedSessions.delete(sessionId);
+		void this.cancelSessionPreparation(sessionId);
 		this.providerAutoRunInputBySession.delete(sessionId);
 		void this.cleanupMcpSession(sessionId);
 		if (this.activeSessionByTab.get(session.tabId) === sessionId) {
 			this.activeSessionByTab.delete(session.tabId);
 		}
+		this.updateWorkspaceTrustMonitor();
 		return session;
 	}
 
@@ -2200,6 +2940,262 @@ export class TerminalHost {
 			: undefined;
 	}
 
+	/** 별도 child를 만들 수 있는 provider 준비 작업을 session-scoped AbortSignal에 연결한다. */
+	private runSessionPreparation<Result>(
+		session: TerminalSession,
+		operation: (signal: AbortSignal) => Promise<Result>,
+	): Promise<Result> {
+		const previous = this.preparationBySession.get(session.sessionId);
+		previous?.controller.abort();
+
+		const controller = new AbortController();
+		let complete!: () => void;
+		const completion = new Promise<void>((resolve) => {
+			complete = resolve;
+		});
+		const ownership = Object.freeze({ controller, completion });
+		this.preparationBySession.set(session.sessionId, ownership);
+
+		let work: Promise<Result>;
+		try {
+			work = operation(controller.signal);
+		} catch (error: unknown) {
+			work = Promise.reject(error);
+		}
+		void work.then(complete, complete);
+		void completion.then(() => {
+			if (this.preparationBySession.get(session.sessionId) === ownership) {
+				this.preparationBySession.delete(session.sessionId);
+			}
+		});
+		return work;
+	}
+
+	/** Revoke/cleanup이 현재 provider 준비 작업을 중단하고 child tree 종료 완료를 공유한다. */
+	private cancelSessionPreparation(sessionId: SessionId): Promise<void> {
+		const ownership = this.preparationBySession.get(sessionId);
+		if (ownership === undefined) {
+			return Promise.resolve();
+		}
+		ownership.controller.abort();
+		return ownership.completion;
+	}
+
+	/** Trust reader 예외를 실행 허용으로 해석하지 않고 fail-closed boolean으로 수렴한다. */
+	private readWorkspaceTrustFresh(): boolean {
+		try {
+			return this.readWorkspaceTrust() === true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Terminal I/O, provider-started, MCP spawn/status 경계에서 Trust를 fresh하게 확인한다.
+	 * Root removal이나 path 상태는 이 경계에서 검사하지 않으므로 실행 중 retention 정책을
+	 * 그대로 유지한다.
+	 */
+	private guardWorkspaceTrust(
+		session: TerminalSession,
+		assignment: AgentAssignment,
+	): boolean {
+		if (
+			!this.lifecycleActive
+			|| this.workspaceTrustFailedSessions.has(session.sessionId)
+			|| this.sessionsById.get(session.sessionId) !== session
+			|| this.activeSessionByTab.get(session.tabId) !== session.sessionId
+			|| this.assignmentBySession.get(session.sessionId) !== assignment
+			|| this.assignmentByTab.get(session.tabId) !== assignment
+		) {
+			return false;
+		}
+		if (this.readWorkspaceTrustFresh()) {
+			this.observeWorkspaceTrustGranted();
+			return true;
+		}
+
+		void this.handleWorkspaceTrustRevoke();
+		return false;
+	}
+
+	/** Fresh trusted boundary가 다음 revoke epoch와 monitor를 다시 활성화한다. */
+	private observeWorkspaceTrustGranted(): void {
+		this.workspaceTrustRevokedObserved = false;
+		this.workspaceTrustRevokeCleanup = undefined;
+		this.updateWorkspaceTrustMonitor();
+	}
+
+	/** starting/running/stopping assignment가 있는 동안 하나의 bounded monitor만 유지한다. */
+	private updateWorkspaceTrustMonitor(): void {
+		const hasActiveAssignedSession = this.lifecycleActive
+			&& !this.workspaceTrustRevokedObserved
+			&& [...this.sessionsById.values()].some((session) => (
+				this.assignmentBySession.has(session.sessionId)
+				&& !this.workspaceTrustFailedSessions.has(session.sessionId)
+				&& (
+					session.state.kind === 'starting'
+					|| session.state.kind === 'running'
+					|| session.state.kind === 'stopping'
+				)
+			));
+		if (!hasActiveAssignedSession) {
+			this.stopWorkspaceTrustMonitor();
+			return;
+		}
+		if (this.workspaceTrustMonitorHandle !== undefined) {
+			return;
+		}
+
+		try {
+			this.workspaceTrustMonitorHandle =
+				this.workspaceTrustMonitorScheduler.setInterval(
+					() => this.pollWorkspaceTrust(),
+					WORKSPACE_TRUST_MONITOR_INTERVAL_MS,
+				);
+		} catch {
+			this.workspaceTrustMonitorHandle = undefined;
+		}
+	}
+
+	/** Interval tick마다 Trust만 읽고 session이 사라졌으면 monitor를 즉시 해제한다. */
+	private pollWorkspaceTrust(): void {
+		if (!this.lifecycleActive) {
+			this.stopWorkspaceTrustMonitor();
+			return;
+		}
+		const hasActiveAssignedSession = [...this.sessionsById.values()].some(
+			(session) => this.assignmentBySession.has(session.sessionId)
+				&& !this.workspaceTrustFailedSessions.has(session.sessionId)
+				&& (
+					session.state.kind === 'starting'
+					|| session.state.kind === 'running'
+					|| session.state.kind === 'stopping'
+				),
+		);
+		if (!hasActiveAssignedSession) {
+			this.stopWorkspaceTrustMonitor();
+			return;
+		}
+		if (!this.readWorkspaceTrustFresh()) {
+			void this.handleWorkspaceTrustRevoke();
+		}
+	}
+
+	/** Panel runtime이 소유한 Trust interval을 멱등하게 해제한다. */
+	private stopWorkspaceTrustMonitor(): void {
+		const handle = this.workspaceTrustMonitorHandle;
+		this.workspaceTrustMonitorHandle = undefined;
+		if (handle === undefined) {
+			return;
+		}
+		try {
+			this.workspaceTrustMonitorScheduler.clearInterval(handle);
+		} catch {
+			/** Monitor 해제 실패가 session routing 차단과 process cleanup을 막지 않는다. */
+		}
+	}
+
+	/**
+	 * 같은 untrusted epoch를 한 번만 처리하고 모든 active Agent/MCP ownership을 동기적으로
+	 * 분리한 뒤 process tree cleanup Promise를 공유한다.
+	 */
+	private handleWorkspaceTrustRevoke(): Promise<void> {
+		if (this.workspaceTrustRevokedObserved) {
+			return this.workspaceTrustRevokeCleanup ?? Promise.resolve();
+		}
+
+		this.workspaceTrustRevokedObserved = true;
+		this.stopWorkspaceTrustMonitor();
+		try {
+			this.onWorkspaceTrustRevoked();
+		} catch {
+			/** Presentation refresh 알림 실패가 실행 권한 회수와 정리를 막지 않는다. */
+		}
+
+		const cleanup = Promise.all(
+			[...this.sessionsById.values()].map((session) => {
+				const assignment = this.assignmentBySession.get(session.sessionId);
+				return assignment === undefined
+					? Promise.resolve()
+					: this.failRunningSessionForTrustRevoke(session, assignment);
+			}),
+		).then(() => undefined, () => undefined);
+		this.workspaceTrustRevokeCleanup = cleanup;
+		return cleanup;
+	}
+
+	/**
+	 * Revoke 대상 session을 current retry identity로 보존하면서 I/O, MCP publication과 native
+	 * process ownership을 먼저 분리하고 `workspace_untrusted` error를 발행한다.
+	 */
+	private failRunningSessionForTrustRevoke(
+		session: TerminalSession,
+		assignment: AgentAssignment,
+	): Promise<void> {
+		if (
+			!this.lifecycleActive
+			|| this.sessionsById.get(session.sessionId) !== session
+			|| this.activeSessionByTab.get(session.tabId) !== session.sessionId
+			|| this.assignmentBySession.get(session.sessionId) !== assignment
+			|| this.assignmentByTab.get(session.tabId) !== assignment
+			|| (
+				session.state.kind !== 'starting'
+				&& session.state.kind !== 'running'
+				&& session.state.kind !== 'stopping'
+			)
+		) {
+			return Promise.resolve();
+		}
+
+		this.workspaceTrustFailedSessions.add(session.sessionId);
+		this.providerAutoRunInputBySession.delete(session.sessionId);
+		this.mcpStatusBySession.delete(session.sessionId);
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
+
+		let process: PtyProcessHandle | undefined;
+		try {
+			process = session.detachProcess();
+		} catch {
+			/** Listener 분리 실패도 error 전이와 남은 Agent/MCP 정리를 막지 않는다. */
+		}
+		const mcpCleanup = this.cleanupMcpSession(session.sessionId);
+
+		if (
+			this.sessionsById.get(session.sessionId) === session
+			&& this.activeSessionByTab.get(session.tabId) === session.sessionId
+			&& this.assignmentBySession.get(session.sessionId) === assignment
+			&& this.assignmentByTab.get(session.tabId) === assignment
+		) {
+			try {
+				session.markError('workspace_untrusted');
+				this.publish(mapWorkspaceFailureToTerminalError(
+					{ ok: false, code: 'workspace_untrusted' },
+					session.tabId,
+					session.sessionId,
+				));
+			} catch {
+				/** 이미 stale한 lifecycle이면 captured resource cleanup만 계속한다. */
+			}
+		}
+		this.updateWorkspaceTrustMonitor();
+
+		const cleanup = Promise.all([
+			preparationCleanup,
+			mcpCleanup,
+			process === undefined
+				? Promise.resolve()
+				: this.terminateProcessTree(process),
+		]).then(() => undefined, () => undefined);
+		this.processCleanupBySession.set(session.sessionId, cleanup);
+		const barrier = this.registerTabCleanup(session.tabId, cleanup);
+		void cleanup.then(() => {
+			if (this.processCleanupBySession.get(session.sessionId) === cleanup) {
+				this.processCleanupBySession.delete(session.sessionId);
+			}
+		});
+		return barrier;
+	}
+
 	/**
 	 * 재시작 또는 Host 정리 전에 세션의 PTY와 구독을 해제하고 최종 상태로 전이한다.
 	 * 실행 중 세션은 stopping을 거쳐 disposed로 전이하므로 정리 시작 시점부터
@@ -2209,6 +3205,7 @@ export class TerminalHost {
 	 * @param session PTY를 종료하고 최종 상태로 전이할 세션
 	 */
 	private disposeSessionProcess(session: TerminalSession): void {
+		void this.cancelSessionPreparation(session.sessionId);
 		void this.cleanupMcpSession(session.sessionId);
 		if (session.state.kind === 'running') {
 			try {
@@ -2229,6 +3226,7 @@ export class TerminalHost {
 		} catch {
 			/** 상태 전이 실패도 재시작 흐름 밖으로 전파하지 않는다. */
 		}
+		this.updateWorkspaceTrustMonitor();
 	}
 
 	/** Session credential을 먼저 무효화하고 adapter 정리를 멱등 supervisor 경계에 위임한다. */
@@ -2314,9 +3312,11 @@ export class TerminalHost {
 		message: string,
 		canRestart: boolean,
 	): void {
+		void this.cancelSessionPreparation(session.sessionId);
 		const ownsDirectProviderPty = this.mcpPtySpawnStarted.has(session.sessionId);
 		this.clearMcpStatus(session);
 		session.markError(code);
+		this.updateWorkspaceTrustMonitor();
 		if (ownsDirectProviderPty) {
 			void this.cleanupMcpSession(session.sessionId);
 			try {
@@ -2332,6 +3332,102 @@ export class TerminalHost {
 			message,
 			canRestart,
 		);
+	}
+
+	/** MCP restart 내부 실패를 live PTY 없이 retry 가능한 terminal 오류로 수렴한다. */
+	private async failMcpRestartInternally(
+		session: TerminalSession,
+		assignment: AgentAssignment,
+	): Promise<void> {
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
+		this.providerAutoRunInputBySession.delete(session.sessionId);
+		this.clearMcpStatus(session);
+
+		let process: PtyProcessHandle | undefined;
+		try {
+			process = session.detachProcess();
+		} catch {
+			/** listener 분리 실패도 MCP/runtime과 process-tree 정리를 막지 않는다. */
+		}
+
+		const cleanup = Promise.all([
+			preparationCleanup,
+			this.cleanupMcpSession(session.sessionId),
+			process === undefined
+				? Promise.resolve()
+				: this.terminateProcessTree(process),
+		]).then(() => undefined, () => undefined);
+		this.processCleanupBySession.set(session.sessionId, cleanup);
+		const barrier = this.registerTabCleanup(session.tabId, cleanup);
+		void cleanup.then(() => {
+			if (this.processCleanupBySession.get(session.sessionId) === cleanup) {
+				this.processCleanupBySession.delete(session.sessionId);
+			}
+		});
+		await barrier;
+
+		if (!this.isCurrentAssignmentSession(session, assignment)) {
+			return;
+		}
+		try {
+			session.markError('internal_error');
+		} catch {
+			return;
+		}
+		this.updateWorkspaceTrustMonitor();
+		this.failWithoutTransition(
+			session.tabId,
+			session,
+			'internal_error',
+			START_ERROR_MESSAGES.preparation,
+			true,
+		);
+	}
+
+	/** post-assignment Workspace 실패를 retry 가능한 current session으로 보존한다. */
+	private async failWorkspaceStart(
+		session: TerminalSession,
+		assignment: AgentAssignment,
+		failure: WorkspaceValidationFailure,
+	): Promise<void> {
+		if (failure.code === 'workspace_untrusted') {
+			await this.handleWorkspaceTrustRevoke();
+			return;
+		}
+		const preparationCleanup = this.cancelSessionPreparation(session.sessionId);
+		this.providerAutoRunInputBySession.delete(session.sessionId);
+		this.clearMcpStatus(session);
+
+		let process: PtyProcessHandle | undefined;
+		try {
+			process = session.detachProcess();
+		} catch {
+			/** listener 분리 실패도 MCP/runtime 정리와 safe error 전이를 막지 않는다. */
+		}
+
+		const cleanup = Promise.all([
+			preparationCleanup,
+			this.cleanupMcpSession(session.sessionId),
+			process === undefined
+				? Promise.resolve()
+				: this.terminateProcessTree(process),
+		]).then(() => undefined, () => undefined);
+		await this.registerTabCleanup(session.tabId, cleanup);
+
+		if (!this.isCurrentAssignmentSession(session, assignment)) {
+			return;
+		}
+		try {
+			session.markError(failure.code);
+		} catch {
+			return;
+		}
+		this.updateWorkspaceTrustMonitor();
+		this.publish(mapWorkspaceFailureToTerminalError(
+			failure,
+			session.tabId,
+			session.sessionId,
+		));
 	}
 
 	/**
@@ -2350,9 +3446,11 @@ export class TerminalHost {
 			| 'invalid_session_state'
 			| 'session_not_found'
 			| 'start_failed'
-			| 'internal_error',
+			| 'internal_error'
+			| 'workspace_change_requires_reset',
 		message: string,
 		canRestart: boolean,
+		switchAttemptId?: SwitchAttemptId,
 	): void {
 		const error = {
 			type: 'terminal.error',
@@ -2361,6 +3459,7 @@ export class TerminalHost {
 			code,
 			message,
 			canRestart,
+			...(switchAttemptId === undefined ? {} : { switchAttemptId }),
 		} as const;
 		this.publish(error);
 	}

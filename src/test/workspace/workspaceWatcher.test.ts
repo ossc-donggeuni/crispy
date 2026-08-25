@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { createCanvasRuntime } from '../../extension';
 import { createWorkspaceRefreshCoordinator } from '../../workspace/workspaceRefresh';
+import { createWorkspaceRootCatalog } from '../../workspace/workspaceRootCatalog';
+import { createWorkspaceRootId } from '../../workspace/workspaceRootId';
 import { watchWorkspaceChanges } from '../../workspace/workspaceWatcher';
 
 suite('Workspace Watcher', () => {
@@ -144,24 +146,48 @@ suite('Workspace Watcher', () => {
 		const coordinator = createWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				snapshotCalls += 1;
-				return { roots: [] };
+				const uri = vscode.Uri.file(`/workspace/${graphVersion}`);
+
+				return {
+					roots: [{
+						id: createWorkspaceRootId(uri),
+						name: graphVersion,
+						uri,
+						status: 'loaded',
+						children: [],
+					}],
+				};
 			},
-			convertWorkspaceSnapshotToGraph() {
+			convertWorkspaceSnapshotToGraph(snapshot) {
+				const root = snapshot.roots[0];
+
+				if (!root) {
+					return { roots: [], rootNodes: {} };
+				}
 				const project = {
 					kind: 'project' as const,
-					id: `project:${graphVersion}`,
-					name: graphVersion,
+					id: root.id,
+					name: root.name,
 					status: 'loaded' as const,
 					children: [],
 				};
 
 				return {
-					roots: [{ id: `root:${graphVersion}`, nodeId: project.id }],
+					roots: [{ id: `root:${root.name}`, nodeId: project.id }],
 					rootNodes: { [project.id]: project },
 				};
 			},
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: (snapshot) => (
+				createWorkspaceRootCatalog(snapshot, true, 'linux')
+			),
 			async postMessage(message) {
-				graphMessages.push(message.graph.roots[0]?.nodeId ?? 'empty');
+				const { graph } = message.presentation;
+				const root = graph.roots[0];
+
+				graphMessages.push(
+					(root ? graph.rootNodes[root.nodeId]?.name : undefined) ?? 'empty',
+				);
 				return true;
 			},
 		});
@@ -204,10 +230,10 @@ suite('Workspace Watcher', () => {
 
 		assert.strictEqual(snapshotCalls, 4);
 		assert.deepStrictEqual(graphMessages, [
-			'project:root-c-added',
-			'project:root-b-removed',
-			'project:file-created',
-			'project:folder-deleted',
+			'root-c-added',
+			'root-b-removed',
+			'file-created',
+			'folder-deleted',
 		]);
 
 		runtime.detach();
@@ -232,6 +258,19 @@ suite('Workspace Watcher', () => {
 
 		assert.strictEqual(changes, 2);
 		disposable.dispose();
+	});
+
+	test('Workspace Trust grant는 같은 refresh callback으로 전달된다', () => {
+		const fake = createFakeWorkspace([]);
+		let changes = 0;
+		const disposable = watchWorkspaceChanges(() => changes += 1, fake.source);
+
+		fake.fireWorkspaceTrustGrant();
+
+		assert.strictEqual(changes, 1);
+		disposable.dispose();
+		fake.fireWorkspaceTrustGrant();
+		assert.strictEqual(changes, 1);
 	});
 
 	test('Workspace가 없어도 Root 추가를 감지한다', () => {
@@ -311,6 +350,7 @@ function createFakeWorkspace(initialFolders: readonly vscode.WorkspaceFolder[]) 
 	const workspaceFoldersEmitter = new vscode.EventEmitter<
 		vscode.WorkspaceFoldersChangeEvent
 	>();
+	const workspaceTrustEmitter = new vscode.EventEmitter<void>();
 	const createWatcherCalls: CreateWatcherCall[] = [];
 	let workspaceFolders = [...initialFolders];
 	const source = {
@@ -334,6 +374,7 @@ function createFakeWorkspace(initialFolders: readonly vscode.WorkspaceFolder[]) 
 				.sort((left, right) => right.uri.path.length - left.uri.path.length)[0];
 		},
 		onDidChangeWorkspaceFolders: workspaceFoldersEmitter.event,
+		onDidGrantWorkspaceTrust: workspaceTrustEmitter.event,
 	};
 
 	return {
@@ -349,6 +390,9 @@ function createFakeWorkspace(initialFolders: readonly vscode.WorkspaceFolder[]) 
 				.filter(({ uri }) => !removedUris.has(uri.toString()))
 				.concat(added);
 			workspaceFoldersEmitter.fire({ added, removed });
+		},
+		fireWorkspaceTrustGrant(): void {
+			workspaceTrustEmitter.fire();
 		},
 	};
 }

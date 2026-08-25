@@ -11,6 +11,7 @@ import {
 	getGraphRootLayoutNodeId,
 	resolveGraphLayoutNodePosition,
 	type GraphLayout,
+	type GraphLayoutNode,
 	type GraphLayoutPosition,
 } from './graphLayout';
 import {
@@ -63,7 +64,16 @@ import type {
 	GraphNodeEffectKind,
 	GraphNodeEffectTarget,
 } from '../../messages';
-import { createGraphNodeEffects } from './graphNodeEffects';
+import {
+	createGraphNodeEffects,
+	type GraphNodeEffectOwner,
+} from './graphNodeEffects';
+import type { AgentActivityStore } from '../../agent/webview/agentActivityStore';
+import {
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	createAgentActivityBindings,
+	getAgentActivityBindingBlockHeight,
+} from './agentActivityBindings';
 import {
 	TASK_DEFAULT_END_POSITION,
 	type TaskBlueprint,
@@ -133,6 +143,8 @@ export interface GraphView {
 	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
 	/** 특정 target의 한 kind 또는 모든 transient 시각 효과를 제거한다. */
 	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
+	/** 한 기능이 소유한 Effect만 독립적으로 정리할 수 있는 범위를 만든다. */
+	createNodeEffectOwner(): GraphNodeEffectOwner;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
 }
@@ -148,6 +160,47 @@ export interface GraphViewWorkspaceSnapshot {
 		| 'hiddenNodeIds'
 	>;
 	readonly tasks: readonly WorkspaceTaskRecord[];
+}
+
+/** Graph View의 비영속 runtime integration만 선택적으로 주입한다. */
+export interface GraphViewRuntimeOptions {
+	readonly agentActivityStore?: AgentActivityStore;
+}
+
+/** Task Scope bounds에서 Card와 Agent Binding의 전체 표시 높이를 반환한다. */
+function getTaskScopeGraphNodeHeight(node: GraphLayoutNode): number {
+	const renderedHeight = node.renderedHeight ?? node.height;
+	const bindingBlockHeight = getAgentActivityBindingBlockHeight(
+		node.agentActivityBindingCount ?? 0,
+	);
+
+	if (bindingBlockHeight === 0) {
+		return renderedHeight;
+	}
+
+	const bindingBottom = node.agentActivityBindingTop === undefined
+		? renderedHeight + bindingBlockHeight
+		: node.agentActivityBindingTop
+			+ bindingBlockHeight
+			- AGENT_ACTIVITY_BINDING_TOP_GAP;
+
+	return Math.max(renderedHeight, bindingBottom);
+}
+
+/** Edge/Card geometry를 바꾸지 않고 Task Scope footprint 계산용 높이만 확장한다. */
+function createTaskScopeBoundsGraphLayout(layout: GraphLayout): GraphLayout {
+	let changed = false;
+	const nodes = layout.nodes.map((node): GraphLayoutNode => {
+		const height = getTaskScopeGraphNodeHeight(node);
+
+		if (height === node.height) {
+			return node;
+		}
+		changed = true;
+		return { ...node, height };
+	});
+
+	return changed ? { ...layout, nodes } : layout;
 }
 
 const TASK_CREATION_OFFSET = 32;
@@ -1276,7 +1329,8 @@ export function focusGraphBacklink(
  * @param graph 렌더링할 Root 목록과 Project Tree
  * @param interactions Detach 완료 요청을 Graph 변경 없이 전달할 callback
  * @param initialTasks 같은 World에 최초 렌더링할 Task Blueprint 목록
-	* @param initialWorkspaceTasks Host가 복원한 owner/provenance 포함 Task record
+ * @param initialWorkspaceTasks Host가 복원한 owner/provenance 포함 Task record
+ * @param runtimeOptions Agent Activity처럼 영속 상태와 분리된 runtime integration
  * @returns State와 Camera 및 전체 lifecycle을 제공하는 Graph View
  */
 export function initializeGraphView(
@@ -1286,6 +1340,7 @@ export function initializeGraphView(
 	interactions: GraphViewInteractions = {},
 	initialTasks: readonly TaskBlueprint[] = [],
 	initialWorkspaceTasks?: readonly WorkspaceTaskRecord[],
+	runtimeOptions: GraphViewRuntimeOptions = {},
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
 	const viewport = ownerDocument.createElement('div');
@@ -1315,6 +1370,12 @@ export function initializeGraphView(
 		undefined,
 		effectRegionLayer,
 	);
+	const agentActivityBindings = runtimeOptions.agentActivityStore
+		? createAgentActivityBindings(
+			runtimeOptions.agentActivityStore,
+			nodeEffects.createLocalEffectHost,
+		)
+		: undefined;
 	const state = createGraphState(initialState);
 	let workspaceGraph = graph;
 	let pendingWorkspaceTaskRecords: readonly WorkspaceTaskRecord[] | undefined;
@@ -1412,6 +1473,7 @@ export function initializeGraphView(
 			...currentTaskScopeBoundaryNodeIds,
 		]),
 		pinnedNodeIds: currentTaskScopeBoundaryNodeIds,
+		getAgentActivityBindingCount: agentActivityBindings?.getBindingCount,
 	});
 	const normalizedInitialSnapshot = {
 		...initialGraphState,
@@ -2215,7 +2277,7 @@ export function initializeGraphView(
 			onSourceDrop: (request) => handleGraphSourceDrop(request),
 			onSourceDragCancel: () => handleGraphSourceDragCancel(),
 		},
-		{ nodeEffects },
+		{ nodeEffects, agentActivityBindings },
 	);
 	const resolveTaskGraphTargetAreaCollapsed = (
 		taskId: string,
@@ -2505,6 +2567,7 @@ export function initializeGraphView(
 	): Map<string, TaskGraphScopeLayout> => {
 		const scopeLayouts = new Map<string, TaskGraphScopeLayout>();
 		const scopeBoundaryNodeIds = collectTaskGraphScopeOccurrenceIds();
+		const boundsGraphLayout = createTaskScopeBoundsGraphLayout(graphLayout);
 
 		for (const node of layout.nodes) {
 			if (!isTaskGraphScopeLayoutNode(node)) {
@@ -2533,7 +2596,7 @@ export function initializeGraphView(
 				scopeLayouts.set(
 					createTaskGraphScopeAreaKey(node.taskId, node.id, area),
 					createTaskGraphScopeLayout(
-						graphLayout,
+						boundsGraphLayout,
 						graphNodePositions,
 						inputs,
 						scopeBoundaryNodeIds,
@@ -3481,6 +3544,55 @@ export function initializeGraphView(
 		),
 		() => persistentNodePositions,
 	);
+	const unsubscribeAgentActivityLayout = agentActivityBindings
+		?.subscribeBindingCountChanges(() => {
+			if (disposed || applyingTaskState) {
+				return;
+			}
+
+			const snapshot = state.getState();
+			const previousLayout = currentLayout;
+			const nextLayout = createLayout(
+				currentGraph,
+				snapshot,
+				currentManualUnarrangedNodeIds,
+			);
+			const baseNodePositions = normalizeGraphNodePositions(
+				nextLayout,
+				rebaseNodePositions(
+					previousLayout,
+					nextLayout,
+					persistentNodePositions,
+					{ logicalParentByChild: currentLogicalParentByChild },
+				),
+			);
+
+			applyingTaskState = true;
+			try {
+				currentLayout = nextLayout;
+				const projection = applyTaskGraphScopeProjection(
+					nextLayout,
+					baseNodePositions,
+				);
+
+				applyGraphLayout(
+					renderer,
+					navigator,
+					nextLayout,
+					projection.nodePositions,
+				);
+				commitRuntimeGraphState({
+					camera: snapshot.camera,
+					nodePositions: projection.nodePositions,
+					fileGroupPages: snapshot.fileGroupPages,
+					openedFolders: snapshot.openedFolders,
+					detachedRootNodeIds: snapshot.detachedRootNodeIds,
+					hiddenNodeIds: snapshot.hiddenNodeIds,
+				}, { projectionOnly: true });
+			} finally {
+				applyingTaskState = false;
+			}
+		}) ?? (() => {});
 	const unsubscribeTaskGraphScope = state.subscribe((snapshot) => {
 		const structureChanged = (
 			snapshot.fileGroupPages !== renderedTaskScopeFileGroupPages
@@ -3746,6 +3858,9 @@ export function initializeGraphView(
 				nodeEffects.clearNodeEffect(target, kind);
 			}
 		},
+		createNodeEffectOwner(): GraphNodeEffectOwner {
+			return nodeEffects.createOwner();
+		},
 		dispose(): void {
 			if (disposed) {
 				return;
@@ -3757,6 +3872,7 @@ export function initializeGraphView(
 			taskImportDialog.dispose();
 			unsubscribeTaskGraphScope();
 			unsubscribeLayout();
+			unsubscribeAgentActivityLayout();
 			unsubscribeTaskInspectorCamera();
 			unsubscribeWorkspaceGraphState();
 			unsubscribeWorkspaceTasks();
@@ -3769,6 +3885,7 @@ export function initializeGraphView(
 			expandedTaskGraphScopeAreaKeys.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
+			agentActivityBindings?.dispose();
 			nodeEffects.dispose();
 			camera.dispose();
 			viewport.remove();

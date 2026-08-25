@@ -1,5 +1,9 @@
-import { isAbsolute } from 'node:path';
+import {
+	validateWorkspacePolicy as validateWorkspaceRootPolicy,
+} from '../../../workspace/workspacePolicy';
 import type { WorkspaceContextSnapshot } from './workspaceContext';
+import type { WorkspaceRootId } from '../../../workspace/workspaceRootId';
+import type { WorkspaceFolder } from 'vscode';
 import type {
 	ValidatedWorkspaceFsPath,
 	ValidatedWorkspaceRoot,
@@ -15,13 +19,6 @@ function validationFailure(
 	return { ok: false, code };
 }
 
-/** 현재 Extension Host에서 terminal cwd로 전달할 수 있는 최소 경로 조건을 검사한다. */
-function isUsableTerminalCwd(fsPath: string): boolean {
-	return fsPath.length > 0
-		&& !fsPath.includes('\0')
-		&& isAbsolute(fsPath);
-}
-
 /**
  * Host가 수집한 workspace snapshot을 고정된 순서로 검증한다.
  * VS Code API나 filesystem I/O를 사용하지 않으며 입력 snapshot을 변경하지 않는다.
@@ -31,31 +28,33 @@ function isUsableTerminalCwd(fsPath: string): boolean {
  */
 export function validateWorkspacePolicy(
 	snapshot: WorkspaceContextSnapshot,
+	workspaceRootId: WorkspaceRootId,
+	platform: NodeJS.Platform = process.platform,
 ): WorkspaceValidationResult {
 	if (!snapshot.isTrusted) {
 		return validationFailure('workspace_untrusted');
 	}
 
-	if (snapshot.workspaceFolders.length === 0) {
-		return validationFailure('workspace_not_found');
+	const folder = snapshot.workspaceFolders.find(
+		(candidate) => candidate.id === workspaceRootId,
+	);
+	if (folder === undefined) {
+		return validationFailure('workspace_root_unavailable');
 	}
-
-	if (snapshot.workspaceFolders.length > 1) {
-		return validationFailure('workspace_multi_root_unsupported');
-	}
-
-	const folder = snapshot.workspaceFolders[0];
-	if (folder.scheme !== 'file') {
-		return validationFailure('workspace_virtual_unsupported');
-	}
-
-	if (!isUsableTerminalCwd(folder.fsPath)) {
-		return validationFailure('workspace_path_invalid');
+	const rootPolicy = validateWorkspaceRootPolicy({
+		uriScheme: folder.scheme,
+		fsPath: folder.fsPath,
+		platform,
+	});
+	if (!rootPolicy.ok) {
+		return validationFailure(rootPolicy.code);
 	}
 
 	const root = {
+		id: folder.id,
+		workspaceFolder: folder.workspaceFolder as WorkspaceFolder,
 		scheme: 'file',
-		fsPath: folder.fsPath as ValidatedWorkspaceFsPath,
+		fsPath: rootPolicy.fsPath as ValidatedWorkspaceFsPath,
 	} as ValidatedWorkspaceRoot;
 
 	return { ok: true, root };

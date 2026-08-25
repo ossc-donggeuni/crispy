@@ -1,4 +1,5 @@
 import * as assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import type {
 	CleanupResult,
 	ProcessTreeCaptureResult,
@@ -60,6 +61,7 @@ suite('Claude MCP version compatibility', () => {
 			cwd: process.cwd(),
 			platform: process.platform,
 			environment: process.env,
+			resolveWorkspaceCwdBeforeSpawn: () => process.cwd(),
 		};
 		const result = await probeClaudeMcpCompatibility(options);
 		const compatibility = await resolveClaudeMcpCompatibility(options);
@@ -77,9 +79,54 @@ suite('Claude MCP version compatibility', () => {
 			cwd: process.cwd(),
 			platform: 'linux',
 			environment: process.env,
+			resolveWorkspaceCwdBeforeSpawn: () => process.cwd(),
 		});
 
 		assert.deepStrictEqual(result, { ok: false, reason: 'request_invalid' });
+	});
+
+	test('version child 직전 fresh Workspace cwd를 적용하고 거부 시 spawn하지 않는다', async () => {
+		let preflightCalls = 0;
+		const rejected = await probeClaudeMcpCompatibility({
+			executable: { executable: process.execPath, launcherKind: 'direct' },
+			cwd: resolve(process.cwd(), 'missing-stale-claude-workspace'),
+			platform: process.platform,
+			environment: process.env,
+			resolveWorkspaceCwdBeforeSpawn: () => {
+				preflightCalls += 1;
+				return undefined;
+			},
+		});
+		assert.deepStrictEqual(rejected, {
+			ok: false,
+			reason: 'workspace_preflight_failed',
+		});
+		assert.strictEqual(preflightCalls, 1);
+		const abortController = new AbortController();
+		const aborted = await probeClaudeMcpCompatibility({
+			executable: { executable: 'node', launcherKind: 'direct' },
+			cwd: process.cwd(),
+			platform: process.platform,
+			environment: process.env,
+			signal: abortController.signal,
+			resolveWorkspaceCwdBeforeSpawn: () => {
+				abortController.abort();
+				return process.cwd();
+			},
+		});
+		assert.deepStrictEqual(aborted, { ok: false, reason: 'signal' });
+
+		const refreshed = await probeClaudeMcpCompatibility({
+			executable: { executable: 'node', launcherKind: 'direct' },
+			cwd: resolve(process.cwd(), 'missing-stale-claude-workspace'),
+			platform: process.platform,
+			environment: process.env,
+			resolveWorkspaceCwdBeforeSpawn: () => process.cwd(),
+		});
+		assert.deepStrictEqual(refreshed, {
+			ok: false,
+			reason: 'unparsable_version',
+		});
 	});
 
 	test('version probe timeout은 result 전에 process tree cleanup을 기다린다', async () => {
@@ -105,6 +152,7 @@ suite('Claude MCP version compatibility', () => {
 			cwd: process.cwd(),
 			platform: process.platform,
 			environment: process.env,
+			resolveWorkspaceCwdBeforeSpawn: () => process.cwd(),
 			processTreeController: controller,
 			versionProbeTimeoutMs: 0,
 		});
@@ -115,6 +163,47 @@ suite('Claude MCP version compatibility', () => {
 		assert.strictEqual(
 			controller.calls[1],
 			controller.calls[0].replace('capture:', 'terminate:'),
+		);
+	});
+
+	test('AbortSignal은 timeout 전에 version process tree를 종료한다', async () => {
+		class RecordingController implements ProcessTreeController {
+			readonly calls: string[] = [];
+
+			async capture(rootPid: number): Promise<ProcessTreeCaptureResult> {
+				this.calls.push(`capture:${rootPid}`);
+				return {
+					status: 'captured',
+					snapshot: { rootPid, descendants: [] },
+				};
+			}
+
+			async terminate(snapshot: ProcessTreeSnapshot): Promise<CleanupResult> {
+				this.calls.push(`terminate:${snapshot.rootPid}`);
+				return { outcome: 'force_terminated' };
+			}
+		}
+		const processController = new RecordingController();
+		const abortController = new AbortController();
+		const probing = probeClaudeMcpCompatibility({
+			executable: { executable: process.execPath, launcherKind: 'direct' },
+			cwd: process.cwd(),
+			platform: process.platform,
+			environment: process.env,
+			resolveWorkspaceCwdBeforeSpawn: () => process.cwd(),
+			processTreeController: processController,
+			versionProbeTimeoutMs: 10_000,
+			signal: abortController.signal,
+		});
+
+		abortController.abort();
+
+		assert.deepStrictEqual(await probing, { ok: false, reason: 'signal' });
+		assert.strictEqual(processController.calls.length, 2);
+		assert.match(processController.calls[0], /^capture:\d+$/u);
+		assert.strictEqual(
+			processController.calls[1],
+			processController.calls[0].replace('capture:', 'terminate:'),
 		);
 	});
 });

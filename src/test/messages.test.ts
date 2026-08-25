@@ -1,10 +1,17 @@
 import * as assert from 'assert';
 import {
+	clearAgentActivitiesBySession,
+	clearAgentActivity,
+	parseAgentActivityEvent,
+	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
+	setAgentActivity,
+	type AgentActivityKind,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
+	type GraphNodeEffectTarget,
 	type TaskJsonCopyFailedMessage,
 	type TaskJsonCopyMessage,
 	type WebviewToExtensionMessage,
@@ -81,18 +88,24 @@ suite('Extension to Webview Workspace messages', () => {
 		assert.deepStrictEqual(webviewMessage, failureMessage);
 	});
 
-	test('Workspace 도메인 메시지가 기존 Graph 모델로 최상위 Host union에 연결된다', () => {
+	test('Workspace 도메인 메시지가 atomic Presentation으로 최상위 Host union에 연결된다', () => {
 		const graph = createWorkspaceGraph();
+		const rootCatalog = [{
+			id: 'workspace-root:file:///workspace/app' as const,
+			name: 'app',
+			description: 'file:///workspace/app',
+			selectable: true as const,
+		}];
 		const workspaceMessage = {
-			type: 'workspace.graphUpdated',
-			graph,
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
 			contextGeneration: 3,
-			rootIds: graph.roots.map((root) => root.nodeId),
+			rootIds: rootCatalog.map(({ id }) => id),
 		} satisfies WorkspaceToWebviewMessage;
 		const extensionMessage: ExtensionToWebviewMessage = workspaceMessage;
-		const graphPayload: Graph = workspaceMessage.graph;
+		const graphPayload: Graph = workspaceMessage.presentation.graph;
 
-		assert.strictEqual(extensionMessage.type, 'workspace.graphUpdated');
+		assert.strictEqual(extensionMessage.type, 'workspace.snapshotUpdated');
 		assert.strictEqual(graphPayload, graph);
 		assert.deepStrictEqual(
 			parseWorkspaceToWebviewMessage(extensionMessage),
@@ -102,18 +115,58 @@ suite('Extension to Webview Workspace messages', () => {
 
 	test('잘못된 Workspace 메시지와 Graph를 수신 경계에서 무시한다', () => {
 		const graph = createWorkspaceGraph();
+		const rootIds = ['workspace-root:file:///workspace/app'] as const;
+		const rootCatalog = [{
+			id: rootIds[0],
+			name: 'app',
+			description: 'file:///workspace/app',
+			selectable: true as const,
+		}];
 
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
-			type: 'workspace.graphUpdated',
-			graph,
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
+			contextGeneration: 3,
+			rootIds,
 			unexpected: true,
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
-			type: 'workspace.graphUpdated',
-			graph: {
-				roots: [{ id: 'root:missing', nodeId: 'project:missing' }],
-				rootNodes: {},
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph: {
+					roots: [{ id: 'root:missing', nodeId: 'project:missing' }],
+					rootNodes: {},
+				},
+				rootCatalog: [],
 			},
+			contextGeneration: 3,
+			rootIds: [],
+		}), undefined);
+		assert.strictEqual(parseWorkspaceToWebviewMessage({
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph,
+				rootCatalog: [{
+					id: 'workspace-root:',
+					name: 'invalid',
+					description: 'invalid',
+					selectable: true,
+				}],
+			},
+			contextGeneration: 3,
+			rootIds,
+		}), undefined);
+		assert.strictEqual(parseWorkspaceToWebviewMessage({
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
+			contextGeneration: 3,
+			rootIds: ['workspace-root:file:///workspace/other'],
+		}), undefined);
+		assert.strictEqual(parseWorkspaceToWebviewMessage({
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
+			contextGeneration: -1,
+			rootIds,
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
 			type: 'terminal.started',
@@ -189,10 +242,180 @@ suite('Extension to Webview Workspace messages', () => {
 	});
 });
 
+suite('Agent Activity messages', () => {
+	const sessionId = 'session:agent-activity-1';
+	const target: GraphNodeEffectTarget = {
+		nodeId: 'file:file:///workspace/app/src/index.ts',
+		rootId: 'detached:root:1',
+	};
+	const activityKinds = [
+		'planned',
+		'active',
+		'editing',
+		'completed',
+		'mentioned',
+		'rejected',
+	] as const satisfies readonly AgentActivityKind[];
+
+	test('6개 Activity 각각 setAgentActivity 메시지를 생성하고 parsing한다', () => {
+		for (const activity of activityKinds) {
+			const event = { sessionId, target, activity };
+			const message = setAgentActivity(sessionId, target, activity);
+
+			assert.deepStrictEqual(message, {
+				type: 'agent.activity.set',
+				sessionId,
+				target,
+				activity,
+			});
+			assert.deepStrictEqual(parseAgentActivityEvent(event), event);
+			assert.deepStrictEqual(
+				parseAgentActivityToWebviewMessage(message),
+				message,
+			);
+			const extensionMessage: ExtensionToWebviewMessage = message;
+			assert.strictEqual(extensionMessage.type, 'agent.activity.set');
+		}
+	});
+
+	test('알 수 없는 Activity와 Event 부가 필드를 거부한다', () => {
+		for (const event of [
+			{ sessionId, target, activity: 'unknown' },
+			{ sessionId, target, activity: '' },
+			{ sessionId, target, activity: 1 },
+			{ sessionId, target, activity: 'active', color: '#fff' },
+		]) {
+			assert.strictEqual(parseAgentActivityEvent(event), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.set',
+				...event,
+			}), undefined);
+		}
+	});
+
+	test('빈 값과 기존 Session ID 규칙을 벗어난 sessionId를 거부한다', () => {
+		for (const invalidSessionId of ['', ' invalid', 'a'.repeat(129), 1]) {
+			assert.strictEqual(parseAgentActivityEvent({
+				sessionId: invalidSessionId,
+				target,
+				activity: 'planned',
+			}), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.clear',
+				sessionId: invalidSessionId,
+				target,
+			}), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.clearSession',
+				sessionId: invalidSessionId,
+			}), undefined);
+		}
+	});
+
+	test('G-11 Target parser 기준으로 잘못된 set/clear Target을 거부한다', () => {
+		for (const invalidTarget of [
+			{},
+			{ nodeId: '' },
+			{ nodeId: 'folder:src', rootId: '' },
+			{ nodeId: 'folder:src', rootId: 1 },
+			{ nodeId: 'folder:src', unexpected: true },
+		]) {
+			assert.strictEqual(parseAgentActivityEvent({
+				sessionId,
+				target: invalidTarget,
+				activity: 'editing',
+			}), undefined);
+			assert.strictEqual(parseAgentActivityToWebviewMessage({
+				type: 'agent.activity.clear',
+				sessionId,
+				target: invalidTarget,
+			}), undefined);
+		}
+	});
+
+	test('단일 Target Activity clear 계약을 strict하게 검증한다', () => {
+		const message = clearAgentActivity(sessionId, target);
+
+		assert.deepStrictEqual(
+			parseAgentActivityToWebviewMessage(message),
+			message,
+		);
+		for (const invalidMessage of [
+			{ type: 'agent.activity.clear', sessionId },
+			{ type: 'agent.activity.clear', target },
+			{ type: 'agent.activity.clear', sessionId, target, activity: 'active' },
+		]) {
+			assert.strictEqual(
+				parseAgentActivityToWebviewMessage(invalidMessage),
+				undefined,
+			);
+		}
+	});
+
+	test('Session 전체 Activity clear 계약을 strict하게 검증한다', () => {
+		const message = clearAgentActivitiesBySession(sessionId);
+
+		assert.deepStrictEqual(
+			parseAgentActivityToWebviewMessage(message),
+			message,
+		);
+		for (const invalidMessage of [
+			{ type: 'agent.activity.clearSession' },
+			{ type: 'agent.activity.clearSession', sessionId, target },
+			{ type: 'agent.activity.clearSession', sessionId, activity: 'completed' },
+			{ type: 'agent.activity.clearAll', sessionId },
+		]) {
+			assert.strictEqual(
+				parseAgentActivityToWebviewMessage(invalidMessage),
+				undefined,
+			);
+		}
+	});
+
+	test('기존 Workspace/Graph Effect 메시지 parser와 허용 범위를 섞지 않는다', () => {
+		const effectMessage = {
+			type: 'graph.nodeEffect.set',
+			target,
+			effect: { kind: 'pulse', color: '#43d17a' },
+		} satisfies GraphNodeEffectSetMessage;
+		const workspaceMessage = {
+			type: 'workspace.snapshotUpdated',
+			presentation: {
+				graph: createWorkspaceGraph(),
+				rootCatalog: [{
+					id: 'workspace-root:file:///workspace/app',
+					name: 'app',
+					description: 'file:///workspace/app',
+					selectable: true,
+				}],
+			},
+			contextGeneration: 2,
+			rootIds: ['workspace-root:file:///workspace/app'],
+		} satisfies WorkspaceToWebviewMessage;
+
+		assert.deepStrictEqual(
+			parseGraphNodeEffectToWebviewMessage(effectMessage),
+			effectMessage,
+		);
+		assert.deepStrictEqual(
+			parseWorkspaceToWebviewMessage(workspaceMessage),
+			workspaceMessage,
+		);
+		assert.strictEqual(
+			parseAgentActivityToWebviewMessage(effectMessage),
+			undefined,
+		);
+		assert.strictEqual(
+			parseAgentActivityToWebviewMessage(workspaceMessage),
+			undefined,
+		);
+	});
+});
+
 function createWorkspaceGraph(): Graph {
 	const project: Project = {
 		kind: 'project',
-		id: 'project:workspace-message',
+		id: 'workspace-root:file:///workspace/app',
 		name: 'workspace-message',
 		status: 'loaded',
 		children: [{
@@ -203,7 +426,7 @@ function createWorkspaceGraph(): Graph {
 	};
 
 	return {
-		roots: [{ id: 'root:workspace-message', nodeId: project.id }],
+		roots: [{ id: `root:${project.id}`, nodeId: project.id }],
 		rootNodes: { [project.id]: project },
 	};
 }

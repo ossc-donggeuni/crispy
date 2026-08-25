@@ -124,6 +124,7 @@ suite('Agent 탭별 Terminal 표면 pool', () => {
 		pool.handleHostMessage({
 			type: 'terminal.starting',
 			tabId: 'tab-unknown',
+			sessionId: 'session-unknown',
 		});
 
 		assert.strictEqual(terminals.get('tab-one')?.received.length, 0);
@@ -152,6 +153,7 @@ suite('Agent 탭별 Terminal 표면 pool', () => {
 		pool.handleHostMessage({
 			type: 'terminal.starting',
 			tabId: 'tab-two',
+			sessionId: 'session-two',
 		});
 		assert.strictEqual(terminals.get('tab-two')?.received.length, 0);
 	});

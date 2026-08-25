@@ -20,6 +20,12 @@ import {
 import {
 	getWorkspaceGraphRootIds,
 	parseWorkspaceRootIds,
+	clearAgentActivitiesBySession,
+	setAgentActivity,
+	type AgentActivityClearSessionMessage,
+	type AgentActivityKind,
+	type AgentActivitySetMessage,
+	type AgentActivityToWebviewMessage,
 	type ExtensionToWebviewMessage,
 	type GraphNodeEffect,
 	type GraphNodeEffectKind,
@@ -43,11 +49,26 @@ import {
 } from './workspace/workspaceMetadata';
 import {
 	createWorkspacePersistenceCoordinator,
+	type WorkspaceRootStateWriter,
 	type WorkspacePersistenceCoordinator,
 } from './workspace/workspacePersistenceCoordinator';
-import { serializeGraphForWebview } from './webview/graph/graphTransport';
 import type { Graph } from './webview/graph/graphModel';
-import type { GraphState } from './webview/graph/graphState';
+import {
+	createGraphLayout,
+	getGraphLayoutRootId,
+	getGraphLayoutSourceId,
+	getGraphRootLayoutNodeId,
+	type GraphFileGroupNode,
+	type GraphLayout,
+} from './webview/graph/graphLayout';
+import {
+	getVisibleFileCount,
+	type GraphState,
+} from './webview/graph/graphState';
+import {
+	applyDetachedGraphRoots,
+	isDetachedRootId,
+} from './webview/graph/graphRootPromotion';
 import {
 	mergeContinuouslyRetainedWorkspaceGraphState,
 	mergeContinuouslyRetainedWorkspaceTaskState,
@@ -58,6 +79,8 @@ import {
 } from './task/taskTransfer';
 import {
 	createCurrentWorkspaceGraph,
+	createCurrentWorkspacePresentation,
+	createWorkspaceRootCatalog,
 	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
@@ -65,8 +88,10 @@ import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
+	serializeWorkspacePresentationForWebview,
 	watchWorkspaceChanges,
 	writeWorkspacePersistentState,
+	type WorkspacePresentation,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRootFilter,
 } from './workspace';
@@ -120,6 +145,40 @@ const pendingWorkspaceWrites = new Set<Promise<void>>();
 export const OPEN_CANVAS_COMMAND_ID = 'crispy.openCanvas';
 export const DEBUG_NODE_EFFECTS_COMMAND_ID = 'crispy.debugNodeEffects';
 export const CLEAR_NODE_EFFECTS_COMMAND_ID = 'crispy.clearNodeEffects';
+export const DEBUG_AGENT_ACTIVITIES_COMMAND_ID = 'crispy.debugAgentActivities';
+export const CLEAR_AGENT_ACTIVITIES_COMMAND_ID = 'crispy.clearAgentActivities';
+
+/** G-12 Debug Command가 독점 소유하고 clear할 수 있는 고정 Session ID다. */
+export const AGENT_ACTIVITY_DEBUG_SESSION_IDS = [
+	'debug-g12-planned',
+	'debug-g12-active',
+	'debug-g12-editing',
+	'debug-g12-completed',
+	'debug-g12-mentioned',
+	'debug-g12-rejected',
+	'debug-g12-detached',
+	'debug-g12-extra',
+] as const;
+
+const AGENT_ACTIVITY_DEBUG_ASSIGNMENTS = [
+	{ sessionId: 'debug-g12-planned', activity: 'planned' },
+	{ sessionId: 'debug-g12-active', activity: 'active' },
+	{ sessionId: 'debug-g12-editing', activity: 'editing' },
+	{ sessionId: 'debug-g12-completed', activity: 'completed' },
+	{ sessionId: 'debug-g12-mentioned', activity: 'mentioned' },
+	{ sessionId: 'debug-g12-rejected', activity: 'rejected' },
+] as const satisfies ReadonlyArray<{
+	readonly sessionId: string;
+	readonly activity: AgentActivityKind;
+}>;
+
+type AgentActivityDebugGraphState = Pick<
+	GraphState,
+	| 'fileGroupPages'
+	| 'openedFolders'
+	| 'hiddenNodeIds'
+	| 'detachedRootNodeIds'
+>;
 
 type GraphNodeEffectDebugTemplate =
 	| { readonly kind: Exclude<GraphNodeEffectKind, 'icon'> }
@@ -210,6 +269,252 @@ export function createGraphNodeEffectDebugMessages(
 	return messages;
 }
 
+/** G-12 Debug Command가 소유한 Session만 지우는 public clearSession 메시지를 만든다. */
+export function createAgentActivityDebugClearMessages(): AgentActivityClearSessionMessage[] {
+	return AGENT_ACTIVITY_DEBUG_SESSION_IDS.map((sessionId) => (
+		clearAgentActivitiesBySession(sessionId)
+	));
+}
+
+/** 현재 Canvas에서 실제 표시되는 Graph Target을 Layout traversal 순서로 수집한다. */
+function collectAgentActivityDebugTargets(
+	layout: GraphLayout,
+	graphState: AgentActivityDebugGraphState,
+): GraphNodeEffectTarget[] {
+	const targets: GraphNodeEffectTarget[] = [];
+	const targetKeys = new Set<string>();
+	const appendTarget = (layoutNodeId: string): void => {
+		const target = toGraphNodeEffectTarget(layoutNodeId);
+		const key = createEffectTargetKey(target);
+
+		if (!targetKeys.has(key)) {
+			targetKeys.add(key);
+			targets.push(target);
+		}
+	};
+
+	for (const node of layout.nodes) {
+		if (node.hidden) {
+			continue;
+		}
+
+		if (node.kind === 'folder') {
+			appendTarget(node.id);
+			continue;
+		}
+
+		if (node.kind !== 'file-group') {
+			continue;
+		}
+
+		if (node.presentation === 'standalone') {
+			const file = node.children.find((candidate) => (
+				candidate.hidden !== true && candidate.presentation === 'normal'
+			));
+
+			if (file) {
+				appendTarget(file.id);
+			}
+			continue;
+		}
+
+		for (const file of getVisibleNormalDebugFiles(node, graphState)) {
+			appendTarget(file.id);
+		}
+	}
+
+	return targets;
+}
+
+/** grouped File의 현재 page에서 실제 Renderer가 생성하는 normal Row만 반환한다. */
+function getVisibleNormalDebugFiles(
+	fileGroup: GraphFileGroupNode,
+	graphState: AgentActivityDebugGraphState,
+): GraphFileGroupNode['children'] {
+	const sourceGroupId = getGraphLayoutSourceId(fileGroup.id);
+	const page = graphState.fileGroupPages?.[fileGroup.id]
+		?? graphState.fileGroupPages?.[sourceGroupId]
+		?? 1;
+	const visibleFileCount = getVisibleFileCount(fileGroup.children.length, page);
+
+	return fileGroup.children
+		.slice(0, visibleFileCount)
+		.filter((file) => (
+			file.hidden !== true && file.presentation === 'normal'
+		));
+}
+
+/** grouped File Binding과 Folder subtree Effect를 함께 볼 수 있는 visible pair를 찾는다. */
+function findAgentActivityGroupedDebugTargets(
+	layout: GraphLayout,
+	graphState: AgentActivityDebugGraphState,
+): Readonly<{
+	readonly folder: GraphNodeEffectTarget;
+	readonly file: GraphNodeEffectTarget;
+}> | undefined {
+	const nodesById = new Map(layout.nodes.map((node) => [node.id, node]));
+	let fallback: Readonly<{
+		readonly folder: GraphNodeEffectTarget;
+		readonly file: GraphNodeEffectTarget;
+	}> | undefined;
+
+	for (const node of layout.nodes) {
+		if (
+			node.kind !== 'file-group'
+			|| node.presentation !== 'grouped'
+			|| node.hidden
+			|| !node.parentId
+		) {
+			continue;
+		}
+		const parent = nodesById.get(node.parentId);
+
+		if (parent?.kind !== 'folder' || parent.hidden) {
+			continue;
+		}
+		const files = getVisibleNormalDebugFiles(node, graphState);
+
+		if (files.length === 0) {
+			continue;
+		}
+		const fileIndex = files.length >= 4 ? 1 : 0;
+		const file = files[fileIndex];
+
+		if (!file) {
+			continue;
+		}
+		const targets = {
+			folder: toGraphNodeEffectTarget(parent.id),
+			file: toGraphNodeEffectTarget(file.id),
+		};
+
+		if (files.length >= 4) {
+			return targets;
+		}
+		fallback ??= targets;
+	}
+
+	return fallback;
+}
+
+/** Layout의 Source/Detached occurrence 식별 정보를 G-11 Target 계약으로 복원한다. */
+function toGraphNodeEffectTarget(layoutNodeId: string): GraphNodeEffectTarget {
+	const rootId = getGraphLayoutRootId(layoutNodeId);
+
+	return {
+		nodeId: getGraphLayoutSourceId(layoutNodeId),
+		...(rootId ? { rootId } : {}),
+	};
+}
+
+/**
+ * 현재 Graph의 visible Target에 G-12 Activity 예시를 결정적인 순서로 배치한다.
+ * 모든 메시지는 실제 G-12.1 public set 진입점을 사용한다.
+ */
+export function createAgentActivityDebugMessages(
+	graph: Graph,
+	graphState: AgentActivityDebugGraphState = {},
+): AgentActivitySetMessage[] {
+	const currentGraph = applyDetachedGraphRoots(
+		graph,
+		graphState.detachedRootNodeIds ?? {},
+	);
+	const layout = createGraphLayout(currentGraph, {
+		fileGroupPages: graphState.fileGroupPages,
+		openedFolders: graphState.openedFolders,
+		hiddenNodeIds: graphState.hiddenNodeIds,
+	});
+	const targets = collectAgentActivityDebugTargets(layout, graphState);
+	const messages: AgentActivitySetMessage[] = [];
+	const messageKeys = new Set<string>();
+	const appendActivity = (
+		sessionId: string,
+		target: GraphNodeEffectTarget,
+		activity: AgentActivityKind,
+	): void => {
+		const key = JSON.stringify([
+			sessionId,
+			target.nodeId,
+			target.rootId ?? null,
+		]);
+
+		if (messageKeys.has(key)) {
+			return;
+		}
+		messageKeys.add(key);
+		messages.push(setAgentActivity(sessionId, target, activity));
+	};
+
+	for (
+		let index = 0;
+		index < Math.min(targets.length, AGENT_ACTIVITY_DEBUG_ASSIGNMENTS.length);
+		index += 1
+	) {
+		const target = targets[index];
+		const assignment = AGENT_ACTIVITY_DEBUG_ASSIGNMENTS[index];
+
+		if (target && assignment) {
+			appendActivity(assignment.sessionId, target, assignment.activity);
+		}
+	}
+
+	const groupedTargets = findAgentActivityGroupedDebugTargets(layout, graphState);
+	const multiSessionTarget = groupedTargets?.file ?? targets[2] ?? targets[0];
+
+	if (groupedTargets) {
+		appendActivity('debug-g12-active', groupedTargets.folder, 'active');
+	}
+	if (multiSessionTarget) {
+		appendActivity('debug-g12-editing', multiSessionTarget, 'editing');
+		appendActivity('debug-g12-planned', multiSessionTarget, 'planned');
+		appendActivity('debug-g12-mentioned', multiSessionTarget, 'mentioned');
+	}
+
+	const detachedRoot = currentGraph.roots.find((root) => (
+		isDetachedRootId(root.id)
+		&& layout.nodes.some((node) => (
+			node.id === getGraphRootLayoutNodeId(root) && !node.hidden
+		))
+	));
+
+	if (detachedRoot) {
+		const sourceTarget = { nodeId: detachedRoot.nodeId };
+		const occurrenceTarget = {
+			nodeId: detachedRoot.nodeId,
+			rootId: detachedRoot.id,
+		};
+
+		appendActivity('debug-g12-detached', sourceTarget, 'planned');
+		appendActivity('debug-g12-detached', occurrenceTarget, 'editing');
+		appendActivity('debug-g12-extra', occurrenceTarget, 'active');
+	}
+
+	return messages;
+}
+
+/** Agent Activity Debug 메시지를 실제 Command와 테스트가 공유하는 순서로 전달한다. */
+export async function postAgentActivityDebugMessages(
+	postMessage: (message: AgentActivityToWebviewMessage) => PromiseLike<unknown>,
+	graph: Graph,
+	graphState: AgentActivityDebugGraphState = {},
+): Promise<void> {
+	for (const message of createAgentActivityDebugClearMessages()) {
+		await postMessage(message);
+	}
+	for (const message of createAgentActivityDebugMessages(graph, graphState)) {
+		await postMessage(message);
+	}
+}
+
+/** Agent Activity Debug가 소유한 Session clear를 결정적인 순서로 전달한다. */
+export async function postAgentActivityDebugClearMessages(
+	postMessage: (message: AgentActivityClearSessionMessage) => PromiseLike<unknown>,
+): Promise<void> {
+	for (const message of createAgentActivityDebugClearMessages()) {
+		await postMessage(message);
+	}
+}
+
 function collectEffectKindsByTarget(
 	messages: readonly GraphNodeEffectSetMessage[],
 ): ReadonlyMap<string, ReadonlySet<GraphNodeEffectKind>> {
@@ -242,7 +547,15 @@ export interface TerminalMessageHost {
 	createTab(tabId: string): void;
 	switchTab(tabId: string): void;
 	closeTab(tabId: string): void;
-	switchAgent(tabId: string, providerId: ProviderId): Promise<unknown>;
+	switchAgent(
+		tabId: string,
+		providerId: ProviderId,
+		workspaceRootId: Extract<
+			WebviewToHostMessage,
+			{ type: 'agent.switch' }
+		>['workspaceRootId'],
+		switchAttemptId: number,
+	): Promise<unknown>;
 	resetAgent(tabId: string): void;
 	routeInput(
 		message: Extract<WebviewToHostMessage, { type: 'terminal.input' }>,
@@ -329,6 +642,23 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		),
 		convertWorkspaceSnapshotToGraph,
 	};
+	const workspacePresentationDependencies = {
+		...workspaceGraphDependencies,
+		readWorkspaceTrust: () => vscode.workspace.isTrusted,
+		createWorkspaceRootCatalog: (
+			snapshot: Parameters<typeof createWorkspaceRootCatalog>[0],
+			isTrusted: boolean,
+		) => createWorkspaceRootCatalog(snapshot, isTrusted, process.platform),
+	};
+	const refreshWorkspaceStateForDelivery = async (
+		rootUris: readonly vscode.Uri[],
+		signal: AbortSignal,
+	): Promise<WorkspacePersistentState> => refreshWorkspacePersistenceContext(
+		workspacePersistence,
+		rootUris,
+		signal,
+		{ allowPendingPersistence: !vscode.workspace.isTrusted },
+	);
 	let debugEffectMessages: GraphNodeEffectSetMessage[] = [];
 	let openingCanvas: Promise<vscode.WebviewPanel> | undefined;
 	/**
@@ -350,6 +680,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			vscode.workspace
 				.getConfiguration('crispy')
 				.get<string>(`${providerId}CliPath`);
+		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,
@@ -358,6 +689,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		});
 		terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
+			readWorkspaceTrust: () => vscode.workspace.isTrusted,
+			onWorkspaceTrustRevoked: () => requestWorkspaceTrustRefresh(),
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
 				getCliPath: readProviderCliPath,
 			}),
@@ -407,29 +740,34 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		);
 
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({
-			...workspaceGraphDependencies,
+			...workspacePresentationDependencies,
 			getWorkspaceContextGeneration: () => workspaceContextGeneration,
 			loadWorkspaceState: async (graph, _rootIds, signal) => {
 				const rootUris = getWorkspaceRootUrisFromGraph(graph);
-
-				return shouldLoadWorkspacePersistenceState(
+				const deliverState = shouldLoadWorkspacePersistenceState(
 					rootUris,
 					workspacePersistenceContextKey,
-					pendingWorkspaceMaterializationGeneration,
+					undefined,
 					latestAcknowledgedWorkspaceContextGeneration
 						< workspaceContextGeneration,
-				)
-					? refreshWorkspacePersistenceContext(
-						workspacePersistence,
-						rootUris,
-						signal,
-					)
-					: undefined;
+				);
+
+				return refreshWorkspacePersistenceForSnapshot(
+					() => refreshWorkspaceStateForDelivery(rootUris, signal),
+					{
+						deliverState,
+						retryPendingPersistence:
+							workspacePersistence.hasPendingPersistence(),
+					},
+				);
 			},
 			postMessage: (message: WorkspaceToWebviewMessage) => (
 				panel.webview.postMessage(message)
 			),
 		});
+		requestWorkspaceTrustRefresh = () => {
+			void workspaceRefresh.requestWorkspaceRefresh();
+		};
 		runtime = createCanvasRuntime(
 			panel,
 			terminalHost,
@@ -451,18 +789,21 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		// 관찰하게 해, dispose signal 없이 떠 있는 초기화를 만들지 않는다.
 		currentRuntime = runtime;
 
-		let graph: Graph;
+		let workspacePresentation: WorkspacePresentation;
 		let initialWorkspaceState: WorkspacePersistentState;
 
 		try {
-			graph = await createCurrentWorkspaceGraph(workspaceGraphDependencies);
+			workspacePresentation = await createCurrentWorkspacePresentation(
+				workspacePresentationDependencies,
+			);
 			if (panelDisposed || workspaceRefresh.signal.aborted) {
 				return panel;
 			}
-			const deliveredRootUris = getWorkspaceRootUrisFromGraph(graph);
+			const deliveredRootUris = getWorkspaceRootUrisFromGraph(
+				workspacePresentation.graph,
+			);
 
-			initialWorkspaceState = await refreshWorkspacePersistenceContext(
-				workspacePersistence,
+			initialWorkspaceState = await refreshWorkspaceStateForDelivery(
 				deliveredRootUris,
 				workspaceRefresh.signal,
 			);
@@ -480,7 +821,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			void runtime.terminate().catch(() => undefined);
 			throw error;
 		}
-		if (panelDisposed) {
+		if (panelDisposed || workspaceRefresh.signal.aborted) {
 			return panel;
 		}
 		const initialWebviewState = createInitialWebviewState(
@@ -494,7 +835,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			stylesUri,
 			scriptUri,
 			initialWebviewState,
-			graph,
+			workspacePresentation,
 			initialWorkspaceState,
 			workspaceContextGeneration,
 		);
@@ -527,7 +868,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		}
 	};
 
-	const postGraphEffectMessage = async (
+	const postDebugMessage = async (
 		panel: vscode.WebviewPanel,
 		message: ExtensionToWebviewMessage,
 	): Promise<void> => {
@@ -562,7 +903,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			));
 
 			if (!nextKinds?.has(previousMessage.effect.kind)) {
-				await postGraphEffectMessage(panel, {
+				await postDebugMessage(panel, {
 					type: 'graph.nodeEffect.clear',
 					target: previousMessage.target,
 					kind: previousMessage.effect.kind,
@@ -571,7 +912,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		}
 
 		for (const message of nextMessages) {
-			await postGraphEffectMessage(panel, message);
+			await postDebugMessage(panel, message);
 		}
 		debugEffectMessages = nextMessages;
 	};
@@ -585,13 +926,44 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			]));
 
 			for (const target of targets.values()) {
-				await postGraphEffectMessage(panel, {
+				await postDebugMessage(panel, {
 					type: 'graph.nodeEffect.clear',
 					target,
 				});
 			}
 		}
 		debugEffectMessages = [];
+	};
+	const debugAgentActivities = async (): Promise<void> => {
+		const panel = await openCanvas();
+		let graph: Graph;
+
+		try {
+			graph = await createCurrentWorkspaceGraph(workspaceGraphDependencies);
+		} catch {
+			return;
+		}
+
+		if (currentRuntime?.panel !== panel) {
+			return;
+		}
+
+		await postAgentActivityDebugMessages(
+			(message) => postDebugMessage(panel, message),
+			graph,
+			lastWebviewState?.graph,
+		);
+	};
+	const clearAgentActivities = async (): Promise<void> => {
+		const panel = currentRuntime?.panel;
+
+		if (!panel) {
+			return;
+		}
+
+		await postAgentActivityDebugClearMessages(
+			(message) => postDebugMessage(panel, message),
+		);
 	};
 	const openCanvasDisposable = vscode.commands.registerCommand(
 		OPEN_CANVAS_COMMAND_ID,
@@ -605,11 +977,21 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		CLEAR_NODE_EFFECTS_COMMAND_ID,
 		clearNodeEffects,
 	);
+	const debugAgentActivitiesDisposable = vscode.commands.registerCommand(
+		DEBUG_AGENT_ACTIVITIES_COMMAND_ID,
+		debugAgentActivities,
+	);
+	const clearAgentActivitiesDisposable = vscode.commands.registerCommand(
+		CLEAR_AGENT_ACTIVITIES_COMMAND_ID,
+		clearAgentActivities,
+	);
 
 	context.subscriptions.push(
 		openCanvasDisposable,
 		debugNodeEffectsDisposable,
 		clearNodeEffectsDisposable,
+		debugAgentActivitiesDisposable,
+		clearAgentActivitiesDisposable,
 	);
 
 	return Object.freeze({
@@ -1057,6 +1439,25 @@ export function shouldLoadWorkspacePersistenceState(
 		|| hasUnacknowledgedContext;
 }
 
+/**
+ * Workspace state 전달과 disk retry를 분리한다. 같은 epoch가 이미 확인된 뒤에는
+ * pending write만 재시도하고, 그 과정에서 읽은 Host state를 Webview에 재전송하지 않는다.
+ */
+export async function refreshWorkspacePersistenceForSnapshot(
+	refreshState: () => Promise<WorkspacePersistentState>,
+	options: Readonly<{
+		deliverState: boolean;
+		retryPendingPersistence: boolean;
+	}>,
+): Promise<WorkspacePersistentState | undefined> {
+	if (!options.deliverState && !options.retryPendingPersistence) {
+		return undefined;
+	}
+	const state = await refreshState();
+
+	return options.deliverState ? state : undefined;
+}
+
 /** Project Root semantic IDs를 URI 배열로 엄격히 복원한다. */
 function parseWorkspaceRootUris(
 	rootIds: readonly string[],
@@ -1331,6 +1732,9 @@ export async function refreshWorkspacePersistenceContext(
 	coordinator: WorkspacePersistenceCoordinator,
 	rootUris: readonly vscode.Uri[],
 	signal?: AbortSignal,
+	options: Readonly<{
+		allowPendingPersistence?: boolean;
+	}> = {},
 ): Promise<WorkspacePersistentState> {
 	assertWorkspacePersistenceRefreshActive(signal);
 	const contextKey = createWorkspaceContextKey(rootUris);
@@ -1338,14 +1742,21 @@ export async function refreshWorkspacePersistenceContext(
 
 	if (contextKey === workspacePersistenceContextKey && desired) {
 		const currentGeneration = workspaceContextGeneration;
+		const fullyPersisted = await flushWorkspacePersistenceForRefresh(
+			coordinator,
+			options.allowPendingPersistence === true,
+			signal,
+		);
 
-		await coordinator.flush();
 		assertWorkspacePersistenceRefreshActive(signal);
 		if (
 			workspacePersistenceContextKey !== contextKey
 			|| workspaceContextGeneration !== currentGeneration
 		) {
 			throw new Error('Workspace persistence context was superseded.');
+		}
+		if (!fullyPersisted) {
+			return coordinator.getDesiredState() ?? desired;
 		}
 		workspacePersistenceRootUris = [...rootUris];
 		workspaceContextByGeneration.set(workspaceContextGeneration, {
@@ -1358,13 +1769,21 @@ export async function refreshWorkspacePersistenceContext(
 		return coordinator.getDesiredState() ?? desired;
 	}
 
-	await coordinator.flush();
+	await flushWorkspacePersistenceForRefresh(
+		coordinator,
+		options.allowPendingPersistence === true,
+		signal,
+	);
 	assertWorkspacePersistenceRefreshActive(signal);
 	const loaded = await loadWorkspacePersistentStateForRoots(rootUris);
 	assertWorkspacePersistenceRefreshActive(signal);
 	// Disk read 중 이전 Webview가 retained Root를 편집했을 수 있다. 두 번째
 	// flush 뒤에는 다음 await 없이 latest desired를 병합해 baseline 교체 race를 닫는다.
-	await coordinator.flush();
+	await flushWorkspacePersistenceForRefresh(
+		coordinator,
+		options.allowPendingPersistence === true,
+		signal,
+	);
 	assertWorkspacePersistenceRefreshActive(signal);
 	const latestDesired = coordinator.getDesiredState()
 		?? lastWorkspaceState
@@ -1381,27 +1800,44 @@ export async function refreshWorkspacePersistenceContext(
 	// 새 Root disk 상태를 새 topology로 repartition한 desired snapshot이다.
 	// accept를 항상 수행해야 journal recovery와 nested ownership 이관이 ack 전에도
 	// 각 목적지 Root에 materialize된다.
-	const persisted = await materializeWorkspacePersistenceContext(
-		coordinator,
-		loaded,
-		merged,
-		rootUris,
-		signal,
-		() => {
-			// accept 예약과 다음 await 사이에 epoch를 공개한다. 이 구간의 old
-			// Webview snapshot은 새 context로 retained merge되어 desired를 갱신한다.
-			pendingWorkspaceMaterializationGeneration = nextGeneration;
-			lastWorkspaceState = merged;
-			workspacePersistenceContextKey = contextKey;
-			workspacePersistenceRootUris = [...rootUris];
-			workspaceContextGeneration = nextGeneration;
-			nextWorkspaceContextGeneration = nextGeneration;
-			workspaceContextByGeneration.set(workspaceContextGeneration, {
-				contextKey,
-				rootUris: [...rootUris],
-			});
-		},
-	);
+	let persisted: WorkspacePersistentState;
+
+	try {
+		persisted = await materializeWorkspacePersistenceContext(
+			coordinator,
+			loaded,
+			merged,
+			rootUris,
+			signal,
+			() => {
+				// accept 예약과 다음 await 사이에 epoch를 공개한다. 이 구간의 old
+				// Webview snapshot은 새 context로 retained merge되어 desired를 갱신한다.
+				pendingWorkspaceMaterializationGeneration = nextGeneration;
+				lastWorkspaceState = merged;
+				workspacePersistenceContextKey = contextKey;
+				workspacePersistenceRootUris = [...rootUris];
+				workspaceContextGeneration = nextGeneration;
+				nextWorkspaceContextGeneration = nextGeneration;
+				workspaceContextByGeneration.set(workspaceContextGeneration, {
+					contextKey,
+					rootUris: [...rootUris],
+				});
+			},
+		);
+	} catch (error) {
+		if (
+			options.allowPendingPersistence !== true
+			|| signal?.aborted === true
+			|| !coordinator.hasPendingPersistence()
+			|| workspaceContextGeneration !== nextGeneration
+			|| workspacePersistenceContextKey !== contextKey
+		) {
+			throw error;
+		}
+		// Trust 전에는 새 Root context와 desired state만 원자적으로 공개한다.
+		// pending materialization은 Trust grant의 같은-context refresh가 확정한다.
+		return coordinator.getDesiredState() ?? merged;
+	}
 	if (
 		workspaceContextGeneration !== nextGeneration
 		|| workspacePersistenceContextKey !== contextKey
@@ -1414,6 +1850,27 @@ export async function refreshWorkspacePersistenceContext(
 	}
 	lastWorkspaceState = persisted;
 	return persisted;
+}
+
+/** Trust 때문에 보류된 write만 context refresh 진행과 분리한다. */
+async function flushWorkspacePersistenceForRefresh(
+	coordinator: WorkspacePersistenceCoordinator,
+	allowPendingPersistence: boolean,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	try {
+		await coordinator.flush();
+		return true;
+	} catch (error) {
+		if (
+			!allowPendingPersistence
+			|| signal?.aborted === true
+			|| !coordinator.hasPendingPersistence()
+		) {
+			throw error;
+		}
+		return false;
+	}
 }
 
 /**
@@ -1498,10 +1955,7 @@ export function createInitialWebviewState(
 export async function persistWorkspacePersistentStateForRoots(
 	state: WorkspacePersistentState,
 	rootUris: readonly vscode.Uri[],
-	writeState: (
-		rootUri: vscode.Uri,
-		rootState: WorkspacePersistentState,
-	) => Promise<void> = writeWorkspacePersistentState,
+	writeState: WorkspaceRootStateWriter = writeWorkspacePersistentState,
 	logger: Pick<Console, 'warn'> = console,
 ): Promise<void> {
 	const rootStates = partitionWorkspacePersistentStateByRoot(state, rootUris);
@@ -1549,9 +2003,11 @@ function handleTerminalMessage(
 			break;
 		case 'agent.switch':
 			void terminalHost.switchAgent(
-				message.tabId,
-				message.providerId,
-			).catch(() => undefined);
+					message.tabId,
+					message.providerId,
+					message.workspaceRootId,
+					message.switchAttemptId,
+				).catch(() => undefined);
 			break;
 		case 'agent.reset':
 			terminalHost.resetAgent(message.tabId);
@@ -1640,7 +2096,7 @@ export async function deactivate(): Promise<void> {
  * @param stylesUri Webview 전용 CSS 리소스 URI
  * @param scriptUri Dock, Resize 및 Collapse 동작을 실행하는 Webview 스크립트 URI
  * @param initialWebviewState 새 Panel에 전달할 마지막 Webview 상태
- * @param graph 실제 Workspace Snapshot에서 생성한 초기 Graph
+ * @param workspacePresentation 같은 Workspace Snapshot에서 생성한 초기 Graph와 Catalog
  * @param workspaceState 초기 Task record를 포함하는 Workspace canonical 상태
  * @param contextGeneration 초기 Graph/상태 Root context의 Host epoch
  * @returns WebviewPanel에 설정할 완성된 HTML 문자열
@@ -1650,16 +2106,17 @@ function getWebviewHtml(
 	stylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
 	initialWebviewState: PersistedWebviewState | undefined,
-	graph: Graph,
+	workspacePresentation: WorkspacePresentation,
 	workspaceState: WorkspacePersistentState,
 	contextGeneration: number,
 ): string {
 	const serializedWebviewState = serializeWebviewState(initialWebviewState);
-	const serializedGraph = serializeGraphForWebview(graph);
 	const serializedWorkspaceState = encodeURIComponent(JSON.stringify(
 		parseWorkspacePersistentState(workspaceState)
 			?? createDefaultWorkspacePersistentState(),
 	));
+	const serializedWorkspacePresentation =
+		serializeWorkspacePresentationForWebview(workspacePresentation);
 
 	/** xterm DOM renderer가 팔레트용 <style>과 truecolor용 style attribute를 생성한다. */
 	/** 두 style 경계만 inline을 허용하고 script와 외부 stylesheet는 Webview source로 제한한다. */
@@ -1673,7 +2130,7 @@ function getWebviewHtml(
 				<title>Crispy</title>
 			</head>
 			<body>
-				<main class="crispy-layout" data-dock="right">
+				<main id="app" class="crispy-layout" data-dock="right" data-workspace-presentation="${serializedWorkspacePresentation}">
 					<section id="graph-area"></section>
 					<div id="panel-resize-handle"></div>
 					<section id="agent-chat-area">
@@ -1686,12 +2143,15 @@ function getWebviewHtml(
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
 						</div>
+						<div id="agent-workspace-status-bar" hidden></div>
+						<div id="agent-tab-menu-host" hidden></div>
 						<div id="agent-dialog-host" hidden></div>
+						<div id="agent-rename-dialog-host" hidden></div>
 					</section>
 					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-					<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-graph="${serializedGraph}" data-workspace-state="${serializedWorkspaceState}" data-workspace-context-generation="${contextGeneration}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-state="${serializedWorkspaceState}" data-workspace-context-generation="${contextGeneration}"></script>
 			</body>
 			</html>`;
 }

@@ -12,6 +12,21 @@ export class FakeAgentElement {
 	value = '';
 	disabled = false;
 	hidden = false;
+	tabIndex = 0;
+	selectCount = 0;
+	readonly style = {
+		left: '',
+		top: '',
+		setProperty: (_name: string, _value: string) => undefined,
+	};
+	readonly rect = {
+		left: 0,
+		top: 0,
+		right: 160,
+		bottom: 32,
+		width: 160,
+		height: 32,
+	};
 	readonly dataset: Record<string, string | undefined> = {};
 	readonly attributes = new Map<string, string>();
 	children: FakeAgentElement[] = [];
@@ -25,7 +40,14 @@ export class FakeAgentElement {
 		Array<(event: Event) => void>
 	>();
 
-	constructor(readonly tagName: string = 'div') {}
+	constructor(
+		readonly tagName: string = 'div',
+		private readonly onFocus?: (element: FakeAgentElement) => void,
+	) {}
+
+	get parentElement(): FakeAgentElement | undefined {
+		return this.parent;
+	}
 
 	/** production 코드가 기대하는 DOM 타입으로 대역을 전달한다. */
 	asHtmlElement(): HTMLElement {
@@ -66,6 +88,13 @@ export class FakeAgentElement {
 		this.listeners.set(type, registered);
 	}
 
+	removeEventListener(type: string, listener: (event: Event) => void): void {
+		this.listeners.set(
+			type,
+			(this.listeners.get(type) ?? []).filter((entry) => entry !== listener),
+		);
+	}
+
 	setAttribute(name: string, value: string): void {
 		this.attributes.set(name, value);
 	}
@@ -80,6 +109,11 @@ export class FakeAgentElement {
 
 	focus(): void {
 		this.focusCount += 1;
+		this.onFocus?.(this);
+	}
+
+	select(): void {
+		this.selectCount += 1;
 	}
 
 	/** 자신을 포함한 하위 트리에 주어진 요소가 있는지 확인한다. */
@@ -125,6 +159,7 @@ export class FakeAgentElement {
 
 /** 문서 수준 이벤트를 기록하고 테스트에서 직접 발생시키는 대역이다. */
 export class FakeDocumentEvents {
+	activeElement: FakeAgentElement | undefined;
 	private readonly listeners = new Map<string, Array<(event: Event) => void>>();
 
 	/** production 코드가 사용하는 구독 함수다. */
@@ -165,8 +200,20 @@ export function createFakeAgentUiDependencies(
 ): AgentUiDependencies {
 	return {
 		createElement: ((tagName: string) =>
-			new FakeAgentElement(tagName).asHtmlElement()) as AgentUiDependencies['createElement'],
+			new FakeAgentElement(
+				tagName,
+				(element) => documentEvents.activeElement = element,
+			).asHtmlElement()) as AgentUiDependencies['createElement'],
 		addDocumentListener: (type, listener) => documentEvents.add(type, listener),
+		getElementRect: (element) => ({
+			...(element as unknown as FakeAgentElement).rect,
+			toJSON: () => ({}),
+			x: (element as unknown as FakeAgentElement).rect.left,
+			y: (element as unknown as FakeAgentElement).rect.top,
+		} as DOMRect),
+		getViewportSize: () => ({ width: 1024, height: 768 }),
+		getActiveElement: () => documentEvents.activeElement?.asHtmlElement() ?? null,
+		addWindowListener: (type, listener) => documentEvents.add(`window:${type}`, listener),
 	};
 }
 

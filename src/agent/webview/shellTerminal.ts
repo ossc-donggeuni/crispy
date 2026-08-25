@@ -7,6 +7,12 @@ import type {
 	TabId,
 	WebviewToHostMessage,
 } from '../protocol';
+import {
+	BRACKETED_PASTE_START,
+	createTerminalInputCollector,
+	isXtermProtocolResponse,
+	type TerminalTitleCandidateEvent,
+} from './terminalInputCollector';
 
 /** xterm 초기화 실패 시 원본 예외 대신 터미널 영역에 표시하는 고정 문구다. */
 export const TERMINAL_INITIALIZATION_ERROR_MESSAGE =
@@ -17,6 +23,9 @@ export const TERMINAL_EXITED_OVERLAY_TITLE = 'Terminal exited';
 
 /** 시작 실패를 알리는 덮개 제목이며 실행 계약 정보를 포함하지 않는다. */
 export const TERMINAL_START_FAILED_OVERLAY_TITLE = 'Unable to start terminal';
+
+/** switchAccepted 직후부터 새 PTY가 started 될 때까지 표시하는 비대화형 상태다. */
+export const TERMINAL_STARTING_OVERLAY_TITLE = 'Starting agent…';
 
 /** 재시작 요청 버튼에 표시하는 고정 문구다. */
 export const TERMINAL_RESTART_BUTTON_LABEL = 'Restart';
@@ -57,6 +66,7 @@ interface XtermTerminal {
 	focus(): void;
 	write(data: string): void;
 	reset(): void;
+	onKey(listener: (event: { readonly key: string }) => void): unknown;
 	onData(listener: (data: string) => void): unknown;
 	dispose(): void;
 }
@@ -66,6 +76,7 @@ interface XtermTerminal {
  * Host가 제공한 안전한 종료 정보와 고정 오류 메시지만 값으로 가진다.
  */
 export type TerminalOverlayState =
+	| { readonly kind: 'starting' }
 	| {
 		readonly kind: 'exited';
 		readonly exitCode?: number;
@@ -100,6 +111,12 @@ export interface ShellTerminalDependencies {
 	addWindowResizeListener(listener: () => void): () => void;
 	addVisibilityChangeListener(listener: () => void): () => void;
 	isDocumentHidden(): boolean;
+
+	/** 설정된 경우에만 current Codex/Claude session의 제목 입력을 복원한다. */
+	readonly autoTitle?: {
+		isEligible(tabId: TabId, sessionId: SessionId): boolean;
+		onCandidate(event: TerminalTitleCandidateEvent): void;
+	};
 }
 
 /** 터미널 준비, 입력, 크기 변경과 재시작을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
@@ -190,6 +207,9 @@ function describeTerminalOverlayState(state: TerminalOverlayState): string {
 	if (state.kind === 'error') {
 		return state.message;
 	}
+	if (state.kind === 'starting') {
+		return '';
+	}
 
 	const details: string[] = [];
 	if (state.exitCode !== undefined) {
@@ -235,10 +255,13 @@ function createDefaultOverlayView(
 		show(state): void {
 			title.textContent = state.kind === 'exited'
 				? TERMINAL_EXITED_OVERLAY_TITLE
-				: TERMINAL_START_FAILED_OVERLAY_TITLE;
+				: state.kind === 'starting'
+					? TERMINAL_STARTING_OVERLAY_TITLE
+					: TERMINAL_START_FAILED_OVERLAY_TITLE;
 			detail.textContent = describeTerminalOverlayState(state);
 			detail.hidden = detail.textContent.length === 0;
-			restartButton.hidden = state.kind === 'error' && !state.canRestart;
+			restartButton.hidden = state.kind === 'starting'
+				|| (state.kind === 'error' && !state.canRestart);
 			overlay.replaceChildren(panel);
 			overlay.setAttribute('role', state.kind === 'error' ? 'alert' : 'status');
 			overlay.hidden = false;
@@ -292,6 +315,7 @@ export function initializeShellTerminal(
 ): ShellTerminalController {
 	const tabId = dependencies.createTabId();
 	let activeSessionId: SessionId | undefined;
+	let startingSessionId: SessionId | undefined;
 	let sessionEverStarted = false;
 	let restartSessionId: SessionId | undefined;
 	let restartRequested = false;
@@ -307,6 +331,14 @@ export function initializeShellTerminal(
 	let readySent = false;
 	let attemptedFrames = 0;
 	let lastSentDimensions: { cols: number; rows: number } | undefined;
+	let pendingKeyboardData: string | undefined;
+	const seenSessionIds = new Set<SessionId>();
+	const titleCollector = dependencies.autoTitle === undefined
+		? undefined
+		: createTerminalInputCollector(
+			tabId,
+			(event) => dependencies.autoTitle?.onCandidate(event),
+		);
 
 	/**
 	 * 모든 layout 및 visibility 이벤트를 한 animation frame으로 병합해 xterm을 맞춘다.
@@ -423,7 +455,11 @@ export function initializeShellTerminal(
 		try {
 			overlayView?.show(state);
 			overlayVisible = true;
-			surface.dataset.state = state.kind === 'exited' ? 'exited' : 'error';
+			surface.dataset.state = state.kind === 'starting'
+				? 'starting'
+				: state.kind === 'exited'
+					? 'exited'
+					: 'error';
 		} catch {
 			/** 덮개 렌더링 실패가 Graph, Dock, Drag Resize로 전파되지 않게 한다. */
 		}
@@ -494,6 +530,7 @@ export function initializeShellTerminal(
 			() => removeWindowResizeListener?.(),
 			() => removeVisibilityChangeListener?.(),
 			() => terminal?.dispose(),
+			() => titleCollector?.dispose(),
 		];
 		for (const cleanup of cleanupActions) {
 			try {
@@ -513,10 +550,47 @@ export function initializeShellTerminal(
 		dispose,
 		handleHostMessage(message): void {
 			switch (message.type) {
+				case 'agent.switchAccepted':
+					if (message.tabId !== tabId) {
+						return;
+					}
+					if (activeSessionId !== undefined) {
+						titleCollector?.endSession(activeSessionId);
+					}
+					activeSessionId = undefined;
+					startingSessionId = undefined;
+					restartSessionId = undefined;
+					restartRequested = false;
+					pendingKeyboardData = undefined;
+					sessionEverStarted = true;
+					try {
+						terminal?.reset();
+					} catch {
+						/** 이전 buffer 제거 실패와 무관하게 input session ownership은 해제된다. */
+					}
+					showOverlay({ kind: 'starting' });
+					break;
+				case 'terminal.starting':
+					if (message.tabId !== tabId) {
+						return;
+					}
+					activeSessionId = undefined;
+					startingSessionId = message.sessionId;
+					restartSessionId = undefined;
+					restartRequested = false;
+					showOverlay({ kind: 'starting' });
+					break;
 				case 'terminal.started':
-					if (message.tabId === tabId) {
+					if (
+						message.tabId === tabId
+						&& activeSessionId !== message.sessionId
+						&& !seenSessionIds.has(message.sessionId)
+					) {
 						const replacedSessionId = activeSessionId;
 						activeSessionId = message.sessionId;
+						startingSessionId = undefined;
+						seenSessionIds.add(message.sessionId);
+						titleCollector?.startSession(message.sessionId);
 						restartSessionId = undefined;
 						restartRequested = false;
 						/**
@@ -568,6 +642,7 @@ export function initializeShellTerminal(
 						message.tabId === tabId
 						&& message.sessionId === activeSessionId
 					) {
+						titleCollector?.endSession(message.sessionId);
 						activeSessionId = undefined;
 						restartSessionId = message.sessionId;
 						restartRequested = false;
@@ -583,6 +658,13 @@ export function initializeShellTerminal(
 					}
 					break;
 				case 'terminal.error':
+					if (
+						message.sessionId === null
+						&& message.switchAttemptId !== undefined
+					) {
+						/** pre-assignment 오류는 provider picker가 처리하며 Terminal overlay를 만들지 않는다. */
+						return;
+					}
 					/** 현재 세션이 없을 때만 Host가 새로 만든 세션의 시작 실패를 받아들인다. */
 					if (
 						message.tabId !== tabId
@@ -590,11 +672,21 @@ export function initializeShellTerminal(
 							activeSessionId !== undefined
 							&& message.sessionId !== activeSessionId
 						)
+						|| (
+							message.sessionId !== null
+							&& activeSessionId === undefined
+							&& startingSessionId !== undefined
+							&& message.sessionId !== startingSessionId
+						)
 					) {
 						return;
 					}
 
 					activeSessionId = undefined;
+					startingSessionId = undefined;
+					if (message.sessionId !== undefined && message.sessionId !== null) {
+						titleCollector?.endSession(message.sessionId);
+					}
 					restartSessionId = message.sessionId ?? undefined;
 					restartRequested = false;
 					showOverlay({
@@ -613,8 +705,19 @@ export function initializeShellTerminal(
 		fitAddon = dependencies.createFitAddon();
 		terminal.loadAddon(fitAddon);
 		terminal.open(mount);
+		/**
+		 * xterm은 keyboard event에서 `onKey`를 `onData`보다 먼저 동기적으로 발생시킨다.
+		 * 공개 `onData`만으로는 keyboard 편집키와 TUI protocol 응답을 구분할 수 없으므로
+		 * 다음 data event 하나의 출처만 원문을 보관하지 않는 방식으로 표시한다.
+		 */
+		terminal.onKey(({ key }) => {
+			pendingKeyboardData = key;
+		});
 		terminal.onData((data) => {
-			if (activeSessionId === undefined) {
+			const isKeyboardData = pendingKeyboardData === data;
+			pendingKeyboardData = undefined;
+			const sessionId = activeSessionId;
+			if (sessionId === undefined) {
 				return;
 			}
 
@@ -622,11 +725,33 @@ export function initializeShellTerminal(
 				postMessage({
 					type: 'terminal.input',
 					tabId,
-					sessionId: activeSessionId,
+					sessionId,
 					data,
 				});
 			} catch {
 				/** Webview 전송 실패가 xterm 입력 처리나 Graph 기능으로 전파되지 않게 한다. */
+			}
+
+			try {
+				if (
+					isXtermProtocolResponse(data)
+					|| (
+						!isKeyboardData
+						&& data.startsWith('\u001b')
+						&& !data.startsWith(BRACKETED_PASTE_START)
+					)
+				) {
+					return;
+				}
+
+				if (dependencies.autoTitle?.isEligible(tabId, sessionId) === true) {
+					titleCollector?.handleData(sessionId, data);
+				} else {
+					titleCollector?.clearInput();
+				}
+			} catch {
+				/** 제목 복원 실패는 기존 terminal.input 전달을 변경하거나 차단하지 않는다. */
+				titleCollector?.clearInput();
 			}
 		});
 

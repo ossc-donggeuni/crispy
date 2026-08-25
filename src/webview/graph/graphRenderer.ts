@@ -6,6 +6,7 @@ import {
 	createFileGroupId,
 	createGraphLayoutNodeId,
 	GRAPH_FILE_GROUP_NODE_WIDTH,
+	GRAPH_FILE_GROUP_ROW_HEIGHT,
 	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 	getGraphLayoutRootId,
 	getGraphLayoutSourceId,
@@ -48,6 +49,11 @@ import {
 	GRAPH_ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER,
 } from './graphRootContext';
 import type { GraphNodeEffects } from './graphNodeEffects';
+import {
+	AGENT_ACTIVITY_BINDING_TOP_GAP,
+	getAgentActivityBindingBlockHeight,
+	type AgentActivityBindings,
+} from './agentActivityBindings';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
@@ -221,6 +227,9 @@ export interface GraphRendererOptions {
 	/** Renderer DOM의 생성/제거를 transient Node Effect registration과 연결한다. */
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>
 		& Partial<Pick<GraphNodeEffects, 'syncLayout'>>;
+	/** Renderer DOM의 생성/제거 및 Layout을 Agent Binding과 연결한다. */
+	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>
+		& Partial<Pick<AgentActivityBindings, 'syncLayout'>>;
 }
 
 /** 특정 Layout 전환에서 새 Detached subtree가 출발할 기존 Instance를 지정한다. */
@@ -316,6 +325,7 @@ export function initializeGraphRenderer(
 	const nodeDetachDrags = new Map<string, GraphDetachDrag>();
 	const nodeFileOpenRequestCleanups = new Map<string, () => void>();
 	const nodeEffectCleanups = new Map<string, () => void>();
+	const nodeActivityBindingCleanups = new Map<string, () => void>();
 	const backlinkClickCleanups = new Map<string, () => void>();
 	const backlinkElements = new Map<string, HTMLElement>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
@@ -457,7 +467,7 @@ export function initializeGraphRenderer(
 				placeholder.className = 'graph-arrangement-placeholder';
 				placeholder.setAttribute('data-graph-arrangement-placeholder-id', nodeId);
 				placeholder.style.width = `${sourceNode.width}px`;
-				placeholder.style.height = `${sourceNode.height}px`;
+				placeholder.style.height = `${getRenderedNodeHeight(sourceNode)}px`;
 				placeholder.style.transform = `translate(${sourcePosition.x}px, ${sourcePosition.y}px)`;
 				nodeLayer.append(placeholder);
 				const sourceBounds = getNodeClientRect(nodeId);
@@ -711,6 +721,24 @@ export function initializeGraphRenderer(
 		));
 	};
 
+	/** G-11 Effect Region과 G-12 Binding horizontal bounds를 같은 Layout으로 맞춘다. */
+	const syncPresentationLayout = (
+		currentLayout: GraphLayout,
+		currentPositions: ReadonlyMap<string, GraphLayoutPosition>,
+		transitionDuration = 0,
+	): void => {
+		options.nodeEffects?.syncLayout?.(
+			currentLayout,
+			currentPositions,
+			transitionDuration,
+		);
+		options.agentActivityBindings?.syncLayout?.(
+			currentLayout,
+			currentPositions,
+			transitionDuration,
+		);
+	};
+
 	/** Node DOM 위치를 반영하고 해당 Node에 직접 연결된 Edge만 갱신한다. */
 	const updateNodePosition = (
 		nodeId: string,
@@ -732,7 +760,7 @@ export function initializeGraphRenderer(
 			}
 		}
 		if (!pendingEdges) {
-			options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
+			syncPresentationLayout(renderedLayout, renderedPositions);
 		}
 	};
 
@@ -815,7 +843,7 @@ export function initializeGraphRenderer(
 			&& !prefersReducedMotion
 			&& allowAnimation;
 
-		options.nodeEffects?.syncLayout?.(
+		syncPresentationLayout(
 			renderedLayout,
 			targetPositions,
 			canAnimate ? transitionDuration : 0,
@@ -1163,18 +1191,32 @@ export function initializeGraphRenderer(
 			layoutNode,
 			ownerDocument,
 		);
-		const effectTarget = getLayoutNodeEffectTarget(layoutNode);
 		const bindingSourceId = getGraphBindingSourceId(layoutNode);
+		const presentationTarget = getLayoutNodePresentationTarget(layoutNode);
+		const subtreePresentationOptions = layoutNode.kind === 'project'
+			|| layoutNode.kind === 'folder'
+			? { layoutNodeId: layoutNode.id }
+			: undefined;
 
-		if (effectTarget && options.nodeEffects) {
+		syncAgentActivityBindingLayout(element, layoutNode);
+
+		if (presentationTarget && options.nodeEffects) {
 			nodeEffectCleanups.set(
 				layoutNode.id,
 				options.nodeEffects.registerNode(
-					effectTarget,
+					presentationTarget,
 					element,
-					layoutNode.kind === 'project' || layoutNode.kind === 'folder'
-						? { layoutNodeId: layoutNode.id }
-						: undefined,
+					subtreePresentationOptions,
+				),
+			);
+		}
+		if (presentationTarget && options.agentActivityBindings) {
+			nodeActivityBindingCleanups.set(
+				layoutNode.id,
+				options.agentActivityBindings.registerTarget(
+					presentationTarget,
+					element,
+					subtreePresentationOptions,
 				),
 			);
 		}
@@ -1221,13 +1263,14 @@ export function initializeGraphRenderer(
 				element,
 				layoutNode,
 				ownerDocument,
-					graphState,
-					interactions,
-					rootNodeIds,
-					initializeBacklink,
-					initializeFileArrangementDrag,
-					options.nodeEffects,
-				);
+				graphState,
+				interactions,
+				rootNodeIds,
+				initializeBacklink,
+				initializeFileArrangementDrag,
+				options.nodeEffects,
+				options.agentActivityBindings,
+			);
 
 			content.render(graphState.getFileGroupPage(
 				layoutNode.id,
@@ -1316,7 +1359,7 @@ export function initializeGraphRenderer(
 				for (const edge of pendingEdges.values()) {
 					renderEdge(edge);
 				}
-				options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
+				syncPresentationLayout(renderedLayout, renderedPositions);
 			};
 			const commitSubtreeDragPositions = (): boolean => {
 				const startPositions = subtreeDragStartPositions;
@@ -1369,7 +1412,7 @@ export function initializeGraphRenderer(
 				for (const edge of pendingEdges.values()) {
 					renderEdge(edge);
 				}
-				options.nodeEffects?.syncLayout?.(renderedLayout, renderedPositions);
+				syncPresentationLayout(renderedLayout, renderedPositions);
 				return true;
 			};
 			const nodeClickHandler = createNodeClickHandler(
@@ -1570,6 +1613,8 @@ export function initializeGraphRenderer(
 		nodeFileOpenRequestCleanups.delete(nodeId);
 		nodeEffectCleanups.get(nodeId)?.();
 		nodeEffectCleanups.delete(nodeId);
+		nodeActivityBindingCleanups.get(nodeId)?.();
+		nodeActivityBindingCleanups.delete(nodeId);
 		backlinkClickCleanups.get(nodeId)?.();
 		backlinkClickCleanups.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
@@ -1604,7 +1649,7 @@ export function initializeGraphRenderer(
 	for (const layoutNode of layout.nodes) {
 		addNode(layoutNode);
 	}
-	options.nodeEffects?.syncLayout?.(layout, renderedPositions);
+	syncPresentationLayout(layout, renderedPositions);
 
 	for (const edge of layout.edges) {
 		renderEdge(edge);
@@ -1896,12 +1941,17 @@ export function initializeGraphRenderer(
 
 				if (
 					element
-					&& (!previousNode || previousNode.height !== nextNode.height)
+					&& (
+						!previousNode
+						|| getRenderedNodeHeight(previousNode)
+							!== getRenderedNodeHeight(nextNode)
+					)
 				) {
-					element.style.height = `${nextNode.height}px`;
+					element.style.height = `${getRenderedNodeHeight(nextNode)}px`;
 				}
 
 				if (element) {
+					syncAgentActivityBindingLayout(element, nextNode);
 					syncDetachedRootActions(nextNode, element);
 					syncRootContextLabel(
 						nextNode,
@@ -2455,7 +2505,7 @@ function createNodeElement(
 	updateContainerStatusState(element, node);
 	element.setAttribute('data-graph-node-id', node.id);
 	element.style.width = `${node.width}px`;
-	element.style.height = `${node.height}px`;
+	element.style.height = `${getRenderedNodeHeight(node)}px`;
 
 	if (node.kind === 'file-group') {
 		element.setAttribute('data-file-group-presentation', node.presentation);
@@ -2501,8 +2551,29 @@ function createNodeElement(
 	return element;
 }
 
-/** Backlink과 grouped File Group Card를 제외한 실제 Source 표현만 효과 대상으로 만든다. */
-function getLayoutNodeEffectTarget(
+/** Edge/Direct Effect용 visual height와 별개인 실제 Renderer DOM 높이를 반환한다. */
+function getRenderedNodeHeight(node: GraphLayoutNode): number {
+	return node.renderedHeight ?? node.height;
+}
+
+/** Layout이 결정한 Target/subtree 아래 Binding Container 위치만 DOM에 전달한다. */
+function syncAgentActivityBindingLayout(
+	element: HTMLElement,
+	node: GraphLayoutNode,
+): void {
+	if (node.agentActivityBindingTop === undefined) {
+		element.style.removeProperty('--graph-agent-activity-binding-top');
+		return;
+	}
+
+	element.style.setProperty(
+		'--graph-agent-activity-binding-top',
+		`${node.agentActivityBindingTop}px`,
+	);
+}
+
+/** Backlink과 grouped File Group Card를 제외한 실제 Source 표현의 exact Target이다. */
+function getLayoutNodePresentationTarget(
 	node: GraphLayoutNode,
 ): { readonly nodeId: string; readonly rootId?: string } | undefined {
 	if (node.kind === 'folder-backlink') {
@@ -2627,6 +2698,7 @@ function initializeFileGroupContent(
 	initializeBacklink: BacklinkInitializer,
 	initializeFileArrangementDrag: FileArrangementDragInitializer,
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
+	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
 	let renderedRootNodeIds = rootNodeIds;
@@ -2673,6 +2745,7 @@ function initializeFileGroupContent(
 					initializeFileArrangementDrag,
 					renderedNode.id,
 					nodeEffects,
+					agentActivityBindings,
 					);
 
 				list.append(row.element);
@@ -2749,6 +2822,8 @@ function initializeFileGroupContent(
 					return nextFile?.id !== file.id
 						|| nextFile.name !== file.name
 						|| nextFile.presentation !== file.presentation
+						|| nextFile.agentActivityBindingCount
+							!== file.agentActivityBindingCount
 						|| nextFile.targetRootId !== file.targetRootId
 						|| !hasSameStringList(
 							nextFile.targetRootIds,
@@ -2795,10 +2870,22 @@ function createFileRow(
 	initializeFileArrangementDrag: FileArrangementDragInitializer,
 	fileGroupId: string,
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
+	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
 	item.className = 'graph-file-item';
+	const bindingBlockHeight = getAgentActivityBindingBlockHeight(
+		file.agentActivityBindingCount ?? 0,
+	);
+
+	if (bindingBlockHeight > 0) {
+		item.style.marginBottom = `${bindingBlockHeight}px`;
+		item.style.setProperty(
+			'--graph-agent-activity-binding-top',
+			`${GRAPH_FILE_GROUP_ROW_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP}px`,
+		);
+	}
 	item.hidden = file.hidden === true;
 	item.setAttribute('data-file-id', getGraphLayoutSourceId(file.id));
 	item.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
@@ -2806,11 +2893,17 @@ function createFileRow(
 	appendFileContent(item, file, ownerDocument);
 	const sourceNodeId = getGraphLayoutSourceId(file.id);
 	const rootId = getGraphLayoutRootId(file.id);
-	const disposeNodeEffect = file.presentation === 'normal'
-		? nodeEffects?.registerNode({
+	const presentationTarget = file.presentation === 'normal'
+		? {
 			nodeId: sourceNodeId,
 			...(rootId ? { rootId } : {}),
-		}, item)
+		}
+		: undefined;
+	const disposeNodeEffect = presentationTarget
+		? nodeEffects?.registerNode(presentationTarget, item)
+		: undefined;
+	const disposeAgentActivityBinding = presentationTarget
+		? agentActivityBindings?.registerTarget(presentationTarget, item)
 		: undefined;
 	const backlinkTargetRootIds = file.targetRootIds
 		?? (file.targetRootId ? [file.targetRootId] : []);
@@ -2886,6 +2979,7 @@ function createFileRow(
 		element: item,
 		dispose: () => {
 			disposeNodeEffect?.();
+			disposeAgentActivityBinding?.();
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
 			sourceRowDrag?.dispose();

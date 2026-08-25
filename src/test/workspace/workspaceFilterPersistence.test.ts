@@ -61,6 +61,46 @@ suite('Workspace Filter Persistence', () => {
 		);
 	});
 
+	test('untrusted Workspace는 기본 Filter를 메모리에서 사용하고 `.crispy`를 쓰지 않는다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/restricted');
+		const fake = createFakeFileSystem();
+		fake.setJson(getDefaultFilterUri(), defaultFilter);
+
+		const loaded = await loadOrCreateWorkspaceFilter(
+			rootUri,
+			extensionUri,
+			fake.fileSystem,
+			() => false,
+		);
+
+		assert.deepStrictEqual(loaded, defaultFilter);
+		assert.deepStrictEqual(fake.createDirectoryCalls, []);
+		assert.deepStrictEqual(fake.writeFileCalls, []);
+		assert.strictEqual(fake.getJson(getFilterUri(rootUri)), undefined);
+	});
+
+	test('Directory 생성 뒤 Trust가 revoke되면 filter.json write를 중단한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/revoked-during-filter-init');
+		const fake = createFakeFileSystem();
+		fake.setJson(getDefaultFilterUri(), defaultFilter);
+		let trustReads = 0;
+
+		const loaded = await loadOrCreateWorkspaceFilter(
+			rootUri,
+			extensionUri,
+			fake.fileSystem,
+			() => {
+				trustReads += 1;
+				return trustReads === 1;
+			},
+		);
+
+		assert.deepStrictEqual(loaded, defaultFilter);
+		assert.strictEqual(fake.createDirectoryCalls.length, 1);
+		assert.deepStrictEqual(fake.writeFileCalls, []);
+		assert.strictEqual(fake.getJson(getFilterUri(rootUri)), undefined);
+	});
+
 	test('.crispy가 없어도 Directory를 만든 뒤 Filter를 생성한다', async () => {
 		const rootUri = vscode.Uri.file('/workspace/new');
 		const fake = createFakeFileSystem();

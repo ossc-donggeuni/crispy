@@ -1,15 +1,24 @@
 import type {
 	HostToWebviewWireMessage,
+	SessionId,
 	WebviewToHostWireMessage,
 } from './agent/protocol';
-import type { Graph } from './webview/graph/graphModel';
-import { parseGraph } from './webview/graph/graphTransport';
+import { ID_MAX_LENGTH, ID_PATTERN } from './agent/protocol/limits';
 import type { WebviewSessionState } from './webview/webviewState';
 import type { TaskTransferSerializeFailureReason } from './task/taskTransfer';
+import type { Graph } from './webview/graph/graphModel';
 import {
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from './workspace/workspaceMetadata';
+import {
+	parseWorkspacePresentation,
+	type WorkspacePresentation,
+} from './workspace/workspacePresentation';
+import {
+	validateWorkspaceRootId,
+	type WorkspaceRootId,
+} from './workspace/workspaceRootId';
 
 /** Webview Session snapshot 변경을 Extension Host에 전달하는 상태 경계 메시지다. */
 export interface WebviewStateChangedMessage {
@@ -23,7 +32,7 @@ export interface WorkspaceStateChangedMessage {
 	/** Host가 발급하고 Webview가 그대로 반사하는 Root context epoch다. */
 	contextGeneration: number;
 	/** 이 snapshot을 만든 Webview Graph의 Project Root node IDs다. */
-	rootIds: readonly string[];
+	rootIds: readonly WorkspaceRootId[];
 	state: WorkspacePersistentState;
 }
 
@@ -56,12 +65,12 @@ export type WebviewToExtensionMessage =
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {
-	type: 'workspace.graphUpdated';
-	graph: Graph;
+	type: 'workspace.snapshotUpdated';
+	presentation: WorkspacePresentation;
 	/** 같은 Root 집합의 ABA 전환까지 구분하는 Host 발급 epoch다. */
 	contextGeneration: number;
 	/** Graph와 state가 함께 채취된 Project Root context다. */
-	rootIds: readonly string[];
+	rootIds: readonly WorkspaceRootId[];
 	/** Root 구성이 바뀔 때 Graph와 원자적으로 교체할 Workspace 상태다. */
 	state?: WorkspacePersistentState;
 };
@@ -79,6 +88,74 @@ export type GraphNodeEffectKind =
 export interface GraphNodeEffectTarget {
 	readonly nodeId: string;
 	readonly rootId?: string;
+}
+
+/** Agent가 Graph Target에 전달할 수 있는 의미 기반 Activity allowlist다. */
+const AGENT_ACTIVITY_KINDS = [
+	'planned',
+	'active',
+	'editing',
+	'completed',
+	'mentioned',
+	'rejected',
+] as const;
+
+/** Agent가 Graph Target에 대해 발생시킨 의미 기반 Activity다. */
+export type AgentActivityKind = typeof AGENT_ACTIVITY_KINDS[number];
+
+/** 어떤 Session이 어떤 Graph Target에 Activity를 발생시켰는지 표현한다. */
+export interface AgentActivityEvent {
+	readonly sessionId: SessionId;
+	readonly target: GraphNodeEffectTarget;
+	readonly activity: AgentActivityKind;
+}
+
+/** Session과 Target 쌍의 현재 Activity를 설정한다. */
+export interface AgentActivitySetMessage extends AgentActivityEvent {
+	readonly type: 'agent.activity.set';
+}
+
+/** Session과 Target 쌍의 Activity를 제거한다. */
+export interface AgentActivityClearMessage {
+	readonly type: 'agent.activity.clear';
+	readonly sessionId: SessionId;
+	readonly target: GraphNodeEffectTarget;
+}
+
+/** 한 Session이 발생시킨 모든 Target Activity를 제거한다. */
+export interface AgentActivityClearSessionMessage {
+	readonly type: 'agent.activity.clearSession';
+	readonly sessionId: SessionId;
+}
+
+/** Extension Host에서 Webview로 전달하는 Agent Activity 변경 계약이다. */
+export type AgentActivityToWebviewMessage =
+	| AgentActivitySetMessage
+	| AgentActivityClearMessage
+	| AgentActivityClearSessionMessage;
+
+/** Session과 Target 쌍의 Activity set 메시지를 만드는 공통 진입점이다. */
+export function setAgentActivity(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+	activity: AgentActivityKind,
+): AgentActivitySetMessage {
+	return { type: 'agent.activity.set', sessionId, target, activity };
+}
+
+/** Session과 Target 쌍의 Activity clear 메시지를 만든다. */
+export function clearAgentActivity(
+	sessionId: SessionId,
+	target: GraphNodeEffectTarget,
+): AgentActivityClearMessage {
+	return { type: 'agent.activity.clear', sessionId, target };
+}
+
+/** 한 Session의 전체 Activity clear 메시지를 만든다. */
+export function clearAgentActivitiesBySession(
+	sessionId: SessionId,
+): AgentActivityClearSessionMessage {
+	return { type: 'agent.activity.clearSession', sessionId };
 }
 
 /** Webview가 의미 상태를 해석하지 않고 그대로 표현하는 시각 효과 계약이다. */
@@ -117,7 +194,62 @@ export type GraphNodeEffectToWebviewMessage =
 export type ExtensionToWebviewMessage =
 	| HostToWebviewWireMessage
 	| WorkspaceToWebviewMessage
+	| AgentActivityToWebviewMessage
 	| GraphNodeEffectToWebviewMessage;
+
+/** unknown 값에서 순수 Agent Activity Event 계약을 strict하게 검증한다. */
+export function parseAgentActivityEvent(
+	value: unknown,
+): AgentActivityEvent | undefined {
+	return isRecord(value)
+		? parseAgentActivityEventRecord(
+			value,
+			['sessionId', 'target', 'activity'],
+		)
+		: undefined;
+}
+
+/** unknown Host 메시지에서 Agent Activity 변경 계약을 strict하게 검증한다. */
+export function parseAgentActivityToWebviewMessage(
+	value: unknown,
+): AgentActivityToWebviewMessage | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+
+	if (value.type === 'agent.activity.set') {
+		const event = parseAgentActivityEventRecord(
+			value,
+			['type', 'sessionId', 'target', 'activity'],
+		);
+
+		return event ? { type: 'agent.activity.set', ...event } : undefined;
+	}
+
+	if (value.type === 'agent.activity.clear') {
+		if (
+			!hasExactKeys(value, ['type', 'sessionId', 'target'])
+			|| !isSessionId(value.sessionId)
+		) {
+			return undefined;
+		}
+		const target = parseGraphNodeEffectTarget(value.target);
+
+		return target
+			? { type: 'agent.activity.clear', sessionId: value.sessionId, target }
+			: undefined;
+	}
+
+	if (
+		value.type === 'agent.activity.clearSession'
+		&& hasExactKeys(value, ['type', 'sessionId'])
+		&& isSessionId(value.sessionId)
+	) {
+		return { type: 'agent.activity.clearSession', sessionId: value.sessionId };
+	}
+
+	return undefined;
+}
 
 /** unknown Host 메시지에서 transient Graph 효과 계약을 구조적으로 검증한다. */
 export function parseGraphNodeEffectToWebviewMessage(
@@ -183,6 +315,35 @@ function parseGraphNodeEffectTarget(
 		nodeId: value.nodeId,
 		...(typeof value.rootId === 'string' ? { rootId: value.rootId } : {}),
 	};
+}
+
+function parseAgentActivityEventRecord(
+	value: Readonly<Record<string, unknown>>,
+	keys: readonly string[],
+): AgentActivityEvent | undefined {
+	if (
+		!hasExactKeys(value, keys)
+		|| !isSessionId(value.sessionId)
+		|| !isAgentActivityKind(value.activity)
+	) {
+		return undefined;
+	}
+	const target = parseGraphNodeEffectTarget(value.target);
+
+	return target
+		? { sessionId: value.sessionId, target, activity: value.activity }
+		: undefined;
+}
+
+function isSessionId(value: unknown): value is SessionId {
+	return typeof value === 'string'
+		&& value.length <= ID_MAX_LENGTH
+		&& ID_PATTERN.test(value);
+}
+
+function isAgentActivityKind(value: unknown): value is AgentActivityKind {
+	return typeof value === 'string'
+		&& (AGENT_ACTIVITY_KINDS as readonly string[]).includes(value);
 }
 
 function parseGraphNodeEffect(value: unknown): GraphNodeEffect | undefined {
@@ -251,24 +412,24 @@ export function getWorkspaceGraphRootIds(graph: Graph): string[] {
 	));
 }
 
-/** Workspace context Root ID 배열의 문자열·중복 불변 조건을 검증한다. */
-export function parseWorkspaceRootIds(value: unknown): string[] | undefined {
+/** Workspace context Root ID 배열의 문법·중복 불변 조건을 검증한다. */
+export function parseWorkspaceRootIds(
+	value: unknown,
+): WorkspaceRootId[] | undefined {
 	if (!Array.isArray(value)) {
 		return undefined;
 	}
-	const rootIds: string[] = [];
+	const rootIds: WorkspaceRootId[] = [];
 	const seen = new Set<string>();
 
 	for (const entry of value) {
-		if (
-			typeof entry !== 'string'
-			|| entry.length === 0
-			|| seen.has(entry)
-		) {
+		const validation = validateWorkspaceRootId(entry);
+
+		if (!validation.ok || seen.has(validation.value)) {
 			return undefined;
 		}
-		seen.add(entry);
-		rootIds.push(entry);
+		seen.add(validation.value);
+		rootIds.push(validation.value);
 	}
 	return rootIds;
 }
@@ -287,15 +448,16 @@ export function parseWorkspaceToWebviewMessage(
 	const candidate = value as Record<string, unknown>;
 
 	if (
-		candidate.type !== 'workspace.graphUpdated'
+		candidate.type !== 'workspace.snapshotUpdated'
 		|| !hasOnlyKeys(candidate, [
 			'type',
-			'graph',
+			'presentation',
 			'contextGeneration',
 			'rootIds',
 			'state',
 		])
-		|| !Object.hasOwn(candidate, 'graph')
+		|| !Object.hasOwn(candidate, 'presentation')
+		|| !Object.hasOwn(candidate, 'contextGeneration')
 		|| !Object.hasOwn(candidate, 'rootIds')
 		|| !Number.isSafeInteger(candidate.contextGeneration)
 		|| (candidate.contextGeneration as number) < 0
@@ -303,20 +465,31 @@ export function parseWorkspaceToWebviewMessage(
 		return undefined;
 	}
 
-	const graph = parseGraph(candidate.graph);
+	const presentation = parseWorkspacePresentation(candidate.presentation);
 	const rootIds = parseWorkspaceRootIds(candidate.rootIds);
 	const state = candidate.state === undefined
 		? undefined
 		: parseWorkspacePersistentState(candidate.state);
-	const graphRootIds = graph ? getWorkspaceGraphRootIds(graph) : undefined;
-	const hasMatchingRootContext = rootIds && graphRootIds
+	const graphRootIds = presentation
+		? getWorkspaceGraphRootIds(presentation.graph)
+		: undefined;
+	const catalogRootIds = presentation
+		? presentation.rootCatalog.map(({ id }) => id)
+		: undefined;
+	const hasMatchingRootContext = rootIds && graphRootIds && catalogRootIds
 		&& rootIds.length === graphRootIds.length
-		&& rootIds.every((rootId, index) => rootId === graphRootIds[index]);
+		&& rootIds.length === catalogRootIds.length
+		&& rootIds.every((rootId, index) => (
+			rootId === graphRootIds[index]
+			&& rootId === catalogRootIds[index]
+		));
 
-	return graph && hasMatchingRootContext && (candidate.state === undefined || state)
+	return presentation
+		&& hasMatchingRootContext
+		&& (candidate.state === undefined || state)
 		? {
-			type: 'workspace.graphUpdated',
-			graph,
+			type: 'workspace.snapshotUpdated',
+			presentation,
 			contextGeneration: candidate.contextGeneration as number,
 			rootIds,
 			...(state ? { state } : {}),

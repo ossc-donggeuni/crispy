@@ -7,11 +7,22 @@ import {
 	type WorkspaceTaskRelocation,
 	type WorkspaceTaskStorageReceipt,
 } from './workspaceMetadata';
+import {
+	createWorkspaceRootId,
+	WORKSPACE_ROOT_ID_PREFIX,
+} from './workspaceRootId';
 
 type WorkspacePersistenceFileSystem = Pick<
 	typeof vscode.workspace.fs,
 	'createDirectory' | 'readFile' | 'writeFile'
 >;
+
+type WorkspaceTrustReader = () => boolean;
+
+/** Disk write가 완료됐는지 Trust 복구 후 재시도가 필요한지 구분한다. */
+export type WorkspacePersistenceWriteOutcome =
+	| 'written'
+	| 'deferred-untrusted';
 
 /** Root URI와 해당 Root가 소유하는 Persistent State를 함께 유지한다. */
 export interface WorkspaceRootPersistentState {
@@ -21,7 +32,7 @@ export interface WorkspaceRootPersistentState {
 
 const CRISPY_DIRECTORY_NAME = '.crispy';
 const WORKSPACE_STATE_FILE_NAME = 'state.json';
-const writeChains = new Map<string, Promise<void>>();
+const writeChains = new Map<string, Promise<WorkspacePersistenceWriteOutcome>>();
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
@@ -66,18 +77,30 @@ export function writeWorkspacePersistentState(
 	rootUri: vscode.Uri,
 	state: WorkspacePersistentState,
 	fileSystem: WorkspacePersistenceFileSystem = vscode.workspace.fs,
-): Promise<void> {
+	readWorkspaceTrust: WorkspaceTrustReader = () => vscode.workspace.isTrusted,
+): Promise<WorkspacePersistenceWriteOutcome> {
 	const snapshot = parseWorkspacePersistentState(state);
 
 	if (!snapshot) {
-		return Promise.resolve();
+		return Promise.reject(new Error('Workspace persistent state is invalid.'));
 	}
 
 	const rootKey = rootUri.toString();
-	const previousWrite = writeChains.get(rootKey) ?? Promise.resolve();
+	const previousWrite = writeChains.get(rootKey)
+		?? Promise.resolve('written' as const);
 	const currentWrite = previousWrite.then(
-		() => persistWorkspaceState(rootUri, snapshot, fileSystem),
-		() => persistWorkspaceState(rootUri, snapshot, fileSystem),
+		() => persistWorkspaceState(
+			rootUri,
+			snapshot,
+			fileSystem,
+			readWorkspaceTrust,
+		),
+		() => persistWorkspaceState(
+			rootUri,
+			snapshot,
+			fileSystem,
+			readWorkspaceTrust,
+		),
 	);
 
 	writeChains.set(rootKey, currentWrite);
@@ -183,7 +206,7 @@ export function mergeWorkspacePersistentStates(
 			rootUri,
 		);
 	}
-	const activeRootIds = new Set(rootUris.map(createWorkspaceRootId));
+	const activeRootIds = new Set<string>(rootUris.map(createWorkspaceRootId));
 	const resolvedTasks = resolveWorkspaceTaskRecords(
 		liveTasksById,
 		liveTasksByOwnerKey,
@@ -214,21 +237,41 @@ async function persistWorkspaceState(
 	rootUri: vscode.Uri,
 	state: WorkspacePersistentState,
 	fileSystem: WorkspacePersistenceFileSystem,
-): Promise<void> {
+	readWorkspaceTrust: WorkspaceTrustReader,
+): Promise<WorkspacePersistenceWriteOutcome> {
+	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
+		return 'deferred-untrusted';
+	}
 	const crispyDirectoryUri = vscode.Uri.joinPath(
 		rootUri,
 		CRISPY_DIRECTORY_NAME,
 	);
 
 	await fileSystem.createDirectory(crispyDirectoryUri);
+	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
+		return 'deferred-untrusted';
+	}
 	await fileSystem.writeFile(
 		vscode.Uri.joinPath(crispyDirectoryUri, WORKSPACE_STATE_FILE_NAME),
 		textEncoder.encode(JSON.stringify(state)),
 	);
+	return 'written';
+}
+
+/** Trust 판독 실패를 Workspace write 허용으로 해석하지 않는다. */
+function isWorkspaceTrusted(readWorkspaceTrust: WorkspaceTrustReader): boolean {
+	try {
+		return readWorkspaceTrust() === true;
+	} catch {
+		return false;
+	}
 }
 
 /** 완료된 write가 아직 Root의 최신 chain일 때만 Map에서 제거한다. */
-function removeCompletedWrite(rootKey: string, write: Promise<void>): void {
+function removeCompletedWrite(
+	rootKey: string,
+	write: Promise<WorkspacePersistenceWriteOutcome>,
+): void {
 	if (writeChains.get(rootKey) === write) {
 		writeChains.delete(rootKey);
 	}
@@ -322,7 +365,7 @@ function partitionTaskRelocations(
 	relocations: readonly WorkspaceTaskRelocation[],
 	rootStates: WorkspaceRootPersistentState[],
 ): void {
-	const rootIndexes = new Map(rootStates.map(({ rootUri }, index) => [
+	const rootIndexes = new Map<string, number>(rootStates.map(({ rootUri }, index) => [
 		createWorkspaceRootId(rootUri),
 		index,
 	]));
@@ -346,7 +389,7 @@ function partitionTaskStorageReceipts(
 	receipts: readonly WorkspaceTaskStorageReceipt[],
 	rootStates: WorkspaceRootPersistentState[],
 ): void {
-	const rootIndexes = new Map(rootStates.map(({ rootUri }, index) => [
+	const rootIndexes = new Map<string, number>(rootStates.map(({ rootUri }, index) => [
 		createWorkspaceRootId(rootUri),
 		index,
 	]));
@@ -602,11 +645,6 @@ function sortJsonObjectKeys(value: unknown): unknown {
 	)).map(([key, entry]) => [key, sortJsonObjectKeys(entry)]));
 }
 
-/** Workspace Root URI의 Task ownership semantic ID를 만든다. */
-function createWorkspaceRootId(rootUri: vscode.Uri): string {
-	return `workspace-root:${rootUri.toString()}`;
-}
-
 /** Node ID가 나타내는 URI를 포함하는 가장 구체적인 Workspace Root index를 찾는다. */
 function findOwningRootIndex(
 	id: string,
@@ -629,7 +667,7 @@ function findOwningRootIndex(
 
 /** 알려진 Workspace/Graph Node ID prefix 뒤의 URI를 복원한다. */
 function parseNodeUri(id: string): vscode.Uri | undefined {
-	const prefixes = ['workspace-root:', 'folder:', 'file:'] as const;
+	const prefixes = [WORKSPACE_ROOT_ID_PREFIX, 'folder:', 'file:'] as const;
 	const prefix = prefixes.find((candidate) => id.startsWith(candidate));
 
 	if (!prefix) {

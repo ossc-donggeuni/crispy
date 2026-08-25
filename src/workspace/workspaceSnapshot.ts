@@ -12,6 +12,7 @@ import {
 	type WorkspaceFilter,
 } from './workspaceFilter';
 import type { WorkspaceRootFilter } from './workspaceFilterPersistence';
+import { createWorkspaceRootId } from './workspaceRootId';
 
 type WorkspaceFoldersSource = Pick<typeof vscode.workspace, 'workspaceFolders'>;
 type WorkspaceFileSystem = Pick<typeof vscode.workspace.fs, 'readDirectory'>;
@@ -64,7 +65,7 @@ async function createWorkspaceRoot(
 	filter: WorkspaceFilter | undefined,
 ): Promise<WorkspaceRoot> {
 	return {
-		id: `workspace-root:${workspaceFolder.uri.toString()}`,
+		id: createWorkspaceRootId(workspaceFolder.uri),
 		name: workspaceFolder.name,
 		uri: workspaceFolder.uri,
 		...(await readWorkspaceDirectory(

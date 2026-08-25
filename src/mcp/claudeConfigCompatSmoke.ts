@@ -76,6 +76,7 @@ export async function runClaudeConfigCompatSmoke(
 			cwd: options.cwd,
 			platform,
 			environment: options.environment,
+			resolveWorkspaceCwdBeforeSpawn: () => options.cwd,
 		}));
 	const compatibility = await probeCompatibility(resolution.executable);
 	if (!compatibility.ok) {

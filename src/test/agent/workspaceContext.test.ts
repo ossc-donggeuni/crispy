@@ -55,22 +55,47 @@ suite('VS Code workspace context adapter', () => {
 	});
 
 	test('여러 folder의 scheme과 fsPath를 순서대로 복사한다', () => {
+		const first = {
+			uri: {
+				scheme: 'file',
+				fsPath: '/workspace/first',
+				toString: () => 'file:///workspace/first',
+			},
+		};
+		const second = {
+			uri: {
+				scheme: 'vscode-remote',
+				fsPath: '/workspace/second',
+				toString: () => 'vscode-remote://host/workspace/second',
+			},
+		};
 		const snapshot = collectWorkspaceContext({
 			isTrusted: true,
-			workspaceFolders: [
-				{ uri: { scheme: 'file', fsPath: '/workspace/first' } },
-				{ uri: { scheme: 'vscode-remote', fsPath: '/workspace/second' } },
-			],
+			workspaceFolders: [first, second],
 		});
 
 		assert.deepStrictEqual(snapshot.workspaceFolders, [
-			{ scheme: 'file', fsPath: '/workspace/first' },
-			{ scheme: 'vscode-remote', fsPath: '/workspace/second' },
+			{
+				id: 'workspace-root:file:///workspace/first',
+				workspaceFolder: first,
+				scheme: 'file',
+				fsPath: '/workspace/first',
+			},
+			{
+				id: 'workspace-root:vscode-remote://host/workspace/second',
+				workspaceFolder: second,
+				scheme: 'vscode-remote',
+				fsPath: '/workspace/second',
+			},
 		]);
 	});
 
-	test('원본 배열과 URI를 변경해도 이미 만든 snapshot은 바뀌지 않는다', () => {
-		const uri = { scheme: 'file', fsPath: '/workspace/original' };
+	test('정책 값은 복사하고 exact lookup용 fresh folder identity는 보존한다', () => {
+		const uri = {
+			scheme: 'file',
+			fsPath: '/workspace/original',
+			toString: () => 'file:///workspace/original',
+		};
 		const workspaceFolders = [{ uri }];
 		const reader = { isTrusted: true, workspaceFolders };
 		const snapshot = collectWorkspaceContext(reader);
@@ -79,15 +104,31 @@ suite('VS Code workspace context adapter', () => {
 		uri.scheme = 'vscode-remote';
 		uri.fsPath = '/workspace/changed';
 		workspaceFolders.push({
-			uri: { scheme: 'file', fsPath: '/workspace/added' },
+			uri: {
+				scheme: 'file',
+				fsPath: '/workspace/added',
+				toString: () => 'file:///workspace/added',
+			},
 		});
 
-		assert.deepStrictEqual(snapshot, {
-			isTrusted: true,
-			workspaceFolders: [
-				{ scheme: 'file', fsPath: '/workspace/original' },
-			],
-		});
+		assert.strictEqual(snapshot.isTrusted, true);
+		assert.strictEqual(snapshot.workspaceFolders.length, 1);
+		assert.deepStrictEqual(
+			{
+				id: snapshot.workspaceFolders[0]?.id,
+				scheme: snapshot.workspaceFolders[0]?.scheme,
+				fsPath: snapshot.workspaceFolders[0]?.fsPath,
+			},
+			{
+				id: 'workspace-root:file:///workspace/original',
+				scheme: 'file',
+				fsPath: '/workspace/original',
+			},
+		);
+		assert.strictEqual(
+			snapshot.workspaceFolders[0]?.workspaceFolder,
+			workspaceFolders[0],
+		);
 		assert.ok(Object.isFrozen(snapshot));
 		assert.ok(Object.isFrozen(snapshot.workspaceFolders));
 		assert.ok(Object.isFrozen(snapshot.workspaceFolders[0]));

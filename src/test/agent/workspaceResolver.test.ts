@@ -9,6 +9,7 @@ import {
 	type WorkspaceResolverDependencies,
 } from '../../agent/host/workspace/workspaceResolver';
 import type { WorkspaceValidationResult } from '../../agent/host/workspace/types';
+import type { WorkspaceRootId } from '../../workspace/workspaceRootId';
 
 /** 두 타입이 서로 정확히 같은지 판별하는 테스트 전용 타입이다. */
 type Equal<Left, Right> =
@@ -20,16 +21,16 @@ type Equal<Left, Right> =
 /** 전달된 타입 조건이 참인 경우에만 컴파일되는 테스트 전용 단언이다. */
 type Assert<Condition extends true> = Condition;
 
-/** canonical resolver가 root나 Webview/session 값을 입력받지 않는지 검증한다. */
-type CanonicalResolverHasNoInput = Assert<Equal<
+/** canonical resolver가 Host가 검증한 WorkspaceRootId 하나만 입력받는지 검증한다. */
+type CanonicalResolverAcceptsWorkspaceRootId = Assert<Equal<
 	Parameters<typeof resolveCurrentWorkspace>,
-	[]
+	[workspaceRootId: WorkspaceRootId]
 >>;
 
-/** 주입된 resolver도 terminal 호출별 override를 입력받지 않는지 검증한다. */
-type InjectedResolverHasNoInput = Assert<Equal<
+/** 주입된 resolver도 raw path 대신 WorkspaceRootId만 입력받는지 검증한다. */
+type InjectedResolverAcceptsWorkspaceRootId = Assert<Equal<
 	Parameters<WorkspaceResolver>,
-	[]
+	[workspaceRootId: WorkspaceRootId]
 >>;
 
 /** resolver dependency가 context reader와 validator로만 제한되는지 검증한다. */
@@ -40,6 +41,22 @@ type ResolverDependenciesHaveNoOverride = Assert<Equal<
 
 const hostRoot = parse(process.cwd()).root;
 const privateWorkspacePath = `${hostRoot}private${sep}workspace-do-not-leak`;
+const ROOT_ID = 'workspace-root:file:///private/workspace-do-not-leak';
+const SECOND_ROOT_ID = 'workspace-root:file:///private/second';
+
+function folder(
+	id: WorkspaceRootId,
+	fsPath: string,
+): WorkspaceContextSnapshot['workspaceFolders'][number] {
+	const workspaceFolder = {
+		uri: {
+			scheme: 'file',
+			fsPath,
+			toString: () => id.slice('workspace-root:'.length),
+		},
+	};
+	return { id, workspaceFolder, scheme: 'file', fsPath };
+}
 
 function context(
 	isTrusted: boolean,
@@ -49,7 +66,7 @@ function context(
 }
 
 function trustedContext(): WorkspaceContextSnapshot {
-	return context(true, [{ scheme: 'file', fsPath: privateWorkspacePath }]);
+	return context(true, [folder(ROOT_ID, privateWorkspacePath)]);
 }
 
 suite('Canonical Workspace resolver', () => {
@@ -61,21 +78,24 @@ suite('Canonical Workspace resolver', () => {
 		} satisfies WorkspaceValidationResult;
 		let readerCalls = 0;
 		let validatedSnapshot: WorkspaceContextSnapshot | undefined;
+		let validatedRootId: WorkspaceRootId | undefined;
 		const resolver = createWorkspaceResolver({
 			readContext: () => {
 				readerCalls += 1;
 				return input;
 			},
-			validatePolicy: (snapshot) => {
+			validatePolicy: (snapshot, workspaceRootId) => {
 				validatedSnapshot = snapshot;
+				validatedRootId = workspaceRootId;
 				return expected;
 			},
 		});
 
-		const result = resolver();
+		const result = resolver(ROOT_ID);
 
 		assert.strictEqual(readerCalls, 1);
 		assert.strictEqual(validatedSnapshot, input);
+		assert.strictEqual(validatedRootId, ROOT_ID);
 		assert.strictEqual(result, expected);
 	});
 
@@ -89,8 +109,8 @@ suite('Canonical Workspace resolver', () => {
 			validatePolicy: validateWorkspacePolicy,
 		});
 
-		resolver();
-		resolver();
+		resolver(ROOT_ID);
+		resolver(ROOT_ID);
 
 		assert.strictEqual(readerCalls, 2);
 	});
@@ -102,9 +122,9 @@ suite('Canonical Workspace resolver', () => {
 			validatePolicy: validateWorkspacePolicy,
 		});
 
-		const startResult = resolver();
+		const startResult = resolver(ROOT_ID);
 		currentContext = context(false, currentContext.workspaceFolders);
-		const restartResult = resolver();
+		const restartResult = resolver(ROOT_ID);
 
 		assert.strictEqual(startResult.ok, true);
 		assert.deepStrictEqual(restartResult, {
@@ -113,24 +133,29 @@ suite('Canonical Workspace resolver', () => {
 		});
 	});
 
-	test('첫 성공 후 multi-root가 되면 다음 호출이 실패한다', () => {
+	test('multi-root가 되어도 같은 ID를 exact lookup하고 root 제거 후 실패한다', () => {
 		let currentContext = trustedContext();
 		const resolver = createWorkspaceResolver({
 			readContext: () => currentContext,
 			validatePolicy: validateWorkspacePolicy,
 		});
 
-		const startResult = resolver();
+		const startResult = resolver(ROOT_ID);
 		currentContext = context(true, [
 			...currentContext.workspaceFolders,
-			{ scheme: 'file', fsPath: `${privateWorkspacePath}-second` },
+			folder(SECOND_ROOT_ID, `${privateWorkspacePath}-second`),
 		]);
-		const restartResult = resolver();
+		const multiRootResult = resolver(ROOT_ID);
+		currentContext = context(true, [
+			folder(SECOND_ROOT_ID, `${privateWorkspacePath}-second`),
+		]);
+		const restartResult = resolver(ROOT_ID);
 
 		assert.strictEqual(startResult.ok, true);
+		assert.strictEqual(multiRootResult.ok, true);
 		assert.deepStrictEqual(restartResult, {
 			ok: false,
-			code: 'workspace_multi_root_unsupported',
+			code: 'workspace_root_unavailable',
 		});
 	});
 
@@ -141,9 +166,9 @@ suite('Canonical Workspace resolver', () => {
 			validatePolicy: validateWorkspacePolicy,
 		});
 
-		const success = resolver();
+		const success = resolver(ROOT_ID);
 		currentContext = context(false, []);
-		const failure = resolver();
+		const failure = resolver(ROOT_ID);
 		const serializedFailure = JSON.stringify(failure);
 
 		assert.strictEqual(success.ok, true);
@@ -155,7 +180,7 @@ suite('Canonical Workspace resolver', () => {
 		assert.strictEqual(serializedFailure.includes('root'), false);
 	});
 
-	test('서로 다른 terminal 호출도 같은 인자 없는 resolver를 사용한다', () => {
+	test('서로 다른 terminal 호출도 같은 ID 기반 resolver를 fresh하게 사용한다', () => {
 		let readerCalls = 0;
 		const resolver = createWorkspaceResolver({
 			readContext: () => {
@@ -167,8 +192,8 @@ suite('Canonical Workspace resolver', () => {
 		const resolveForStart: WorkspaceResolver = resolver;
 		const resolveForRestart: WorkspaceResolver = resolver;
 
-		const startResult = resolveForStart();
-		const restartResult = resolveForRestart();
+		const startResult = resolveForStart(ROOT_ID);
+		const restartResult = resolveForRestart(ROOT_ID);
 
 		assert.strictEqual(startResult.ok, true);
 		assert.strictEqual(restartResult.ok, true);
@@ -176,30 +201,29 @@ suite('Canonical Workspace resolver', () => {
 	});
 
 	test('context와 validator 결과를 변경하지 않는다', () => {
+		const frozenFolder = Object.freeze(folder(ROOT_ID, privateWorkspacePath));
 		const input = Object.freeze({
 			isTrusted: true,
-			workspaceFolders: Object.freeze([
-				Object.freeze({ scheme: 'file', fsPath: privateWorkspacePath }),
-			]),
+			workspaceFolders: Object.freeze([frozenFolder]),
 		}) satisfies WorkspaceContextSnapshot;
 		const expected = Object.freeze({
 			ok: false,
 			code: 'workspace_path_invalid',
 		}) satisfies WorkspaceValidationResult;
-		const inputBefore = structuredClone(input);
 		const resultBefore = structuredClone(expected);
 		const resolver = createWorkspaceResolver({
 			readContext: () => input,
-			validatePolicy: (snapshot) => {
+			validatePolicy: (snapshot, workspaceRootId) => {
 				assert.strictEqual(snapshot, input);
+				assert.strictEqual(workspaceRootId, ROOT_ID);
 				return expected;
 			},
 		});
 
-		const result = resolver();
+		const result = resolver(ROOT_ID);
 
 		assert.strictEqual(result, expected);
-		assert.deepStrictEqual(input, inputBefore);
+		assert.strictEqual(input.workspaceFolders[0], frozenFolder);
 		assert.deepStrictEqual(expected, resultBefore);
 	});
 });

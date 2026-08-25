@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import { createAgentTabModel } from '../agent/UI/agentTabModel';
+import type { AgentPanelUiCallbacks } from '../agent/UI/agentPanelUi';
 import type {
+	AgentActivityKind,
 	GraphNodeEffect,
 	GraphNodeEffectKind,
 	GraphNodeEffectTarget,
@@ -13,13 +15,13 @@ import {
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
 import type { GraphViewWorkspaceSnapshot } from '../webview/graph/graphView';
-import { serializeGraphForWebview } from '../webview/graph/graphTransport';
 import { createDefaultTaskBlueprint } from '../task';
 import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
 import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
+import { serializeWorkspacePresentationForWebview } from '../workspace/workspacePresentation';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
@@ -463,11 +465,31 @@ suite('Webview State Wiring', () => {
 				},
 			},
 		};
+		const initialWorkspaceRootCatalog = [
+			{
+				id: 'workspace-root:project:app' as const,
+				name: 'app',
+				description: 'file:///workspace/app',
+				selectable: true as const,
+			},
+			{
+				id: 'workspace-root:project:api' as const,
+				name: 'api',
+				description: 'file:///workspace/api',
+				selectable: true as const,
+			},
+		];
 		const refreshedWorkspaceGraph: Graph = {
-			roots: [{
-				id: 'root:refreshed',
-				nodeId: 'workspace-root:project:refreshed',
-			}],
+			roots: [
+				{
+					id: 'root:refreshed',
+					nodeId: 'workspace-root:project:refreshed',
+				},
+				{
+					id: 'root:sibling',
+					nodeId: 'workspace-root:file:///workspace/sibling',
+				},
+			],
 			rootNodes: {
 				'workspace-root:project:refreshed': {
 					kind: 'project',
@@ -476,8 +498,29 @@ suite('Webview State Wiring', () => {
 					status: 'loaded',
 					children: [],
 				},
+				'workspace-root:file:///workspace/sibling': {
+					kind: 'project',
+					id: 'workspace-root:file:///workspace/sibling',
+					name: 'sibling',
+					status: 'loaded',
+					children: [],
+				},
 			},
 		};
+		const refreshedWorkspaceRootCatalog = [
+			{
+				id: 'workspace-root:project:refreshed' as const,
+				name: 'refreshed',
+				description: 'file:///workspace/refreshed',
+				selectable: true as const,
+			},
+			{
+				id: 'workspace-root:file:///workspace/sibling' as const,
+				name: 'sibling',
+				description: 'file:///workspace/sibling',
+				selectable: true as const,
+			},
+		];
 		let taskIdSequence = 0;
 		const initialTask = createDefaultTaskBlueprint(
 			{ title: 'Initial persisted Task' },
@@ -532,6 +575,24 @@ suite('Webview State Wiring', () => {
 			readonly target: GraphNodeEffectTarget;
 			readonly kind?: GraphNodeEffectKind;
 		}> = [];
+		const agentEffectSets: Array<{
+			readonly target: GraphNodeEffectTarget;
+			readonly effect: GraphNodeEffect;
+		}> = [];
+		const agentEffectClears: Array<{
+			readonly target: GraphNodeEffectTarget;
+			readonly kind?: GraphNodeEffectKind;
+		}> = [];
+		const agentActivitySets: Array<{
+			readonly sessionId: string;
+			readonly target: GraphNodeEffectTarget;
+			readonly activity: AgentActivityKind;
+		}> = [];
+		const agentActivityClears: Array<{
+			readonly sessionId: string;
+			readonly target: GraphNodeEffectTarget;
+		}> = [];
+		const agentActivitySessionClears: string[] = [];
 		const terminalHostMessages: unknown[] = [];
 		let currentGraphState: GraphStateSnapshot = {
 			camera: initialState.graph.camera,
@@ -579,6 +640,9 @@ suite('Webview State Wiring', () => {
 		let resizeRefresh: (() => void) | undefined;
 		let resizeFit: (() => void) | undefined;
 		let agentUiLayoutChange: (() => void) | undefined;
+		let agentProviderSelect: AgentPanelUiCallbacks['onProviderSelected'];
+		const agentWorkspaceCatalogUpdates: unknown[] = [];
+		let initialAgentWorkspaceCatalog: unknown;
 		let unloadHandler: (() => void) | undefined;
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
 		let graphInitializeCount = 0;
@@ -588,10 +652,15 @@ suite('Webview State Wiring', () => {
 		let graphUnsubscribed = false;
 		let workspaceUnsubscribed = false;
 		let graphDisposed = false;
+		let agentEffectOwnerDisposed = false;
 		let agentPanelUiInitialized = false;
 		let agentPanelUiDisposed = false;
 		let terminalPoolDisposed = false;
 		let terminalFitCount = 0;
+		let graphAgentActivityStore: ReturnType<
+			typeof import('../agent/webview/agentActivityStore').createAgentActivityStore
+		> | undefined;
+		let createdAgentActivityStore: typeof graphAgentActivityStore;
 
 		const graphViewModulePath = require.resolve('../webview/graph/graphView');
 		const panelDockModulePath = require.resolve('../webview/panel/panelDock');
@@ -602,6 +671,9 @@ suite('Webview State Wiring', () => {
 		const agentPanelUiModulePath = require.resolve('../agent/UI/agentPanelUi');
 		const agentTerminalPoolModulePath = require.resolve(
 			'../agent/webview/agentTerminalPool',
+		);
+		const agentActivityStoreModulePath = require.resolve(
+			'../agent/webview/agentActivityStore',
 		);
 		const webviewModulePath = require.resolve('../webview/webview');
 		const graphViewModule = require(graphViewModulePath) as GraphViewModule;
@@ -616,6 +688,9 @@ suite('Webview State Wiring', () => {
 		const agentTerminalPoolModule = require(
 			agentTerminalPoolModulePath,
 		) as AgentTerminalPoolModule;
+		const agentActivityStoreModule = require(
+			agentActivityStoreModulePath,
+		) as AgentActivityStoreModule;
 		const originalInitializeGraphView = graphViewModule.initializeGraphView;
 		const originalInitializePanelDock = panelDockModule.initializePanelDock;
 		const originalInitializePanelResize = panelResizeModule.initializePanelResize;
@@ -624,6 +699,8 @@ suite('Webview State Wiring', () => {
 		const originalInitializeAgentPanelUi = agentPanelUiModule.initializeAgentPanelUi;
 		const originalCreateDefaultAgentTerminalPool =
 			agentTerminalPoolModule.createDefaultAgentTerminalPool;
+		const originalCreateAgentActivityStore =
+			agentActivityStoreModule.createAgentActivityStore;
 		const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 		const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 		const originalAcquireVsCodeApi = Object.getOwnPropertyDescriptor(
@@ -638,9 +715,11 @@ suite('Webview State Wiring', () => {
 			interactions,
 			_initialTasks,
 			restoredWorkspaceTasks,
+			options,
 		) => {
 			graphInitializeCount += 1;
 			graphViewInteractions = interactions;
+			graphAgentActivityStore = options?.agentActivityStore;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
 			assert.deepStrictEqual(restoredWorkspaceTasks, initialWorkspaceTasks);
@@ -737,6 +816,25 @@ suite('Webview State Wiring', () => {
 				clearNodeEffect: (target, kind) => {
 					graphEffectClears.push({ target, ...(kind ? { kind } : {}) });
 				},
+				createNodeEffectOwner: () => ({
+					setNodeEffect(target, effect): void {
+						agentEffectSets.push({ target, effect });
+					},
+					replaceNodeEffects(target, effects): void {
+						for (const effect of effects) {
+							agentEffectSets.push({ target, effect });
+						}
+					},
+					clearNodeEffect(target, kind): void {
+						agentEffectClears.push({
+							target,
+							...(kind ? { kind } : {}),
+						});
+					},
+					dispose(): void {
+						agentEffectOwnerDisposed = true;
+					},
+				}),
 				dispose: () => {
 					graphDisposed = true;
 				},
@@ -815,13 +913,41 @@ suite('Webview State Wiring', () => {
 			},
 		})) as typeof agentTerminalPoolModule.createDefaultAgentTerminalPool;
 
+		agentActivityStoreModule.createAgentActivityStore = (() => {
+			const store = originalCreateAgentActivityStore();
+			const recordingStore: ReturnType<
+				typeof originalCreateAgentActivityStore
+			> = {
+				getActivities: store.getActivities,
+				getSnapshot: store.getSnapshot,
+				setAgentActivity(sessionId, target, activity): void {
+					agentActivitySets.push({ sessionId, target, activity });
+					store.setAgentActivity(sessionId, target, activity);
+				},
+				clearAgentActivity(sessionId, target): void {
+					agentActivityClears.push({ sessionId, target });
+					store.clearAgentActivity(sessionId, target);
+				},
+				clearAgentActivitiesBySession(sessionId): void {
+					agentActivitySessionClears.push(sessionId);
+					store.clearAgentActivitiesBySession(sessionId);
+				},
+				subscribe: store.subscribe,
+			};
+
+			createdAgentActivityStore = recordingStore;
+			return recordingStore;
+		}) as typeof agentActivityStoreModule.createAgentActivityStore;
+
 		/**
 		 * 실제 Agent DOM 대신 초기화 여부와 Webview로 전달되는 콜백만 노출한다.
 		 * 실제 구현과 같이 초기 탭을 만들고 `onTabCreated`를 호출해 wiring을 재현한다.
 		 */
-		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks) => {
+		agentPanelUiModule.initializeAgentPanelUi = ((_elements, callbacks, _deps, options) => {
 			agentPanelUiInitialized = true;
 			agentUiLayoutChange = callbacks?.onLayoutChange;
+			agentProviderSelect = callbacks?.onProviderSelected;
+			initialAgentWorkspaceCatalog = options?.initialWorkspaceRootCatalog;
 
 			const model = createAgentTabModel(() => agentTabId);
 			callbacks?.onTabCreated?.(model.createTab());
@@ -829,7 +955,14 @@ suite('Webview State Wiring', () => {
 			return {
 				model,
 				getSnapshot: () => model.getSnapshot(),
-				handleHostMessage: () => undefined,
+				getAssignmentState: () => undefined,
+				updateWorkspaceRootCatalog: (catalog) => {
+					agentWorkspaceCatalogUpdates.push(catalog);
+				},
+				handleHostMessage: (message) => (
+					message.type !== 'agent.switchAccepted'
+					|| message.switchAttemptId > 1
+				),
 				dispose(): void {
 					agentPanelUiDisposed = true;
 				},
@@ -853,9 +986,18 @@ suite('Webview State Wiring', () => {
 			style: { setProperty: () => undefined },
 			clientWidth: 1000,
 			clientHeight: 800,
+			getAttribute: (attribute: string) => (
+				attribute === 'data-workspace-presentation'
+					? serializeWorkspacePresentationForWebview({
+						graph: initialWorkspaceGraph,
+						rootCatalog: initialWorkspaceRootCatalog,
+					})
+					: null
+			),
 		} as unknown as HTMLElement;
 		const elements = new Map<string, HTMLElement>([
 			['.crispy-layout', layoutElement],
+			['#app', layoutElement],
 			['#graph-area', {} as HTMLElement],
 			['#agent-chat-area', {} as HTMLElement],
 			['#chat-drag-handle', {} as HTMLElement],
@@ -866,17 +1008,20 @@ suite('Webview State Wiring', () => {
 			['#agent-terminal-area', {} as HTMLElement],
 			['#agent-top-bar', {} as HTMLElement],
 			['#agent-tab-strip', {} as HTMLElement],
+			['#agent-tab-menu-host', {} as HTMLElement],
 			['#agent-provider-picker-host', {} as HTMLElement],
+			['#agent-workspace-status-bar', {} as HTMLElement],
 			['#agent-dialog-host', {} as HTMLElement],
+			['#agent-rename-dialog-host', {} as HTMLElement],
 		]);
 		const documentMock = {
 			currentScript: {
 				getAttribute: (attribute: string) => {
-					if (attribute === 'data-workspace-graph') {
-						return serializeGraphForWebview(initialWorkspaceGraph);
-					}
 					if (attribute === 'data-workspace-state') {
 						return encodeURIComponent(JSON.stringify(initialWorkspaceState));
+					}
+					if (attribute === 'data-workspace-context-generation') {
+						return '0';
 					}
 					return null;
 				},
@@ -924,8 +1069,16 @@ suite('Webview State Wiring', () => {
 			assert.deepStrictEqual(ensuredTabs, [agentTabId]);
 			assert.deepStrictEqual(activeTabs, [agentTabId]);
 			assert.strictEqual(graphInitializeCount, 1);
+			assert.strictEqual(graphAgentActivityStore, createdAgentActivityStore);
 			assert.strictEqual(graphVisibleRefreshCount, 1);
 			assert.ok(hostMessageHandler);
+			assert.ok(agentProviderSelect);
+
+			/** 초기 atomic Presentation의 Catalog를 Agent UI에도 같은 값으로 전달한다. */
+			assert.deepStrictEqual(
+				initialAgentWorkspaceCatalog,
+				initialWorkspaceRootCatalog,
+			);
 
 			const taskJson = '{"format":"crispy.task"}';
 			graphViewInteractions?.onTaskJsonCopyRequest?.(taskJson);
@@ -941,8 +1094,11 @@ suite('Webview State Wiring', () => {
 
 			hostMessageHandler({
 				data: {
-					type: 'workspace.graphUpdated',
-					graph: initialWorkspaceGraph,
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: initialWorkspaceGraph,
+						rootCatalog: initialWorkspaceRootCatalog,
+					},
 					contextGeneration: 0,
 					rootIds: initialWorkspaceGraph.roots.map(
 						(root) => root.nodeId,
@@ -951,14 +1107,20 @@ suite('Webview State Wiring', () => {
 			} as MessageEvent);
 
 			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
+			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [
+				initialWorkspaceRootCatalog,
+			]);
 			assert.deepStrictEqual(terminalHostMessages, []);
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphDisposed, false);
 
 			hostMessageHandler({
 				data: {
-					type: 'workspace.graphUpdated',
-					graph: refreshedWorkspaceGraph,
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: refreshedWorkspaceGraph,
+						rootCatalog: refreshedWorkspaceRootCatalog,
+					},
 					contextGeneration: 1,
 					rootIds: refreshedWorkspaceGraph.roots.map(
 						(root) => root.nodeId,
@@ -982,6 +1144,97 @@ suite('Webview State Wiring', () => {
 				},
 			}]);
 			assert.deepStrictEqual(currentWorkspaceTasks, refreshedWorkspaceTasks);
+			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
+			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [
+				initialWorkspaceRootCatalog,
+				refreshedWorkspaceRootCatalog,
+			]);
+			assert.strictEqual(agentProviderSelect(
+				agentTabId,
+				'claude',
+				'workspace-root:project:refreshed',
+			), 1);
+			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages), [{
+				type: 'agent.switch',
+				tabId: agentTabId,
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:project:refreshed',
+				switchAttemptId: 1,
+			}]);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: refreshedWorkspaceGraph,
+						rootCatalog: refreshedWorkspaceRootCatalog,
+					},
+					contextGeneration: 1,
+					rootIds: refreshedWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
+				},
+			} as MessageEvent);
+
+			/** 여러 root에서는 UI가 명시적으로 고른 ID를 callback이 그대로 보낸다. */
+			assert.strictEqual(agentProviderSelect(
+				agentTabId,
+				'codex',
+				'workspace-root:file:///workspace/sibling',
+			), 2);
+			assert.strictEqual(getAgentSwitchMessages(postedMessages).length, 2);
+			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages)[1], {
+				type: 'agent.switch',
+				tabId: agentTabId,
+				providerId: 'codex',
+				workspaceRootId: 'workspace-root:file:///workspace/sibling',
+				switchAttemptId: 2,
+			});
+			assert.deepStrictEqual(terminalHostMessages, []);
+			assert.strictEqual(graphInitializeCount, 1);
+			assert.strictEqual(graphDisposed, false);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: refreshedWorkspaceGraph,
+						rootCatalog: [{
+							id: 'workspace-root:',
+							name: 'invalid',
+							description: 'invalid',
+							selectable: true,
+						}],
+					},
+					contextGeneration: 1,
+					rootIds: refreshedWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
+				},
+			} as MessageEvent);
+
+			/** Catalog가 잘못되면 유효한 Graph도 부분 적용하지 않는다. */
+			assert.deepStrictEqual(graphUpdates, [
+				initialWorkspaceGraph,
+				refreshedWorkspaceGraph,
+			]);
+
+			/** 이전 generation의 full snapshot은 Graph, Catalog, Task를 되돌리지 않는다. */
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: initialWorkspaceGraph,
+						rootCatalog: initialWorkspaceRootCatalog,
+					},
+					contextGeneration: 0,
+					rootIds: initialWorkspaceGraph.roots.map((root) => root.nodeId),
+					state: initialWorkspaceState,
+				},
+			} as MessageEvent);
+			assert.strictEqual(workspaceUpdates.length, 1);
+			assert.deepStrictEqual(currentWorkspaceTasks, refreshedWorkspaceTasks);
+			assert.strictEqual(agentWorkspaceCatalogUpdates.length, 3);
 
 			hostMessageHandler({
 				data: {
@@ -1013,14 +1266,90 @@ suite('Webview State Wiring', () => {
 				kind: 'shimmer',
 			}]);
 
+			const activityTarget: GraphNodeEffectTarget = {
+				nodeId: 'file:app/index.ts',
+				rootId: 'detached:file:app/index.ts:1',
+			};
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.set',
+					sessionId: 'session-activity-a',
+					target: activityTarget,
+					activity: 'editing',
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.clear',
+					sessionId: 'session-activity-a',
+					target: activityTarget,
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.clearSession',
+					sessionId: 'session-activity-b',
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(agentActivitySets, [{
+				sessionId: 'session-activity-a',
+				target: activityTarget,
+				activity: 'editing',
+			}]);
+			assert.deepStrictEqual(agentActivityClears, [{
+				sessionId: 'session-activity-a',
+				target: activityTarget,
+			}]);
+			assert.deepStrictEqual(
+				agentActivitySessionClears,
+				['session-activity-b'],
+			);
+			assert.deepStrictEqual(agentEffectSets, [{
+				target: activityTarget,
+				effect: {
+					kind: 'pulse',
+					color: 'var(--graph-viewport-accent-color, #007acc)',
+				},
+			}]);
+			assert.deepStrictEqual(agentEffectClears, [{
+				target: activityTarget,
+			}]);
+
 			const terminalStartingMessage = {
 				type: 'terminal.starting',
 				tabId: agentTabId,
+				sessionId: 'session-starting',
 			} as const;
 
 			hostMessageHandler({ data: terminalStartingMessage } as MessageEvent);
 			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
-			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
+
+			const rejectedSwitchAccepted = {
+				type: 'agent.switchAccepted',
+				tabId: agentTabId,
+				providerId: 'claude',
+				workspaceRootId: 'workspace-root:project:refreshed',
+				switchAttemptId: 1,
+				assignmentRevision: 1,
+			} as const;
+			hostMessageHandler({ data: rejectedSwitchAccepted } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
+
+			const acceptedSwitchAccepted = {
+				...rejectedSwitchAccepted,
+				switchAttemptId: 2,
+				assignmentRevision: 3,
+			} as const;
+			hostMessageHandler({ data: acceptedSwitchAccepted } as MessageEvent);
+			assert.deepStrictEqual(terminalHostMessages, [
+				terminalStartingMessage,
+				acceptedSwitchAccepted,
+			]);
+			assert.deepStrictEqual(graphUpdates, [
+				initialWorkspaceGraph,
+				refreshedWorkspaceGraph,
+			]);
 
 			const fitCountBeforeLayoutChange = terminalFitCount;
 			agentUiLayoutChange();
@@ -1278,6 +1607,7 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(graphUnsubscribed, true);
 			assert.strictEqual(workspaceUnsubscribed, true);
 			assert.strictEqual(graphDisposed, true);
+			assert.strictEqual(agentEffectOwnerDisposed, true);
 			assert.strictEqual(terminalPoolDisposed, true);
 			assert.strictEqual(agentPanelUiDisposed, true);
 		} finally {
@@ -1289,6 +1619,8 @@ suite('Webview State Wiring', () => {
 			agentPanelUiModule.initializeAgentPanelUi = originalInitializeAgentPanelUi;
 			agentTerminalPoolModule.createDefaultAgentTerminalPool =
 				originalCreateDefaultAgentTerminalPool;
+			agentActivityStoreModule.createAgentActivityStore =
+				originalCreateAgentActivityStore;
 			restoreGlobalProperty('document', originalDocument);
 			restoreGlobalProperty('window', originalWindow);
 			restoreGlobalProperty('acquireVsCodeApi', originalAcquireVsCodeApi);
@@ -1322,6 +1654,11 @@ interface AgentTerminalPoolModule {
 		typeof import('../agent/webview/agentTerminalPool').createDefaultAgentTerminalPool;
 }
 
+interface AgentActivityStoreModule {
+	createAgentActivityStore:
+		typeof import('../agent/webview/agentActivityStore').createAgentActivityStore;
+}
+
 function getStateChangedMessages(
 	messages: WebviewToExtensionMessage[],
 ): Array<Extract<WebviewToExtensionMessage, { type: 'webview.stateChanged' }>> {
@@ -1352,6 +1689,17 @@ function getTabCreateMessages(
 			WebviewToExtensionMessage,
 			{ type: 'tab.create' }
 		> => message.type === 'tab.create',
+	);
+}
+
+function getAgentSwitchMessages(
+	messages: WebviewToExtensionMessage[],
+): Array<Extract<WebviewToExtensionMessage, { type: 'agent.switch' }>> {
+	return messages.filter(
+		(message): message is Extract<
+			WebviewToExtensionMessage,
+			{ type: 'agent.switch' }
+		> => message.type === 'agent.switch',
 	);
 }
 

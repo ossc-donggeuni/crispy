@@ -155,6 +155,7 @@ async function collectArchive(target, vsixPath) {
 
 	const nodePtyPrefix = 'extension/dist/node_modules/node-pty/';
 	const bufferedEntries = new Set([
+		'extension/package.json',
 		'extension/dist/mcp-server.mjs',
 		`${nodePtyPrefix}package.json`,
 		...artifactsByTarget[target].map((artifactPath) => `${nodePtyPrefix}${artifactPath}`),
@@ -203,6 +204,69 @@ async function collectArchive(target, vsixPath) {
 		});
 		zipFile.readEntry();
 	});
+}
+
+const requiredRestrictedWorkspaceConfigurations = Object.freeze([
+	'crispy.codexCliPath',
+	'crispy.claudeCliPath',
+	'crispy.antigravityCliPath',
+]);
+
+function findExtensionManifestCapabilityProblems(manifest) {
+	const problems = [];
+	if (manifest?.main !== './dist/extension.js') {
+		problems.push('main');
+	}
+	if (manifest?.engines?.node !== '24.x') {
+		problems.push('engines.node');
+	}
+	if (manifest?.capabilities?.untrustedWorkspaces?.supported !== 'limited') {
+		problems.push('capabilities.untrustedWorkspaces.supported');
+	}
+	const restricted = manifest?.capabilities
+		?.untrustedWorkspaces?.restrictedConfigurations;
+	if (
+		!Array.isArray(restricted)
+		|| restricted.length !== requiredRestrictedWorkspaceConfigurations.length
+		|| restricted.some((value, index) => (
+			value !== requiredRestrictedWorkspaceConfigurations[index]
+		))
+	) {
+		problems.push('capabilities.untrustedWorkspaces.restrictedConfigurations');
+	}
+	if (manifest?.capabilities?.virtualWorkspaces?.supported !== 'limited') {
+		problems.push('capabilities.virtualWorkspaces.supported');
+	}
+	return Object.freeze(problems);
+}
+
+function verifyExtensionManifest(target, vsixPath, entries) {
+	const entryName = 'extension/package.json';
+	const record = requireEntry(target, vsixPath, entries, entryName);
+	let manifest;
+	try {
+		manifest = JSON.parse(record.buffer.toString('utf8'));
+	} catch (error) {
+		throw inspectionError(
+			target,
+			'extension manifest is invalid',
+			`${vsixPath}:${entryName}`,
+			'valid JSON',
+			'parse failed',
+			error,
+		);
+	}
+
+	const problems = findExtensionManifestCapabilityProblems(manifest);
+	if (problems.length > 0) {
+		throw inspectionError(
+			target,
+			'extension manifest execution capabilities are incomplete',
+			`${vsixPath}:${entryName}`,
+			'host-owned entrypoint, Node 24 and limited Workspace capabilities',
+			problems.join(', '),
+		);
+	}
 }
 
 function requireEntry(target, vsixPath, entries, entryName) {
@@ -418,6 +482,7 @@ async function inspectVsix(target, vsixPath) {
 		);
 	}
 	requireEntry(target, vsixPath, entries, 'extension/dist/extension.js');
+	verifyExtensionManifest(target, vsixPath, entries);
 	verifyMcpChildBundle(target, vsixPath, entries);
 	requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/LICENSE');
 	const packageRecord = requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/package.json');
@@ -470,6 +535,7 @@ if (require.main === module) {
 }
 
 module.exports = Object.freeze({
+	findExtensionManifestCapabilityProblems,
 	findUnresolvedMcpRuntimeSpecifiers,
 	findUnexpectedVsixPayloadEntries,
 	inspectVsix,

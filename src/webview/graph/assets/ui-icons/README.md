@@ -64,12 +64,6 @@ License: Public Domain (CC0)
 Author: Mary Akveo
 Attribution required: No
 
-- task-add.svg
-Source: Project-authored SVG path
-License: MIT
-Author: Crispy contributors
-Attribution required: No
-
 - clean.svg
 Source: SVG Repo / Home Assistant Outlined Icons
 License: Public Domain (CC0)
@@ -93,4 +87,12 @@ Attribution required: No
 Source: SVG Repo / Chuck Icons
 License: Public Domain (CC0)
 Author: LaylaRen
+Attribution required: No
+
+- toolbar-add.svg
+- toolbar-switch.svg
+- toolbar-restart.svg
+Source: Authored for Crispy
+License: MIT (same as this project)
+Author: Crispy contributors
 Attribution required: No

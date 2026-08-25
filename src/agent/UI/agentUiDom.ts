@@ -16,6 +16,12 @@ export interface AgentUiDependencies {
 		type: string,
 		listener: (event: Event) => void,
 	): () => void;
+
+	/** 메뉴 위치와 focus trap을 실제 브라우저 없이 검증하기 위한 DOM 조회 경계다. */
+	getElementRect(element: HTMLElement): DOMRect;
+	getViewportSize(): { readonly width: number; readonly height: number };
+	getActiveElement(): Element | null;
+	addWindowListener(type: string, listener: (event: Event) => void): () => void;
 }
 
 /** 브라우저 `document`를 그대로 사용하는 기본 DOM 의존성이다. */
@@ -24,5 +30,12 @@ export const defaultAgentUiDependencies: AgentUiDependencies = {
 	addDocumentListener: (type, listener) => {
 		document.addEventListener(type, listener);
 		return () => document.removeEventListener(type, listener);
+	},
+	getElementRect: (element) => element.getBoundingClientRect(),
+	getViewportSize: () => ({ width: window.innerWidth, height: window.innerHeight }),
+	getActiveElement: () => document.activeElement,
+	addWindowListener: (type, listener) => {
+		window.addEventListener(type, listener);
+		return () => window.removeEventListener(type, listener);
 	},
 };

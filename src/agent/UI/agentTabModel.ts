@@ -1,15 +1,27 @@
-import { type ProviderId, type SessionId } from '../protocol';
+import {
+	type ProviderId,
+	type SessionId,
+	type WorkspaceRootId,
+} from '../protocol';
 import type { McpFailureReason } from '../../mcp/failureReason';
 import {
 	UNSELECTED_TAB_LABEL,
 	formatAgentTabLabel,
 } from './agentProviders';
+import {
+	AGENT_TAB_TITLE_MAX_CODE_POINTS,
+	AGENT_TAB_TITLE_MAX_CANDIDATES,
+	countUnicodeCodePoints,
+	createAgentTabNameKey,
+	normalizeManualAgentTabName,
+	type ManualTabNameError,
+} from './agentTabTitle';
 
-/**
- * 탭 strip이 사용하는 UI 전용 탭 식별자다.
- * Phase 2에서 Host 세션과 연결할 때 protocol의 `TabId`와 대응시킨다.
- */
+/** 탭 strip과 Host session routing이 공유하는 Webview 탭 식별자다. */
 export type AgentTabId = string;
+
+/** 탭 제목이 만들어진 출처다. */
+export type AgentTabTitleSource = 'default' | 'automatic' | 'manual';
 
 /** 탭 UI가 보관하는 credential-free MCP 표시 상태다. */
 export type VisibleMcpStatus =
@@ -24,27 +36,32 @@ export type VisibleMcpStatus =
 
 const NO_VISIBLE_MCP_STATUS: VisibleMcpStatus = Object.freeze({ kind: 'none' });
 
+/** 수동 이름 저장 결과다. */
+export type RenameAgentTabResult =
+	| { readonly ok: true; readonly value: string }
+	| { readonly ok: false; readonly error: ManualTabNameError | 'duplicate' };
+
 /** 탭 하나의 표시 상태이며 외부에서 변경할 수 없는 snapshot이다. */
 export interface AgentTabSnapshot {
-	/** 탭을 구분하는 UI 식별자다. */
 	readonly id: AgentTabId;
-
-	/** 배정된 provider이며 미선택 상태에서는 `undefined`다. */
 	readonly providerId?: ProviderId;
-
-	/** 같은 provider 안에서 순차 증가하는 번호이며 미선택 상태에서는 `undefined`다. */
+	/** Host가 commit한 Workspace assignment의 root 식별자다. */
+	readonly workspaceRootId?: WorkspaceRootId;
+	/** 탭 title과 접근성 이름에 사용하는 마지막 정상 Catalog metadata다. */
+	readonly workspaceName?: string;
+	readonly workspaceDescription?: string;
+	readonly assignmentRevision?: number;
 	readonly sequence?: number;
-
-	/** 탭 strip에 표시할 라벨이다. */
+	readonly baseLabel?: string;
+	readonly displayName: string;
+	/** 기존 UI 소비자와의 호환을 유지하는 displayName alias다. */
 	readonly label: string;
-
-	/** Host가 알린 현재 Terminal session이며 MCP status ownership 검증에만 사용한다. */
+	readonly titleSource: AgentTabTitleSource;
+	readonly autoTitleAttempted: boolean;
+	readonly hasStartedSession: boolean;
+	readonly isPinned: boolean;
 	readonly sessionId?: SessionId;
-
-	/** token, route, generation을 포함하지 않는 현재 탭 전용 MCP 표시 상태다. */
 	readonly mcpStatus: VisibleMcpStatus;
-
-	/** 확인 또는 Host 요청이 진행 중인 같은 탭의 MCP restart 연타 방어다. */
 	readonly mcpRestartPending: boolean;
 }
 
@@ -54,111 +71,125 @@ export interface AgentTabModelSnapshot {
 	readonly activeTabId?: AgentTabId;
 }
 
-/** 상태 변경을 전달받는 구독자다. */
 export type AgentTabModelListener = (snapshot: AgentTabModelSnapshot) => void;
 
-/** 상단 bar와 탭 strip이 공유하는 탭 상태 관리 경계다. */
+/** 상단 bar, 탭 strip과 Terminal 제목 collector가 공유하는 탭 상태 경계다. */
 export interface AgentTabModel {
-	/** 현재 탭 목록과 활성 탭을 담은 immutable snapshot을 반환한다. */
 	getSnapshot(): AgentTabModelSnapshot;
-
-	/** 상태 변경을 구독하고 해제 함수를 반환한다. */
 	subscribe(listener: AgentTabModelListener): () => void;
-
-	/** provider 미선택 상태의 새 탭을 만들고 활성 탭으로 전환한다. */
 	createTab(): AgentTabId;
-
-	/** 주어진 탭을 활성 탭으로 전환한다. 없는 탭이면 아무 것도 하지 않는다. */
 	selectTab(tabId: AgentTabId): void;
-
-	/**
-	 * 탭에 provider를 배정하고 해당 provider의 다음 번호를 부여한다.
-	 * 이미 같은 provider가 배정된 탭이면 번호를 다시 매기지 않는다.
-	 */
-	assignProvider(tabId: AgentTabId, providerId: ProviderId): void;
-
-	/** 탭을 유지한 채 provider 배정을 지워 다시 선택할 수 있는 상태로 되돌린다. */
+	assignProvider(
+		tabId: AgentTabId,
+		providerId: ProviderId,
+		workspace?: Readonly<{
+			readonly id: WorkspaceRootId;
+			readonly name: string;
+			readonly description: string;
+			readonly assignmentRevision: number;
+		}>,
+	): void;
+	updateWorkspaceMetadata(
+		tabId: AgentTabId,
+		workspace: Readonly<{
+			readonly id: WorkspaceRootId;
+			readonly name: string;
+			readonly description: string;
+			readonly assignmentRevision: number;
+		}>,
+	): void;
 	clearProvider(tabId: AgentTabId): void;
-
-	/** Host가 시작한 fresh Terminal session을 탭에 연결하고 이전 MCP 표시를 지운다. */
 	setSession(tabId: AgentTabId, sessionId: SessionId): void;
-
-	/** 정확한 current session의 표시 상태만 갱신한다. */
 	setMcpStatus(
 		tabId: AgentTabId,
 		sessionId: SessionId,
 		status: VisibleMcpStatus,
 	): void;
-
-	/** 정확한 current session의 indicator와 restart pending을 제거한다. */
 	clearMcpStatus(tabId: AgentTabId, sessionId: SessionId): void;
-
-	/** 정확한 current session의 MCP restart pending guard를 갱신한다. */
 	setMcpRestartPending(
 		tabId: AgentTabId,
 		sessionId: SessionId,
 		pending: boolean,
 	): void;
-
-	/** 정상 종료된 current session의 ownership과 표시 상태를 함께 지운다. */
 	clearSession(tabId: AgentTabId, sessionId: SessionId): void;
-
-	/** 탭을 닫고 필요하면 이웃 탭으로 활성 탭을 옮긴다. */
 	closeTab(tabId: AgentTabId): void;
+	renameTab(tabId: AgentTabId, value: string): RenameAgentTabResult;
+	canAttemptAutomaticTitle(tabId: AgentTabId, sessionId: SessionId): boolean;
+	applyAutomaticTitleCandidates(
+		tabId: AgentTabId,
+		sessionId: SessionId,
+		candidates: readonly string[],
+	): boolean;
+	setPinned(tabId: AgentTabId, pinned: boolean): void;
 }
 
-/** 탭 식별자를 만드는 기본 구현이며 테스트에서는 결정적인 구현으로 대체한다. */
 function createDefaultTabId(): AgentTabId {
 	return `agent-tab-${globalThis.crypto.randomUUID()}`;
 }
 
-/** 내부에서만 변경하는 탭 상태다. */
 interface MutableAgentTab {
 	readonly id: AgentTabId;
 	providerId?: ProviderId;
+	workspaceRootId?: WorkspaceRootId;
+	workspaceName?: string;
+	workspaceDescription?: string;
+	assignmentRevision?: number;
 	sequence?: number;
+	baseLabel?: string;
+	displayName: string;
+	titleSource: AgentTabTitleSource;
+	autoTitleAttempted: boolean;
+	hasStartedSession: boolean;
+	isPinned: boolean;
 	sessionId?: SessionId;
+	readonly seenSessionIds: Set<SessionId>;
 	mcpStatus: VisibleMcpStatus;
 	mcpRestartPending: boolean;
 }
 
-/**
- * 탭 하나를 외부에 노출할 immutable snapshot으로 변환한다.
- *
- * @param tab 내부 탭 상태
- * @returns 라벨이 계산된 frozen 탭 snapshot
- */
+/** 내부 상태를 깊이가 제한된 frozen 탭 snapshot으로 복사한다. */
 function toTabSnapshot(tab: MutableAgentTab): AgentTabSnapshot {
-	if (tab.providerId === undefined || tab.sequence === undefined) {
-		return Object.freeze({
-			id: tab.id,
-			label: UNSELECTED_TAB_LABEL,
-			mcpStatus: tab.mcpStatus,
-			mcpRestartPending: tab.mcpRestartPending,
-			...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
-		});
-	}
-
 	return Object.freeze({
 		id: tab.id,
-		providerId: tab.providerId,
-		sequence: tab.sequence,
-		label: formatAgentTabLabel(tab.providerId, tab.sequence),
+		...(tab.providerId === undefined ? {} : { providerId: tab.providerId }),
+		...(tab.workspaceRootId === undefined
+			? {}
+			: { workspaceRootId: tab.workspaceRootId }),
+		...(tab.workspaceName === undefined
+			? {}
+			: { workspaceName: tab.workspaceName }),
+		...(tab.workspaceDescription === undefined
+			? {}
+			: { workspaceDescription: tab.workspaceDescription }),
+		...(tab.assignmentRevision === undefined
+			? {}
+			: { assignmentRevision: tab.assignmentRevision }),
+		...(tab.sequence === undefined ? {} : { sequence: tab.sequence }),
+		...(tab.baseLabel === undefined ? {} : { baseLabel: tab.baseLabel }),
+		displayName: tab.displayName,
+		label: tab.displayName,
+		titleSource: tab.titleSource,
+		autoTitleAttempted: tab.autoTitleAttempted,
+		hasStartedSession: tab.hasStartedSession,
+		isPinned: tab.isPinned,
+		...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
 		mcpStatus: tab.mcpStatus,
 		mcpRestartPending: tab.mcpRestartPending,
-		...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
 	});
 }
 
+/** 자동 callback 경계에서 후보 형식과 길이를 다시 확인한다. */
+function isValidAutomaticCandidate(candidate: string): boolean {
+	const normalized = normalizeManualAgentTabName(candidate);
+	return normalized.ok
+		&& normalized.value === candidate
+		&& countUnicodeCodePoints(candidate) <= AGENT_TAB_TITLE_MAX_CODE_POINTS
+		&& /[\p{L}\p{N}]/u.test(candidate);
+}
+
 /**
- * 상단 bar와 탭 strip이 공유하는 탭 상태를 만든다.
- *
- * 이 단계에서는 실제 세션을 만들지 않으므로 상태 전이는 UI 안에서만 일어난다.
- * provider 번호는 provider별로 단조 증가하며 탭을 닫아도 재사용하지 않는다.
- * 이미 표시 중인 탭 라벨이 뒤늦게 바뀌지 않게 하기 위한 선택이다.
- *
- * @param createTabId 새 탭 식별자를 만드는 함수
- * @returns 탭 생성, 전환, provider 배정과 닫기를 제공하는 상태 객체
+ * Webview 수명 동안 탭 제목, session ownership, MCP 표시와 고정 순서를 관리한다.
+ * provider 번호는 단조 증가하고 열린 탭의 표시/예약 이름과 충돌하는 번호를 건너뛴다.
  */
 export function createAgentTabModel(
 	createTabId: () => AgentTabId = createDefaultTabId,
@@ -168,53 +199,85 @@ export function createAgentTabModel(
 	const listeners = new Set<AgentTabModelListener>();
 	let activeTabId: AgentTabId | undefined;
 
-	/**
-	 * 현재 상태를 frozen snapshot으로 만든다.
-	 *
-	 * @returns 외부 변경으로부터 분리된 상태 snapshot
-	 */
 	const buildSnapshot = (): AgentTabModelSnapshot => Object.freeze({
 		tabs: Object.freeze(tabs.map(toTabSnapshot)),
 		...(activeTabId === undefined ? {} : { activeTabId }),
 	});
 
-	/**
-	 * 구독자에게 현재 snapshot을 전달한다.
-	 * 한 구독자의 실패가 나머지 구독자나 상태 전이를 막지 않게 한다.
-	 */
 	const notify = (): void => {
 		const snapshot = buildSnapshot();
 		for (const listener of [...listeners]) {
 			try {
 				listener(snapshot);
 			} catch {
-				/** 구독자 렌더링 실패가 다른 Webview 기능으로 전파되지 않게 한다. */
+				/** 구독자 하나의 실패가 다른 Webview 상태 전이를 막지 않게 한다. */
 			}
 		}
 	};
 
-	/**
-	 * 식별자로 내부 탭을 찾는다.
-	 *
-	 * @param tabId 찾을 탭 식별자
-	 * @returns 일치하는 탭이며 없으면 `undefined`
-	 */
 	const findTab = (tabId: AgentTabId): MutableAgentTab | undefined =>
 		tabs.find((tab) => tab.id === tabId);
+
+	/** 시스템 기본 New tab을 제외한 다른 열린 탭의 표시/예약 이름과 비교한다. */
+	const isNameAvailable = (
+		name: string,
+		owner?: MutableAgentTab,
+	): boolean => {
+		const key = createAgentTabNameKey(name);
+		for (const tab of tabs) {
+			if (tab === owner) {
+				continue;
+			}
+
+			const isSystemNewTab = tab.providerId === undefined
+				&& tab.titleSource === 'default'
+				&& tab.displayName === UNSELECTED_TAB_LABEL;
+			if (
+				(!isSystemNewTab && createAgentTabNameKey(tab.displayName) === key)
+				|| (
+					tab.baseLabel !== undefined
+					&& createAgentTabNameKey(tab.baseLabel) === key
+				)
+			) {
+				return false;
+			}
+		}
+
+		return true;
+	};
+
+	/** 현재 tab의 기존 이름도 충돌로 세어 새 baseLabel에 쓸 번호를 찾는다. */
+	const isBaseLabelAvailable = (name: string): boolean => {
+		const key = createAgentTabNameKey(name);
+		return tabs.every((tab) => {
+			const isSystemNewTab = tab.providerId === undefined
+				&& tab.titleSource === 'default'
+				&& tab.displayName === UNSELECTED_TAB_LABEL;
+			return (isSystemNewTab || createAgentTabNameKey(tab.displayName) !== key)
+				&& (
+					tab.baseLabel === undefined
+					|| createAgentTabNameKey(tab.baseLabel) !== key
+				);
+		});
+	};
 
 	return {
 		getSnapshot: buildSnapshot,
 
 		subscribe(listener): () => void {
 			listeners.add(listener);
-			return () => {
-				listeners.delete(listener);
-			};
+			return () => listeners.delete(listener);
 		},
 
 		createTab(): AgentTabId {
 			const tab: MutableAgentTab = {
 				id: createTabId(),
+				displayName: UNSELECTED_TAB_LABEL,
+				titleSource: 'default',
+				autoTitleAttempted: false,
+				hasStartedSession: false,
+				isPinned: false,
+				seenSessionIds: new Set<SessionId>(),
 				mcpStatus: NO_VISIBLE_MCP_STATUS,
 				mcpRestartPending: false,
 			};
@@ -228,24 +291,77 @@ export function createAgentTabModel(
 			if (activeTabId === tabId || findTab(tabId) === undefined) {
 				return;
 			}
-
 			activeTabId = tabId;
 			notify();
 		},
 
-		assignProvider(tabId, providerId): void {
+		assignProvider(tabId, providerId, workspace): void {
 			const tab = findTab(tabId);
-			if (tab === undefined || tab.providerId === providerId) {
+			if (tab === undefined) {
+				return;
+			}
+			if (tab.providerId === providerId) {
+				if (workspace !== undefined) {
+					tab.workspaceRootId = workspace.id;
+					tab.workspaceName = workspace.name;
+					tab.workspaceDescription = workspace.description;
+					tab.assignmentRevision = workspace.assignmentRevision;
+					delete tab.sessionId;
+					tab.hasStartedSession = false;
+					tab.autoTitleAttempted = false;
+					if (tab.titleSource !== 'manual') {
+						tab.displayName = tab.baseLabel ?? UNSELECTED_TAB_LABEL;
+						tab.titleSource = 'default';
+					}
+					tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
+					tab.mcpRestartPending = false;
+					notify();
+				}
 				return;
 			}
 
-			const nextSequence = (sequenceCounters.get(providerId) ?? 0) + 1;
+			let nextSequence = sequenceCounters.get(providerId) ?? 0;
+			let baseLabel = '';
+			do {
+				nextSequence += 1;
+				baseLabel = formatAgentTabLabel(providerId, nextSequence);
+			} while (!isBaseLabelAvailable(baseLabel));
 			sequenceCounters.set(providerId, nextSequence);
+
 			tab.providerId = providerId;
+			if (workspace !== undefined) {
+				tab.workspaceRootId = workspace.id;
+				tab.workspaceName = workspace.name;
+				tab.workspaceDescription = workspace.description;
+				tab.assignmentRevision = workspace.assignmentRevision;
+			}
 			tab.sequence = nextSequence;
+			tab.baseLabel = baseLabel;
+			if (tab.titleSource !== 'manual') {
+				tab.displayName = baseLabel;
+				tab.titleSource = 'default';
+			}
 			delete tab.sessionId;
+			tab.seenSessionIds.clear();
+			tab.hasStartedSession = false;
+			tab.autoTitleAttempted = false;
 			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
 			tab.mcpRestartPending = false;
+			notify();
+		},
+
+		updateWorkspaceMetadata(tabId, workspace): void {
+			const tab = findTab(tabId);
+			if (
+				tab === undefined
+				|| tab.providerId === undefined
+				|| tab.workspaceRootId !== workspace.id
+			) {
+				return;
+			}
+			tab.workspaceName = workspace.name;
+			tab.workspaceDescription = workspace.description;
+			tab.assignmentRevision = workspace.assignmentRevision;
 			notify();
 		},
 
@@ -256,8 +372,18 @@ export function createAgentTabModel(
 			}
 
 			delete tab.providerId;
+			delete tab.workspaceRootId;
+			delete tab.workspaceName;
+			delete tab.workspaceDescription;
+			delete tab.assignmentRevision;
 			delete tab.sequence;
+			delete tab.baseLabel;
 			delete tab.sessionId;
+			tab.displayName = UNSELECTED_TAB_LABEL;
+			tab.titleSource = 'default';
+			tab.autoTitleAttempted = false;
+			tab.hasStartedSession = false;
+			tab.seenSessionIds.clear();
 			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
 			tab.mcpRestartPending = false;
 			notify();
@@ -265,10 +391,27 @@ export function createAgentTabModel(
 
 		setSession(tabId, sessionId): void {
 			const tab = findTab(tabId);
-			if (tab === undefined || tab.sessionId === sessionId) {
+			if (
+				tab === undefined
+				|| tab.sessionId === sessionId
+				|| tab.seenSessionIds.has(sessionId)
+			) {
 				return;
 			}
+
+			if (tab.hasStartedSession) {
+				tab.displayName = tab.baseLabel ?? UNSELECTED_TAB_LABEL;
+				tab.titleSource = 'default';
+				tab.autoTitleAttempted = false;
+			} else if (tab.titleSource !== 'manual') {
+				tab.displayName = tab.baseLabel ?? UNSELECTED_TAB_LABEL;
+				tab.titleSource = 'default';
+				tab.autoTitleAttempted = false;
+			}
+
 			tab.sessionId = sessionId;
+			tab.seenSessionIds.add(sessionId);
+			tab.hasStartedSession = true;
 			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;
 			tab.mcpRestartPending = false;
 			notify();
@@ -330,8 +473,83 @@ export function createAgentTabModel(
 
 			tabs.splice(index, 1);
 			if (activeTabId === tabId) {
-				/** 닫은 위치의 다음 탭을 우선 활성화하고 없으면 이전 탭으로 되돌린다. */
 				activeTabId = (tabs[index] ?? tabs[index - 1])?.id;
+			}
+			notify();
+		},
+
+		renameTab(tabId, value): RenameAgentTabResult {
+			const tab = findTab(tabId);
+			const normalized = normalizeManualAgentTabName(value);
+			if (!normalized.ok) {
+				return normalized;
+			}
+			if (tab === undefined || !isNameAvailable(normalized.value, tab)) {
+				return { ok: false, error: 'duplicate' };
+			}
+
+			tab.displayName = normalized.value;
+			tab.titleSource = 'manual';
+			notify();
+			return normalized;
+		},
+
+		canAttemptAutomaticTitle(tabId, sessionId): boolean {
+			const tab = findTab(tabId);
+			return tab !== undefined
+				&& tab.sessionId === sessionId
+				&& (tab.providerId === 'codex' || tab.providerId === 'claude')
+				&& tab.titleSource !== 'manual'
+				&& !tab.autoTitleAttempted;
+		},
+
+		applyAutomaticTitleCandidates(tabId, sessionId, candidates): boolean {
+			const tab = findTab(tabId);
+			if (
+				tab === undefined
+				|| tab.sessionId !== sessionId
+				|| (tab.providerId !== 'codex' && tab.providerId !== 'claude')
+				|| tab.titleSource === 'manual'
+				|| tab.autoTitleAttempted
+			) {
+				return false;
+			}
+
+			tab.autoTitleAttempted = true;
+			for (const candidate of candidates.slice(0, AGENT_TAB_TITLE_MAX_CANDIDATES)) {
+				if (
+					isValidAutomaticCandidate(candidate)
+					&& isNameAvailable(candidate, tab)
+				) {
+					tab.displayName = candidate;
+					tab.titleSource = 'automatic';
+					notify();
+					return true;
+				}
+			}
+
+			notify();
+			return false;
+		},
+
+		setPinned(tabId, pinned): void {
+			const index = tabs.findIndex((tab) => tab.id === tabId);
+			const tab = tabs[index];
+			if (tab === undefined || tab.isPinned === pinned) {
+				return;
+			}
+
+			tabs.splice(index, 1);
+			tab.isPinned = pinned;
+			if (pinned) {
+				const firstUnpinnedIndex = tabs.findIndex((entry) => !entry.isPinned);
+				tabs.splice(
+					firstUnpinnedIndex < 0 ? tabs.length : firstUnpinnedIndex,
+					0,
+					tab,
+				);
+			} else {
+				tabs.push(tab);
 			}
 			notify();
 		},

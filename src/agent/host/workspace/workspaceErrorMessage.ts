@@ -14,6 +14,12 @@ export type WorkspaceTerminalErrorMessage = Extract<
 	{ type: 'terminal.error' }
 >;
 
+/** MCP restart의 cleanup 전 Workspace 거부에 사용하는 Host→Webview 메시지다. */
+export type WorkspaceMcpRestartRejectedMessage = Extract<
+	HostToWebviewMessage,
+	{ type: 'mcp.restartRejected' }
+>;
+
 /** Workspace 오류 code별로 Webview에 공개할 수 있는 고정 정책이다. */
 interface WorkspaceErrorMessagePolicy {
 	readonly message: string;
@@ -25,16 +31,12 @@ interface WorkspaceErrorMessagePolicy {
  * 입력값이나 내부 예외 문자열을 사용하지 않는 완전한 code allowlist다.
  */
 const WORKSPACE_ERROR_MESSAGE_POLICIES = {
-	workspace_not_found: {
-		message: '작업공간 폴더를 연 후 다시 시도하세요.',
-		canRestart: true,
-	},
 	workspace_untrusted: {
 		message: '작업공간을 신뢰한 후 다시 시도하세요.',
 		canRestart: true,
 	},
-	workspace_multi_root_unsupported: {
-		message: '하나의 작업공간 폴더만 연 후 다시 시도하세요.',
+	workspace_root_unavailable: {
+		message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
 		canRestart: true,
 	},
 	workspace_virtual_unsupported: {
@@ -73,5 +75,25 @@ export function mapWorkspaceFailureToTerminalError(
 		code: failure.code,
 		message: policy.message,
 		canRestart: policy.canRestart,
+	};
+}
+
+/**
+ * Workspace resolver 실패를 현재 CLI/MCP 상태를 보존하는 MCP restart 거부로 변환한다.
+ * terminal mapper와 같은 고정 allowlist 문구를 사용하며 경로나 URI를 반사하지 않는다.
+ */
+export function mapWorkspaceFailureToMcpRestartRejected(
+	failure: WorkspaceValidationFailure,
+	tabId: TabId,
+	sessionId: SessionId,
+): WorkspaceMcpRestartRejectedMessage {
+	const policy = WORKSPACE_ERROR_MESSAGE_POLICIES[failure.code];
+
+	return {
+		type: 'mcp.restartRejected',
+		tabId,
+		sessionId,
+		code: failure.code,
+		message: policy.message,
 	};
 }

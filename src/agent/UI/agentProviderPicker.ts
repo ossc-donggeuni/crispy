@@ -1,6 +1,15 @@
-import { PROVIDER_IDS, type ProviderId } from '../protocol';
+import {
+	PROVIDER_IDS,
+	type ProviderId,
+	type WorkspaceRootId,
+} from '../protocol';
+import type { WorkspaceRootCatalogEntry } from '../../workspace/workspaceRootCatalog';
 import { AGENT_PROVIDER_LABELS } from './agentProviders';
 import type { AgentTabModelSnapshot } from './agentTabModel';
+import {
+	initializeAgentWorkspacePicker,
+	type AgentWorkspacePickerState,
+} from './agentWorkspacePicker';
 import {
 	defaultAgentUiDependencies,
 	type AgentUiDependencies,
@@ -18,12 +27,24 @@ export const AGENT_PROVIDER_MARK = '>_';
 export interface AgentProviderPickerCallbacks {
 	/** 목록에서 provider를 고른 경우다. */
 	onProviderSelect(providerId: ProviderId): void;
+
+	/** Agent를 시작할 Workspace root를 고른 경우다. */
+	onWorkspaceSelect(workspaceRootId: WorkspaceRootId): void;
+}
+
+export interface AgentProviderPickerState extends AgentWorkspacePickerState {
+	readonly workspaceSelected: boolean;
+	readonly forceShow?: boolean;
 }
 
 /** 중앙 선택기를 탭 상태에 맞춰 갱신하는 표시 경계다. */
 export interface AgentProviderPickerView {
 	/** 활성 탭이 provider 미선택 상태일 때만 선택기를 표시한다. */
-	render(snapshot: AgentTabModelSnapshot): void;
+	render(
+		snapshot: AgentTabModelSnapshot,
+		workspaceCatalog?: readonly WorkspaceRootCatalogEntry[],
+		state?: AgentProviderPickerState,
+	): void;
 
 	/** 선택기 DOM을 정리한다. */
 	dispose(): void;
@@ -52,6 +73,8 @@ export function initializeAgentProviderPicker(
 
 	const heading = dependencies.createElement('div');
 	heading.className = 'agent-provider-picker-heading';
+	const headingCopy = dependencies.createElement('div');
+	headingCopy.className = 'agent-provider-picker-heading-copy';
 
 	const title = dependencies.createElement('p');
 	title.className = 'agent-provider-picker-title';
@@ -60,7 +83,16 @@ export function initializeAgentProviderPicker(
 	const description = dependencies.createElement('p');
 	description.className = 'agent-provider-picker-description';
 	description.textContent = AGENT_PROVIDER_PICKER_DESCRIPTION;
-	heading.append(title, description);
+	headingCopy.append(title, description);
+
+	const workspacePickerHost = dependencies.createElement('div');
+	workspacePickerHost.className = 'agent-workspace-picker-host';
+	const workspacePicker = initializeAgentWorkspacePicker(
+		workspacePickerHost,
+		callbacks.onWorkspaceSelect,
+		dependencies,
+	);
+	heading.append(headingCopy, workspacePickerHost);
 
 	const list = dependencies.createElement('div');
 	list.className = 'agent-provider-list';
@@ -93,17 +125,32 @@ export function initializeAgentProviderPicker(
 	container.hidden = true;
 
 	return {
-		render(snapshot): void {
+		render(snapshot, workspaceCatalog = [], state): void {
 			const activeTab = snapshot.tabs.find(
 				(tab) => tab.id === snapshot.activeTabId,
 			);
 			const shouldShow = activeTab !== undefined
-				&& activeTab.providerId === undefined;
+				&& (
+					activeTab.providerId === undefined
+					|| state?.forceShow === true
+				);
 
 			container.hidden = !shouldShow;
+			workspacePicker.render(workspaceCatalog, state);
+			panel.setAttribute(
+				'aria-busy',
+				state?.pending || state?.resetting ? 'true' : 'false',
+			);
+			for (const option of Array.from(list.children)) {
+				(option as HTMLButtonElement).disabled = state === undefined
+					|| !state.workspaceSelected
+					|| state.pending
+					|| state.resetting;
+			}
 		},
 
 		dispose(): void {
+			workspacePicker.dispose();
 			container.hidden = true;
 			container.replaceChildren();
 		},

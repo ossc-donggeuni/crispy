@@ -1,4 +1,5 @@
 import type { Uri } from 'vscode';
+import type { WorkspaceRootId } from './workspaceRootId';
 
 /** Workspace 탐색 항목이 공통으로 유지하는 식별 정보다. */
 interface WorkspaceItemBase {
@@ -17,6 +18,7 @@ export interface WorkspaceSnapshot {
 
 /** 하나의 VS Code Workspace Root와 이후 탐색될 직계 항목이다. */
 export interface WorkspaceRoot extends WorkspaceItemBase {
+	readonly id: WorkspaceRootId;
 	readonly status: WorkspaceDirectoryStatus;
 	readonly children: readonly WorkspaceEntry[];
 }

@@ -1,4 +1,9 @@
 import { workspace } from 'vscode';
+import type { Uri } from 'vscode';
+import {
+	createWorkspaceRootId,
+	type WorkspaceRootId,
+} from '../../../workspace/workspaceRootId';
 
 /**
  * 작업공간 폴더 URI에서 정책 판단에 필요한 최소 속성만 읽는 계약이다.
@@ -10,6 +15,9 @@ export interface WorkspaceFolderUriReader {
 
 	/** VS Code가 URI에서 제공하는 파일 시스템 경로 문자열이다. */
 	readonly fsPath: string;
+
+	/** 공용 WorkspaceRootId를 생성할 canonical URI 문자열을 반환한다. */
+	toString(): string;
 }
 
 /**
@@ -34,10 +42,16 @@ export interface WorkspaceContextReader {
 }
 
 /**
- * 정책 계층에 전달할 작업공간 폴더의 불변 복사본이다.
- * 원본 URI 객체에 대한 참조를 보관하지 않는다.
+ * 정책 계층에 전달할 작업공간 폴더의 호출 시점 snapshot이다.
+ * 정책 값은 문자열로 복사하고 exact lookup 성공 결과용 folder identity만 보존한다.
  */
 export interface WorkspaceFolderContextSnapshot {
+	/** Graph, Catalog와 execution exact lookup이 공유하는 URI 기반 식별자다. */
+	readonly id: WorkspaceRootId;
+
+	/** exact lookup에 성공했을 때 반환할 이번 호출의 fresh folder 객체다. */
+	readonly workspaceFolder: WorkspaceFolderReader;
+
 	/** 수집 시점에 문자열로 복사한 URI 스킴이다. */
 	readonly scheme: string;
 
@@ -47,7 +61,7 @@ export interface WorkspaceFolderContextSnapshot {
 
 /**
  * 특정 시점의 VS Code 작업공간 상태를 담는 Host 전용 불변 스냅샷이다.
- * 이후의 순수 정책 validator는 VS Code 객체 대신 이 값만 입력받는다.
+ * 이후의 순수 정책 validator는 복사한 정책 값과 fresh folder identity만 사용한다.
  */
 export interface WorkspaceContextSnapshot {
 	/** 스냅샷 생성 시점의 작업공간 신뢰 상태다. */
@@ -65,7 +79,7 @@ const WORKSPACE_CONTEXT_READ_ERROR_MESSAGE = 'Workspace context is unavailable.'
  * trusted 여부나 root 지원 가능성은 판정하지 않는다.
  *
  * @param reader VS Code API 또는 테스트 대역이 제공하는 최소 작업공간 상태 판독기다.
- * @returns 원본 배열과 URI 객체에서 분리되어 동결된 작업공간 상태 스냅샷이다.
+ * @returns 원본 배열에서 분리되고 정책 값이 복사된 작업공간 상태 스냅샷이다.
  * @throws 상태를 읽는 중 실패하면 경로나 URI를 포함하지 않는 고정 오류를 던진다.
  */
 export function collectWorkspaceContext(
@@ -73,10 +87,15 @@ export function collectWorkspaceContext(
 ): WorkspaceContextSnapshot {
 	try {
 		const workspaceFolders = reader.workspaceFolders ?? [];
-		const folderSnapshots = workspaceFolders.map(({ uri }) => Object.freeze({
-			scheme: uri.scheme,
-			fsPath: uri.fsPath,
-		}));
+		const folderSnapshots = workspaceFolders.map((workspaceFolder) => {
+			const { uri } = workspaceFolder;
+			return Object.freeze({
+				id: createWorkspaceRootId(uri as Uri),
+				workspaceFolder,
+				scheme: uri.scheme,
+				fsPath: uri.fsPath,
+			});
+		});
 
 		return Object.freeze({
 			isTrusted: reader.isTrusted,
@@ -96,4 +115,18 @@ export function collectWorkspaceContext(
  */
 export function readVsCodeWorkspaceContext(): WorkspaceContextSnapshot {
 	return collectWorkspaceContext(workspace);
+}
+
+/**
+ * Terminal I/O와 active-session monitor가 현재 Workspace Trust만 fresh하게 읽는다.
+ * Workspace folder 목록이나 URI를 함께 수집하지 않아 root removal과 Trust revoke를
+ * 서로 다른 실행 정책으로 유지한다. VS Code 판독 자체가 실패하면 실행을 계속하지
+ * 않도록 false로 수렴한다.
+ */
+export function readVsCodeWorkspaceTrust(): boolean {
+	try {
+		return workspace.isTrusted;
+	} catch {
+		return false;
+	}
 }

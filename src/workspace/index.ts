@@ -6,8 +6,37 @@ export type {
 	WorkspaceRoot,
 	WorkspaceSnapshot,
 } from './workspaceModel';
+export {
+	createWorkspaceRootId,
+	validateWorkspaceRootId,
+	WORKSPACE_ROOT_ID_PREFIX,
+	type WorkspaceRootId,
+	type WorkspaceRootIdValidationErrorCode,
+	type WorkspaceRootIdValidationFailure,
+	type WorkspaceRootIdValidationResult,
+	type WorkspaceRootIdValidationSuccess,
+} from './workspaceRootId';
+export {
+	validateWorkspacePolicy,
+	type WorkspacePolicyErrorCode,
+	type WorkspacePolicyFailure,
+	type WorkspacePolicyInput,
+	type WorkspacePolicyResult,
+	type WorkspacePolicySuccess,
+} from './workspacePolicy';
 export { createWorkspaceSnapshot } from './workspaceSnapshot';
 export { convertWorkspaceSnapshotToGraph } from './workspaceToGraph';
+export {
+	createWorkspaceRootCatalog,
+	type WorkspaceRootCatalogEntry,
+	type WorkspaceRootCatalogUnavailableReason,
+} from './workspaceRootCatalog';
+export {
+	deserializeWorkspacePresentationFromWebview,
+	parseWorkspacePresentation,
+	serializeWorkspacePresentationForWebview,
+	type WorkspacePresentation,
+} from './workspacePresentation';
 export { readDefaultWorkspaceFilter } from './workspaceDefaultFilter';
 export {
 	matchesWorkspaceFilterRule,
@@ -38,6 +67,7 @@ export {
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
 	writeWorkspacePersistentState,
+	type WorkspacePersistenceWriteOutcome,
 	type WorkspaceRootPersistentState,
 } from './workspacePersistence';
 export {
@@ -49,8 +79,13 @@ export {
 } from './workspacePersistenceCoordinator';
 export {
 	createCurrentWorkspaceGraph,
+	createCurrentWorkspacePresentation,
+	createCurrentWorkspaceSnapshot,
 	createWorkspaceRefreshCoordinator,
+	type WorkspaceGraphDependencies,
+	type WorkspacePresentationDependencies,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRefreshDependencies,
+	type WorkspaceSnapshotDependencies,
 } from './workspaceRefresh';
 export { watchWorkspaceChanges } from './workspaceWatcher';

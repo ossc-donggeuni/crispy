@@ -9,6 +9,7 @@ import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	writeWorkspacePersistentState,
+	type WorkspacePersistenceWriteOutcome,
 	type WorkspaceRootPersistentState,
 } from './workspacePersistence';
 
@@ -16,7 +17,7 @@ import {
 export type WorkspaceRootStateWriter = (
 	rootUri: vscode.Uri,
 	state: WorkspacePersistentState,
-) => Promise<void>;
+) => Promise<void | WorkspacePersistenceWriteOutcome>;
 
 /** Workspace runtime snapshot을 순서대로 안전하게 저장하는 coordinator다. */
 export interface WorkspacePersistenceCoordinator {
@@ -32,6 +33,8 @@ export interface WorkspacePersistenceCoordinator {
 	): Promise<void>;
 	/** 현재 desired snapshot의 독립 복사본을 반환한다. */
 	getDesiredState(): WorkspacePersistentState | undefined;
+	/** Disk에 확정되지 않은 desired generation이 남아 있는지 반환한다. */
+	hasPendingPersistence(): boolean;
 	/** 실행 중 write를 기다리고, 직전 실패가 있으면 마지막 snapshot을 한 번 재시도한다. */
 	flush(): Promise<void>;
 	/** 새 snapshot을 거부하고 현재 write만 완료되도록 한다. */
@@ -47,6 +50,14 @@ interface DesiredWorkspaceSnapshot {
 	readonly generation: number;
 	readonly state: WorkspacePersistentState;
 	readonly rootUris: readonly vscode.Uri[];
+}
+
+/** Trust 복구 후 같은 desired generation을 재시도해야 함을 나타낸다. */
+class WorkspacePersistenceDeferredError extends Error {
+	constructor() {
+		super('Workspace persistence was deferred while the Workspace is untrusted.');
+		this.name = 'WorkspacePersistenceDeferredError';
+	}
 }
 
 /**
@@ -91,11 +102,16 @@ export function createWorkspacePersistenceCoordinator(
 						target.state,
 						target.rootUris,
 						async (rootUri, state) => {
-							await writeState(rootUri, state);
+							const outcome = await writeState(rootUri, state);
+
+							if (outcome === 'deferred-untrusted') {
+								return outcome;
+							}
 							confirmedRootStates.set(rootUri.toString(), {
 								rootUri,
 								state: cloneWorkspaceState(state),
 							});
+							return outcome;
 						},
 					);
 					durableState = cloneWorkspaceState(target.state);
@@ -104,7 +120,9 @@ export function createWorkspacePersistenceCoordinator(
 					durableState = mergeWorkspacePersistentStates([
 						...confirmedRootStates.values(),
 					]);
-					logger.warn('[Crispy] Failed to persist Workspace State.', error);
+					if (!(error instanceof WorkspacePersistenceDeferredError)) {
+						logger.warn('[Crispy] Failed to persist Workspace State.', error);
+					}
 					break;
 				}
 			}
@@ -164,6 +182,10 @@ export function createWorkspacePersistenceCoordinator(
 		},
 		getDesiredState(): WorkspacePersistentState | undefined {
 			return desired ? cloneWorkspaceState(desired.state) : undefined;
+		},
+		hasPendingPersistence(): boolean {
+			return desired !== undefined
+				&& desired.generation !== completedGeneration;
 		},
 		async flush(): Promise<void> {
 			await activeWrite;
@@ -272,7 +294,7 @@ export async function persistWorkspaceStateTransition(
 		if (!nextRoot) {
 			continue;
 		}
-		await writeState(rootUri, {
+		await writeWorkspaceRootStateOrDefer(writeState, rootUri, {
 			...nextRoot.state,
 			taskRelocations: mergeTaskRelocationsForStaging(
 				nextRoot.state.taskRelocations,
@@ -307,7 +329,7 @@ export async function persistWorkspaceStateTransition(
 			),
 		};
 
-		await writeState(rootUri, stagedState);
+		await writeWorkspaceRootStateOrDefer(writeState, rootUri, stagedState);
 	}
 
 	// staging이 모두 성공한 뒤 final snapshot을 쓴다. Root별 저수준 chain과 별개로
@@ -329,14 +351,34 @@ export async function persistWorkspaceStateTransition(
 
 	for (const { rootUri, state } of orderedFinalRootStates) {
 		try {
-			await writeState(rootUri, state);
+			await writeWorkspaceRootStateOrDefer(writeState, rootUri, state);
 		} catch (error) {
 			failures.push(error);
 		}
 	}
 
 	if (failures.length > 0) {
+		if (
+			failures.every((error) => (
+				error instanceof WorkspacePersistenceDeferredError
+			))
+		) {
+			throw failures[0];
+		}
 		throw new AggregateError(failures, 'Workspace final state write failed.');
+	}
+}
+
+/** Explicit Trust deferral를 성공으로 해석하지 않고 transition을 멈춘다. */
+async function writeWorkspaceRootStateOrDefer(
+	writeState: WorkspaceRootStateWriter,
+	rootUri: vscode.Uri,
+	state: WorkspacePersistentState,
+): Promise<void> {
+	const outcome = await writeState(rootUri, state);
+
+	if (outcome === 'deferred-untrusted') {
+		throw new WorkspacePersistenceDeferredError();
 	}
 }
 

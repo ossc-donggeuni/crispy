@@ -208,6 +208,7 @@ async function runWindowsCmdOneShotSmoke(temporaryRoot, environment) {
 		cwd: temporaryRoot,
 		platform: 'win32',
 		environment: fixtureEnvironment,
+		resolveWorkspaceCwdBeforeSpawn: () => temporaryRoot,
 	});
 	if (!compatibility.ok) {
 		throw smokeError(
@@ -257,6 +258,7 @@ async function main() {
 			cwd: temporaryRoot,
 			platform: process.platform,
 			environment,
+			resolveWorkspaceCwdBeforeSpawn: () => temporaryRoot,
 		});
 		if (!compatibility.ok) {
 			throw smokeError(`Codex version probe failed (${compatibility.reason}).`);

@@ -9,6 +9,7 @@ import {
 } from './workspaceContext';
 import { validateWorkspacePolicy } from './workspacePolicy';
 import type { WorkspaceValidationResult } from './types';
+import type { WorkspaceRootId } from '../../../workspace/workspaceRootId';
 
 /**
  * 호출 시점의 익스텐션 호스트 작업공간 컨텍스트를 새 스냅샷으로 읽는 함수다.
@@ -25,6 +26,7 @@ export type WorkspaceContextSnapshotReader = () => WorkspaceContextSnapshot;
  */
 export type WorkspacePolicyValidator = (
 	snapshot: WorkspaceContextSnapshot,
+	workspaceRootId: WorkspaceRootId,
 ) => WorkspaceValidationResult;
 
 /**
@@ -32,7 +34,9 @@ export type WorkspacePolicyValidator = (
  *
  * @returns 현재 상태를 다시 읽고 검증한 작업공간 정책 결과다.
  */
-export type WorkspaceResolver = () => WorkspaceValidationResult;
+export type WorkspaceResolver = (
+	workspaceRootId: WorkspaceRootId,
+) => WorkspaceValidationResult;
 
 /** 작업공간 resolver를 구성하는 익스텐션 호스트 소유 의존성이다. */
 export interface WorkspaceResolverDependencies {
@@ -55,9 +59,11 @@ export function createWorkspaceResolver(
 ): WorkspaceResolver {
 	const { readContext, validatePolicy } = dependencies;
 
-	return function resolveWorkspace(): WorkspaceValidationResult {
+	return function resolveWorkspace(
+		workspaceRootId: WorkspaceRootId,
+	): WorkspaceValidationResult {
 		const snapshot = readContext();
-		return validatePolicy(snapshot);
+		return validatePolicy(snapshot, workspaceRootId);
 	};
 }
 
@@ -66,7 +72,10 @@ export function createWorkspaceResolver(
  * 최초 시작 전과 모든 재시작 전, 그리고 향후 그래프에서 동일하게 호출한다.
  * 성공 결과는 호스트 내부 실행 준비에만 사용하며 프로토콜 메시지로 노출하지 않는다.
  */
-export const resolveCurrentWorkspace = createWorkspaceResolver({
+export const resolveWorkspaceForExecution = createWorkspaceResolver({
 	readContext: readVsCodeWorkspaceContext,
 	validatePolicy: validateWorkspacePolicy,
 });
+
+/** 이전 import 이름을 유지하되 이제 명시적인 WorkspaceRootId를 반드시 받는다. */
+export const resolveCurrentWorkspace = resolveWorkspaceForExecution;

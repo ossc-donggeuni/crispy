@@ -14,6 +14,19 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "crispy.codexCliPath",
+        "crispy.claudeCliPath",
+        "crispy.antigravityCliPath"
+      ]
+    },
+    "virtualWorkspaces": {
+      "supported": "limited"
+    }
+  },
   "contributes": {
     "commands": [
       {
@@ -27,6 +40,14 @@
       {
         "command": "crispy.clearNodeEffects",
         "title": "Crispy: Clear Node Effects"
+      },
+      {
+        "command": "crispy.debugAgentActivities",
+        "title": "Crispy: Debug Agent Activities"
+      },
+      {
+        "command": "crispy.clearAgentActivities",
+        "title": "Crispy: Clear Agent Activities"
       }
     ],
     "configuration": {

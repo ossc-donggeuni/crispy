@@ -46,13 +46,58 @@ suite('Workspace Persistence', () => {
 			const state = createState(rootUri, 2);
 			const fake = createFakeFileSystem();
 
-			await writeWorkspacePersistentState(rootUri, state, fake.fileSystem);
+			assert.strictEqual(
+				await writeWorkspacePersistentState(rootUri, state, fake.fileSystem),
+				'written',
+			);
 
 			assert.deepStrictEqual(
 				fake.createDirectoryCalls.map((uri) => uri.toString()),
 				[vscode.Uri.joinPath(rootUri, '.crispy').toString()],
 			);
 			assert.deepStrictEqual(fake.getJson(getStateUri(rootUri)), state);
+		});
+
+		test('untrusted Workspace는 `.crispy/state.json` write를 시작하지 않는다', async () => {
+			const rootUri = vscode.Uri.file('/workspace/restricted');
+			const fake = createFakeFileSystem();
+
+			assert.strictEqual(
+				await writeWorkspacePersistentState(
+					rootUri,
+					createState(rootUri, 2),
+					fake.fileSystem,
+					() => false,
+				),
+				'deferred-untrusted',
+			);
+
+			assert.deepStrictEqual(fake.createDirectoryCalls, []);
+			assert.deepStrictEqual(fake.writeFileCalls, []);
+			assert.strictEqual(fake.getJson(getStateUri(rootUri)), undefined);
+		});
+
+		test('Directory 생성 뒤 Trust가 revoke되면 state.json write를 중단한다', async () => {
+			const rootUri = vscode.Uri.file('/workspace/revoked-before-state-write');
+			const fake = createFakeFileSystem();
+			let trustReads = 0;
+
+			assert.strictEqual(
+				await writeWorkspacePersistentState(
+					rootUri,
+					createState(rootUri, 3),
+					fake.fileSystem,
+					() => {
+						trustReads += 1;
+						return trustReads === 1;
+					},
+				),
+				'deferred-untrusted',
+			);
+
+			assert.strictEqual(fake.createDirectoryCalls.length, 1);
+			assert.deepStrictEqual(fake.writeFileCalls, []);
+			assert.strictEqual(fake.getJson(getStateUri(rootUri)), undefined);
 		});
 
 		test('잘못된 JSON, schema와 version은 읽기 실패로 전파한다', async () => {
@@ -921,12 +966,12 @@ function createState(
 		nodePositions: { [folder]: { x: page * 10, y: page * 20 } },
 		fileGroupPages: { [`${folder}:files`]: page },
 		openedFolders: { [folder]: true },
-	detachedRootNodeIds: { [file]: true },
-	hiddenNodeIds: { [folder]: true },
+		detachedRootNodeIds: { [file]: true },
+		hiddenNodeIds: { [folder]: true },
 		tasks: [],
 		taskRelocations: [],
 		taskStorageReceipts: [],
-		};
+	};
 }
 
 function createTaskRecord(
