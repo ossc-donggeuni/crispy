@@ -65,13 +65,17 @@ import type {
 } from '../../messages';
 import { createGraphNodeEffects } from './graphNodeEffects';
 import {
-	createTaskState,
 	TASK_DEFAULT_END_POSITION,
 	type TaskBlueprint,
 	type TaskNodePosition,
 	type TaskOrigin,
-	type TaskStateStore,
 } from '../../task';
+import {
+	createWorkspaceTaskState,
+	type TaskGraphTargetOrigin,
+	type WorkspaceTaskRecord,
+	type WorkspaceTaskStateStore,
+} from '../../task/workspaceTaskState';
 import {
 	materializeTaskTransfer,
 	parseTaskTransferJson,
@@ -98,6 +102,7 @@ import {
 	initializeTaskInspector,
 	type FocusedTaskNode,
 	type TaskInspectorFieldInput,
+	type TaskInspectorRootOption,
 } from '../task/taskInspector';
 import { createTaskImportDialog } from '../task/taskImportDialog';
 
@@ -108,19 +113,40 @@ export interface GraphView {
 	/** Pan/Zoom과 Viewport/World 좌표 변환을 제공하는 Camera다. */
 	readonly camera: GraphCamera;
 	/** Task 생성, 연결과 explicit Node 위치의 source of truth인 Domain Store다. */
-	readonly taskState: TaskStateStore;
+	readonly taskState: WorkspaceTaskStateStore;
+	/** Workspace owner/provenance와 projection 전 Graph 위치를 함께 반환한다. */
+	getWorkspaceSnapshot(): GraphViewWorkspaceSnapshot;
+	/** Workspace 영속 snapshot 변경을 구독한다. */
+	subscribeWorkspaceSnapshot(
+		subscriber: (snapshot: GraphViewWorkspaceSnapshot) => void,
+	): () => void;
 	/** Panel/Dock/Webview 변화 뒤 Visible Graph 기반 Overlay를 즉시 다시 배치한다. */
 	refreshVisibleGraphArea(): void;
 	/** 기존 View와 State를 유지하며 새로운 Workspace Graph를 적용한다. */
 	updateGraph(graph: Graph): void;
 	/** 기존 View와 Workspace Graph를 유지하며 Task Blueprint 목록을 적용한다. */
 	updateTasks(tasks: readonly TaskBlueprint[]): void;
+	/** Root Graph와 해당 Root들에서 복원한 전체 Workspace 상태를 원자적으로 적용한다. */
+	updateWorkspace(graph: Graph, snapshot: GraphViewWorkspaceSnapshot): void;
 	/** Host가 지정한 transient 시각 효과를 같은 kind 기준으로 적용 또는 교체한다. */
 	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
 	/** 특정 target의 한 kind 또는 모든 transient 시각 효과를 제거한다. */
 	clearNodeEffect(target: GraphNodeEffectTarget, kind?: GraphNodeEffectKind): void;
 	/** Navigator, Renderer, Camera와 생성한 Viewport DOM을 정리한다. */
 	dispose(): void;
+}
+
+/** Webview가 `.crispy/state.json`으로 전달할 projection-free Workspace 상태다. */
+export interface GraphViewWorkspaceSnapshot {
+	readonly graph: Pick<
+		GraphStateSnapshot,
+		| 'nodePositions'
+		| 'fileGroupPages'
+		| 'openedFolders'
+		| 'detachedRootNodeIds'
+		| 'hiddenNodeIds'
+	>;
+	readonly tasks: readonly WorkspaceTaskRecord[];
 }
 
 const TASK_CREATION_OFFSET = 32;
@@ -153,6 +179,195 @@ function createTaskOriginInVisibleArea(
 	}
 
 	return baseOrigin;
+}
+
+/** 원본 Workspace Graph의 Project Root만 owner 후보로 노출한다. */
+export function createTaskWorkspaceRootOptions(
+	graph: Graph,
+): readonly TaskInspectorRootOption[] {
+	const roots = graph.roots.flatMap((root) => {
+		const node = graph.rootNodes[root.nodeId];
+
+		return node?.kind === 'project'
+			? [{ value: root.nodeId, label: node.name }]
+			: [];
+	});
+	const labelCounts = new Map<string, number>();
+
+	for (const root of roots) {
+		labelCounts.set(root.label, (labelCounts.get(root.label) ?? 0) + 1);
+	}
+	return roots.map((root) => ({
+		value: root.value,
+		label: (labelCounts.get(root.label) ?? 0) > 1
+			? `${root.label} — ${root.value.replace(/^workspace-root:/, '')}`
+			: root.label,
+	}));
+}
+
+/** 기존 GraphView의 Blueprint 초기 입력을 owner/provenance가 완전한 record로 보강한다. */
+function createInitialWorkspaceTaskRecords(
+	tasks: readonly TaskBlueprint[],
+	graph: Graph,
+	targetIndex: ReturnType<typeof createTaskGraphTargetIndex>,
+): WorkspaceTaskRecord[] {
+	const ownerRootId = createTaskWorkspaceRootOptions(graph)[0]?.value
+		?? 'workspace-root:transient';
+
+	return tasks.map((task) => ({
+		ownerRootId,
+		storageRevision: 1,
+		task,
+		targetOrigins: collectTaskTargetOrigins(task, ownerRootId, targetIndex),
+	}));
+}
+
+function collectTaskTargetOrigins(
+	task: TaskBlueprint,
+	fallbackRootId: string,
+	targetIndex: ReturnType<typeof createTaskGraphTargetIndex>,
+): TaskGraphTargetOrigin[] {
+	const origins: TaskGraphTargetOrigin[] = [];
+	const appendTargets = (
+		nodeId: string,
+		area: 'reference' | 'work',
+		sourceIds: readonly string[],
+	): void => {
+		for (const sourceId of sourceIds) {
+			origins.push({
+				nodeId,
+				area,
+				sourceId,
+				sourceRootId: targetIndex.get(sourceId)?.sourceRootId ?? fallbackRootId,
+			});
+		}
+	};
+	const start = task.nodes.find((node) => node.kind === 'start');
+
+	if (start) {
+		appendTargets(start.id, 'reference', task.defaultGraphTargets.reference);
+		appendTargets(start.id, 'work', task.defaultGraphTargets.work);
+	}
+	for (const node of task.nodes) {
+		if (node.kind === 'work') {
+			appendTargets(node.id, 'reference', node.graphTargets.reference);
+			appendTargets(node.id, 'work', node.graphTargets.work);
+		}
+	}
+	return origins;
+}
+
+function createTaskTargetOriginKey(
+	nodeId: string,
+	area: 'reference' | 'work',
+	sourceId: string,
+): string {
+	return [nodeId, area, sourceId].join('\u0000');
+}
+
+/**
+ * 현재 열려 있는 Project Root 집합에 맞지 않는 Task와 영역 참조를 제거한다.
+ * owner Root가 사라진 Task는 표시하지 않고, 외부 Root provenance가 사라진
+ * membership은 Blueprint와 provenance 양쪽에서 같은 transaction으로 정리한다.
+ */
+export function sanitizeWorkspaceTaskRecords(
+	records: readonly WorkspaceTaskRecord[],
+	graph: Graph,
+): WorkspaceTaskRecord[] {
+	const activeRootIds = new Set(
+		createTaskWorkspaceRootOptions(graph).map((option) => option.value),
+	);
+	const targetIndex = createTaskGraphTargetIndex(graph);
+
+	return records.flatMap((record) => {
+		if (!activeRootIds.has(record.ownerRootId)) {
+			return [];
+		}
+
+		const removedOriginKeys = new Set<string>();
+		let provenanceChanged = false;
+		const targetOrigins = record.targetOrigins.flatMap((origin) => {
+			const currentSource = targetIndex.get(origin.sourceId);
+
+			if (currentSource) {
+				if (currentSource.sourceRootId !== origin.sourceRootId) {
+					provenanceChanged = true;
+					return [{
+						...origin,
+						sourceRootId: currentSource.sourceRootId,
+					}];
+				}
+				return [origin];
+			}
+			if (activeRootIds.has(origin.sourceRootId)) {
+				// 같은 Root가 활성 상태라면 일시적인 scan 누락으로 보고 보존한다.
+				return [origin];
+			}
+			provenanceChanged = true;
+			removedOriginKeys.add(createTaskTargetOriginKey(
+					origin.nodeId,
+					origin.area,
+					origin.sourceId,
+				));
+			return [];
+		});
+
+		if (!provenanceChanged) {
+			return [record];
+		}
+
+		const removeUnavailableTargets = (
+			nodeId: string,
+			area: 'reference' | 'work',
+			sourceIds: readonly string[],
+		): string[] => sourceIds.filter((sourceId) => !removedOriginKeys.has(
+			createTaskTargetOriginKey(nodeId, area, sourceId),
+		));
+		const start = record.task.nodes.find((node) => node.kind === 'start');
+		const task: TaskBlueprint = {
+			...record.task,
+			defaultGraphTargets: start
+				? {
+					reference: removeUnavailableTargets(
+						start.id,
+						'reference',
+						record.task.defaultGraphTargets.reference,
+					),
+					work: removeUnavailableTargets(
+						start.id,
+						'work',
+						record.task.defaultGraphTargets.work,
+					),
+				}
+				: record.task.defaultGraphTargets,
+			nodes: record.task.nodes.map((node) => node.kind === 'work'
+				? {
+					...node,
+					graphTargets: {
+						reference: removeUnavailableTargets(
+							node.id,
+							'reference',
+							node.graphTargets.reference,
+						),
+						work: removeUnavailableTargets(
+							node.id,
+							'work',
+							node.graphTargets.work,
+						),
+					},
+				}
+				: node),
+		};
+
+		return [{
+			...record,
+			storageRevision: record.storageRevision < Number.MAX_SAFE_INTEGER
+				? record.storageRevision + 1
+				: record.storageRevision,
+			task,
+			targetOrigins,
+		}];
+	});
 }
 
 /** Graph View가 Renderer의 향후 Root Promotion 요청을 전달할 상위 계약이다. */
@@ -533,6 +748,13 @@ export function initializeGraphLayoutReflow(
 	) => GraphStateSnapshot['nodePositions'] = (_layout, nodePositions) => (
 		nodePositions
 	),
+	commitState: (
+		nextState: GraphState,
+		baseNodePositions: GraphStateSnapshot['nodePositions'],
+	) => void = (nextState) => state.setState(nextState),
+	getBaseNodePositions: (
+		state: GraphStateSnapshot,
+	) => GraphStateSnapshot['nodePositions'] = (snapshot) => snapshot.nodePositions,
 ): () => void {
 	let active = true;
 	let renderedFileGroupPages = state.getState().fileGroupPages;
@@ -565,12 +787,13 @@ export function initializeGraphLayoutReflow(
 		}
 		const previousLayout = getCurrentLayout();
 		const nextLayout = createLayout(nextState);
+		const baseNodePositions = getBaseNodePositions(nextState);
 		const rebasedNodePositions = normalizeGraphNodePositions(
 			nextLayout,
 			rebaseNodePositions(
 				previousLayout,
 				nextLayout,
-				nextState.nodePositions,
+				baseNodePositions,
 				{
 					captureCollapsedNodePositions: hasNewlyClosedFolder,
 					logicalParentByChild: getLogicalParentByChild(),
@@ -592,14 +815,14 @@ export function initializeGraphLayoutReflow(
 		if (hiddenNodeIdsChanged) {
 			onHiddenNodeIdsChange(nextState);
 		}
-		state.setState({
+		commitState({
 			camera: nextState.camera,
 			nodePositions: projectedNodePositions,
 			fileGroupPages: nextState.fileGroupPages,
 			openedFolders: nextState.openedFolders,
 			detachedRootNodeIds: nextState.detachedRootNodeIds,
 			hiddenNodeIds: nextState.hiddenNodeIds,
-		});
+		}, rebasedNodePositions);
 	});
 
 	return () => {
@@ -1050,6 +1273,7 @@ export function focusGraphBacklink(
  * @param graph 렌더링할 Root 목록과 Project Tree
  * @param interactions Detach 완료 요청을 Graph 변경 없이 전달할 callback
  * @param initialTasks 같은 World에 최초 렌더링할 Task Blueprint 목록
+	* @param initialWorkspaceTasks Host가 복원한 owner/provenance 포함 Task record
  * @returns State와 Camera 및 전체 lifecycle을 제공하는 Graph View
  */
 export function initializeGraphView(
@@ -1058,6 +1282,7 @@ export function initializeGraphView(
 	graph: Graph,
 	interactions: GraphViewInteractions = {},
 	initialTasks: readonly TaskBlueprint[] = [],
+	initialWorkspaceTasks?: readonly WorkspaceTaskRecord[],
 ): GraphView {
 	const ownerDocument = root.ownerDocument;
 	const viewport = ownerDocument.createElement('div');
@@ -1088,7 +1313,21 @@ export function initializeGraphView(
 		effectRegionLayer,
 	);
 	const state = createGraphState(initialState);
-	const taskState = createTaskState(initialTasks);
+	let workspaceGraph = graph;
+	let pendingWorkspaceTaskRecords: readonly WorkspaceTaskRecord[] | undefined;
+	let pendingWorkspaceGraphState: GraphViewWorkspaceSnapshot['graph'] | undefined;
+	let taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
+	const initialRecords = initialWorkspaceTasks
+		? sanitizeWorkspaceTaskRecords(initialWorkspaceTasks, workspaceGraph)
+		: createInitialWorkspaceTaskRecords(
+			initialTasks,
+			workspaceGraph,
+			taskGraphTargetIndex,
+		);
+	const taskState = createWorkspaceTaskState(initialRecords, {
+		defaultOwnerRootId: createTaskWorkspaceRootOptions(workspaceGraph)[0]?.value
+			?? 'workspace-root:transient',
+	});
 	let disposed = false;
 	/** 활성 Task Scope가 World 위치를 소유하는 actual Graph occurrence Root다. */
 	let currentTaskScopeBoundaryNodeIds = new Set<string>();
@@ -1129,8 +1368,6 @@ export function initializeGraphView(
 	};
 	reconcileExpandedTaskGraphScopeAreas();
 	let initialGraphState = state.getState();
-	let workspaceGraph = graph;
-	let taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
 	let currentGraph = applyDetachedGraphRoots(
 		workspaceGraph,
 		initialGraphState.detachedRootNodeIds,
@@ -1238,6 +1475,145 @@ export function initializeGraphView(
 		return;
 	};
 	let skipGraphLayoutReflow = false;
+	let persistentNodePositions: GraphStateSnapshot['nodePositions'] = {
+		...initialGraphState.nodePositions,
+	};
+	let suppressPersistentGraphCapture = 0;
+	let suppressWorkspaceNotifications = 0;
+	let observedPersistentGraphState = state.getState();
+	const workspaceSubscribers = new Set<(
+		snapshot: GraphViewWorkspaceSnapshot,
+	) => void>();
+	const getWorkspaceSnapshot = (): GraphViewWorkspaceSnapshot => {
+		const snapshot = state.getState();
+
+		return {
+			graph: {
+				nodePositions: Object.fromEntries(Object.entries(
+					persistentNodePositions,
+				).map(([nodeId, position]) => [nodeId, { ...position }])),
+				fileGroupPages: { ...snapshot.fileGroupPages },
+				openedFolders: { ...snapshot.openedFolders },
+				detachedRootNodeIds: { ...snapshot.detachedRootNodeIds },
+				hiddenNodeIds: { ...snapshot.hiddenNodeIds },
+			},
+			tasks: taskState.getWorkspaceSnapshot().records,
+		};
+	};
+	const notifyWorkspaceSubscribers = (): void => {
+		if (
+			disposed
+			|| suppressWorkspaceNotifications > 0
+			|| workspaceSubscribers.size === 0
+		) {
+			return;
+		}
+		const snapshot = getWorkspaceSnapshot();
+
+		for (const subscriber of [...workspaceSubscribers]) {
+			subscriber(snapshot);
+		}
+	};
+	const collectTaskProjectionOwnedNodeIds = (): Set<string> => {
+		const ownedNodeIds = new Set<string>();
+
+		for (const boundaryNodeId of currentTaskScopeBoundaryNodeIds) {
+			for (const nodeId of collectGraphLayoutSubtreeNodeIds(
+				currentLayout,
+				boundaryNodeId,
+			)) {
+				ownedNodeIds.add(nodeId);
+			}
+			for (const nodeId of collectGraphLogicalSubtreeNodeIds(
+				boundaryNodeId,
+				currentLogicalParentByChild,
+			)) {
+				ownedNodeIds.add(nodeId);
+			}
+		}
+		return ownedNodeIds;
+	};
+	const captureProjectionFreeNodePositions = (
+		nodePositions: GraphStateSnapshot['nodePositions'],
+	): void => {
+		const nextNodePositions: Record<string, GraphLayoutPosition> = Object.fromEntries(
+			Object.entries(nodePositions).map(([nodeId, position]) => [
+				nodeId,
+				{ ...position },
+			]),
+		);
+
+		for (const nodeId of collectTaskProjectionOwnedNodeIds()) {
+			const persistentPosition = persistentNodePositions[nodeId];
+
+			if (persistentPosition) {
+				nextNodePositions[nodeId] = { ...persistentPosition };
+			} else {
+				delete nextNodePositions[nodeId];
+			}
+		}
+		persistentNodePositions = nextNodePositions;
+	};
+	const commitRuntimeGraphState = (
+		nextState: GraphState,
+		options: {
+			readonly baseNodePositions?: GraphStateSnapshot['nodePositions'];
+			readonly projectionOnly?: boolean;
+		} = {},
+	): void => {
+		if (options.baseNodePositions) {
+			persistentNodePositions = Object.fromEntries(Object.entries(
+				options.baseNodePositions,
+			).map(([nodeId, position]) => [nodeId, { ...position }]));
+		}
+
+		const previous = state.getState();
+
+		suppressPersistentGraphCapture += 1;
+		try {
+			state.setState(nextState);
+		} finally {
+			suppressPersistentGraphCapture -= 1;
+		}
+		const current = state.getState();
+		const workspaceGraphChanged = options.baseNodePositions !== undefined
+			|| previous.fileGroupPages !== current.fileGroupPages
+			|| previous.openedFolders !== current.openedFolders
+			|| previous.detachedRootNodeIds !== current.detachedRootNodeIds
+			|| previous.hiddenNodeIds !== current.hiddenNodeIds;
+
+		if (!options.projectionOnly && workspaceGraphChanged) {
+			notifyWorkspaceSubscribers();
+		}
+	};
+	const unsubscribeWorkspaceGraphState = state.subscribe((snapshot) => {
+		const previous = observedPersistentGraphState;
+
+		observedPersistentGraphState = snapshot;
+		if (suppressPersistentGraphCapture > 0) {
+			return;
+		}
+		let changed = false;
+
+		if (previous.nodePositions !== snapshot.nodePositions) {
+			captureProjectionFreeNodePositions(snapshot.nodePositions);
+			changed = true;
+		}
+		if (
+			previous.fileGroupPages !== snapshot.fileGroupPages
+			|| previous.openedFolders !== snapshot.openedFolders
+			|| previous.detachedRootNodeIds !== snapshot.detachedRootNodeIds
+			|| previous.hiddenNodeIds !== snapshot.hiddenNodeIds
+		) {
+			changed = true;
+		}
+		if (changed) {
+			notifyWorkspaceSubscribers();
+		}
+	});
+	const unsubscribeWorkspaceTasks = taskState.subscribeWorkspaceTasks(
+		() => notifyWorkspaceSubscribers(),
+	);
 	const syncNavigatorRoots = (
 		snapshot: GraphStateSnapshot = state.getState(),
 	): void => {
@@ -1324,7 +1700,7 @@ export function initializeGraphView(
 			rebaseNodePositions(
 				previousLayout,
 				nextLayout,
-				snapshot.nodePositions,
+				persistentNodePositions,
 				{
 					logicalParentByChild: createGraphLogicalParentByChild(
 						addition.graph,
@@ -1335,14 +1711,14 @@ export function initializeGraphView(
 		const translatedNodePositions = translateDetachedSubtree(
 			previousLayout,
 			nextLayout,
-			snapshot.nodePositions,
+			persistentNodePositions,
 			detachedRootNodeId,
 			targetPosition,
 			{ baseNodePositions: rebasedNodePositions },
 		);
 		const nodePositions = cloneDetachedSubtreePositions(
 			translatedNodePositions,
-			snapshot.nodePositions,
+			persistentNodePositions,
 			previousLayout,
 			sourceRootNodeId,
 			addition.root.id,
@@ -1369,14 +1745,14 @@ export function initializeGraphView(
 				? { enteringSourceRootId: animationSourceRootId }
 				: undefined,
 		);
-		state.setState({
+		commitRuntimeGraphState({
 			camera: snapshot.camera,
 			nodePositions,
 			fileGroupPages: visualState.fileGroupPages,
 			openedFolders: visualState.openedFolders,
 			detachedRootNodeIds,
 			hiddenNodeIds: snapshot.hiddenNodeIds,
-		});
+		}, { baseNodePositions: nodePositions });
 		syncNavigatorRoots();
 		return detachedRootNodeId;
 	};
@@ -1436,14 +1812,14 @@ export function initializeGraphView(
 		skipGraphLayoutReflow = true;
 		applyingTaskState = true;
 		try {
-			state.setState({
+			commitRuntimeGraphState({
 				camera: snapshot.camera,
 				nodePositions: projection.nodePositions,
 				fileGroupPages: visualState.fileGroupPages,
 				openedFolders: visualState.openedFolders,
 				detachedRootNodeIds: {},
 				hiddenNodeIds: snapshot.hiddenNodeIds,
-			});
+			}, { baseNodePositions: {} });
 		} finally {
 			applyingTaskState = false;
 			skipGraphLayoutReflow = false;
@@ -1518,7 +1894,7 @@ export function initializeGraphView(
 			unarrangedNodeIds,
 		);
 		const transferredNodePositions = transferReattachedSubtreePositions(
-			snapshot.nodePositions,
+			persistentNodePositions,
 			snapshot.nodePositions,
 			previousLayout,
 			nextLayout,
@@ -1557,14 +1933,14 @@ export function initializeGraphView(
 		currentLogicalParentByChild = nextLogicalParentByChild;
 		currentLayout = nextLayout;
 		applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
-		state.setState({
+		commitRuntimeGraphState({
 			camera: snapshot.camera,
 			nodePositions,
 			fileGroupPages: visualState.fileGroupPages,
 			openedFolders: visualState.openedFolders,
 			detachedRootNodeIds,
 			hiddenNodeIds: snapshot.hiddenNodeIds,
-		});
+		}, { baseNodePositions: nodePositions });
 		syncNavigatorRoots();
 		return true;
 	};
@@ -1699,10 +2075,10 @@ export function initializeGraphView(
 			snapshot,
 			nextUnarrangedNodeIds,
 		);
-		let nodePositions = rebaseNodePositions(
+		const baseNodePositions = rebaseNodePositions(
 			previousLayout,
 			nextLayout,
-			snapshot.nodePositions,
+			persistentNodePositions,
 			{
 				logicalParentByChild: currentLogicalParentByChild,
 			},
@@ -1712,8 +2088,9 @@ export function initializeGraphView(
 			&& !nextLayout.nodes.some((node) => node.id === nodeId)
 		) {
 			// standalone File Card가 grouped Row로 돌아가면 Layout 좌표 소유권도 제거한다.
-			delete nodePositions[nodeId];
+			delete baseNodePositions[nodeId];
 		}
+		let nodePositions = baseNodePositions;
 		if (currentTaskScopeBoundaryNodeIds.size > 0) {
 			// Arrangement rebase는 일반 descendant를 Parent local 좌표로 옮긴다.
 			// Task Scope boundary는 Task Region이 절대 World 위치를 소유하므로,
@@ -1735,14 +2112,14 @@ export function initializeGraphView(
 		currentManualUnarrangedNodeIds = nextUnarrangedNodeIds;
 		currentLayout = nextLayout;
 		applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
-		state.setState({
+		commitRuntimeGraphState({
 			camera: snapshot.camera,
 			nodePositions,
 			fileGroupPages: snapshot.fileGroupPages,
 			openedFolders: snapshot.openedFolders,
 			detachedRootNodeIds: snapshot.detachedRootNodeIds,
 			hiddenNodeIds: snapshot.hiddenNodeIds,
-		});
+		}, { baseNodePositions });
 		return true;
 	};
 	/**
@@ -1860,7 +2237,20 @@ export function initializeGraphView(
 			: undefined
 	);
 	const syncTaskInspector = (): void => {
-		taskInspector?.apply(focusedTaskNode, currentTaskLayout);
+		const focusedTaskId = focusedTaskNode?.taskId;
+
+		taskInspector?.apply(
+			focusedTaskNode,
+			currentTaskLayout,
+			focusedTaskId
+				? {
+					options: createTaskWorkspaceRootOptions(workspaceGraph),
+					ownerRootId: taskState.getWorkspaceTask(
+						focusedTaskId,
+					)?.ownerRootId,
+				}
+				: undefined,
+		);
 	};
 	const clearTaskFocus = (): void => {
 		if (!focusedTaskNode) {
@@ -2275,7 +2665,7 @@ export function initializeGraphView(
 			const scopeBoundariesChanged = reconcileTaskGraphScopeOccurrences(bindings);
 			const snapshot = state.getState();
 			let graphNodePositions: Record<string, GraphLayoutPosition> = {
-				...snapshot.nodePositions,
+				...persistentNodePositions,
 			};
 
 			if (scopeBoundariesChanged) {
@@ -2288,7 +2678,7 @@ export function initializeGraphView(
 				graphNodePositions = rebaseNodePositions(
 					previousLayout,
 					nextLayout,
-					snapshot.nodePositions,
+					persistentNodePositions,
 					{ logicalParentByChild: currentLogicalParentByChild },
 				);
 				const nextNodeIds = new Set(nextLayout.nodes.map((node) => node.id));
@@ -2326,10 +2716,18 @@ export function initializeGraphView(
 				} else if (animateGraphScopeNodes) {
 					renderer.applyLayout(currentLayout, projection.nodePositions);
 				}
-				state.setState({
-					camera: snapshot.camera,
-					nodePositions: projection.nodePositions,
-				});
+				commitRuntimeGraphState(
+					{
+						camera: snapshot.camera,
+						nodePositions: projection.nodePositions,
+					},
+					{
+						...(scopeBoundariesChanged
+							? { baseNodePositions: graphNodePositions }
+							: {}),
+						projectionOnly: !scopeBoundariesChanged,
+					},
+				);
 			}
 		} finally {
 			applyingTaskState = false;
@@ -2354,77 +2752,33 @@ export function initializeGraphView(
 				return false;
 			}
 		}
-		const applyChanges = (
-			graphTargets: TaskBlueprint['defaultGraphTargets'],
-			nodeId: string,
-			changesForTask: typeof effectiveChanges,
-		): TaskBlueprint['defaultGraphTargets'] => {
-			let nextGraphTargets = graphTargets;
+		const membershipChanges = effectiveChanges.map(({ binding, included }) => {
+			const record = taskState.getWorkspaceTask(binding.taskId);
+			const previousOrigin = record?.targetOrigins.find((origin) => (
+				origin.nodeId === binding.nodeId
+				&& origin.area === binding.area
+				&& origin.sourceId === binding.sourceId
+			));
+			const sourceRootId = taskGraphTargetIndex.get(
+				binding.sourceId,
+			)?.sourceRootId
+				?? previousOrigin?.sourceRootId
+				?? record?.ownerRootId;
 
-			for (const { binding, included } of changesForTask) {
-				if (binding.nodeId !== nodeId) {
-					continue;
-				}
-				const areaTargets = nextGraphTargets[binding.area];
-				const nextAreaTargets = included
-					? areaTargets.includes(binding.sourceId)
-						? areaTargets
-						: sortTaskGraphTargetIds(taskGraphTargetIndex, [
-							...areaTargets,
-							binding.sourceId,
-						])
-					: areaTargets.includes(binding.sourceId)
-						? areaTargets.filter((sourceId) => sourceId !== binding.sourceId)
-						: areaTargets;
+			return sourceRootId
+				? [{
+					taskId: binding.taskId,
+					nodeId: binding.nodeId,
+					area: binding.area,
+					sourceId: binding.sourceId,
+					sourceRootId,
+					included,
+				}]
+				: [];
+		}).flat();
 
-				if (nextAreaTargets === areaTargets) {
-					continue;
-				}
-
-				nextGraphTargets = {
-					...nextGraphTargets,
-					[binding.area]: nextAreaTargets,
-				};
-			}
-			return nextGraphTargets;
-		};
-
-		for (const taskId of new Set(effectiveChanges.map(
-			(change) => change.binding.taskId,
-		))) {
-			const taskChanges = effectiveChanges.filter(
-				(change) => change.binding.taskId === taskId,
-			);
-			const updated = taskState.updateTask(taskId, (current) => {
-				const start = current.nodes.find((node) => node.kind === 'start');
-
-				return {
-					...current,
-					defaultGraphTargets: start
-						? applyChanges(current.defaultGraphTargets, start.id, taskChanges)
-						: current.defaultGraphTargets,
-					nodes: current.nodes.map((node) => {
-						if (node.kind !== 'work') {
-							return node;
-						}
-						const graphTargets = applyChanges(
-							node.graphTargets,
-							node.id,
-							taskChanges,
-						);
-
-						return graphTargets === node.graphTargets
-							? node
-							: { ...node, graphTargets };
-					}),
-				};
-			});
-
-			if (!updated) {
-				return false;
-			}
-		}
-		return true;
+		return membershipChanges.length === effectiveChanges.length
+			&& taskState.updateGraphTargetMemberships(membershipChanges) !== undefined;
 	};
 	function removeTaskGraphScopeBindingsForOccurrence(
 		occurrenceNodeId: string,
@@ -2523,7 +2877,7 @@ export function initializeGraphView(
 		scopeBoundaryNodeIds: ReadonlySet<string> = new Set(),
 	): void => {
 		const snapshot = state.getState();
-		const nodePositions = { ...snapshot.nodePositions };
+		const nodePositions = { ...persistentNodePositions };
 		const translatedPositions = new Map<string, GraphLayoutPosition>();
 
 		translateScopeLogicalSubtreePositions(
@@ -2537,7 +2891,10 @@ export function initializeGraphView(
 		for (const [nodeId, position] of translatedPositions) {
 			nodePositions[nodeId] = position;
 		}
-		state.setState({ camera: snapshot.camera, nodePositions });
+		commitRuntimeGraphState(
+			{ camera: snapshot.camera, nodePositions },
+			{ baseNodePositions: nodePositions },
+		);
 	};
 	handleGraphSourceDragMove = ({
 		sourceNodeId,
@@ -2716,6 +3073,17 @@ export function initializeGraphView(
 		if (!task) {
 			return;
 		}
+		if (input.kind === 'start' && input.field === 'ownerRootId') {
+			if (!createTaskWorkspaceRootOptions(workspaceGraph).some(
+				(option) => option.value === input.value,
+			)) {
+				return;
+			}
+			if (taskState.setOwnerRoot(input.taskId, input.value)) {
+				syncTaskInspector();
+			}
+			return;
+		}
 
 		if (input.kind === 'start') {
 			if (targetNode?.kind !== 'start') {
@@ -2875,7 +3243,7 @@ export function initializeGraphView(
 
 				try {
 					const imported = materializeTaskTransfer(parsed.document, current);
-					const updated = taskState.updateTask(taskId, () => imported);
+					const updated = taskState.replaceTaskBlueprint(taskId, imported);
 
 					if (!updated) {
 						return {
@@ -2953,8 +3321,12 @@ export function initializeGraphView(
 	};
 	const handleTaskCreate = (): void => {
 		const tasks = taskState.getSnapshot().tasks;
+		const ownerRootId = createTaskWorkspaceRootOptions(workspaceGraph)[0]?.value;
 
-		taskState.createTask({
+		if (!ownerRootId) {
+			return;
+		}
+		taskState.createOwnedTask(ownerRootId, {
 			title: `Task ${tasks.length + 1}`,
 			origin: createTaskOriginInVisibleArea(
 				camera,
@@ -3090,6 +3462,11 @@ export function initializeGraphView(
 				applyingTaskState = false;
 			}
 		},
+		(nextState, baseNodePositions) => commitRuntimeGraphState(
+			nextState,
+			{ baseNodePositions },
+		),
+		() => persistentNodePositions,
 	);
 	const unsubscribeTaskGraphScope = state.subscribe((snapshot) => {
 		const structureChanged = (
@@ -3111,10 +3488,17 @@ export function initializeGraphView(
 
 	applyTaskState({ animateGraphScopeNodes: false });
 
-	return {
+	const graphView: GraphView = {
 		state,
 		camera,
 		taskState,
+		getWorkspaceSnapshot,
+		subscribeWorkspaceSnapshot(subscriber): () => void {
+			workspaceSubscribers.add(subscriber);
+			return () => {
+				workspaceSubscribers.delete(subscriber);
+			};
+		},
 		refreshVisibleGraphArea(): void {
 			if (!disposed) {
 				navigator.refreshVisibleGraphArea();
@@ -3126,10 +3510,43 @@ export function initializeGraphView(
 				return;
 			}
 
-			const snapshot = state.getState();
+			const currentSnapshot = state.getState();
+			const restoredGraphState = pendingWorkspaceGraphState;
+
+			pendingWorkspaceGraphState = undefined;
+			if (restoredGraphState) {
+				persistentNodePositions = Object.fromEntries(Object.entries(
+					restoredGraphState.nodePositions,
+				).map(([nodeId, position]) => [nodeId, { ...position }]));
+			}
+			const snapshot: GraphStateSnapshot = restoredGraphState
+				? {
+					camera: currentSnapshot.camera,
+					nodePositions: persistentNodePositions,
+					fileGroupPages: restoredGraphState.fileGroupPages,
+					openedFolders: restoredGraphState.openedFolders,
+					detachedRootNodeIds: restoredGraphState.detachedRootNodeIds,
+					hiddenNodeIds: restoredGraphState.hiddenNodeIds,
+				}
+				: currentSnapshot;
 
 			workspaceGraph = graph;
 			taskGraphTargetIndex = createTaskGraphTargetIndex(workspaceGraph);
+			const currentRecords = taskState.getWorkspaceSnapshot().records;
+			const nextTaskRecords = pendingWorkspaceTaskRecords;
+
+			pendingWorkspaceTaskRecords = undefined;
+			if (
+				nextTaskRecords
+				&& (
+					nextTaskRecords.length !== currentRecords.length
+					|| nextTaskRecords.some(
+						(record, index) => record !== currentRecords[index],
+					)
+				)
+			) {
+				taskState.replaceWorkspaceTasks(nextTaskRecords);
+			}
 			const nextGraph = applyDetachedGraphRoots(
 				workspaceGraph,
 				snapshot.detachedRootNodeIds,
@@ -3161,7 +3578,7 @@ export function initializeGraphView(
 			const scopedNodePositions = scopeDetachedNodePositions(
 				nextGraph,
 				nextLayout,
-				snapshot.nodePositions,
+				persistentNodePositions,
 			);
 			const restoredArrangement = classifyGraphLayoutNodeArrangement(
 				nextLayout,
@@ -3223,23 +3640,88 @@ export function initializeGraphView(
 			currentLogicalParentByChild = nextLogicalParentByChild;
 			currentLayout = nextLayout;
 			applyGraphLayout(renderer, navigator, nextLayout, nodePositions);
-			state.setState({
+			commitRuntimeGraphState({
 				camera: snapshot.camera,
 				nodePositions,
 				fileGroupPages: visualState.fileGroupPages,
 				openedFolders: visualState.openedFolders,
 				detachedRootNodeIds,
 				hiddenNodeIds: snapshot.hiddenNodeIds,
-			});
+			}, { baseNodePositions: nodePositions });
 			syncNavigatorRoots();
 			navigator.setWorkspaceGraph(workspaceGraph);
 			applyTaskState();
 		},
 		updateTasks(tasks): void {
 			if (!disposed) {
-				taskState.replaceTasks(tasks);
+				const previousRecords = new Map(
+					taskState.getWorkspaceSnapshot().records.map((record) => [
+						record.task.id,
+						record,
+					]),
+				);
+				const fallbackOwnerRootId = createTaskWorkspaceRootOptions(
+					workspaceGraph,
+				)[0]?.value ?? 'workspace-root:transient';
+				const records = tasks.map((task) => {
+					const previous = previousRecords.get(task.id);
+					const ownerRootId = previous?.ownerRootId ?? fallbackOwnerRootId;
+					const previousOrigins = new Map(previous?.targetOrigins.map((origin) => [
+						createTaskTargetOriginKey(
+							origin.nodeId,
+							origin.area,
+							origin.sourceId,
+						),
+						origin,
+					]));
+					const targetOrigins = collectTaskTargetOrigins(
+						task,
+						ownerRootId,
+						taskGraphTargetIndex,
+					).map((origin) => {
+						if (taskGraphTargetIndex.has(origin.sourceId)) {
+							return origin;
+						}
+						return previousOrigins.get(createTaskTargetOriginKey(
+							origin.nodeId,
+							origin.area,
+							origin.sourceId,
+						)) ?? origin;
+					});
+
+					return {
+						ownerRootId,
+						storageRevision: previous
+							? Math.min(
+								Number.MAX_SAFE_INTEGER,
+								previous.storageRevision + 1,
+							)
+							: 1,
+						task,
+						targetOrigins,
+					};
+				});
+
+				taskState.replaceWorkspaceTasks(records);
 				applyTaskState();
 			}
+		},
+		updateWorkspace(graph, snapshot): void {
+			if (disposed) {
+				return;
+			}
+			suppressWorkspaceNotifications += 1;
+			try {
+				pendingWorkspaceTaskRecords = sanitizeWorkspaceTaskRecords(
+					snapshot.tasks,
+					graph,
+				);
+				pendingWorkspaceGraphState = snapshot.graph;
+				graphView.updateGraph(graph);
+			} finally {
+				suppressWorkspaceNotifications -= 1;
+			}
+			notifyWorkspaceSubscribers();
 		},
 		setNodeEffect(target, effect): void {
 			if (!disposed) {
@@ -3263,6 +3745,9 @@ export function initializeGraphView(
 			unsubscribeTaskGraphScope();
 			unsubscribeLayout();
 			unsubscribeTaskInspectorCamera();
+			unsubscribeWorkspaceGraphState();
+			unsubscribeWorkspaceTasks();
+			workspaceSubscribers.clear();
 			navigator.dispose();
 			taskInspector?.dispose();
 			taskInspector = undefined;
@@ -3276,4 +3761,5 @@ export function initializeGraphView(
 			viewport.remove();
 		},
 	};
+	return graphView;
 }

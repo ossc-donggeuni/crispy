@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
+import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
 import {
 	createDefaultWorkspacePersistentState,
 	parseWorkspacePersistentState,
+	type WorkspaceTaskRelocation,
 	type WorkspacePersistentState,
 } from './workspaceMetadata';
 
@@ -94,6 +96,8 @@ export function partitionWorkspacePersistentStateByRoot(
 		'detachedRootNodeIds',
 	);
 	partitionRecord(source.hiddenNodeIds, rootStates, rootUris, 'hiddenNodeIds');
+	partitionTasks(source.tasks, rootStates);
+	partitionTaskRelocations(source.taskRelocations, rootStates);
 
 	return rootStates;
 }
@@ -104,6 +108,8 @@ export function mergeWorkspacePersistentStates(
 ): WorkspacePersistentState {
 	const merged = createDefaultWorkspacePersistentState();
 	const rootUris = rootStates.map(({ rootUri }) => rootUri);
+	const tasksById = new Map<string, WorkspaceTaskRecord>();
+	const relocationsByKey = new Map<string, WorkspaceTaskRelocation>();
 
 	for (const { rootUri, state } of rootStates) {
 		const source = parseWorkspacePersistentState(state);
@@ -142,7 +148,25 @@ export function mergeWorkspacePersistentStates(
 			rootUri,
 			rootUris,
 		);
+		mergeOwnedTasks(source.tasks, tasksById, rootUri);
+		mergeOwnedTaskRelocations(
+			source.taskRelocations,
+			relocationsByKey,
+			rootUri,
+		);
 	}
+	const activeRootIds = new Set(rootUris.map(createWorkspaceRootId));
+
+	for (const relocation of relocationsByKey.values()) {
+		// destination이 현재 비활성이어도 먼저 모든 journal과 live record 중
+		// 전역 winner를 결정한다. 연쇄 이동의 이전 journal이 활성 Root를
+		// 가리키더라도 더 최신 journal의 비활성 owner를 덮어쓰면 안 된다.
+		mergePreferredTaskRecord(relocation.record, tasksById);
+	}
+	merged.tasks = [...tasksById.values()].filter((record) => (
+		activeRootIds.has(record.ownerRootId)
+	));
+	merged.taskRelocations = [...relocationsByKey.values()];
 
 	return merged;
 }
@@ -227,6 +251,146 @@ function mergeOwnedRecord<T>(
 			target[id] = value;
 		}
 	}
+}
+
+/** Task를 명시된 ownerRootId와 정확히 일치하는 Root state에만 분배한다. */
+function partitionTasks(
+	tasks: readonly WorkspaceTaskRecord[],
+	rootStates: WorkspaceRootPersistentState[],
+): void {
+	const rootIndexes = new Map<string, number>();
+	for (const [index, { rootUri }] of rootStates.entries()) {
+		const rootId = createWorkspaceRootId(rootUri);
+
+		if (!rootIndexes.has(rootId)) {
+			rootIndexes.set(rootId, index);
+		}
+	}
+
+	for (const task of tasks) {
+		const rootIndex = rootIndexes.get(task.ownerRootId);
+		const rootState = rootIndex === undefined
+			? undefined
+			: rootStates[rootIndex];
+
+		if (rootState) {
+			(rootState.state.tasks as WorkspaceTaskRecord[]).push(task);
+		}
+	}
+}
+
+/** 이동 journal은 destination이 아니라 명시된 source Root에만 저장한다. */
+function partitionTaskRelocations(
+	relocations: readonly WorkspaceTaskRelocation[],
+	rootStates: WorkspaceRootPersistentState[],
+): void {
+	const rootIndexes = new Map(rootStates.map(({ rootUri }, index) => [
+		createWorkspaceRootId(rootUri),
+		index,
+	]));
+
+	for (const relocation of relocations) {
+		const rootIndex = rootIndexes.get(relocation.sourceRootId);
+		const rootState = rootIndex === undefined
+			? undefined
+			: rootStates[rootIndex];
+
+		if (rootState) {
+			(rootState.state.taskRelocations as WorkspaceTaskRelocation[]).push(
+				relocation,
+			);
+		}
+	}
+}
+
+/**
+ * 물리 Root와 persisted owner가 일치하는 Task만 병합한다.
+ * 같은 Task ID는 높은 revision을, 동률이면 canonical record가 앞선 값을 택한다.
+ */
+function mergeOwnedTasks(
+	tasks: readonly WorkspaceTaskRecord[],
+	target: Map<string, WorkspaceTaskRecord>,
+	rootUri: vscode.Uri,
+): void {
+	const rootId = createWorkspaceRootId(rootUri);
+
+	for (const candidate of tasks) {
+		if (candidate.ownerRootId !== rootId) {
+			continue;
+		}
+		mergePreferredTaskRecord(candidate, target);
+	}
+}
+
+/** 물리 source와 일치하는 이동 journal만 병합하고 중복은 높은 revision을 택한다. */
+function mergeOwnedTaskRelocations(
+	relocations: readonly WorkspaceTaskRelocation[],
+	target: Map<string, WorkspaceTaskRelocation>,
+	rootUri: vscode.Uri,
+): void {
+	const sourceRootId = createWorkspaceRootId(rootUri);
+
+	for (const relocation of relocations) {
+		if (relocation.sourceRootId !== sourceRootId) {
+			continue;
+		}
+		const key = JSON.stringify([sourceRootId, relocation.record.task.id]);
+		const current = target.get(key);
+
+		if (
+			!current
+			|| isPreferredTaskRecord(relocation.record, current.record)
+		) {
+			target.set(key, relocation);
+		}
+	}
+}
+
+function mergePreferredTaskRecord(
+	candidate: WorkspaceTaskRecord,
+	target: Map<string, WorkspaceTaskRecord>,
+): void {
+	const current = target.get(candidate.task.id);
+
+	if (!current || isPreferredTaskRecord(candidate, current)) {
+		target.set(candidate.task.id, candidate);
+	}
+}
+
+/** revision과 canonical JSON 순서로 Task ID 충돌 winner를 결정한다. */
+function isPreferredTaskRecord(
+	candidate: WorkspaceTaskRecord,
+	current: WorkspaceTaskRecord,
+): boolean {
+	if (candidate.storageRevision !== current.storageRevision) {
+		return candidate.storageRevision > current.storageRevision;
+	}
+
+	return createCanonicalJson(candidate) < createCanonicalJson(current);
+}
+
+/** object key 순서를 제거한 JSON 문자열로 동률 비교를 입력 순서와 분리한다. */
+function createCanonicalJson(value: unknown): string {
+	return JSON.stringify(sortJsonObjectKeys(value));
+}
+
+/** JSON value의 모든 object key를 재귀적으로 정렬한다. */
+function sortJsonObjectKeys(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(sortJsonObjectKeys);
+	}
+	if (!value || typeof value !== 'object') {
+		return value;
+	}
+
+	return Object.fromEntries(Object.entries(value).sort(([left], [right]) => (
+		left < right ? -1 : left > right ? 1 : 0
+	)).map(([key, entry]) => [key, sortJsonObjectKeys(entry)]));
+}
+
+/** Workspace Root URI의 Task ownership semantic ID를 만든다. */
+function createWorkspaceRootId(rootUri: vscode.Uri): string {
+	return `workspace-root:${rootUri.toString()}`;
 }
 
 /** Node ID가 나타내는 URI를 포함하는 가장 구체적인 Workspace Root index를 찾는다. */

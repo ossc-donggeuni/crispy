@@ -26,6 +26,8 @@ export type TaskGraphTargetKind = 'folder' | 'file';
 /** Workspace Graph 순회에서 얻은 Canonical Source 표시 정보다. */
 export interface TaskGraphTargetSource {
 	readonly sourceId: string;
+	/** Source가 속한 실제 Workspace Graph Root의 canonical node ID다. */
+	readonly sourceRootId: string;
 	readonly kind: TaskGraphTargetKind;
 	readonly name: string;
 	readonly relativePath: string;
@@ -73,10 +75,12 @@ export function createTaskGraphTargetIndex(
 	graph: Graph,
 ): TaskGraphTargetIndex {
 	const sources = new Map<string, TaskGraphTargetSource>();
+	const ownershipRootNodeIds = collectOwnershipRootNodeIds(graph.roots);
 	let order = 0;
 
 	const addEntry = (
 		entry: ProjectEntry,
+		traversalRootNodeId: string,
 		workspaceName: string,
 		path: readonly string[],
 		parentId: string | undefined,
@@ -84,6 +88,11 @@ export function createTaskGraphTargetIndex(
 		if (!sources.has(entry.id)) {
 			sources.set(entry.id, {
 				sourceId: entry.id,
+				sourceRootId: resolveTaskGraphTargetSourceRootId(
+					entry.id,
+					traversalRootNodeId,
+					ownershipRootNodeIds,
+				),
 				kind: entry.kind,
 				name: entry.name,
 				relativePath: [workspaceName, ...path].filter(Boolean).join('/'),
@@ -97,6 +106,7 @@ export function createTaskGraphTargetIndex(
 			for (const child of entry.children) {
 				addEntry(
 					child,
+					traversalRootNodeId,
 					workspaceName,
 					[...path, child.name],
 					entry.id,
@@ -115,6 +125,50 @@ export function createTaskGraphTargetIndex(
 	}
 
 	return sources;
+}
+
+/**
+ * Source ID URI를 포함하는 Root 중 가장 구체적인 Root node ID를 반환한다.
+ * 중첩 Workspace가 부모 Tree에도 동일 Source를 노출해도 Root 순서와 무관하게
+ * nested Root provenance가 유지된다. URI를 해석할 수 없으면 실제 순회 Root를 쓴다.
+ */
+export function resolveTaskGraphTargetSourceRootId(
+	sourceId: string,
+	traversalRootNodeId: string,
+	rootNodeIds: readonly string[],
+): string {
+	const sourceUri = parseGraphNodeUri(sourceId);
+
+	if (!sourceUri) {
+		return traversalRootNodeId;
+	}
+
+	let ownerRootId: string | undefined;
+	let ownerPathLength = -1;
+
+	for (const rootNodeId of rootNodeIds) {
+		const rootUri = parseGraphNodeUri(rootNodeId);
+
+		if (!rootUri || !isUriWithinRoot(sourceUri, rootUri)) {
+			continue;
+		}
+
+		const rootPathLength = normalizeUriPath(rootUri.pathname).length;
+
+		if (
+			rootPathLength > ownerPathLength
+			|| (
+				rootPathLength === ownerPathLength
+				&& ownerRootId !== undefined
+				&& compareSourceIds(rootNodeId, ownerRootId) < 0
+			)
+		) {
+			ownerRootId = rootNodeId;
+			ownerPathLength = rootPathLength;
+		}
+	}
+
+	return ownerRootId ?? traversalRootNodeId;
 }
 
 /** Workspace 순회 순서와 Source ID tie-breaker를 공유해 binding 순서를 안정화한다. */
@@ -297,6 +351,7 @@ function indexRoot(
 	rootNode: GraphRootNode,
 	addEntry: (
 		entry: ProjectEntry,
+		traversalRootNodeId: string,
 		workspaceName: string,
 		path: readonly string[],
 		parentId: string | undefined,
@@ -304,7 +359,13 @@ function indexRoot(
 ): void {
 	if (rootNode.kind === 'project') {
 		for (const child of rootNode.children) {
-			addEntry(child, rootNode.name, [child.name], undefined);
+			addEntry(
+				child,
+				root.nodeId,
+				rootNode.name,
+				[child.name],
+				undefined,
+			);
 		}
 		return;
 	}
@@ -313,7 +374,68 @@ function indexRoot(
 		?.split('/')
 		.filter(Boolean)
 		.join('/') ?? '';
-	addEntry(rootNode, contextPath, [rootNode.name], undefined);
+	addEntry(
+		rootNode,
+		root.nodeId,
+		contextPath,
+		[rootNode.name],
+		undefined,
+	);
+}
+
+/** Workspace Root가 하나라도 있으면 transient Folder/File Root는 ownership에서 제외한다. */
+function collectOwnershipRootNodeIds(
+	roots: readonly GraphRoot[],
+): readonly string[] {
+	const workspaceRootNodeIds = roots
+		.map((root) => root.nodeId)
+		.filter((nodeId) => nodeId.startsWith('workspace-root:'));
+
+	return workspaceRootNodeIds.length > 0
+		? workspaceRootNodeIds
+		: roots.map((root) => root.nodeId);
+}
+
+/** 알려진 Graph Node ID 뒤의 absolute URI를 URL 비교 값으로 복원한다. */
+function parseGraphNodeUri(nodeId: string): URL | undefined {
+	const prefixes = ['workspace-root:', 'folder:', 'file:'] as const;
+	const prefix = prefixes.find((candidate) => nodeId.startsWith(candidate));
+
+	if (!prefix) {
+		return undefined;
+	}
+
+	try {
+		return new URL(nodeId.slice(prefix.length));
+	} catch {
+		return undefined;
+	}
+}
+
+/** scheme/authority와 path segment 경계를 보존해 Source의 Root 포함 여부를 판별한다. */
+function isUriWithinRoot(uri: URL, rootUri: URL): boolean {
+	if (
+		uri.protocol !== rootUri.protocol
+		|| uri.username !== rootUri.username
+		|| uri.password !== rootUri.password
+		|| uri.host !== rootUri.host
+	) {
+		return false;
+	}
+
+	const rootPath = normalizeUriPath(rootUri.pathname);
+	const candidatePath = normalizeUriPath(uri.pathname);
+
+	return candidatePath === rootPath
+		|| rootPath === '/'
+		|| candidatePath.startsWith(`${rootPath}/`);
+}
+
+/** `/` 이외 URI path의 trailing slash를 제거한다. */
+function normalizeUriPath(path: string): string {
+	return path.length > 1 && path.endsWith('/')
+		? path.replace(/\/+$/, '')
+		: path;
 }
 
 /** locale 설정과 무관한 Source ID tie-breaker다. */

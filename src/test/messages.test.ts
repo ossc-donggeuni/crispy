@@ -12,24 +12,41 @@ import {
 	type WorkspaceToWebviewMessage,
 } from '../messages';
 import type { Graph, Project } from '../webview/graph/graphModel';
+import { createDefaultTaskBlueprint } from '../task';
+import { WORKSPACE_PERSISTENT_STATE_VERSION } from '../workspace/workspaceMetadata';
 
 suite('Extension to Webview Workspace messages', () => {
 	test('Workspace Persistent State 전체 snapshot을 Webview에서 Host로 전달한다', () => {
+		let sequence = 0;
+		const task = createDefaultTaskBlueprint(
+			{ title: 'Persisted Task' },
+			() => `message-task-${++sequence}`,
+		);
 		const workspaceMessage = {
 			type: 'workspace.stateChanged',
+			contextGeneration: 3,
+			rootIds: ['workspace-root:file:///workspace/app'],
 			state: {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: { 'folder:file:///workspace/app/src': { x: 10, y: 20 } },
 				fileGroupPages: { 'folder:file:///workspace/app/src:files': 2 },
 				openedFolders: { 'folder:file:///workspace/app/src': true },
 				detachedRootNodeIds: { 'file:file:///workspace/app/index.ts': true },
 				hiddenNodeIds: { 'folder:file:///workspace/app/private': true },
+				tasks: [{
+					ownerRootId: 'workspace-root:file:///workspace/app',
+					storageRevision: 1,
+					task,
+					targetOrigins: [],
+				}],
+				taskRelocations: [],
 			},
 		} satisfies WorkspaceStateChangedMessage;
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
 
 		assert.strictEqual(webviewMessage.type, 'workspace.stateChanged');
 		assert.deepStrictEqual(webviewMessage.state, workspaceMessage.state);
+		assert.strictEqual(webviewMessage.state.tasks[0]?.task.title, 'Persisted Task');
 	});
 
 	test('File Open 요청은 File ID만 포함해 Host union에 연결된다', () => {
@@ -57,6 +74,8 @@ suite('Extension to Webview Workspace messages', () => {
 		const workspaceMessage = {
 			type: 'workspace.graphUpdated',
 			graph,
+			contextGeneration: 3,
+			rootIds: graph.roots.map((root) => root.nodeId),
 		} satisfies WorkspaceToWebviewMessage;
 		const extensionMessage: ExtensionToWebviewMessage = workspaceMessage;
 		const graphPayload: Graph = workspaceMessage.graph;

@@ -7,6 +7,7 @@ import {
 	getTaskFlowStatus,
 	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
 	type TaskBlueprint,
+	type WorkspaceTaskRecord,
 } from '../../task';
 import { serializeTaskTransfer } from '../../task/taskTransfer';
 import {
@@ -39,6 +40,7 @@ import {
 import {
 	createGraphState,
 	INITIAL_GRAPH_STATE,
+	type GraphState,
 	type GraphStateSnapshot,
 } from '../../webview/graph/graphState';
 import {
@@ -60,6 +62,7 @@ import {
 	focusGraphRoot,
 	initializeGraphLayoutReflow,
 	initializeGraphView,
+	sanitizeWorkspaceTaskRecords,
 } from '../../webview/graph/graphView';
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
@@ -248,6 +251,269 @@ suite('Graph View', () => {
 		assert.strictEqual(getDescendantsByClass(root, 'task-end-node').length, 2);
 
 		graphView.dispose();
+	});
+
+	test('멀티 Root 새 Task는 첫 Project owner로 생성되고 START Inspector에서 owner를 바꾼다', () => {
+		const fixture = createPersistenceWorkspaceFixture();
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			createPersistenceGraphState(fixture),
+			fixture.graph,
+		);
+		const addTaskButton = getDescendantByAttribute(
+			root,
+			'aria-label',
+			'Task 추가',
+		);
+
+		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
+		const created = graphView.taskState.getWorkspaceSnapshot().records[0];
+
+		assert.ok(created);
+		assert.strictEqual(created.ownerRootId, fixture.firstProject.id);
+		assert.strictEqual(created.storageRevision, 1);
+		assert.deepStrictEqual(created.targetOrigins, []);
+		const start = created.task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(start);
+		const startElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			start.id,
+			created.task.id,
+		);
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		const inspector = getTaskInspector(root);
+		const ownerSelect = getTaskInspectorControl(inspector, 'ownerRootId');
+
+		assert.strictEqual(ownerSelect.value, fixture.firstProject.id);
+		assert.strictEqual(ownerSelect.disabled, false);
+		ownerSelect.value = fixture.secondProject.id;
+		ownerSelect.dispatch('change', createChangeEvent(ownerSelect));
+		const moved = graphView.taskState.getWorkspaceTask(created.task.id);
+
+		assert.ok(moved);
+		assert.strictEqual(moved.ownerRootId, fixture.secondProject.id);
+		assert.strictEqual(moved.storageRevision, 2);
+		assert.strictEqual(ownerSelect.value, fixture.secondProject.id);
+		assert.deepStrictEqual(graphView.getWorkspaceSnapshot().tasks, [moved]);
+
+		graphView.dispose();
+	});
+
+	test('Workspace snapshot은 Task provenance를 포함하고 Scope projection 좌표를 제외한다', () => {
+		const fixture = createPersistenceWorkspaceFixture();
+		const initialState = createPersistenceGraphState(fixture);
+		const record = createPersistenceTaskRecord({
+			ownerRootId: fixture.firstProject.id,
+			taskId: 'task:persistence-projection',
+			origin: { x: 2_000, y: 1_200 },
+			targets: [{
+				sourceId: fixture.secondSource.id,
+				sourceRootId: fixture.secondProject.id,
+			}],
+		});
+		const controlDocument = new FakeDocument();
+		const controlRoot = controlDocument.createElement('section');
+		const controlView = initializeGraphView(
+			controlRoot.asHtmlElement(),
+			initialState,
+			fixture.graph,
+		);
+		const persistentBaseline = controlView.getWorkspaceSnapshot().graph.nodePositions;
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			initialState,
+			fixture.graph,
+			{},
+			[],
+			[record],
+		);
+		const runtimePosition = graphView.state.getState().nodePositions[
+			fixture.secondSource.id
+		];
+		const snapshot = graphView.getWorkspaceSnapshot();
+
+		assert.deepStrictEqual(snapshot.tasks, [record]);
+		assert.deepStrictEqual(snapshot.tasks[0]?.targetOrigins, record.targetOrigins);
+		assert.deepStrictEqual(snapshot.graph.nodePositions, persistentBaseline);
+		assert.ok(runtimePosition);
+		assert.notDeepStrictEqual(
+			runtimePosition,
+			snapshot.graph.nodePositions[fixture.secondSource.id],
+		);
+
+		controlView.dispose();
+		graphView.dispose();
+	});
+
+	test('Task Scope 활성 중 Graph Reflow도 projection 좌표를 Workspace에 저장하지 않는다', () => {
+		const fixture = createPersistenceWorkspaceFixture();
+		const initialState = createPersistenceGraphState(fixture);
+		const record = createPersistenceTaskRecord({
+			ownerRootId: fixture.firstProject.id,
+			taskId: 'task:persistence-reflow-projection',
+			origin: { x: 2_000, y: 1_200 },
+			targets: [{
+				sourceId: fixture.secondSource.id,
+				sourceRootId: fixture.secondProject.id,
+			}],
+		});
+		const controlDocument = new FakeDocument();
+		const controlRoot = controlDocument.createElement('section');
+		const controlView = initializeGraphView(
+			controlRoot.asHtmlElement(),
+			initialState,
+			fixture.graph,
+		);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			initialState,
+			fixture.graph,
+			{},
+			[],
+			[record],
+		);
+
+		controlView.state.toggleFolder(fixture.firstProject.id);
+		graphView.state.toggleFolder(fixture.firstProject.id);
+
+		const persistentBaseline = controlView.getWorkspaceSnapshot().graph;
+		const snapshot = graphView.getWorkspaceSnapshot();
+		const runtimePosition = graphView.state.getState().nodePositions[
+			fixture.secondSource.id
+		];
+
+		assert.deepStrictEqual(snapshot.graph, persistentBaseline);
+		assert.ok(runtimePosition);
+		assert.notDeepStrictEqual(
+			runtimePosition,
+			snapshot.graph.nodePositions[fixture.secondSource.id],
+		);
+
+		controlView.dispose();
+		graphView.dispose();
+	});
+
+	test('updateWorkspace는 사라진 foreign membership 양쪽과 owner 없는 Task를 제거한다', () => {
+		const fixture = createPersistenceWorkspaceFixture();
+		const retained = createPersistenceTaskRecord({
+			ownerRootId: fixture.firstProject.id,
+			taskId: 'task:persistence-retained',
+			storageRevision: 7,
+			targets: [{
+				sourceId: fixture.firstSource.id,
+				sourceRootId: fixture.firstProject.id,
+			}, {
+				sourceId: fixture.secondSource.id,
+				sourceRootId: fixture.secondProject.id,
+			}],
+		});
+		const removed = createPersistenceTaskRecord({
+			ownerRootId: fixture.secondProject.id,
+			taskId: 'task:persistence-removed-owner',
+			storageRevision: 3,
+			targets: [],
+		});
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			createPersistenceGraphState(fixture),
+			fixture.graph,
+			{},
+			[],
+			[retained, removed],
+		);
+		const nextGraph: Graph = {
+			roots: [fixture.graph.roots[0] ?? assert.fail()],
+			rootNodes: {
+				[fixture.firstProject.id]: fixture.firstProject,
+			},
+		};
+
+		graphView.updateWorkspace(nextGraph, {
+			graph: graphView.getWorkspaceSnapshot().graph,
+			tasks: [retained, removed],
+		});
+		const snapshot = graphView.getWorkspaceSnapshot();
+		const current = snapshot.tasks[0];
+
+		assert.strictEqual(snapshot.tasks.length, 1);
+		assert.ok(current);
+		const currentStart = current.task.nodes.find((node) => node.kind === 'start');
+
+		assert.ok(currentStart);
+		assert.strictEqual(current.task.id, retained.task.id);
+		assert.strictEqual(current.ownerRootId, fixture.firstProject.id);
+		assert.strictEqual(current.storageRevision, retained.storageRevision + 1);
+		assert.deepStrictEqual(current.task.defaultGraphTargets.reference, [
+			fixture.firstSource.id,
+		]);
+		assert.deepStrictEqual(current.targetOrigins, [{
+			nodeId: currentStart.id,
+			area: 'reference',
+			sourceId: fixture.firstSource.id,
+			sourceRootId: fixture.firstProject.id,
+		}]);
+		assert.strictEqual(
+			graphView.taskState.getTask(removed.task.id),
+			undefined,
+		);
+
+		graphView.dispose();
+	});
+
+	test('nested Root 추가와 제거는 현재 Source membership을 유지하고 provenance만 실제 owner로 이관한다', () => {
+		const fixture = createNestedPersistenceWorkspaceFixture();
+		const initial = createPersistenceTaskRecord({
+			ownerRootId: fixture.parentRootId,
+			taskId: 'task:nested-provenance-migration',
+			storageRevision: 5,
+			targets: [{
+				sourceId: fixture.sourceId,
+				sourceRootId: fixture.parentRootId,
+			}],
+		});
+
+		const afterNestedRootAdded = sanitizeWorkspaceTaskRecords(
+			[initial],
+			fixture.multiRootGraph,
+		);
+		const addedRecord = afterNestedRootAdded[0];
+
+		assert.ok(addedRecord);
+		assert.strictEqual(addedRecord.storageRevision, initial.storageRevision + 1);
+		assert.deepStrictEqual(addedRecord.task.defaultGraphTargets.reference, [
+			fixture.sourceId,
+		]);
+		assert.deepStrictEqual(addedRecord.targetOrigins, [{
+			...initial.targetOrigins[0],
+			sourceRootId: fixture.nestedRootId,
+		}]);
+
+		const afterNestedRootRemoved = sanitizeWorkspaceTaskRecords(
+			afterNestedRootAdded,
+			fixture.parentOnlyGraph,
+		);
+		const removedRecord = afterNestedRootRemoved[0];
+
+		assert.ok(removedRecord);
+		assert.strictEqual(
+			removedRecord.storageRevision,
+			addedRecord.storageRevision + 1,
+		);
+		assert.deepStrictEqual(removedRecord.task.defaultGraphTargets.reference, [
+			fixture.sourceId,
+		]);
+		assert.deepStrictEqual(removedRecord.targetOrigins, initial.targetOrigins);
 	});
 
 	test('동일 World 좌표의 서로 다른 Task를 보정 없이 겹쳐 렌더링하고 독립 Drag한다', () => {
@@ -14014,7 +14280,7 @@ function getTaskInspector(element: FakeElement): FakeElement {
 
 function getTaskInspectorControl(
 	element: FakeElement,
-	field: 'title' | 'description' | 'prompt' | 'agentProviderId',
+	field: 'title' | 'description' | 'prompt' | 'agentProviderId' | 'ownerRootId',
 ): FakeElement {
 	return getDescendantByAttribute(
 		element,
@@ -14533,6 +14799,200 @@ function assertRenderedTaskGeometry(
 		assert.strictEqual(action.style.left, `${edge.geometry.midpoint.x}px`);
 		assert.strictEqual(action.style.top, `${edge.geometry.midpoint.y}px`);
 	}
+}
+
+interface PersistenceWorkspaceFixture {
+	readonly graph: Graph;
+	readonly firstProject: Project;
+	readonly secondProject: Project;
+	readonly firstSource: Project['children'][number];
+	readonly secondSource: Project['children'][number];
+}
+
+/** Task 영속화 통합 테스트용 URI 기반 멀티 Project Graph다. */
+function createPersistenceWorkspaceFixture(): PersistenceWorkspaceFixture {
+	const firstSource = {
+		kind: 'folder' as const,
+		id: 'folder:file:///workspace/alpha/src',
+		name: 'src',
+		status: 'loaded' as const,
+		children: [],
+	};
+	const secondSource = {
+		kind: 'folder' as const,
+		id: 'folder:file:///workspace/beta/lib',
+		name: 'lib',
+		status: 'loaded' as const,
+		children: [],
+	};
+	const firstProject: Project = {
+		kind: 'project',
+		id: 'workspace-root:file:///workspace/alpha',
+		name: 'alpha',
+		status: 'loaded',
+		children: [firstSource],
+	};
+	const secondProject: Project = {
+		kind: 'project',
+		id: 'workspace-root:file:///workspace/beta',
+		name: 'beta',
+		status: 'loaded',
+		children: [secondSource],
+	};
+
+	return {
+		firstProject,
+		secondProject,
+		firstSource,
+		secondSource,
+		graph: {
+			roots: [{
+				id: 'root:persistence-alpha',
+				nodeId: firstProject.id,
+			}, {
+				id: 'root:persistence-beta',
+				nodeId: secondProject.id,
+			}],
+			rootNodes: {
+				[firstProject.id]: firstProject,
+				[secondProject.id]: secondProject,
+			},
+		},
+	};
+}
+
+/** 같은 Graph baseline을 projection 유무 View 사이에 재사용한다. */
+function createPersistenceGraphState(
+	fixture: PersistenceWorkspaceFixture,
+): GraphState {
+	return {
+		camera: { x: 0, y: 0, scale: 1 },
+		nodePositions: {
+			[fixture.firstProject.id]: { x: 100, y: 100 },
+			[fixture.firstSource.id]: { x: 360, y: 180 },
+			[fixture.secondProject.id]: { x: 1_000, y: 100 },
+			[fixture.secondSource.id]: { x: 1_260, y: 180 },
+		},
+		openedFolders: {
+			[fixture.firstProject.id]: true,
+			[fixture.secondProject.id]: true,
+		},
+	};
+}
+
+/** START default reference와 provenance가 1:1인 persisted Task record를 만든다. */
+function createPersistenceTaskRecord({
+	ownerRootId,
+	taskId,
+	storageRevision = 1,
+	origin = { x: 1_600, y: 800 },
+	targets,
+}: {
+	readonly ownerRootId: string;
+	readonly taskId: string;
+	readonly storageRevision?: number;
+	readonly origin?: { readonly x: number; readonly y: number };
+	readonly targets: readonly {
+		readonly sourceId: string;
+		readonly sourceRootId: string;
+	}[];
+}): WorkspaceTaskRecord {
+	let sequence = 0;
+	const task = createDefaultTaskBlueprint({
+		title: `Persisted ${taskId}`,
+		origin,
+		defaultGraphTargets: {
+			reference: targets.map(({ sourceId }) => sourceId),
+			work: [],
+		},
+	}, () => `persistence-${++sequence}`);
+	const start = task.nodes.find((node) => node.kind === 'start');
+
+	assert.ok(start);
+	return {
+		ownerRootId,
+		storageRevision,
+		task: { ...task, id: taskId },
+		targetOrigins: targets.map(({ sourceId, sourceRootId }) => ({
+			nodeId: start.id,
+			area: 'reference',
+			sourceId,
+			sourceRootId,
+		})),
+	};
+}
+
+/** Parent Tree에도 나타나는 nested Workspace Source의 Root 전환 fixture다. */
+function createNestedPersistenceWorkspaceFixture(): {
+	readonly parentRootId: string;
+	readonly nestedRootId: string;
+	readonly sourceId: string;
+	readonly parentOnlyGraph: Graph;
+	readonly multiRootGraph: Graph;
+} {
+	const parentRootId = 'workspace-root:file:///repo';
+	const nestedRootId = 'workspace-root:file:///repo/packages/app';
+	const sourceId = 'file:file:///repo/packages/app/src/index.ts';
+	const source = {
+		kind: 'file' as const,
+		id: sourceId,
+		name: 'index.ts',
+	};
+	const sourceFolder = {
+		kind: 'folder' as const,
+		id: 'folder:file:///repo/packages/app/src',
+		name: 'src',
+		status: 'loaded' as const,
+		children: [source],
+	};
+	const parentProject: Project = {
+		kind: 'project',
+		id: parentRootId,
+		name: 'repo',
+		status: 'loaded',
+		children: [{
+			kind: 'folder',
+			id: 'folder:file:///repo/packages',
+			name: 'packages',
+			status: 'loaded',
+			children: [{
+				kind: 'folder',
+				id: 'folder:file:///repo/packages/app',
+				name: 'app',
+				status: 'loaded',
+				children: [sourceFolder],
+			}],
+		}],
+	};
+	const nestedProject: Project = {
+		kind: 'project',
+		id: nestedRootId,
+		name: 'app',
+		status: 'loaded',
+		children: [sourceFolder],
+	};
+	const parentRoot = { id: 'root:nested-parent', nodeId: parentRootId };
+	const parentOnlyGraph: Graph = {
+		roots: [parentRoot],
+		rootNodes: { [parentRootId]: parentProject },
+	};
+
+	return {
+		parentRootId,
+		nestedRootId,
+		sourceId,
+		parentOnlyGraph,
+		multiRootGraph: {
+			roots: [
+				parentRoot,
+				{ id: 'root:nested-app', nodeId: nestedRootId },
+			],
+			rootNodes: {
+				[parentRootId]: parentProject,
+				[nestedRootId]: nestedProject,
+			},
+		},
+	};
 }
 
 function createSerialRenderingTask(

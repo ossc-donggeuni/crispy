@@ -25,7 +25,13 @@ export {
 	loadOrCreateWorkspaceFilters,
 	type WorkspaceRootFilter,
 } from './workspaceFilterPersistence';
-export type { WorkspacePersistentState } from './workspaceMetadata';
+export {
+	createDefaultWorkspacePersistentState,
+	parseWorkspacePersistentState,
+	WORKSPACE_PERSISTENT_STATE_VERSION,
+	type WorkspacePersistentState,
+	type WorkspaceTaskRelocation,
+} from './workspaceMetadata';
 export {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
@@ -33,6 +39,13 @@ export {
 	writeWorkspacePersistentState,
 	type WorkspaceRootPersistentState,
 } from './workspacePersistence';
+export {
+	createWorkspacePersistenceCoordinator,
+	persistWorkspaceStateTransition,
+	type WorkspacePersistenceCoordinator,
+	type WorkspacePersistenceCoordinatorDependencies,
+	type WorkspaceRootStateWriter,
+} from './workspacePersistenceCoordinator';
 export {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,

@@ -5,7 +5,10 @@ import type {
 import type { Graph } from './webview/graph/graphModel';
 import { parseGraph } from './webview/graph/graphTransport';
 import type { WebviewSessionState } from './webview/webviewState';
-import type { WorkspacePersistentState } from './workspace/workspaceMetadata';
+import {
+	parseWorkspacePersistentState,
+	type WorkspacePersistentState,
+} from './workspace/workspaceMetadata';
 
 /** Webview Session snapshot 변경을 Extension Host에 전달하는 상태 경계 메시지다. */
 export interface WebviewStateChangedMessage {
@@ -16,6 +19,10 @@ export interface WebviewStateChangedMessage {
 /** Workspace Persistent State 전체 snapshot 변경을 Extension Host에 전달한다. */
 export interface WorkspaceStateChangedMessage {
 	type: 'workspace.stateChanged';
+	/** Host가 발급하고 Webview가 그대로 반사하는 Root context epoch다. */
+	contextGeneration: number;
+	/** 이 snapshot을 만든 Webview Graph의 Project Root node IDs다. */
+	rootIds: readonly string[];
 	state: WorkspacePersistentState;
 }
 
@@ -43,6 +50,12 @@ export type WebviewToExtensionMessage =
 export type WorkspaceToWebviewMessage = {
 	type: 'workspace.graphUpdated';
 	graph: Graph;
+	/** 같은 Root 집합의 ABA 전환까지 구분하는 Host 발급 epoch다. */
+	contextGeneration: number;
+	/** Graph와 state가 함께 채취된 Project Root context다. */
+	rootIds: readonly string[];
+	/** Root 구성이 바뀔 때 Graph와 원자적으로 교체할 Workspace 상태다. */
+	state?: WorkspacePersistentState;
 };
 
 /** Host가 지정할 수 있는 Graph Node 시각 효과 종류다. */
@@ -223,6 +236,35 @@ function hasOnlyKeys(
 	return Object.keys(value).every((key) => allowed.has(key));
 }
 
+/** Graph의 실제 Project Root node IDs를 표시 순서대로 반환한다. */
+export function getWorkspaceGraphRootIds(graph: Graph): string[] {
+	return graph.roots.flatMap((root) => (
+		graph.rootNodes[root.nodeId]?.kind === 'project' ? [root.nodeId] : []
+	));
+}
+
+/** Workspace context Root ID 배열의 문자열·중복 불변 조건을 검증한다. */
+export function parseWorkspaceRootIds(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	const rootIds: string[] = [];
+	const seen = new Set<string>();
+
+	for (const entry of value) {
+		if (
+			typeof entry !== 'string'
+			|| entry.length === 0
+			|| seen.has(entry)
+		) {
+			return undefined;
+		}
+		seen.add(entry);
+		rootIds.push(entry);
+	}
+	return rootIds;
+}
+
 /**
  * unknown Host 메시지에서 현재 Workspace 도메인 계약만 구조적으로 검증한다.
  * 다른 도메인 메시지와 잘못된 Graph는 기존 수신 정책과 같이 조용히 무시한다.
@@ -238,15 +280,40 @@ export function parseWorkspaceToWebviewMessage(
 
 	if (
 		candidate.type !== 'workspace.graphUpdated'
-		|| Object.keys(candidate).length !== 2
+		|| !hasOnlyKeys(candidate, [
+			'type',
+			'graph',
+			'contextGeneration',
+			'rootIds',
+			'state',
+		])
 		|| !Object.hasOwn(candidate, 'graph')
+		|| !Object.hasOwn(candidate, 'rootIds')
+		|| !Number.isSafeInteger(candidate.contextGeneration)
+		|| (candidate.contextGeneration as number) < 0
 	) {
 		return undefined;
 	}
 
 	const graph = parseGraph(candidate.graph);
+	const rootIds = parseWorkspaceRootIds(candidate.rootIds);
+	const state = candidate.state === undefined
+		? undefined
+		: parseWorkspacePersistentState(candidate.state);
+	const graphRootIds = graph ? getWorkspaceGraphRootIds(graph) : undefined;
+	const hasMatchingRootContext = rootIds && graphRootIds
+		&& rootIds.length === graphRootIds.length
+		&& rootIds.every((rootId, index) => rootId === graphRootIds[index]);
 
-	return graph ? { type: 'workspace.graphUpdated', graph } : undefined;
+	return graph && hasMatchingRootContext && (candidate.state === undefined || state)
+		? {
+			type: 'workspace.graphUpdated',
+			graph,
+			contextGeneration: candidate.contextGeneration as number,
+			rootIds,
+			...(state ? { state } : {}),
+		}
+		: undefined;
 }
 
 /** `src/agent/protocol`이 공개하는 타입을 기존 import 경로에서도 재노출한다. */

@@ -1,9 +1,11 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import type { WorkspaceTaskRecord } from '../../task/workspaceTaskState';
 import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
+	WORKSPACE_PERSISTENT_STATE_VERSION,
 	writeWorkspacePersistentState,
 	type WorkspacePersistentState,
 } from '../../workspace';
@@ -67,7 +69,7 @@ suite('Workspace Persistence', () => {
 			});
 			fake.setJson(getStateUri(roots[2]), {
 				...createDefaultWorkspacePersistentState(),
-				version: 2,
+				version: 3,
 			});
 
 			for (const rootUri of roots) {
@@ -238,7 +240,7 @@ suite('Workspace Persistence', () => {
 			const appOldFolderId = folderId(appOldUri);
 			const unknownId = 'folder:file:///outside/private';
 			const state: WorkspacePersistentState = {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: {
 					[appRootId]: { x: 10, y: 20 },
 					[appFolderId]: { x: 30, y: 40 },
@@ -266,6 +268,8 @@ suite('Workspace Persistence', () => {
 					[appOldFolderId]: true,
 					[unknownId]: true,
 				},
+				tasks: [],
+				taskRelocations: [],
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -313,7 +317,7 @@ suite('Workspace Persistence', () => {
 				'config.ts',
 			).toString()}`;
 			const state: WorkspacePersistentState = {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: { [hiddenFolderId]: { x: 10, y: 20 } },
 				fileGroupPages: { [`${hiddenFolderId}:files`]: 2 },
 				openedFolders: { [hiddenFolderId]: true },
@@ -322,6 +326,8 @@ suite('Workspace Persistence', () => {
 					[hiddenFolderId]: true,
 					[hiddenFileId]: true,
 				},
+				tasks: [],
+				taskRelocations: [],
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -338,7 +344,7 @@ suite('Workspace Persistence', () => {
 			const innerRootFileGroupId = `${workspaceRootId(innerRootUri)}:files`;
 			const innerFolderFileGroupId = `${folderId(innerRootUri)}:files`;
 			const state: WorkspacePersistentState = {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: {
 					[innerRootFileGroupId]: { x: 10, y: 20 },
 					[innerFolderFileGroupId]: { x: 30, y: 40 },
@@ -353,6 +359,8 @@ suite('Workspace Persistence', () => {
 					[workspaceRootId(innerRootUri)]: true,
 					[folderId(innerRootUri)]: true,
 				},
+				tasks: [],
+				taskRelocations: [],
 			};
 
 			const partitioned = partitionWorkspacePersistentStateByRoot(
@@ -365,6 +373,87 @@ suite('Workspace Persistence', () => {
 				createDefaultWorkspacePersistentState(),
 			);
 			assert.deepStrictEqual(getRootState(partitioned, innerRootUri), state);
+		});
+
+		test('Task는 URI 포함 관계가 아니라 ownerRootId가 정확히 같은 Root에 분배한다', () => {
+			const appUri = vscode.Uri.file('/workspace/app');
+			const apiUri = vscode.Uri.file('/workspace/api');
+			const appTask = createTaskRecord(appUri, 'app');
+			const apiTask = createTaskRecord(apiUri, 'api');
+			const unavailableTask = createTaskRecord(
+				vscode.Uri.file('/workspace/unavailable'),
+				'unavailable',
+			);
+			const state: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				tasks: [apiTask, unavailableTask, appTask],
+				taskRelocations: [],
+			};
+
+			const partitioned = partitionWorkspacePersistentStateByRoot(
+				state,
+				[appUri, apiUri],
+			);
+			const app = getRootState(partitioned, appUri);
+			const api = getRootState(partitioned, apiUri);
+
+			assert.deepStrictEqual(app.tasks, [appTask]);
+			assert.deepStrictEqual(api.tasks, [apiTask]);
+			assert.notStrictEqual(app.tasks[0], appTask);
+			assert.strictEqual(
+				partitioned.some(({ state: rootState }) => (
+					rootState.tasks.some((record) => (
+						record.task.id === unavailableTask.task.id
+					))
+				)),
+				false,
+			);
+		});
+
+		test('source relocation journal은 destination Root가 함께 열릴 때만 Task를 복구한다', () => {
+			const appUri = vscode.Uri.file('/workspace/app');
+			const apiUri = vscode.Uri.file('/workspace/api');
+			const movedTask = createTaskRecord(apiUri, 'recovered', 5);
+			const relocation = {
+				sourceRootId: workspaceRootId(appUri),
+				record: movedTask,
+			};
+			const appState: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				taskRelocations: [relocation],
+			};
+			const apiState = createDefaultWorkspacePersistentState();
+			const appOnly = mergeWorkspacePersistentStates([{
+				rootUri: appUri,
+				state: appState,
+			}]);
+
+			assert.deepStrictEqual(appOnly.tasks, []);
+			assert.deepStrictEqual(appOnly.taskRelocations, [relocation]);
+
+			const recovered = mergeWorkspacePersistentStates([{
+				rootUri: appUri,
+				state: appState,
+			}, {
+				rootUri: apiUri,
+				state: apiState,
+			}]);
+
+			assert.deepStrictEqual(recovered.tasks, [movedTask]);
+			assert.deepStrictEqual(recovered.taskRelocations, [relocation]);
+			const partitioned = partitionWorkspacePersistentStateByRoot(
+				recovered,
+				[appUri, apiUri],
+			);
+
+			assert.deepStrictEqual(
+				getRootState(partitioned, appUri).taskRelocations,
+				[relocation],
+			);
+			assert.deepStrictEqual(
+				getRootState(partitioned, apiUri).tasks,
+				[movedTask],
+			);
 		});
 	});
 
@@ -379,7 +468,7 @@ suite('Workspace Persistence', () => {
 				{ rootUri: appUri, state: appState },
 				{ rootUri: apiUri, state: apiState },
 			]), {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: {
 					...appState.nodePositions,
 					...apiState.nodePositions,
@@ -400,6 +489,8 @@ suite('Workspace Persistence', () => {
 					...appState.hiddenNodeIds,
 					...apiState.hiddenNodeIds,
 				},
+				tasks: [],
+				taskRelocations: [],
 			});
 		});
 
@@ -407,7 +498,7 @@ suite('Workspace Persistence', () => {
 			const appUri = vscode.Uri.file('/workspace/app');
 			const apiUri = vscode.Uri.file('/workspace/api');
 			const runtime: WorkspacePersistentState = {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: {
 					...createState(appUri, 2).nodePositions,
 					...createState(apiUri, 3).nodePositions,
@@ -428,6 +519,8 @@ suite('Workspace Persistence', () => {
 					...createState(appUri, 2).hiddenNodeIds,
 					...createState(apiUri, 3).hiddenNodeIds,
 				},
+				tasks: [],
+				taskRelocations: [],
 			};
 
 			assert.deepStrictEqual(
@@ -447,7 +540,7 @@ suite('Workspace Persistence', () => {
 			const appState = createState(appUri, 2);
 			const apiState = createState(apiUri, 4);
 			const contaminatedAppState: WorkspacePersistentState = {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: {
 					...appState.nodePositions,
 					...apiState.nodePositions,
@@ -468,13 +561,15 @@ suite('Workspace Persistence', () => {
 					...appState.hiddenNodeIds,
 					...apiState.hiddenNodeIds,
 				},
+				tasks: [],
+				taskRelocations: [],
 			};
 
 			assert.deepStrictEqual(mergeWorkspacePersistentStates([
 				{ rootUri: appUri, state: contaminatedAppState },
 				{ rootUri: apiUri, state: apiState },
 			]), {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: {
 					...appState.nodePositions,
 					...apiState.nodePositions,
@@ -495,7 +590,156 @@ suite('Workspace Persistence', () => {
 					...appState.hiddenNodeIds,
 					...apiState.hiddenNodeIds,
 				},
+				tasks: [],
+				taskRelocations: [],
 			});
+		});
+
+		test('물리 Root와 ownerRootId가 일치하는 Task만 병합한다', () => {
+			const appUri = vscode.Uri.file('/workspace/app');
+			const apiUri = vscode.Uri.file('/workspace/api');
+			const appTask = createTaskRecord(appUri, 'app');
+			const apiTask = createTaskRecord(apiUri, 'api');
+			const appState: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				tasks: [apiTask, appTask],
+				taskRelocations: [],
+			};
+			const apiState: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				tasks: [apiTask],
+				taskRelocations: [],
+			};
+
+			assert.deepStrictEqual(mergeWorkspacePersistentStates([
+				{ rootUri: appUri, state: appState },
+				{ rootUri: apiUri, state: apiState },
+			]).tasks, [appTask, apiTask]);
+		});
+
+		test('Task ID 충돌은 높은 storageRevision을 선택한다', () => {
+			const appUri = vscode.Uri.file('/workspace/app');
+			const apiUri = vscode.Uri.file('/workspace/api');
+			const appTask = createTaskRecord(appUri, 'shared', 2);
+			const apiTask = {
+				...createTaskRecord(apiUri, 'shared', 5),
+				task: {
+					...createTaskRecord(apiUri, 'shared', 5).task,
+					title: 'Newer API Task',
+				},
+			};
+
+			assert.deepStrictEqual(mergeWorkspacePersistentStates([
+				{
+					rootUri: appUri,
+					state: {
+						...createDefaultWorkspacePersistentState(),
+						tasks: [appTask],
+						taskRelocations: [],
+					},
+				},
+				{
+					rootUri: apiUri,
+					state: {
+						...createDefaultWorkspacePersistentState(),
+						tasks: [apiTask],
+						taskRelocations: [],
+					},
+				},
+			]).tasks, [apiTask]);
+		});
+
+		test('같은 revision의 Task ID 충돌 winner는 Root 입력 순서와 무관하다', () => {
+			const appUri = vscode.Uri.file('/workspace/app');
+			const apiUri = vscode.Uri.file('/workspace/api');
+			const appTask = createTaskRecord(appUri, 'shared', 3);
+			const apiTask = {
+				...createTaskRecord(apiUri, 'shared', 3),
+				task: {
+					...createTaskRecord(apiUri, 'shared', 3).task,
+					title: 'API Task',
+				},
+			};
+			const appRootState = {
+				rootUri: appUri,
+				state: {
+					...createDefaultWorkspacePersistentState(),
+					tasks: [appTask],
+					taskRelocations: [],
+				},
+			};
+			const apiRootState = {
+				rootUri: apiUri,
+				state: {
+					...createDefaultWorkspacePersistentState(),
+					tasks: [apiTask],
+					taskRelocations: [],
+				},
+			};
+
+			const forward = mergeWorkspacePersistentStates([
+				appRootState,
+				apiRootState,
+			]);
+			const reversed = mergeWorkspacePersistentStates([
+				apiRootState,
+				appRootState,
+			]);
+
+			assert.deepStrictEqual(forward.tasks, reversed.tasks);
+			assert.ok(
+				forward.tasks[0]?.ownerRootId === appTask.ownerRootId
+				|| forward.tasks[0]?.ownerRootId === apiTask.ownerRootId,
+			);
+		});
+
+		test('연쇄 relocation은 비활성 owner의 최신 journal이 이전 live/journal 복구를 막는다', () => {
+			const rootA = vscode.Uri.file('/workspace/a');
+			const rootB = vscode.Uri.file('/workspace/b');
+			const rootC = vscode.Uri.file('/workspace/c');
+			const movedToB = createTaskRecord(rootB, 'chain', 2);
+			const movedToC = createTaskRecord(rootC, 'chain', 3);
+			const relocationAtoB = {
+				sourceRootId: workspaceRootId(rootA),
+				record: movedToB,
+			};
+			const relocationBtoC = {
+				sourceRootId: workspaceRootId(rootB),
+				record: movedToC,
+			};
+			const stateA: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				taskRelocations: [relocationAtoB],
+			};
+			const stateB: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				// B destination에 남은 이전 live record와 B→C journal이
+				// 동시에 있는 crash snapshot을 재현한다.
+				tasks: [movedToB],
+				taskRelocations: [relocationBtoC],
+			};
+
+			const withoutC = mergeWorkspacePersistentStates([
+				{ rootUri: rootA, state: stateA },
+				{ rootUri: rootB, state: stateB },
+			]);
+
+			assert.deepStrictEqual(withoutC.tasks, []);
+			assert.deepStrictEqual(withoutC.taskRelocations, [
+				relocationAtoB,
+				relocationBtoC,
+			]);
+
+			const withC = mergeWorkspacePersistentStates([
+				{ rootUri: rootA, state: stateA },
+				{ rootUri: rootB, state: stateB },
+				{
+					rootUri: rootC,
+					state: createDefaultWorkspacePersistentState(),
+				},
+			]);
+
+			assert.deepStrictEqual(withC.tasks, [movedToC]);
 		});
 	});
 });
@@ -580,12 +824,43 @@ function createState(
 	const file = fileId(rootUri);
 
 	return {
-		version: 1,
+		version: WORKSPACE_PERSISTENT_STATE_VERSION,
 		nodePositions: { [folder]: { x: page * 10, y: page * 20 } },
 		fileGroupPages: { [`${folder}:files`]: page },
 		openedFolders: { [folder]: true },
 	detachedRootNodeIds: { [file]: true },
 	hiddenNodeIds: { [folder]: true },
+	tasks: [],
+	taskRelocations: [],
+	};
+}
+
+function createTaskRecord(
+	rootUri: vscode.Uri,
+	suffix: string,
+	storageRevision = 1,
+): WorkspaceTaskRecord {
+	const startId = `task-node:${suffix}:start`;
+	const endId = `task-node:${suffix}:end`;
+
+	return {
+		ownerRootId: workspaceRootId(rootUri),
+		storageRevision,
+		task: {
+			version: 1,
+			id: `task:${suffix}`,
+			title: `Task ${suffix}`,
+			description: '',
+			defaultGraphTargets: { reference: [], work: [] },
+			origin: { x: 10, y: 20 },
+			nodePositions: { [endId]: { x: 640, y: 0 } },
+			nodes: [
+				{ id: startId, kind: 'start' },
+				{ id: endId, kind: 'end' },
+			],
+			edges: [],
+		},
+		targetOrigins: [],
 	};
 }
 

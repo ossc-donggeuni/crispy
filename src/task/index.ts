@@ -43,6 +43,19 @@ export {
 	type TaskStateStore,
 } from './taskState';
 export {
+	assertValidWorkspaceTaskRecord,
+	createWorkspaceTaskRecordSnapshot,
+	createWorkspaceTaskState,
+	type CreateWorkspaceTaskStateOptions,
+	type TaskGraphTargetArea,
+	type TaskGraphTargetOrigin,
+	type WorkspaceTaskGraphTargetMembershipChange,
+	type WorkspaceTaskRecord,
+	type WorkspaceTaskStateSnapshot,
+	type WorkspaceTaskStateStore,
+	type WorkspaceTaskStateSubscriber,
+} from './workspaceTaskState';
+export {
 	materializeTaskTransfer,
 	parseTaskTransferJson,
 	serializeTaskTransfer,

@@ -23,11 +23,18 @@ export interface FocusedTaskNode {
 }
 
 /** START Inspector가 TaskBlueprint에 반영할 수 있는 입력이다. */
-export interface TaskStartInspectorFieldInput extends FocusedTaskNode {
-	readonly kind: 'start';
-	readonly field: 'title' | 'description';
-	readonly value: string;
-}
+export type TaskStartInspectorFieldInput = FocusedTaskNode & (
+	| {
+		readonly kind: 'start';
+		readonly field: 'title' | 'description';
+		readonly value: string;
+	}
+	| {
+		readonly kind: 'start';
+		readonly field: 'ownerRootId';
+		readonly value: string;
+	}
+);
 
 /** WORK Inspector가 WorkNode에 반영할 수 있는 입력이다. */
 export type TaskWorkInspectorFieldInput = FocusedTaskNode & (
@@ -48,12 +55,28 @@ export type TaskInspectorFieldInput =
 	| TaskStartInspectorFieldInput
 	| TaskWorkInspectorFieldInput;
 
+/** Inspector의 문자열 select가 표시할 value/label 한 쌍이다. */
+export interface TaskInspectorSelectOption {
+	readonly value: string;
+	readonly label: string;
+}
+
+/** START owner select에 전달할 Workspace Root option이다. */
+export type TaskInspectorRootOption = TaskInspectorSelectOption;
+
+/** START Inspector에만 투영하는 현재 Workspace ownership context다. */
+export interface TaskInspectorWorkspaceContext {
+	readonly options: readonly TaskInspectorRootOption[];
+	readonly ownerRootId?: string;
+}
+
 /** Inspector DOM과 위치 projection lifecycle이다. */
 export interface TaskInspector {
 	/** GraphView의 단일 Focus state와 최신 Layout을 DOM에 투영한다. */
 	apply(
 		focusedTaskNode: FocusedTaskNode | undefined,
 		layout: TaskGraphLayout,
+		workspaceContext?: TaskInspectorWorkspaceContext,
 	): void;
 	/** 최신 Camera state로 현재 Inspector 위치를 다시 계산한다. */
 	refreshPosition(): void;
@@ -91,11 +114,6 @@ type TaskInspectorControl =
 	| HTMLTextAreaElement
 	| HTMLSelectElement;
 
-interface TaskInspectorSelectOption {
-	readonly value: WorkAgentProviderId;
-	readonly label: string;
-}
-
 interface TaskInspectorFieldDescriptor {
 	readonly field: TaskInspectorField;
 	readonly label: string;
@@ -111,7 +129,7 @@ interface MountedTaskInspector {
 	readonly controls: ReadonlyMap<TaskInspectorField, TaskInspectorControl>;
 }
 
-const START_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
+const TASK_TEXT_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
 	{
 		field: 'title',
 		label: 'Title',
@@ -124,6 +142,16 @@ const START_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
 	},
 ];
 
+const START_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
+	{
+		field: 'ownerRootId',
+		label: 'Workspace',
+		options: [],
+		getValue: () => '',
+	},
+	...TASK_TEXT_FIELD_DESCRIPTORS,
+];
+
 const WORK_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
 	{
 		field: 'agentProviderId',
@@ -134,7 +162,7 @@ const WORK_FIELD_DESCRIPTORS: readonly TaskInspectorFieldDescriptor[] = [
 		})),
 		getValue: (node) => node.kind === 'work' ? node.agentProviderId : '',
 	},
-	...START_FIELD_DESCRIPTORS,
+	...TASK_TEXT_FIELD_DESCRIPTORS,
 	{
 		field: 'prompt',
 		label: 'Prompt',
@@ -203,6 +231,7 @@ export function initializeTaskInspector(
 	const ownerDocument = overlayLayer.ownerDocument;
 	let mounted: MountedTaskInspector | undefined;
 	let currentNode: InspectableTaskLayoutNode | undefined;
+	let currentWorkspaceContext: TaskInspectorWorkspaceContext | undefined;
 	let disposed = false;
 
 	const stopInteractionPropagation = (event: Event): void => {
@@ -216,15 +245,19 @@ export function initializeTaskInspector(
 		if (!mounted || !isTaskInspectorControl(event.target)) {
 			return;
 		}
+		const control = event.target;
 
-		const field = event.target.getAttribute(TASK_INSPECTOR_FIELD_ATTRIBUTE);
+		const field = control.getAttribute(TASK_INSPECTOR_FIELD_ATTRIBUTE);
 		const taskId = mounted.root.getAttribute(TASK_INSPECTOR_TASK_ID_ATTRIBUTE);
 		const nodeId = mounted.root.getAttribute(TASK_INSPECTOR_NODE_ID_ATTRIBUTE);
 
 		if (!taskId || !nodeId || !isTaskInspectorField(field)) {
 			return;
 		}
-		if ((field === 'agentProviderId') !== (controlKind === 'select')) {
+		if (
+			(field === 'agentProviderId' || field === 'ownerRootId')
+			!== (controlKind === 'select')
+		) {
 			return;
 		}
 
@@ -237,19 +270,34 @@ export function initializeTaskInspector(
 				taskId,
 				nodeId,
 				field,
-				value: event.target.value,
+				value: control.value,
 			});
 		} else if (
-			mounted.kind === 'work'
-			&& field === 'agentProviderId'
-			&& isWorkAgentProviderId(event.target.value)
+			mounted.kind === 'start'
+			&& field === 'ownerRootId'
+			&& currentWorkspaceContext?.options.some(
+				(option) => option.value === control.value,
+			)
+			&& currentWorkspaceContext.ownerRootId !== control.value
 		) {
 			interactions.onFieldInput?.({
 				kind: mounted.kind,
 				taskId,
 				nodeId,
 				field,
-				value: event.target.value,
+				value: control.value,
+			});
+		} else if (
+			mounted.kind === 'work'
+			&& field === 'agentProviderId'
+			&& isWorkAgentProviderId(control.value)
+		) {
+			interactions.onFieldInput?.({
+				kind: mounted.kind,
+				taskId,
+				nodeId,
+				field,
+				value: control.value,
 			});
 		} else if (
 			mounted.kind === 'work'
@@ -260,7 +308,7 @@ export function initializeTaskInspector(
 				taskId,
 				nodeId,
 				field,
-				value: event.target.value,
+				value: control.value,
 			});
 		}
 	};
@@ -274,6 +322,7 @@ export function initializeTaskInspector(
 	const removeMountedInspector = (): void => {
 		if (!mounted) {
 			currentNode = undefined;
+			currentWorkspaceContext = undefined;
 			return;
 		}
 
@@ -285,6 +334,7 @@ export function initializeTaskInspector(
 		mounted.root.remove();
 		mounted = undefined;
 		currentNode = undefined;
+		currentWorkspaceContext = undefined;
 	};
 
 	const mountInspector = (node: InspectableTaskLayoutNode): void => {
@@ -357,6 +407,50 @@ export function initializeTaskInspector(
 		};
 	};
 
+	/**
+	 * Workspace Root 변화는 START Inspector 전체를 다시 만들지 않고 owner select만
+	 * controlled state로 동기화한다. Title/Description DOM과 caret은 그대로 둔다.
+	 */
+	const syncWorkspaceContext = (
+		workspaceContext: TaskInspectorWorkspaceContext | undefined,
+	): void => {
+		currentWorkspaceContext = workspaceContext;
+
+		if (!mounted || mounted.kind !== 'start') {
+			return;
+		}
+
+		const control = mounted.controls.get('ownerRootId');
+
+		if (!control || control.localName !== 'select') {
+			return;
+		}
+
+		const select = control as HTMLSelectElement;
+		const options = workspaceContext?.options ?? [];
+		const currentOptions = Array.from(select.children).map((option) => ({
+			value: (option as HTMLOptionElement).value,
+			label: option.textContent ?? '',
+		}));
+
+		if (!areSelectOptionsEqual(currentOptions, options)) {
+			select.replaceChildren(...options.map((item) => {
+				const option = ownerDocument.createElement('option');
+
+				option.value = item.value;
+				option.textContent = item.label;
+				return option;
+			}));
+		}
+
+		select.disabled = options.length <= 1;
+		const ownerRootId = workspaceContext?.ownerRootId ?? '';
+
+		if (select.value !== ownerRootId) {
+			select.value = ownerRootId;
+		}
+	};
+
 	const refreshPosition = (): void => {
 		if (!mounted || !currentNode || disposed) {
 			return;
@@ -391,6 +485,7 @@ export function initializeTaskInspector(
 	const apply = (
 		focusedTaskNode: FocusedTaskNode | undefined,
 		layout: TaskGraphLayout,
+		workspaceContext?: TaskInspectorWorkspaceContext,
 	): void => {
 		if (disposed) {
 			return;
@@ -421,13 +516,16 @@ export function initializeTaskInspector(
 		}
 
 		currentNode = node;
+		syncWorkspaceContext(workspaceContext);
 		const descriptors = node.kind === 'start'
 			? START_FIELD_DESCRIPTORS
 			: WORK_FIELD_DESCRIPTORS;
 
 		for (const descriptor of descriptors) {
 			const control = mounted?.controls.get(descriptor.field);
-			const value = descriptor.getValue(node);
+			const value = descriptor.field === 'ownerRootId'
+				? workspaceContext?.ownerRootId ?? ''
+				: descriptor.getValue(node);
 
 			// 같은 input event가 Task State/Layout을 round-trip해도 caret을 건드리지 않는다.
 			if (control && control.value !== value) {
@@ -477,7 +575,18 @@ function isTaskInspectorField(value: string | null): value is TaskInspectorField
 	return value === 'title'
 		|| value === 'description'
 		|| value === 'prompt'
-		|| value === 'agentProviderId';
+		|| value === 'agentProviderId'
+		|| value === 'ownerRootId';
+}
+
+function areSelectOptionsEqual(
+	left: readonly TaskInspectorSelectOption[],
+	right: readonly TaskInspectorSelectOption[],
+): boolean {
+	return left.length === right.length && left.every((option, index) => (
+		option.value === right[index]?.value
+		&& option.label === right[index]?.label
+	));
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

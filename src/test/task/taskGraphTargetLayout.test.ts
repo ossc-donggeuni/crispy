@@ -26,41 +26,75 @@ suite('Task Graph Target actual occurrence Layout', () => {
 		assert.strictEqual(index.has('project:workspace'), false);
 		assert.deepStrictEqual([...index.values()].map((source) => ({
 			id: source.sourceId,
+			sourceRootId: source.sourceRootId,
 			kind: source.kind,
 			path: source.relativePath,
 			parentId: source.parentId,
 			order: source.order,
 		})), [{
 			id: 'folder:file:///workspace/src',
+			sourceRootId: 'project:workspace',
 			kind: 'folder',
 			path: 'workspace/src',
 			parentId: undefined,
 			order: 0,
 		}, {
 			id: 'folder:file:///workspace/src/webview',
+			sourceRootId: 'project:workspace',
 			kind: 'folder',
 			path: 'workspace/src/webview',
 			parentId: 'folder:file:///workspace/src',
 			order: 1,
 		}, {
 			id: 'file:file:///workspace/src/webview/graphView.ts',
+			sourceRootId: 'project:workspace',
 			kind: 'file',
 			path: 'workspace/src/webview/graphView.ts',
 			parentId: 'folder:file:///workspace/src/webview',
 			order: 2,
 		}, {
 			id: 'file:file:///workspace/src/esbuild.js',
+			sourceRootId: 'project:workspace',
 			kind: 'file',
 			path: 'workspace/src/esbuild.js',
 			parentId: 'folder:file:///workspace/src',
 			order: 3,
 		}, {
 			id: 'folder:file:///workspace/docs',
+			sourceRootId: 'project:workspace',
 			kind: 'folder',
 			path: 'workspace/docs',
 			parentId: undefined,
 			order: 4,
 		}]);
+	});
+
+	test('중첩 Workspace의 Source provenance는 Root 순서와 무관하게 가장 구체적인 Root를 사용한다', () => {
+		const parentRootId = 'workspace-root:file:///repo';
+		const nestedRootId = 'workspace-root:file:///repo/packages/app';
+		const nestedSourceId = 'file:file:///repo/packages/app/src/index.ts';
+		const parentSourceId = 'file:file:///repo/README.md';
+		const siblingPrefixSourceId =
+			'file:file:///repo/packages/application/index.ts';
+
+		for (const reverseRoots of [false, true]) {
+			const index = createTaskGraphTargetIndex(
+				createNestedWorkspaceGraph(reverseRoots),
+			);
+
+			assert.strictEqual(
+				index.get(nestedSourceId)?.sourceRootId,
+				nestedRootId,
+			);
+			assert.strictEqual(
+				index.get(parentSourceId)?.sourceRootId,
+				parentRootId,
+			);
+			assert.strictEqual(
+				index.get(siblingPrefixSourceId)?.sourceRootId,
+				parentRootId,
+			);
+		}
 	});
 
 	test('Canonical Target은 workspace traversal 순서로 중복 없이 정렬한다', () => {
@@ -309,6 +343,75 @@ function createFolderRootGraph(): Graph {
 	return {
 		roots: [{ id: src.id, nodeId: src.id }, { id: docs.id, nodeId: docs.id }],
 		rootNodes: { [src.id]: src, [docs.id]: docs },
+	};
+}
+
+function createNestedWorkspaceGraph(reverseRoots: boolean): Graph {
+	const parentRootId = 'workspace-root:file:///repo';
+	const nestedRootId = 'workspace-root:file:///repo/packages/app';
+	const nestedSource = {
+		kind: 'file' as const,
+		id: 'file:file:///repo/packages/app/src/index.ts',
+		name: 'index.ts',
+	};
+	const nestedSrc = {
+		kind: 'folder' as const,
+		id: 'folder:file:///repo/packages/app/src',
+		name: 'src',
+		status: 'loaded' as const,
+		children: [nestedSource],
+	};
+	const parentProject: Project = {
+		kind: 'project',
+		id: parentRootId,
+		name: 'repo',
+		status: 'loaded',
+		children: [{
+			kind: 'file',
+			id: 'file:file:///repo/README.md',
+			name: 'README.md',
+		}, {
+			kind: 'folder',
+			id: 'folder:file:///repo/packages',
+			name: 'packages',
+			status: 'loaded',
+			children: [{
+				kind: 'folder',
+				id: 'folder:file:///repo/packages/app',
+				name: 'app',
+				status: 'loaded',
+				children: [nestedSrc],
+			}, {
+				kind: 'folder',
+				id: 'folder:file:///repo/packages/application',
+				name: 'application',
+				status: 'loaded',
+				children: [{
+					kind: 'file',
+					id: 'file:file:///repo/packages/application/index.ts',
+					name: 'index.ts',
+				}],
+			}],
+		}],
+	};
+	const nestedProject: Project = {
+		kind: 'project',
+		id: nestedRootId,
+		name: 'app',
+		status: 'loaded',
+		children: [nestedSrc],
+	};
+	const roots = [{ id: `root:${parentRootId}`, nodeId: parentRootId }, {
+		id: `root:${nestedRootId}`,
+		nodeId: nestedRootId,
+	}];
+
+	return {
+		roots: reverseRoots ? [...roots].reverse() : roots,
+		rootNodes: {
+			[parentRootId]: parentProject,
+			[nestedRootId]: nestedProject,
+		},
 	};
 }
 

@@ -12,7 +12,14 @@ import {
 	type GraphStateSnapshot,
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
+import type { GraphViewWorkspaceSnapshot } from '../webview/graph/graphView';
 import { serializeGraphForWebview } from '../webview/graph/graphTransport';
+import { createDefaultTaskBlueprint } from '../task';
+import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
+import {
+	WORKSPACE_PERSISTENT_STATE_VERSION,
+	type WorkspacePersistentState,
+} from '../workspace/workspaceMetadata';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
 import {
@@ -432,13 +439,13 @@ suite('Webview State Wiring', () => {
 		const initialState = createWebviewState('left', 35, -25, 1.25);
 		const initialWorkspaceGraph: Graph = {
 			roots: [
-				{ id: 'root:app', nodeId: 'project:app' },
-				{ id: 'root:api', nodeId: 'project:api' },
+				{ id: 'root:app', nodeId: 'workspace-root:project:app' },
+				{ id: 'root:api', nodeId: 'workspace-root:project:api' },
 			],
 			rootNodes: {
-				'project:app': {
+				'workspace-root:project:app': {
 					kind: 'project',
-					id: 'project:app',
+					id: 'workspace-root:project:app',
 					name: 'app',
 					status: 'loaded',
 					children: [{
@@ -447,9 +454,9 @@ suite('Webview State Wiring', () => {
 						name: 'index.ts',
 					}],
 				},
-				'project:api': {
+				'workspace-root:project:api': {
 					kind: 'project',
-					id: 'project:api',
+					id: 'workspace-root:project:api',
 					name: 'api',
 					status: 'loaded',
 					children: [],
@@ -457,16 +464,54 @@ suite('Webview State Wiring', () => {
 			},
 		};
 		const refreshedWorkspaceGraph: Graph = {
-			roots: [{ id: 'root:refreshed', nodeId: 'project:refreshed' }],
+			roots: [{
+				id: 'root:refreshed',
+				nodeId: 'workspace-root:project:refreshed',
+			}],
 			rootNodes: {
-				'project:refreshed': {
+				'workspace-root:project:refreshed': {
 					kind: 'project',
-					id: 'project:refreshed',
+					id: 'workspace-root:project:refreshed',
 					name: 'refreshed',
 					status: 'loaded',
 					children: [],
 				},
 			},
+		};
+		let taskIdSequence = 0;
+		const initialTask = createDefaultTaskBlueprint(
+			{ title: 'Initial persisted Task' },
+			() => `webview-initial-${++taskIdSequence}`,
+		);
+		const refreshedTask = createDefaultTaskBlueprint(
+			{ title: 'Refreshed persisted Task' },
+			() => `webview-refreshed-${++taskIdSequence}`,
+		);
+		const initialWorkspaceTasks: readonly WorkspaceTaskRecord[] = [{
+			ownerRootId: 'workspace-root:project:app',
+			storageRevision: 1,
+			task: initialTask,
+			targetOrigins: [],
+		}];
+		const refreshedWorkspaceTasks: readonly WorkspaceTaskRecord[] = [{
+			ownerRootId: 'workspace-root:project:refreshed',
+			storageRevision: 4,
+			task: refreshedTask,
+			targetOrigins: [],
+		}];
+		const initialWorkspaceState: WorkspacePersistentState = {
+			version: WORKSPACE_PERSISTENT_STATE_VERSION,
+			nodePositions: {},
+			fileGroupPages: {},
+			openedFolders: {},
+			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
+			tasks: initialWorkspaceTasks,
+			taskRelocations: [],
+		};
+		const refreshedWorkspaceState: WorkspacePersistentState = {
+			...initialWorkspaceState,
+			tasks: refreshedWorkspaceTasks,
 		};
 		const agentTabId = 'agent-tab-test';
 		const savedStates: WebviewSessionState[] = [];
@@ -474,6 +519,10 @@ suite('Webview State Wiring', () => {
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
 		const graphUpdates: Graph[] = [];
+		const workspaceUpdates: Array<{
+			readonly graph: Graph;
+			readonly snapshot: GraphViewWorkspaceSnapshot;
+		}> = [];
 		const graphEffectSets: Array<{
 			readonly target: GraphNodeEffectTarget;
 			readonly effect: GraphNodeEffect;
@@ -492,6 +541,32 @@ suite('Webview State Wiring', () => {
 			hiddenNodeIds: initialState.graph.hiddenNodeIds ?? {},
 		};
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
+		let workspaceSubscriber: ((
+			snapshot: import('../webview/graph/graphView').GraphViewWorkspaceSnapshot,
+		) => void) | undefined;
+		let currentWorkspaceTasks = initialWorkspaceTasks;
+		const getCurrentWorkspaceSnapshot = (): import(
+			'../webview/graph/graphView'
+		).GraphViewWorkspaceSnapshot => ({
+			graph: {
+				nodePositions: currentGraphState.nodePositions,
+				fileGroupPages: currentGraphState.fileGroupPages,
+				openedFolders: currentGraphState.openedFolders,
+				detachedRootNodeIds: currentGraphState.detachedRootNodeIds,
+				hiddenNodeIds: currentGraphState.hiddenNodeIds,
+			},
+			tasks: currentWorkspaceTasks,
+		});
+		const getCurrentWorkspacePersistentState = (): WorkspacePersistentState => ({
+			version: WORKSPACE_PERSISTENT_STATE_VERSION,
+			nodePositions: currentGraphState.nodePositions,
+			fileGroupPages: currentGraphState.fileGroupPages,
+			openedFolders: currentGraphState.openedFolders,
+			detachedRootNodeIds: currentGraphState.detachedRootNodeIds,
+			hiddenNodeIds: currentGraphState.hiddenNodeIds,
+			tasks: currentWorkspaceTasks,
+			taskRelocations: [],
+		});
 		let panelState: PanelLayoutState | undefined;
 		let persistPanelState: (() => void) | undefined;
 		let dockFit: (() => void) | undefined;
@@ -509,6 +584,7 @@ suite('Webview State Wiring', () => {
 		let graphViewInteractions:
 			import('../webview/graph/graphView').GraphViewInteractions | undefined;
 		let graphUnsubscribed = false;
+		let workspaceUnsubscribed = false;
 		let graphDisposed = false;
 		let agentPanelUiInitialized = false;
 		let agentPanelUiDisposed = false;
@@ -558,11 +634,15 @@ suite('Webview State Wiring', () => {
 			restoredGraphState,
 			graph,
 			interactions,
+			_initialTasks,
+			restoredWorkspaceTasks,
 		) => {
 			graphInitializeCount += 1;
 			graphViewInteractions = interactions;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
+			assert.deepStrictEqual(restoredWorkspaceTasks, initialWorkspaceTasks);
+			currentWorkspaceTasks = restoredWorkspaceTasks ?? [];
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
 			currentGraphState = {
 				camera: { ...graphState.camera },
@@ -621,6 +701,15 @@ suite('Webview State Wiring', () => {
 				taskState: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['taskState'],
+				getWorkspaceSnapshot: getCurrentWorkspaceSnapshot,
+				subscribeWorkspaceSnapshot: (subscriber) => {
+					workspaceSubscriber = subscriber;
+
+					return () => {
+						workspaceSubscriber = undefined;
+						workspaceUnsubscribed = true;
+					};
+				},
 				refreshVisibleGraphArea: () => {
 					graphVisibleRefreshCount += 1;
 				},
@@ -628,6 +717,18 @@ suite('Webview State Wiring', () => {
 					graphUpdates.push(nextGraph);
 				},
 				updateTasks: () => undefined,
+				updateWorkspace: (nextGraph, snapshot) => {
+					workspaceUpdates.push({ graph: nextGraph, snapshot });
+					currentGraphState = {
+						...currentGraphState,
+						nodePositions: snapshot.graph.nodePositions,
+						fileGroupPages: snapshot.graph.fileGroupPages,
+						openedFolders: snapshot.graph.openedFolders,
+						detachedRootNodeIds: snapshot.graph.detachedRootNodeIds,
+						hiddenNodeIds: snapshot.graph.hiddenNodeIds,
+					};
+					currentWorkspaceTasks = snapshot.tasks;
+				},
 				setNodeEffect: (target, effect) => {
 					graphEffectSets.push({ target, effect });
 				},
@@ -768,11 +869,15 @@ suite('Webview State Wiring', () => {
 		]);
 		const documentMock = {
 			currentScript: {
-				getAttribute: (attribute: string) => (
-					attribute === 'data-workspace-graph'
-						? serializeGraphForWebview(initialWorkspaceGraph)
-						: null
-				),
+				getAttribute: (attribute: string) => {
+					if (attribute === 'data-workspace-graph') {
+						return serializeGraphForWebview(initialWorkspaceGraph);
+					}
+					if (attribute === 'data-workspace-state') {
+						return encodeURIComponent(JSON.stringify(initialWorkspaceState));
+					}
+					return null;
+				},
 			},
 			querySelector: (selector: string) => elements.get(selector) ?? null,
 		};
@@ -830,14 +935,46 @@ suite('Webview State Wiring', () => {
 			hostMessageHandler({
 				data: {
 					type: 'workspace.graphUpdated',
-					graph: refreshedWorkspaceGraph,
+					graph: initialWorkspaceGraph,
+					contextGeneration: 0,
+					rootIds: initialWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
 				},
 			} as MessageEvent);
 
-			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
+			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
 			assert.deepStrictEqual(terminalHostMessages, []);
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphDisposed, false);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.graphUpdated',
+					graph: refreshedWorkspaceGraph,
+					contextGeneration: 1,
+					rootIds: refreshedWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
+					state: refreshedWorkspaceState,
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(workspaceUpdates, [{
+				graph: refreshedWorkspaceGraph,
+				snapshot: {
+					graph: {
+						nodePositions: refreshedWorkspaceState.nodePositions,
+						fileGroupPages: refreshedWorkspaceState.fileGroupPages,
+						openedFolders: refreshedWorkspaceState.openedFolders,
+						detachedRootNodeIds:
+							refreshedWorkspaceState.detachedRootNodeIds,
+						hiddenNodeIds: refreshedWorkspaceState.hiddenNodeIds,
+					},
+					tasks: refreshedWorkspaceTasks,
+				},
+			}]);
+			assert.deepStrictEqual(currentWorkspaceTasks, refreshedWorkspaceTasks);
 
 			hostMessageHandler({
 				data: {
@@ -876,7 +1013,7 @@ suite('Webview State Wiring', () => {
 
 			hostMessageHandler({ data: terminalStartingMessage } as MessageEvent);
 			assert.deepStrictEqual(terminalHostMessages, [terminalStartingMessage]);
-			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
+			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
 
 			const fitCountBeforeLayoutChange = terminalFitCount;
 			agentUiLayoutChange();
@@ -918,19 +1055,15 @@ suite('Webview State Wiring', () => {
 				nodePositions: { 'folder:src': { x: 800, y: 240 } },
 			};
 			currentGraphState = nodePositionState;
-			graphSubscriber(nodePositionState);
+			assert.ok(workspaceSubscriber);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.deepStrictEqual(getWorkspaceStateChangedMessages(postedMessages), [{
 				type: 'workspace.stateChanged',
-				state: {
-					version: 1,
-					nodePositions: { 'folder:src': { x: 800, y: 240 } },
-					fileGroupPages: {},
-					openedFolders: {},
-					detachedRootNodeIds: {},
-					hiddenNodeIds: {},
-				},
+				contextGeneration: 1,
+				rootIds: refreshedWorkspaceGraph.roots.map((root) => root.nodeId),
+				state: getCurrentWorkspacePersistentState(),
 			}]);
 
 			const fileGroupPageState: GraphStateSnapshot = {
@@ -938,7 +1071,7 @@ suite('Webview State Wiring', () => {
 				fileGroupPages: { 'folder:src:files': 2 },
 			};
 			currentGraphState = fileGroupPageState;
-			graphSubscriber(fileGroupPageState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -955,7 +1088,7 @@ suite('Webview State Wiring', () => {
 				openedFolders: { 'folder:src': true },
 			};
 			currentGraphState = openedFolderState;
-			graphSubscriber(openedFolderState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -972,7 +1105,7 @@ suite('Webview State Wiring', () => {
 				detachedRootNodeIds: { 'folder:src': true },
 			};
 			currentGraphState = detachedRootState;
-			graphSubscriber(detachedRootState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -981,14 +1114,7 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(
 				getWorkspaceStateChangedMessages(postedMessages)[3]?.state,
-				{
-					version: 1,
-					nodePositions: { 'folder:src': { x: 800, y: 240 } },
-					fileGroupPages: { 'folder:src:files': 2 },
-					openedFolders: { 'folder:src': true },
-					detachedRootNodeIds: { 'folder:src': true },
-					hiddenNodeIds: {},
-				},
+				getCurrentWorkspacePersistentState(),
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
@@ -998,7 +1124,7 @@ suite('Webview State Wiring', () => {
 				detachedRootNodeIds: {},
 			};
 			currentGraphState = reattachedRootState;
-			graphSubscriber(reattachedRootState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1007,14 +1133,7 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(
 				getWorkspaceStateChangedMessages(postedMessages)[4]?.state,
-				{
-					version: 1,
-					nodePositions: {},
-					fileGroupPages: { 'folder:src:files': 2 },
-					openedFolders: { 'folder:src': true },
-					detachedRootNodeIds: {},
-					hiddenNodeIds: {},
-				},
+				getCurrentWorkspacePersistentState(),
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
@@ -1023,7 +1142,7 @@ suite('Webview State Wiring', () => {
 				hiddenNodeIds: { 'folder:src/private': true },
 			};
 			currentGraphState = hiddenNodeState;
-			graphSubscriber(hiddenNodeState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1032,14 +1151,7 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(
 				getWorkspaceStateChangedMessages(postedMessages)[5]?.state,
-				{
-					version: 1,
-					nodePositions: {},
-					fileGroupPages: { 'folder:src:files': 2 },
-					openedFolders: { 'folder:src': true },
-					detachedRootNodeIds: {},
-					hiddenNodeIds: { 'folder:src/private': true },
-				},
+				getCurrentWorkspacePersistentState(),
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
@@ -1157,6 +1269,7 @@ suite('Webview State Wiring', () => {
 			unloadHandler();
 
 			assert.strictEqual(graphUnsubscribed, true);
+			assert.strictEqual(workspaceUnsubscribed, true);
 			assert.strictEqual(graphDisposed, true);
 			assert.strictEqual(terminalPoolDisposed, true);
 			assert.strictEqual(agentPanelUiDisposed, true);

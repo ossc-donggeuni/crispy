@@ -736,6 +736,15 @@ select.task-inspector-control {
 	cursor: pointer;
 }
 
+select.task-inspector-control:disabled {
+	color: var(
+		--vscode-disabledForeground,
+		var(--vscode-descriptionForeground, var(--vscode-foreground))
+	);
+	cursor: default;
+	opacity: 0.8;
+}
+
 .task-inspector-control:focus,
 .task-inspector-control:focus-visible {
 	border-color: var(

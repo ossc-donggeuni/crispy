@@ -100,8 +100,24 @@ export function createTaskState(
 	initialTasks: readonly TaskBlueprint[] = [],
 	createId?: TaskIdSource,
 ): TaskStateStore {
+	return createTaskStateStore(initialTasks, createId, false);
+}
+
+/** Workspace transaction이 이미 검증된 내부 snapshot의 구조 공유를 유지한다. */
+export function createTaskStateFromSnapshots(
+	initialTasks: readonly TaskBlueprint[],
+	createId?: TaskIdSource,
+): TaskStateStore {
+	return createTaskStateStore(initialTasks, createId, true);
+}
+
+function createTaskStateStore(
+	initialTasks: readonly TaskBlueprint[],
+	createId: TaskIdSource | undefined,
+	reuseInitialSnapshots: boolean,
+): TaskStateStore {
 	assertUniqueTaskIds(initialTasks);
-	let snapshot = createStateSnapshot(initialTasks);
+	let snapshot = createStateSnapshot(initialTasks, reuseInitialSnapshots);
 	const commitTask = (
 		taskId: string,
 		createUpdatedTask: (current: TaskBlueprint) => TaskBlueprint | undefined,
@@ -448,9 +464,16 @@ function assertUniqueTaskIds(tasks: readonly TaskBlueprint[]): void {
 /** 입력 목록과 참조를 공유하지 않는 Task 상태 snapshot을 생성한다. */
 function createStateSnapshot(
 	tasks: readonly TaskBlueprint[],
+	reuseSnapshots = false,
 ): TaskStateSnapshot {
 	return Object.freeze({
-		tasks: Object.freeze(tasks.map(createTaskSnapshot)),
+		tasks: Object.freeze(tasks.map((task) => {
+			if (!reuseSnapshots) {
+				return createTaskSnapshot(task);
+			}
+			assertValidTaskBlueprint(task);
+			return task;
+		})),
 	});
 }
 

@@ -5,18 +5,27 @@ import {
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
+	getWorkspaceGraphRootIds,
 	parseGraphNodeEffectToWebviewMessage,
 	parseWorkspaceToWebviewMessage,
 	type WebviewToExtensionMessage,
 } from '../messages';
 import {
+	createDefaultWorkspacePersistentState,
+	parseWorkspacePersistentState,
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 } from '../workspace/workspaceMetadata';
-import { initializeGraphView } from './graph/graphView';
+import {
+	initializeGraphView,
+	type GraphViewWorkspaceSnapshot,
+} from './graph/graphView';
 import { deserializeGraphFromWebview } from './graph/graphTransport';
-import type { GraphStateSnapshot } from './graph/graphState';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
+import {
+	haveSameWorkspaceRoots,
+	mergeWorkspaceStateForRootTransition,
+} from './workspaceRootTransition';
 import { initializePanelCollapse } from './panel/panelCollapse';
 import { initializePanelDock } from './panel/panelDock';
 import { applyPanelSize, initializePanelResize } from './panel/panelResize';
@@ -49,14 +58,51 @@ function getRequiredElement<T extends HTMLElement>(selector: string): T {
 	return element;
 }
 
+/** HTML attribute로 전달된 canonical Workspace snapshot을 안전하게 복원한다. */
+function parseSerializedWorkspaceState(
+	serializedState: string | undefined,
+): WorkspacePersistentState {
+	if (!serializedState) {
+		return createDefaultWorkspacePersistentState();
+	}
+	try {
+		return parseWorkspacePersistentState(JSON.parse(
+			decodeURIComponent(serializedState),
+		)) ?? createDefaultWorkspacePersistentState();
+	} catch {
+		return createDefaultWorkspacePersistentState();
+	}
+}
+
+function parseWorkspaceContextGeneration(value: string | null): number {
+	if (value === null || value.trim() === '') {
+		return 0;
+	}
+	const parsed = Number(value);
+
+	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
 const vscodeApi = acquireVsCodeApi();
 const currentScript = document.currentScript;
 const serializedInitialState = currentScript?.getAttribute('data-webview-state')
 	?? undefined;
 const serializedWorkspaceGraph = currentScript?.getAttribute('data-workspace-graph')
 	?? undefined;
+const serializedWorkspaceState = currentScript?.getAttribute('data-workspace-state')
+	?? undefined;
+const serializedWorkspaceContextGeneration = currentScript?.getAttribute(
+	'data-workspace-context-generation',
+) ?? null;
 const initialState = restoreWebviewState(vscodeApi, serializedInitialState);
 const workspaceGraph = deserializeGraphFromWebview(serializedWorkspaceGraph);
+const initialWorkspaceState = parseSerializedWorkspaceState(
+	serializedWorkspaceState,
+);
+let currentWorkspaceRootIds = getWorkspaceGraphRootIds(workspaceGraph);
+let currentWorkspaceContextGeneration = parseWorkspaceContextGeneration(
+	serializedWorkspaceContextGeneration,
+);
 const panelState = initialState.panel;
 
 const layout = getRequiredElement<HTMLElement>('.crispy-layout');
@@ -93,6 +139,8 @@ const graphView = initializeGraphView(
 			panelState.collapsed,
 		),
 	},
+	initialWorkspaceState.tasks.map((record) => record.task),
+	initialWorkspaceState.tasks,
 );
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
@@ -125,19 +173,21 @@ const persistWebviewSessionState = () => {
 
 /** Runtime Graph State의 Workspace 소유 필드를 현재 version snapshot으로 복사한다. */
 const createWorkspacePersistentState = (
-	graphState: GraphStateSnapshot,
+	snapshot: GraphViewWorkspaceSnapshot,
 ): WorkspacePersistentState => ({
 	version: WORKSPACE_PERSISTENT_STATE_VERSION,
 	nodePositions: Object.fromEntries(
-		Object.entries(graphState.nodePositions).map(([id, position]) => [
+		Object.entries(snapshot.graph.nodePositions).map(([id, position]) => [
 			id,
 			{ x: position.x, y: position.y },
 		]),
 	),
-	fileGroupPages: { ...graphState.fileGroupPages },
-	openedFolders: { ...graphState.openedFolders },
-	detachedRootNodeIds: { ...graphState.detachedRootNodeIds },
-	hiddenNodeIds: { ...graphState.hiddenNodeIds },
+	fileGroupPages: { ...snapshot.graph.fileGroupPages },
+	openedFolders: { ...snapshot.graph.openedFolders },
+	detachedRootNodeIds: { ...snapshot.graph.detachedRootNodeIds },
+	hiddenNodeIds: { ...snapshot.graph.hiddenNodeIds },
+	tasks: snapshot.tasks,
+	taskRelocations: [],
 });
 
 /**
@@ -279,23 +329,34 @@ const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
 		persistWebviewSessionState();
 	}
 
-	if (
-		previousState.nodePositions !== currentGraphState.nodePositions
-		|| previousState.fileGroupPages !== currentGraphState.fileGroupPages
-		|| previousState.openedFolders !== currentGraphState.openedFolders
-		|| previousState.detachedRootNodeIds
-			!== currentGraphState.detachedRootNodeIds
-		|| previousState.hiddenNodeIds !== currentGraphState.hiddenNodeIds
-	) {
-		vscodeApi.postMessage({
-			type: 'workspace.stateChanged',
-			state: createWorkspacePersistentState(currentGraphState),
-		});
-	}
 });
+const postWorkspaceSnapshot = (snapshot: GraphViewWorkspaceSnapshot): void => {
+	vscodeApi.postMessage({
+		type: 'workspace.stateChanged',
+		contextGeneration: currentWorkspaceContextGeneration,
+		rootIds: currentWorkspaceRootIds,
+		state: createWorkspacePersistentState(snapshot),
+	});
+};
+const unsubscribeWorkspaceSnapshot = graphView.subscribeWorkspaceSnapshot(
+	postWorkspaceSnapshot,
+);
+const normalizedInitialWorkspaceState = createWorkspacePersistentState(
+	graphView.getWorkspaceSnapshot(),
+);
+
+// 초기 Root 집합에서 접근할 수 없는 foreign target이 정리된 경우에도 별도
+// 사용자 편집을 기다리지 않고 정리된 canonical snapshot을 disk에 반영한다.
+if (
+	JSON.stringify(normalizedInitialWorkspaceState)
+	!== JSON.stringify(initialWorkspaceState)
+) {
+	postWorkspaceSnapshot(graphView.getWorkspaceSnapshot());
+}
 
 window.addEventListener('unload', () => {
 	unsubscribeGraphState();
+	unsubscribeWorkspaceSnapshot();
 	graphView.dispose();
 	terminalPool.dispose();
 	agentPanelUi?.dispose();
@@ -328,7 +389,57 @@ function handleHostMessage(message: unknown): void {
 	const workspaceMessage = parseWorkspaceToWebviewMessage(message);
 
 	if (workspaceMessage) {
-		graphView.updateGraph(workspaceMessage.graph);
+		if (workspaceMessage.contextGeneration < currentWorkspaceContextGeneration) {
+			return;
+		}
+		const rootContextChanged = workspaceMessage.contextGeneration
+			!== currentWorkspaceContextGeneration;
+		const rootIdsChanged = !haveSameWorkspaceRoots(
+			currentWorkspaceRootIds,
+			workspaceMessage.rootIds,
+		);
+
+		if (!rootContextChanged && rootIdsChanged) {
+			return;
+		}
+
+		if (workspaceMessage.state) {
+			const currentWorkspaceState = createWorkspacePersistentState(
+				graphView.getWorkspaceSnapshot(),
+			);
+			const workspaceState = rootContextChanged
+					? mergeWorkspaceStateForRootTransition(
+						currentWorkspaceState,
+						workspaceMessage.state,
+						currentWorkspaceRootIds,
+						workspaceMessage.rootIds,
+					)
+					: workspaceMessage.state;
+
+			// updateWorkspace의 final subscriber가 새 epoch로 응답하도록 먼저 바꾼다.
+			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
+			currentWorkspaceContextGeneration = workspaceMessage.contextGeneration;
+			graphView.updateWorkspace(
+				workspaceMessage.graph,
+				{
+					graph: {
+						nodePositions: workspaceState.nodePositions,
+						fileGroupPages: workspaceState.fileGroupPages,
+						openedFolders: workspaceState.openedFolders,
+						detachedRootNodeIds:
+							workspaceState.detachedRootNodeIds,
+						hiddenNodeIds: workspaceState.hiddenNodeIds,
+					},
+					tasks: workspaceState.tasks,
+				},
+			);
+		} else {
+			if (rootContextChanged) {
+				return;
+			}
+			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
+			graphView.updateGraph(workspaceMessage.graph);
+		}
 		return;
 	}
 

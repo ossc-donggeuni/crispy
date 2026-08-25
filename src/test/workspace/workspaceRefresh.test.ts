@@ -99,6 +99,43 @@ suite('Workspace Refresh Coordinator', () => {
 		assert.strictEqual(postMessageCalls, 0);
 	});
 
+	test('Workspace State load 중 dispose는 signal을 즉시 abort하고 결과 전송을 차단한다', async () => {
+		const stateLoad = createDeferred<void>();
+		let receivedSignal: AbortSignal | undefined;
+		let postMessageCalls = 0;
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				return createSnapshot('state-load-dispose');
+			},
+			convertWorkspaceSnapshotToGraph() {
+				return createGraph('state-load-dispose');
+			},
+			async loadWorkspaceState(_graph, _rootIds, signal) {
+				receivedSignal = signal;
+				await stateLoad.promise;
+				return undefined;
+			},
+			async postMessage() {
+				postMessageCalls += 1;
+				return true;
+			},
+		});
+		const activeRefresh = coordinator.requestWorkspaceRefresh();
+
+		await waitFor(() => receivedSignal !== undefined);
+		assert.strictEqual(coordinator.signal.aborted, false);
+		assert.strictEqual(receivedSignal?.aborted, false);
+
+		coordinator.dispose();
+		assert.strictEqual(coordinator.signal.aborted, true);
+		assert.strictEqual(receivedSignal?.aborted, true);
+
+		stateLoad.resolve(undefined);
+		await assert.doesNotReject(activeRefresh);
+
+		assert.strictEqual(postMessageCalls, 0);
+	});
+
 	test('Idle 요청은 현재 Snapshot을 기존 Graph 변환 후 Webview에 전송한다', async () => {
 		const snapshot = createSnapshot('initial');
 		const graph = createGraph('initial');
@@ -136,6 +173,8 @@ suite('Workspace Refresh Coordinator', () => {
 		assert.deepStrictEqual(messages, [{
 			type: 'workspace.graphUpdated',
 			graph,
+			contextGeneration: 0,
+			rootIds: graph.roots.map((root) => root.nodeId),
 		}]);
 	});
 
@@ -169,6 +208,8 @@ suite('Workspace Refresh Coordinator', () => {
 		assert.deepStrictEqual(messages, [{
 			type: 'workspace.graphUpdated',
 			graph: createGraph('filter-fallback'),
+			contextGeneration: 0,
+			rootIds: ['project:filter-fallback'],
 		}]);
 	});
 
