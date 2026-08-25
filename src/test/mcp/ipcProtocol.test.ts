@@ -111,38 +111,56 @@ suite('MCP strict IPC validator', () => {
 		}
 	});
 
-	test('Agent Activity outbound set/clear는 exact frozen wire이며 inbound parser는 Phase 3까지 격리한다', () => {
-		const setEvent = createSetAgentActivityRequested({
-			sessionId,
-			generation,
-			path: 'src/mcp/toolServer.ts',
-			targetKind: 'file',
-			activity: 'editing',
-		});
-		const clearEvent = createClearAgentActivityRequested({
-			sessionId,
-			generation,
-			path: 'src/mcp',
-			targetKind: 'folder',
-		});
+	test('Agent Activity set/clear를 exact frozen clone으로 parsing한다', () => {
+		const setEvent: Record<string, unknown> = {
+			...createSetAgentActivityRequested({
+				sessionId,
+				generation,
+				path: 'src/mcp/toolServer.ts',
+				targetKind: 'file',
+				activity: 'editing',
+			}),
+		};
+		const clearEvent: Record<string, unknown> = {
+			...createClearAgentActivityRequested({
+				sessionId,
+				generation,
+				path: 'src/mcp',
+				targetKind: 'folder',
+			}),
+		};
+		const parsedSet = parseMcpChildToHostMessage(setEvent);
+		const parsedClear = parseMcpChildToHostMessage(clearEvent);
+		assertSuccess(parsedSet);
+		assertSuccess(parsedClear);
 
-		assert.deepStrictEqual(Object.keys(setEvent), [
+		assert.notStrictEqual(parsedSet.value, setEvent);
+		assert.notStrictEqual(parsedClear.value, clearEvent);
+		assert.deepStrictEqual(parsedSet.value, setEvent);
+		assert.deepStrictEqual(parsedClear.value, clearEvent);
+		assert.deepStrictEqual(Object.keys(parsedSet.value), [
 			'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind', 'activity',
 		]);
-		assert.deepStrictEqual(Object.keys(clearEvent), [
+		assert.deepStrictEqual(Object.keys(parsedClear.value), [
 			'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind',
 		]);
-		assert.strictEqual(Object.isFrozen(setEvent), true);
-		assert.strictEqual(Object.isFrozen(clearEvent), true);
-		assertFailure(
-			parseMcpChildToHostMessage(setEvent),
-			'unknown_type',
-			'type',
+		assert.strictEqual(Object.isFrozen(parsedSet.value), true);
+		assert.strictEqual(Object.isFrozen(parsedClear.value), true);
+
+		setEvent.path = 'mutated-after-parse.ts';
+		setEvent.activity = 'rejected';
+		clearEvent.path = 'mutated-after-parse';
+		assert.strictEqual(
+			parsedSet.value.type === 'session.agentActivityRequested'
+				? parsedSet.value.path
+				: undefined,
+			'src/mcp/toolServer.ts',
 		);
-		assertFailure(
-			parseMcpChildToHostMessage(clearEvent),
-			'unknown_type',
-			'type',
+		assert.strictEqual(
+			parsedClear.value.type === 'session.agentActivityRequested'
+				? parsedClear.value.path
+				: undefined,
+			'src/mcp',
 		);
 
 		for (const activity of AGENT_ACTIVITY_KINDS) {
@@ -153,12 +171,107 @@ suite('MCP strict IPC validator', () => {
 				targetKind: 'file',
 				activity,
 			});
-			assert.strictEqual(event.operation, 'set');
-			assert.strictEqual(event.activity, activity);
-			assert.deepStrictEqual(Object.keys(event), [
+			const parsed = parseMcpChildToHostMessage(event);
+			assertSuccess(parsed);
+			assert.strictEqual(
+				parsed.value.type === 'session.agentActivityRequested'
+					&& parsed.value.operation === 'set'
+					? parsed.value.activity
+					: undefined,
+				activity,
+			);
+			assert.deepStrictEqual(Object.keys(parsed.value), [
 				'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind', 'activity',
 			]);
 		}
+	});
+
+	test('Agent Activity operation별 required/forbidden/extra field와 enum을 거부한다', () => {
+		const base = {
+			type: 'session.agentActivityRequested',
+			sessionId,
+			generation,
+			path: 'src/file.ts',
+			targetKind: 'file',
+		};
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			activity: 'active',
+		}), 'missing_field', 'operation');
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			operation: 'replace',
+			activity: 'active',
+		}), 'invalid_field', 'operation');
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			operation: 'set',
+		}), 'missing_field', 'activity');
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			operation: 'clear',
+			activity: 'active',
+		}), 'unexpected_field', 'activity');
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			operation: 'set',
+			activity: 'working',
+		}), 'invalid_field', 'activity');
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			operation: 'set',
+			activity: 'active',
+			targetKind: 'workspace',
+		}), 'invalid_field', 'targetKind');
+		assertFailure(parseMcpChildToHostMessage({
+			...base,
+			operation: 'set',
+			activity: 'active',
+			extra: 'not-on-wire',
+		}), 'unexpected_field', 'extra');
+	});
+
+	test('Agent Activity identity grammar와 canonical path를 독립 검증하며 보정하지 않는다', () => {
+		const valid = {
+			type: 'session.agentActivityRequested',
+			sessionId,
+			generation,
+			operation: 'set',
+			path: 'src/file.ts',
+			targetKind: 'file',
+			activity: 'active',
+		};
+		for (const invalidId of ['', 'space is invalid', '한글', 'x'.repeat(129)]) {
+			assertFailure(parseMcpChildToHostMessage({
+				...valid,
+				sessionId: invalidId,
+			}), 'invalid_field', 'sessionId');
+			assertFailure(parseMcpChildToHostMessage({
+				...valid,
+				generation: invalidId,
+			}), 'invalid_field', 'generation');
+		}
+		for (const invalidPath of [
+			'src//file.ts',
+			'src\\file.ts',
+			'src/../file.ts',
+			'/workspace/file.ts',
+		]) {
+			assertFailure(parseMcpChildToHostMessage({
+				...valid,
+				path: invalidPath,
+			}), 'invalid_field', 'path');
+		}
+		assertFailure(parseMcpChildToHostMessage({
+			...valid,
+			path: '.',
+		}), 'invalid_field', 'path');
+		const maxIdentity = parseMcpChildToHostMessage({
+			...valid,
+			sessionId: 's'.repeat(128),
+			generation: 'g'.repeat(128),
+		});
+		assertSuccess(maxIdentity);
 	});
 
 	test('Agent Activity outbound serialized IPC UTF-8 fixture는 8192/8193 exact다', () => {
@@ -192,8 +305,8 @@ suite('MCP strict IPC validator', () => {
 			ACTIVITY_IPC_MAX_UTF8_BYTES + 1,
 		);
 
-		assertFailure(parseMcpChildToHostMessage(atLimit), 'unknown_type', 'type');
-		assertFailure(parseMcpChildToHostMessage(overLimit), 'unknown_type', 'type');
+		assertSuccess(parseMcpChildToHostMessage(atLimit));
+		assertFailure(parseMcpChildToHostMessage(overLimit), 'invalid_field', 'path');
 	});
 
 	test('null, array, primitive, unknown type와 누락 필드를 양방향에서 거부한다', () => {

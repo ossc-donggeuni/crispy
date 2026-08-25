@@ -616,13 +616,17 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				.get<string>(`${providerId}CliPath`);
 		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
+		/** Phase 5 will replace this Host-owned default with the VS Code allowlist. */
+		const agentActivityCompatible = false;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,
 			parentEnvironment: { ...process.env },
+			agentActivityCompatible,
 			onEvent: (event) => terminalHost?.handleMcpRuntimeEvent(event),
 		});
 		terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
+			agentActivityCompatible,
 			readWorkspaceTrust: () => vscode.workspace.isTrusted,
 			onWorkspaceTrustRevoked: () => requestWorkspaceTrustRefresh(),
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({

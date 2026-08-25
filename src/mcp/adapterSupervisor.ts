@@ -16,6 +16,12 @@ export type McpSessionRuntimeFactory = (
 	options: McpSessionRuntimeOptions,
 ) => McpSessionRuntime;
 
+/** Runtime callback의 실제 source object를 Host 경계까지 보존한다. */
+export interface SupervisorRuntimeEvent {
+	readonly sourceRuntime: McpSessionRuntime;
+	readonly event: McpSessionRuntimeEvent;
+}
+
 export interface McpAdapterSupervisorOptions {
 	readonly extensionUri: Readonly<{ fsPath: string }>;
 	readonly parentEnvironment?: NodeJS.ProcessEnv;
@@ -26,8 +32,13 @@ export interface McpAdapterSupervisorOptions {
 	readonly createRequestId?: () => string;
 	readonly createGeneration?: () => string;
 	readonly createRuntime?: McpSessionRuntimeFactory;
-	readonly onEvent?: (event: McpSessionRuntimeEvent) => void;
+	readonly onEvent?: (event: SupervisorRuntimeEvent) => void;
 	readonly agentActivityCompatible?: boolean;
+}
+
+interface OwnedRuntimeIdentity {
+	readonly sessionId: string;
+	readonly generation: string;
 }
 
 /** Panel 단위로 session별 adapter runtime ownership과 stale generation 방어를 제공한다. */
@@ -36,12 +47,23 @@ export class McpAdapterSupervisor {
 	private readonly options: McpAdapterSupervisorOptions;
 	private readonly createGeneration: () => string;
 	private readonly createRuntime: McpSessionRuntimeFactory;
+	private readonly onEvent: ((event: SupervisorRuntimeEvent) => void) | undefined;
+	private readonly agentActivityCompatible: boolean;
 	private readonly runtimes = new Map<string, McpSessionRuntime>();
+	private readonly liveRuntimes = new Set<McpSessionRuntime>();
+	private readonly ownedRuntimeIdentities = new Map<
+		McpSessionRuntime,
+		OwnedRuntimeIdentity
+	>();
+	private readonly retirements = new Map<McpSessionRuntime, Promise<void>>();
 	private readonly prepares = new Map<string, Promise<McpPrepareResult>>();
 	private readonly restarts = new Map<string, Promise<McpPrepareResult>>();
 	private readonly stops = new Map<string, Promise<void>>();
 	private disposed = false;
 	private disposePromise: Promise<void> | undefined;
+	private resolveDispose: (() => void) | undefined;
+	private runtimeCreationDepth = 0;
+	private disposeRetirementStarted = false;
 
 	constructor(options: McpAdapterSupervisorOptions) {
 		this.options = options;
@@ -50,6 +72,8 @@ export class McpAdapterSupervisor {
 			?? (() => `generation-${randomUUID()}`);
 		this.createRuntime = options.createRuntime
 			?? ((runtimeOptions) => new McpSessionRuntime(runtimeOptions));
+		this.onEvent = options.onEvent;
+		this.agentActivityCompatible = options.agentActivityCompatible === true;
 	}
 
 	prepareSession(sessionId: string): Promise<McpPrepareResult> {
@@ -87,7 +111,10 @@ export class McpAdapterSupervisor {
 		if (existingStop !== undefined) {
 			return existingStop;
 		}
-		const stop = this.performStop(sessionId).finally(() => {
+		const runtime = this.runtimes.get(sessionId);
+		const stop = Promise.resolve().then(
+			() => this.performStop(runtime),
+		).finally(() => {
 			if (this.stops.get(sessionId) === stop) {
 				this.stops.delete(sessionId);
 			}
@@ -104,7 +131,13 @@ export class McpAdapterSupervisor {
 		if (existingRestart !== undefined) {
 			return existingRestart;
 		}
-		const restart = this.performRestart(sessionId).finally(() => {
+		if (this.stops.has(sessionId)) {
+			return Promise.resolve(supervisorFailure('adapter_start_failed'));
+		}
+		const previous = this.runtimes.get(sessionId);
+		const restart = Promise.resolve().then(
+			() => this.performRestart(sessionId, previous),
+		).finally(() => {
 			if (this.restarts.get(sessionId) === restart) {
 				this.restarts.delete(sessionId);
 			}
@@ -118,15 +151,18 @@ export class McpAdapterSupervisor {
 			return this.disposePromise;
 		}
 		this.disposed = true;
+		this.runtimes.clear();
 		this.prepares.clear();
 		this.restarts.clear();
 		this.stops.clear();
-		const ownedRuntimes = [...this.runtimes.values()];
-		this.runtimes.clear();
-		this.disposePromise = Promise.allSettled(
-			ownedRuntimes.map((runtime) => runtime.stop()),
-		).then(() => undefined);
-		return this.disposePromise;
+		const dispose = new Promise<void>((resolve) => {
+			this.resolveDispose = resolve;
+		});
+		this.disposePromise = dispose;
+		if (this.runtimeCreationDepth === 0) {
+			this.beginDisposeRetirement();
+		}
+		return dispose;
 	}
 
 	/** Host integration과 deterministic test가 현재 ownership만 조회하는 read-only 경계다. */
@@ -134,35 +170,81 @@ export class McpAdapterSupervisor {
 		return this.runtimes.get(sessionId);
 	}
 
+	/** 이 Supervisor가 소유한 exact runtime object만 detach하고 한 번 정리한다. */
+	retireExactRuntime(runtime: McpSessionRuntime): Promise<void> {
+		const existingRetirement = this.retirements.get(runtime);
+		if (existingRetirement !== undefined) {
+			return existingRetirement;
+		}
+		const identity = this.ownedRuntimeIdentities.get(runtime);
+		if (!this.liveRuntimes.has(runtime) || identity === undefined) {
+			return Promise.resolve();
+		}
+
+		let resolveRetirement!: () => void;
+		const retirement = new Promise<void>((resolve) => {
+			resolveRetirement = resolve;
+		});
+		this.retirements.set(runtime, retirement);
+		if (this.runtimes.get(identity.sessionId) === runtime) {
+			this.runtimes.delete(identity.sessionId);
+			this.prepares.delete(identity.sessionId);
+		}
+		void this.settleRuntimeRetirement(
+			runtime,
+			retirement,
+			resolveRetirement,
+		);
+		return retirement;
+	}
+
 	private async performPrepare(
 		sessionId: string,
 		runtime: McpSessionRuntime,
 	): Promise<McpPrepareResult> {
-		const result = await runtime.start();
+		let result: McpPrepareResult;
+		try {
+			result = await runtime.start();
+		} catch {
+			await this.retireExactRuntime(runtime);
+			return supervisorFailure('adapter_start_failed');
+		}
+		const identity = this.ownedRuntimeIdentities.get(runtime);
 		if (
 			this.disposed
+			|| identity === undefined
+			|| identity.sessionId !== sessionId
+			|| runtime.sessionId !== identity.sessionId
+			|| runtime.generation !== identity.generation
 			|| this.runtimes.get(sessionId) !== runtime
-			|| runtime.generation !== resultGeneration(result, runtime.generation)
+			|| (
+				result.ok
+				&& (
+					result.connection.sessionId !== identity.sessionId
+					|| result.connection.generation !== identity.generation
+				)
+			)
 		) {
-			await runtime.stop();
+			await this.retireExactRuntime(runtime);
 			return supervisorFailure('adapter_start_failed');
 		}
 		return result;
 	}
 
-	private async performRestart(sessionId: string): Promise<McpPrepareResult> {
-		const previous = this.runtimes.get(sessionId);
-		this.prepares.delete(sessionId);
+	private async performRestart(
+		sessionId: string,
+		previous: McpSessionRuntime | undefined,
+	): Promise<McpPrepareResult> {
 		if (previous !== undefined) {
-			await previous.stop();
-			if (this.runtimes.get(sessionId) === previous) {
-				this.runtimes.delete(sessionId);
-			}
+			await this.retireExactRuntime(previous);
 		}
 		if (this.disposed) {
 			return supervisorFailure('adapter_start_failed');
 		}
 		this.prepares.delete(sessionId);
+		if (this.runtimes.has(sessionId)) {
+			return supervisorFailure('adapter_start_failed');
+		}
 		const runtime = this.createOwnedRuntime(sessionId);
 		if (runtime === undefined) {
 			return supervisorFailure('adapter_start_failed');
@@ -173,49 +255,84 @@ export class McpAdapterSupervisor {
 		return prepare;
 	}
 
-	private async performStop(sessionId: string): Promise<void> {
-		const restarting = this.restarts.get(sessionId);
-		if (restarting !== undefined) {
-			await restarting.catch(() => undefined);
-		}
-		this.prepares.delete(sessionId);
-		const runtime = this.runtimes.get(sessionId);
-		if (runtime === undefined) {
-			return;
-		}
-		await runtime.stop();
-		if (this.runtimes.get(sessionId) === runtime) {
-			this.runtimes.delete(sessionId);
+	private async performStop(
+		runtime: McpSessionRuntime | undefined,
+	): Promise<void> {
+		if (runtime !== undefined) {
+			await this.retireExactRuntime(runtime);
 		}
 	}
 
 	private createOwnedRuntime(sessionId: string): McpSessionRuntime | undefined {
-		const generation = this.createGeneration();
-		if (!isValidMcpOpaqueId(generation)) {
+		this.runtimeCreationDepth += 1;
+		try {
+			const generation = this.createGeneration();
+			if (!isValidMcpOpaqueId(generation)) {
+				return undefined;
+			}
+			let sourceRuntime: McpSessionRuntime | undefined;
+			const runtime = this.createRuntime({
+				generation,
+				sessionId,
+				childEntryPath: this.childEntryPath,
+				parentEnvironment: this.options.parentEnvironment,
+				hostRuntime: this.options.hostRuntime,
+				timeouts: this.options.timeouts,
+				randomBytes: this.options.randomBytes,
+				spawnChild: this.options.spawnChild,
+				createRequestId: this.options.createRequestId,
+				agentActivityCompatible: this.agentActivityCompatible,
+				onEvent: (event) => {
+					if (sourceRuntime !== undefined) {
+						this.handleRuntimeEvent(sourceRuntime, event);
+					}
+				},
+			});
+			sourceRuntime = runtime;
+			if (this.liveRuntimes.has(runtime)) {
+				return undefined;
+			}
+			this.ownedRuntimeIdentities.set(runtime, Object.freeze({
+				sessionId,
+				generation,
+			}));
+			this.liveRuntimes.add(runtime);
+			if (
+				this.disposed
+				|| runtime.sessionId !== sessionId
+				|| runtime.generation !== generation
+			) {
+				void this.retireExactRuntime(runtime);
+				return undefined;
+			}
+			return runtime;
+		} catch {
 			return undefined;
+		} finally {
+			this.runtimeCreationDepth -= 1;
+			if (this.disposed && this.runtimeCreationDepth === 0) {
+				this.beginDisposeRetirement();
+			}
 		}
-		return this.createRuntime({
-			generation,
-			sessionId,
-			childEntryPath: this.childEntryPath,
-			parentEnvironment: this.options.parentEnvironment,
-			hostRuntime: this.options.hostRuntime,
-			timeouts: this.options.timeouts,
-			randomBytes: this.options.randomBytes,
-			spawnChild: this.options.spawnChild,
-			createRequestId: this.options.createRequestId,
-			agentActivityCompatible:
-				this.options.agentActivityCompatible === true,
-			onEvent: (event) => this.handleRuntimeEvent(event),
-		});
 	}
 
-	private handleRuntimeEvent(event: McpSessionRuntimeEvent): void {
-		const current = this.runtimes.get(event.sessionId);
+	private handleRuntimeEvent(
+		sourceRuntime: McpSessionRuntime,
+		event: McpSessionRuntimeEvent,
+	): void {
+		const identity = this.ownedRuntimeIdentities.get(sourceRuntime);
+		if (
+			identity === undefined
+			|| event.sessionId !== identity.sessionId
+			|| event.generation !== identity.generation
+		) {
+			void this.retireExactRuntime(sourceRuntime);
+			return;
+		}
+		const current = this.runtimes.get(identity.sessionId);
 		if (
 			this.disposed
-			|| current === undefined
-			|| current.generation !== event.generation
+			|| current !== sourceRuntime
 		) {
 			return;
 		}
@@ -223,10 +340,45 @@ export class McpAdapterSupervisor {
 			this.prepares.delete(event.sessionId);
 		}
 		try {
-			this.options.onEvent?.(event);
+			this.onEvent?.(Object.freeze({ sourceRuntime, event }));
 		} catch {
 			/** Panel consumer 실패가 다른 session lifecycle을 변경하지 않게 한다. */
 		}
+	}
+
+	private async settleRuntimeRetirement(
+		runtime: McpSessionRuntime,
+		retirement: Promise<void>,
+		resolveRetirement: () => void,
+	): Promise<void> {
+		try {
+			await runtime.stop();
+		} catch {
+			/** Runtime cleanup 실패도 exact ownership release를 막지 않는다. */
+		} finally {
+			this.liveRuntimes.delete(runtime);
+			this.ownedRuntimeIdentities.delete(runtime);
+			if (this.retirements.get(runtime) === retirement) {
+				this.retirements.delete(runtime);
+			}
+			resolveRetirement();
+		}
+	}
+
+	/** Admission-close 중 reentrant factory가 만든 runtime까지 같은 dispose barrier에 넣는다. */
+	private beginDisposeRetirement(): void {
+		if (this.disposeRetirementStarted || this.disposePromise === undefined) {
+			return;
+		}
+		this.disposeRetirementStarted = true;
+		const ownedRuntimes = [...this.liveRuntimes];
+		void Promise.allSettled(
+			ownedRuntimes.map((runtime) => this.retireExactRuntime(runtime)),
+		).then(() => {
+			const resolve = this.resolveDispose;
+			this.resolveDispose = undefined;
+			resolve?.();
+		});
 	}
 }
 
@@ -238,11 +390,4 @@ function supervisorFailure(
 		failure: createMcpFailure(reason),
 		providerAction: 'continue_without_mcp',
 	});
-}
-
-function resultGeneration(
-	result: McpPrepareResult,
-	fallback: string,
-): string {
-	return result.ok ? result.connection.generation : fallback;
 }

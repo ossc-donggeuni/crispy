@@ -105,6 +105,7 @@ export {
 	McpAdapterSupervisor,
 	type McpAdapterSupervisorOptions,
 	type McpSessionRuntimeFactory,
+	type SupervisorRuntimeEvent,
 } from './adapterSupervisor';
 export {
 	createAgentProcessEnvironment,

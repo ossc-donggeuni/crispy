@@ -36,11 +36,16 @@ type StartSessionAcceptsOnlyReadyDimensions = Assert<Equal<
 	[tabId: string, cols: number, rows: number]
 >>;
 
+const WORKSPACE_ROOT_URI = 'file:///validated/workspace';
+const WORKSPACE_ROOT_ID = `workspace-root:${WORKSPACE_ROOT_URI}` as const;
 const root = {
+	id: WORKSPACE_ROOT_ID,
+	workspaceFolder: {
+		uri: { toString: () => WORKSPACE_ROOT_URI },
+	},
 	scheme: 'file',
 	fsPath: '/validated/workspace' as ValidatedWorkspaceFsPath,
-} as ValidatedWorkspaceRoot;
-const WORKSPACE_ROOT_ID = 'workspace-root:file:///validated/workspace';
+} as unknown as ValidatedWorkspaceRoot;
 
 const launchPolicy: ShellLaunchPolicy = {
 	executable: '/host/selected/shell',

@@ -1,4 +1,12 @@
-import type { AgentActivityRequested } from './agentActivityProtocol';
+import {
+	ACTIVITY_IPC_MAX_UTF8_BYTES,
+	createClearAgentActivityRequested,
+	createSetAgentActivityRequested,
+	isAgentActivityKind,
+	isAgentActivityTargetKind,
+	isCanonicalAgentActivityPath,
+	type AgentActivityRequested,
+} from './agentActivityProtocol';
 import {
 	isValidMcpBearerToken,
 	isValidMcpOpaqueId,
@@ -74,7 +82,6 @@ export type McpChildControlMessage =
 		readonly reason: McpChildOperationFailureReason;
 	};
 
-/** Phase 2 wire union. Activity parsing/ownership remains quarantined until Phase 3. */
 export type McpChildToHostMessage = McpChildControlMessage | AgentActivityRequested;
 
 export type McpIpcValidationErrorCode =
@@ -171,14 +178,110 @@ export function parseHostToMcpChildMessage(
 	) as McpIpcParseResult<HostToMcpChildMessage>;
 }
 
-/** Phase 2 control parser. Per-call Activity source/ownership parsing starts in Phase 3. */
+/** Child IPC payload를 exact schema의 새 frozen object로 복사한다. */
 export function parseMcpChildToHostMessage(
 	value: unknown,
-): McpIpcParseResult<McpChildControlMessage> {
+): McpIpcParseResult<McpChildToHostMessage> {
+	if (
+		isRecord(value)
+		&& Object.hasOwn(value, 'type')
+		&& value.type === 'session.agentActivityRequested'
+	) {
+		return parseAgentActivityRequested(value);
+	}
 	return parseMessage(
 		value,
 		CHILD_TO_HOST_SCHEMAS,
-	) as McpIpcParseResult<McpChildControlMessage>;
+	) as McpIpcParseResult<McpChildToHostMessage>;
+}
+
+function parseAgentActivityRequested(
+	value: Record<string, unknown>,
+): McpIpcParseResult<AgentActivityRequested> {
+	const enumerableKeys = Object.keys(value);
+	if (!enumerableKeys.includes('operation')) {
+		return failure('missing_field', 'operation');
+	}
+	const operation = value.operation;
+	if (operation !== 'set' && operation !== 'clear') {
+		return failure('invalid_field', 'operation');
+	}
+
+	const expectedKeys = operation === 'set'
+		? [
+			'type',
+			'sessionId',
+			'generation',
+			'operation',
+			'path',
+			'targetKind',
+			'activity',
+		] as const
+		: [
+			'type',
+			'sessionId',
+			'generation',
+			'operation',
+			'path',
+			'targetKind',
+		] as const;
+	for (const name of expectedKeys) {
+		if (!enumerableKeys.includes(name)) {
+			return failure('missing_field', name);
+		}
+	}
+	for (const name of enumerableKeys) {
+		if (!(expectedKeys as readonly string[]).includes(name)) {
+			return failure('unexpected_field', name);
+		}
+	}
+
+	const sessionId = value.sessionId;
+	const generation = value.generation;
+	const path = value.path;
+	const targetKind = value.targetKind;
+	if (!isValidMcpOpaqueId(sessionId)) {
+		return failure('invalid_field', 'sessionId');
+	}
+	if (!isValidMcpOpaqueId(generation)) {
+		return failure('invalid_field', 'generation');
+	}
+	if (!isAgentActivityTargetKind(targetKind)) {
+		return failure('invalid_field', 'targetKind');
+	}
+	if (!isCanonicalAgentActivityPath(path, targetKind)) {
+		return failure('invalid_field', 'path');
+	}
+
+	let event: AgentActivityRequested;
+	if (operation === 'set') {
+		const activity = value.activity;
+		if (!isAgentActivityKind(activity)) {
+			return failure('invalid_field', 'activity');
+		}
+		event = createSetAgentActivityRequested({
+			sessionId,
+			generation,
+			path,
+			targetKind,
+			activity,
+		});
+	} else {
+		event = createClearAgentActivityRequested({
+			sessionId,
+			generation,
+			path,
+			targetKind,
+		});
+	}
+
+	if (
+		Buffer.byteLength(JSON.stringify(event), 'utf8')
+		> ACTIVITY_IPC_MAX_UTF8_BYTES
+	) {
+		return failure('invalid_field', 'path');
+	}
+	return { ok: true, value: event };
 }
 
 function parseMessage(

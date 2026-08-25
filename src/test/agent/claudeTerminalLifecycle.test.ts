@@ -7,12 +7,14 @@ import {
 	type McpSupervisor,
 } from '../../agent/host/terminal/terminalHost';
 import type { ProcessTreeController } from '../../agent/host/terminal/processTreeController';
+import type { SupervisorRuntimeEvent } from '../../mcp/adapterSupervisor';
 import { buildClaudeMcpLaunchPlan } from '../../mcp/claudeLaunchPlan';
 import { CLAUDE_MANAGED_MCP_DYNAMIC_CONFIG_REJECTION } from '../../mcp/claudeDiagnostic';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type {
 	McpPrepareResult,
 	McpRuntimeLifecycle,
+	McpSessionRuntime,
 	McpSessionRuntimeEvent,
 } from '../../mcp/sessionRuntime';
 import { createCaptureFailureProcessTreeController } from './support/fakeProcessTreeController';
@@ -26,9 +28,15 @@ const shellPolicy: ShellLaunchPolicy = {
 };
 const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
 const workspaceRoot = {
+	id: WORKSPACE_ROOT_ID,
 	scheme: 'file',
 	fsPath: '/trusted/workspace',
-} as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
+	workspaceFolder: {
+		name: 'trusted-workspace',
+		index: 0,
+		uri: { toString: () => 'file:///trusted/workspace' },
+	},
+} as unknown as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
 
 const successfulShellPrepare: PrepareTerminalLaunch = async () => ({
 	ok: true,
@@ -39,7 +47,10 @@ class FakeClaudeRuntime {
 	lifecycle: McpRuntimeLifecycle = 'running';
 	markProviderStartedCount = 0;
 
-	constructor(readonly generation: string) {}
+	constructor(
+		readonly sessionId: string,
+		readonly generation: string,
+	) {}
 
 	markProviderStarted(): boolean {
 		if (this.lifecycle !== 'running') {
@@ -50,22 +61,27 @@ class FakeClaudeRuntime {
 	}
 }
 
+type FakeClaudeRuntimeHandle = FakeClaudeRuntime & McpSessionRuntime;
+
 class FakeClaudeSupervisor implements McpSupervisor {
 	readonly prepareCalls: string[] = [];
 	readonly stopCalls: string[] = [];
 	disposeCallCount = 0;
 	prepareFailure: McpPrepareResult | undefined;
 	private generationIndex = 0;
-	private readonly runtimes = new Map<string, FakeClaudeRuntime>();
+	private disposePromise: Promise<void> | undefined;
+	private readonly runtimes = new Map<string, FakeClaudeRuntimeHandle>();
+	private readonly retirements = new Map<McpSessionRuntime, Promise<void>>();
 	private readonly connections = new Map<string, McpConnectionDescriptor>();
 
 	prepareSession(sessionId: string): Promise<McpPrepareResult> {
 		this.prepareCalls.push(sessionId);
 		if (this.prepareFailure !== undefined) {
+			this.createRuntime(sessionId, 'stopped');
 			return Promise.resolve(this.prepareFailure);
 		}
-		this.generationIndex += 1;
-		const generation = `claude-generation-${this.generationIndex}`;
+		const runtime = this.createRuntime(sessionId);
+		const generation = runtime.generation;
 		const route = Buffer.alloc(24, this.generationIndex).toString('base64url');
 		const token = Buffer.alloc(32, this.generationIndex + 32).toString('base64url');
 		const connection = new McpConnectionDescriptor(
@@ -75,42 +91,60 @@ class FakeClaudeSupervisor implements McpSupervisor {
 			token,
 		);
 		this.connections.set(sessionId, connection);
-		this.runtimes.set(sessionId, new FakeClaudeRuntime(generation));
 		return Promise.resolve({ ok: true, connection });
 	}
 
-	stopSession(sessionId: string): Promise<void> {
-		this.stopCalls.push(sessionId);
-		this.connections.get(sessionId)?.invalidate();
-		this.connections.delete(sessionId);
-		const runtime = this.runtimes.get(sessionId);
-		if (runtime !== undefined) {
-			runtime.lifecycle = 'stopped';
-		}
-		this.runtimes.delete(sessionId);
-		return Promise.resolve();
-	}
-
-	getSessionRuntime(sessionId: string): FakeClaudeRuntime | undefined {
+	getSessionRuntime(sessionId: string): FakeClaudeRuntimeHandle | undefined {
 		return this.runtimes.get(sessionId);
 	}
 
-	dispose(): Promise<void> {
-		this.disposeCallCount += 1;
-		for (const connection of this.connections.values()) {
-			connection.invalidate();
+	retireExactRuntime(runtime: McpSessionRuntime): Promise<void> {
+		const existing = this.retirements.get(runtime);
+		if (existing !== undefined) {
+			return existing;
 		}
-		this.connections.clear();
-		this.runtimes.clear();
-		return Promise.resolve();
+		if (this.runtimes.get(runtime.sessionId) !== runtime) {
+			return Promise.resolve();
+		}
+
+		let resolveRetirement!: () => void;
+		const retirement = new Promise<void>((resolve) => {
+			resolveRetirement = resolve;
+		});
+		this.retirements.set(runtime, retirement);
+		this.stopCalls.push(runtime.sessionId);
+		this.connections.get(runtime.sessionId)?.invalidate();
+		this.connections.delete(runtime.sessionId);
+		(runtime as FakeClaudeRuntimeHandle).lifecycle = 'stopped';
+		this.runtimes.delete(runtime.sessionId);
+		resolveRetirement();
+		void retirement.then(() => {
+			if (this.retirements.get(runtime) === retirement) {
+				this.retirements.delete(runtime);
+			}
+		});
+		return retirement;
 	}
 
-	crash(sessionId: string): McpSessionRuntimeEvent {
+	dispose(): Promise<void> {
+		if (this.disposePromise !== undefined) {
+			return this.disposePromise;
+		}
+		this.disposeCallCount += 1;
+		this.disposePromise = Promise.all(
+			[...this.runtimes.values()].map(
+				(runtime) => this.retireExactRuntime(runtime),
+			),
+		).then(() => undefined);
+		return this.disposePromise;
+	}
+
+	crash(sessionId: string): SupervisorRuntimeEvent {
 		const runtime = this.runtimes.get(sessionId);
 		assert.ok(runtime !== undefined);
 		runtime.lifecycle = 'crashed';
 		this.connections.get(sessionId)?.invalidate();
-		return {
+		const event: McpSessionRuntimeEvent = {
 			type: 'runtime.failure',
 			generation: runtime.generation,
 			sessionId,
@@ -120,16 +154,32 @@ class FakeClaudeSupervisor implements McpSupervisor {
 				? 'keep_running'
 				: 'continue_without_mcp',
 		};
+		return { sourceRuntime: runtime, event };
 	}
 
-	activity(sessionId: string): McpSessionRuntimeEvent {
+	activity(sessionId: string): SupervisorRuntimeEvent {
 		const runtime = this.runtimes.get(sessionId);
 		assert.ok(runtime !== undefined);
-		return {
+		const event: McpSessionRuntimeEvent = {
 			type: 'session.mcpActivityObserved',
 			generation: runtime.generation,
 			sessionId,
 		};
+		return { sourceRuntime: runtime, event };
+	}
+
+	private createRuntime(
+		sessionId: string,
+		lifecycle: McpRuntimeLifecycle = 'running',
+	): FakeClaudeRuntimeHandle {
+		this.generationIndex += 1;
+		const runtime = new FakeClaudeRuntime(
+			sessionId,
+			`claude-generation-${this.generationIndex}`,
+		) as unknown as FakeClaudeRuntimeHandle;
+		runtime.lifecycle = lifecycle;
+		this.runtimes.set(sessionId, runtime);
+		return runtime;
 	}
 }
 
@@ -196,6 +246,7 @@ function createFixture(options: {
 		mcpSupervisor: supervisor,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
+		sessionIdNonce: 'claude-lifecycle-panel',
 		...(options.buildPlan === undefined
 			? {}
 			: { buildClaudeMcpLaunchPlan: options.buildPlan }),
@@ -654,6 +705,10 @@ suite('Claude narrow startup rejection fallback', () => {
 		await beginClaude(fixture.host, 'tab-policy-fallback');
 		const authenticated = fixture.host.getActiveSession('tab-policy-fallback');
 		assert.ok(authenticated !== undefined);
+		assert.strictEqual(
+			authenticated.sessionId,
+			'session-claude-lifecycle-panel-1',
+		);
 
 		fixture.adapter.handles[0].emitData(
 			`Error: ${CLAUDE_MANAGED_MCP_DYNAMIC_CONFIG_REJECTION}\r\n`,
@@ -663,6 +718,7 @@ suite('Claude narrow startup rejection fallback', () => {
 
 		const bare = fixture.host.getActiveSession('tab-policy-fallback');
 		assert.ok(bare !== undefined);
+		assert.strictEqual(bare.sessionId, 'session-claude-lifecycle-panel-2');
 		assert.notStrictEqual(bare.sessionId, authenticated.sessionId);
 		assert.deepStrictEqual(fixture.adapter.spawnCalls[1].args, []);
 		assert.strictEqual(Object.keys(fixture.adapter.spawnCalls[1].env).some(

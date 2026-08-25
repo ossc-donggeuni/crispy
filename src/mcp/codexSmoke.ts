@@ -129,7 +129,10 @@ export class CodexSmokeEventObserver {
 			this.settle({ type: 'activity' });
 			return;
 		}
-		if (event.type === 'session.mcpActivityObserved') {
+		if (
+			event.type === 'session.mcpActivityObserved'
+			|| event.type === 'session.agentActivityRequested'
+		) {
 			return;
 		}
 		this.settle({ type: 'failure', reason: event.failure.reason });
@@ -400,7 +403,7 @@ async function main(): Promise<void> {
 	const supervisor = new McpAdapterSupervisor({
 		extensionUri: { fsPath: repositoryRoot },
 		parentEnvironment: process.env,
-		onEvent: (event) => observer.handle(event),
+		onEvent: ({ event }) => observer.handle(event),
 	});
 	const abort = (): void => controller.abort();
 	process.once('SIGINT', abort);
