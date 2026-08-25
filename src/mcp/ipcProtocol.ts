@@ -198,8 +198,8 @@ export function parseMcpChildToHostMessage(
 function parseAgentActivityRequested(
 	value: Record<string, unknown>,
 ): McpIpcParseResult<AgentActivityRequested> {
-	const enumerableKeys = Object.keys(value);
-	if (!enumerableKeys.includes('operation')) {
+	const ownPropertyNames = Object.getOwnPropertyNames(value);
+	if (!ownPropertyNames.includes('operation')) {
 		return failure('missing_field', 'operation');
 	}
 	const operation = value.operation;
@@ -226,11 +226,11 @@ function parseAgentActivityRequested(
 			'targetKind',
 		] as const;
 	for (const name of expectedKeys) {
-		if (!enumerableKeys.includes(name)) {
+		if (!ownPropertyNames.includes(name)) {
 			return failure('missing_field', name);
 		}
 	}
-	for (const name of enumerableKeys) {
+	for (const name of ownPropertyNames) {
 		if (!(expectedKeys as readonly string[]).includes(name)) {
 			return failure('unexpected_field', name);
 		}

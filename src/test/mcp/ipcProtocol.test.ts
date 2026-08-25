@@ -231,6 +231,45 @@ suite('MCP strict IPC validator', () => {
 		}), 'unexpected_field', 'extra');
 	});
 
+	test('Agent Activity set/clear의 비열거형 unexpected own-property를 거부한다', () => {
+		const messages: Record<string, unknown>[] = [
+			{
+				type: 'session.agentActivityRequested',
+				sessionId,
+				generation,
+				operation: 'set',
+				path: 'src/file.ts',
+				targetKind: 'file',
+				activity: 'active',
+			},
+			{
+				type: 'session.agentActivityRequested',
+				sessionId,
+				generation,
+				operation: 'clear',
+				path: 'src',
+				targetKind: 'folder',
+			},
+		];
+
+		for (const message of messages) {
+			Object.defineProperty(message, 'hidden', {
+				value: 'not-on-wire',
+				enumerable: false,
+			});
+			assert.strictEqual(Object.keys(message).includes('hidden'), false);
+			assert.strictEqual(
+				Object.getOwnPropertyNames(message).includes('hidden'),
+				true,
+			);
+			assertFailure(
+				parseMcpChildToHostMessage(message),
+				'unexpected_field',
+				'hidden',
+			);
+		}
+	});
+
 	test('Agent Activity identity grammar와 canonical path를 독립 검증하며 보정하지 않는다', () => {
 		const valid = {
 			type: 'session.agentActivityRequested',
