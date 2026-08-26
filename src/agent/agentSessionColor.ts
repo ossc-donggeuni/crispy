@@ -35,12 +35,18 @@ export interface AgentSessionColorRegistry {
 	readonly resolve: AgentSessionColorResolver;
 }
 
+const UINT32_RANGE = 0x1_0000_0000;
+
 /**
  * 한 Webview 수명 동안 세션 색상을 할당한다.
- * 팔레트 크기까지는 생성 순서가 다른 세션끼리 색상이 겹치지 않는다.
+ * Webview마다 새 random seed로 팔레트 순서를 섞고, 팔레트 크기까지는
+ * 생성 순서가 다른 세션끼리 색상이 겹치지 않는다.
  */
-export function createAgentSessionColorRegistry(): AgentSessionColorRegistry {
+export function createAgentSessionColorRegistry(
+	seed: number = createAgentSessionColorSeed(),
+): AgentSessionColorRegistry {
 	const colorsBySession = new Map<SessionId, string>();
+	const colors = createShuffledSessionColors(seed);
 	let nextColorIndex = 0;
 
 	return Object.freeze({
@@ -50,14 +56,44 @@ export function createAgentSessionColorRegistry(): AgentSessionColorRegistry {
 				return current;
 			}
 
-			const color = AGENT_SESSION_COLOR_PALETTE[
-				nextColorIndex % AGENT_SESSION_COLOR_PALETTE.length
-			];
+			const color = colors[nextColorIndex % colors.length];
 			nextColorIndex += 1;
 			colorsBySession.set(sessionId, color);
 			return color;
 		},
 	});
+}
+
+/** Webview에서 지원하는 CSPRNG로 수명별 32-bit 팔레트 seed를 만든다. */
+function createAgentSessionColorSeed(): number {
+	return globalThis.crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
+}
+
+/** 주입한 seed를 결정적인 PRNG로 확장해 팔레트의 Fisher-Yates 순서를 만든다. */
+function createShuffledSessionColors(seed: number): readonly string[] {
+	const colors = [...AGENT_SESSION_COLOR_PALETTE];
+	const random = createSeededRandom(seed);
+
+	for (let index = colors.length - 1; index > 0; index -= 1) {
+		const swapIndex = Math.floor(random() * (index + 1));
+		[colors[index], colors[swapIndex]] = [colors[swapIndex], colors[index]];
+	}
+
+	return Object.freeze(colors);
+}
+
+/** Mulberry32는 하나의 uint32 seed에서 셔플에 필요한 결정적인 값을 만든다. */
+function createSeededRandom(seed: number): () => number {
+	let state = seed >>> 0;
+
+	return (): number => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let value = state;
+
+		value = Math.imul(value ^ (value >>> 15), value | 1);
+		value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+		return ((value ^ (value >>> 14)) >>> 0) / UINT32_RANGE;
+	};
 }
 
 /** 독립 컴포넌트와 테스트가 공유 Registry 없이도 같은 세션 색을 얻는 fallback이다. */
