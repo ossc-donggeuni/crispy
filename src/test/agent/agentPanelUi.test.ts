@@ -1305,14 +1305,19 @@ suite('Agent Panel UI', () => {
 		);
 	});
 
-	test('MCP status는 current tab 우측 점으로 표시하고 retryable failure에만 재시작을 제공한다', () => {
+	test('MCP status는 하단 bar 우측에 표시하고 retryable failure에만 재시작을 제공한다', () => {
 		const fixture = createFixture();
 		selectProvider(fixture.providerPicker, 'codex');
 		const tabId = fixture.controller.getSnapshot().tabs[0].id;
 		const failureDetail = requireElement(fixture.topBar, 'agent-mcp-status');
 		const restart = requireElement(fixture.topBar, 'agent-mcp-restart');
+		const connectionStatus = requireElement(
+			fixture.workspaceStatusBar,
+			'agent-mcp-connection-status',
+		);
 
 		assert.strictEqual(failureDetail.hidden, true);
+		assert.strictEqual(connectionStatus.hidden, true);
 		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		fixture.controller.handleHostMessage({
 			type: 'terminal.started', tabId, sessionId: 'session-current',
@@ -1331,10 +1336,17 @@ suite('Agent Panel UI', () => {
 			sessionId: 'session-current',
 			status: 'connected',
 		});
-		const connected = requireElement(fixture.tabStrip, 'agent-tab-mcp-indicator');
-		assert.strictEqual(connected.dataset.kind, 'connected');
-		assert.strictEqual(connected.textContent, '');
-		assert.strictEqual(connected.getAttribute('aria-label'), 'MCP 연결됨');
+		assert.strictEqual(connectionStatus.hidden, false);
+		assert.strictEqual(connectionStatus.dataset.kind, 'connected');
+		assert.strictEqual(
+			requireElement(
+				connectionStatus,
+				'agent-mcp-connection-label',
+			).textContent,
+			'connected',
+		);
+		assert.strictEqual(connectionStatus.getAttribute('aria-label'), 'MCP 연결됨');
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		assert.strictEqual(failureDetail.hidden, true);
 		assert.strictEqual(restart.hidden, true);
 
@@ -1346,10 +1358,15 @@ suite('Agent Panel UI', () => {
 			reason: 'provider_config_rejected',
 			retryable: false,
 		});
+		assert.strictEqual(connectionStatus.dataset.kind, 'failed');
 		assert.strictEqual(
-			requireElement(fixture.tabStrip, 'agent-tab-mcp-indicator').dataset.kind,
+			requireElement(
+				connectionStatus,
+				'agent-mcp-connection-label',
+			).textContent,
 			'failed',
 		);
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		assert.strictEqual(failureDetail.hidden, false);
 		assert.strictEqual(failureDetail.dataset.kind, 'failed');
 		assert.strictEqual(failureDetail.getAttribute('role'), 'alert');
@@ -1413,6 +1430,13 @@ suite('Agent Panel UI', () => {
 		});
 		assert.strictEqual(
 			requireElement(fixture.topBar, 'agent-mcp-status').hidden,
+			true,
+		);
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-mcp-connection-status',
+			).hidden,
 			true,
 		);
 		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
@@ -1490,7 +1514,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(restart.disabled, false);
 	});
 
-	test('여러 탭의 우측 점을 동시에 표시하고 old clear는 fresh session status를 바꾸지 않는다', () => {
+	test('하단 bar는 활성 탭의 MCP 상태만 표시하고 old clear는 fresh session status를 바꾸지 않는다', () => {
 		const fixture = createFixture();
 		selectProvider(fixture.providerPicker, 'codex');
 		const first = fixture.controller.getSnapshot().tabs[0].id;
@@ -1514,16 +1538,27 @@ suite('Agent Panel UI', () => {
 			type: 'mcp.statusChanged',
 			tabId: second,
 			sessionId: 'session-second',
-			status: 'connected',
+			status: 'failed',
+			reason: 'provider_config_rejected',
+			retryable: false,
 		});
-		assert.deepStrictEqual(
-			fixture.tabStrip.findAll('agent-tab-mcp-indicator').map(
-				(indicator) => indicator.parent?.dataset.tabId,
-			),
-			[first, second],
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-mcp-connection-label',
+			).textContent,
+			'failed',
 		);
-		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, true);
+		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, false);
 		fixture.tabStrip.findAll('agent-tab-select')[0].click();
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-mcp-connection-label',
+			).textContent,
+			'connected',
+		);
 		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, true);
 
 		fixture.controller.handleHostMessage({
@@ -1538,7 +1573,11 @@ suite('Agent Panel UI', () => {
 		fixture.controller.handleHostMessage({
 			type: 'mcp.statusCleared', tabId: first, sessionId: 'session-first',
 		});
-		assert.strictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator').length, 2);
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs.find((tab) => tab.id === first)?.mcpStatus.kind,
+			'connected',
+		);
 	});
 
 	test('비활성 탭 우클릭은 활성 탭을 바꾸지 않고 접근 가능한 메뉴를 연다', () => {

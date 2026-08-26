@@ -14,7 +14,6 @@ import {
 } from './agentUiDom';
 
 export const AGENT_TAB_CLOSE_LABEL = '×';
-export const MCP_CONNECTED_ACCESSIBLE_LABEL = 'MCP 연결됨';
 
 export function formatTabCloseTitle(tabLabel: string): string {
 	return `Close ${tabLabel}`;
@@ -164,20 +163,6 @@ export function initializeAgentTabStrip(
 					callbacks.onRequestCloseTab(tab.id);
 				});
 
-				let tabStatus: HTMLElement | undefined;
-				if (tab.mcpStatus.kind !== 'none') {
-					tabStatus = dependencies.createElement('span');
-					tabStatus.className = 'agent-tab-mcp-indicator';
-					tabStatus.dataset.kind = tab.mcpStatus.kind;
-					tabStatus.setAttribute('role', 'img');
-					tabStatus.setAttribute(
-						'aria-label',
-						tab.mcpStatus.kind === 'connected'
-							? MCP_CONNECTED_ACCESSIBLE_LABEL
-							: tab.mcpStatus.message,
-					);
-				}
-
 				tabElement.addEventListener('contextmenu', (event) => {
 					const mouseEvent = event as MouseEvent;
 					mouseEvent.preventDefault();
@@ -188,7 +173,6 @@ export function initializeAgentTabStrip(
 				});
 				tabElement.append(
 					selectButton,
-					...(tabStatus === undefined ? [] : [tabStatus]),
 					closeButton,
 				);
 				nextTabButtons.set(tab.id, selectButton);
