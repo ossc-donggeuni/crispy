@@ -149,26 +149,44 @@ interface FullChainFixture {
 	cleanup(): Promise<void>;
 }
 
+const FULL_CHAIN_TEST_TIMEOUT_MS = 60_000;
+const FULL_CHAIN_PHASE_TIMEOUT_MS = 15_000;
+const FULL_CHAIN_CLEANUP_PHASE_TIMEOUT_MS = 5_000;
+const FULL_CHAIN_STATE_TIMEOUT_MS = 5_000;
+
 suite('Agent Activity production full-chain integration', () => {
-	test('HTTP SDK crosses child ownership, selected root, Store and tracked quota', async () => {
+	test('HTTP SDK crosses child ownership, selected root, Store and tracked quota', async function () {
+		this.timeout(FULL_CHAIN_TEST_TIMEOUT_MS);
 		const fixture = await createFullChainFixture(true);
+		let primaryFailure: Readonly<{ error: unknown }> | undefined;
 		try {
-			const listed = await fixture.client.listTools();
+			const listed = await awaitPhase(
+				'enabled/list tools',
+				() => fixture.client.listTools(),
+			);
 			assert.deepStrictEqual(listed.tools.map(({ name }) => name), [
 				CRISPY_PING_TOOL_NAME,
 				CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 				CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 			]);
 
-			const firstSet = fixture.client.callTool({
-				name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: {
-					path: 'src//./feature.ts',
-					targetKind: 'file',
-					activity: 'editing',
-				},
-			});
-			await fixture.firstValidationStarted;
+			const firstSet = awaitPhase(
+				'enabled/first set call',
+				() => fixture.client.callTool({
+					name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: {
+						path: 'src//./feature.ts',
+						targetKind: 'file',
+						activity: 'editing',
+					},
+				}),
+			);
+			/** Validation-start failure must not leave the concurrent Tool call unhandled. */
+			void firstSet.catch(() => undefined);
+			await awaitPhase(
+				'enabled/first set validation start',
+				() => fixture.firstValidationStarted,
+			);
 			assertAccepted(await firstSet);
 			/** Child acceptance is deliberately observed before Host validation/Store apply. */
 			assert.deepStrictEqual(fixture.store.getSnapshot(), []);
@@ -193,7 +211,10 @@ suite('Agent Activity production full-chain integration', () => {
 			});
 
 			fixture.releaseFirstValidation();
-			await waitFor(() => fixture.webview.messages.length === 1);
+			await waitFor(
+				'enabled/first set delivery',
+				() => fixture.webview.messages.length === 1,
+			);
 			const expectedTarget = {
 				nodeId: `file:${vscode.Uri.joinPath(
 					fixture.rootUri,
@@ -216,12 +237,21 @@ suite('Agent Activity production full-chain integration', () => {
 			);
 
 			/** Clear must preserve the deterministic target after the file disappears. */
-			await unlink(path.join(fixture.tempRoot, 'src', 'feature.ts'));
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: { path: 'src/feature.ts', targetKind: 'file' },
-			}));
-			await waitFor(() => fixture.webview.messages.length === 2);
+			await awaitPhase(
+				'enabled/remove validated file',
+				() => unlink(path.join(fixture.tempRoot, 'src', 'feature.ts')),
+			);
+			assertAccepted(await awaitPhase(
+				'enabled/first clear call',
+				() => fixture.client.callTool({
+					name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: { path: 'src/feature.ts', targetKind: 'file' },
+				}),
+			));
+			await waitFor(
+				'enabled/first clear delivery',
+				() => fixture.webview.messages.length === 2,
+			);
 			assert.strictEqual(fixture.validationCalls(), 1);
 			assert.deepStrictEqual(readPublicTypes(fixture.webview.messages), [
 				'agent.activity.set',
@@ -244,20 +274,32 @@ suite('Agent Activity production full-chain integration', () => {
 			await fixture.webview.settlePost(1, true);
 
 			/** set→clear delivery stays FIFO even when post Promises settle clear→set. */
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: {
-					path: 'src/reverse.ts',
-					targetKind: 'file',
-					activity: 'active',
-				},
-			}));
-			await waitFor(() => fixture.webview.messages.length === 3);
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: { path: 'src/reverse.ts', targetKind: 'file' },
-			}));
-			await waitFor(() => fixture.webview.messages.length === 4);
+			assertAccepted(await awaitPhase(
+				'enabled/reverse set call',
+				() => fixture.client.callTool({
+					name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: {
+						path: 'src/reverse.ts',
+						targetKind: 'file',
+						activity: 'active',
+					},
+				}),
+			));
+			await waitFor(
+				'enabled/reverse set delivery',
+				() => fixture.webview.messages.length === 3,
+			);
+			assertAccepted(await awaitPhase(
+				'enabled/reverse clear call',
+				() => fixture.client.callTool({
+					name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: { path: 'src/reverse.ts', targetKind: 'file' },
+				}),
+			));
+			await waitFor(
+				'enabled/reverse clear delivery',
+				() => fixture.webview.messages.length === 4,
+			);
 			assert.deepStrictEqual(
 				readPublicTypes(fixture.webview.messages.slice(2, 4)),
 				['agent.activity.set', 'agent.activity.clear'],
@@ -266,35 +308,54 @@ suite('Agent Activity production full-chain integration', () => {
 			await fixture.webview.settlePost(3, true);
 			await fixture.webview.settlePost(2, true);
 			fixture.webview.deliverNextReceipt();
-			await waitFor(() => (
-				fixture.bridge!.getPanelSnapshotForTest().activeTargets === 0
-			));
+			await waitFor(
+				'enabled/reverse receipt settlement',
+				() => fixture.bridge!.getPanelSnapshotForTest().activeTargets === 0,
+			);
 
 			/** clear→set preserves the newer set and an older receipt cannot clear it. */
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: {
-					path: 'src/revive.ts',
-					targetKind: 'file',
-					activity: 'planned',
-				},
-			}));
-			await waitFor(() => fixture.webview.messages.length === 5);
+			assertAccepted(await awaitPhase(
+				'enabled/revive planned set call',
+				() => fixture.client.callTool({
+					name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: {
+						path: 'src/revive.ts',
+						targetKind: 'file',
+						activity: 'planned',
+					},
+				}),
+			));
+			await waitFor(
+				'enabled/revive planned delivery',
+				() => fixture.webview.messages.length === 5,
+			);
 			await fixture.webview.settlePost(4, true);
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: { path: 'src/revive.ts', targetKind: 'file' },
-			}));
-			await waitFor(() => fixture.webview.messages.length === 6);
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: {
-					path: 'src/revive.ts',
-					targetKind: 'file',
-					activity: 'completed',
-				},
-			}));
-			await waitFor(() => fixture.webview.messages.length === 7);
+			assertAccepted(await awaitPhase(
+				'enabled/revive clear call',
+				() => fixture.client.callTool({
+					name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: { path: 'src/revive.ts', targetKind: 'file' },
+				}),
+			));
+			await waitFor(
+				'enabled/revive clear delivery',
+				() => fixture.webview.messages.length === 6,
+			);
+			assertAccepted(await awaitPhase(
+				'enabled/revive completed set call',
+				() => fixture.client.callTool({
+					name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: {
+						path: 'src/revive.ts',
+						targetKind: 'file',
+						activity: 'completed',
+					},
+				}),
+			));
+			await waitFor(
+				'enabled/revive completed delivery',
+				() => fixture.webview.messages.length === 7,
+			);
 			assert.deepStrictEqual(
 				readPublicTypes(fixture.webview.messages.slice(5, 7)),
 				['agent.activity.clear', 'agent.activity.set'],
@@ -316,11 +377,17 @@ suite('Agent Activity production full-chain integration', () => {
 			);
 
 			/** Leave a settled target-clear receipt for clearSession to subsume. */
-			assertAccepted(await fixture.client.callTool({
-				name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: { path: 'src/revive.ts', targetKind: 'file' },
-			}));
-			await waitFor(() => fixture.webview.messages.length === 8);
+			assertAccepted(await awaitPhase(
+				'enabled/final target clear call',
+				() => fixture.client.callTool({
+					name: CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: { path: 'src/revive.ts', targetKind: 'file' },
+				}),
+			));
+			await waitFor(
+				'enabled/final target clear delivery',
+				() => fixture.webview.messages.length === 8,
+			);
 			assert.deepStrictEqual(fixture.store.getSnapshot(), []);
 			await fixture.webview.settlePost(7, true);
 			assert.deepStrictEqual(
@@ -330,7 +397,10 @@ suite('Agent Activity production full-chain integration', () => {
 
 			/** Lease teardown invokes clearSession after the target clear. */
 			fixture.host.detach();
-			await waitFor(() => fixture.webview.messages.length === 9);
+			await waitFor(
+				'enabled/clearSession delivery',
+				() => fixture.webview.messages.length === 9,
+			);
 			assert.deepStrictEqual(
 				readPublicTypes(fixture.webview.messages.slice(6, 9)),
 				[
@@ -358,35 +428,52 @@ suite('Agent Activity production full-chain integration', () => {
 				0,
 			);
 			await fixture.webview.settleAllReverse(true);
-			await waitFor(() => (
-				fixture.bridge!.getPanelSnapshotForTest().activeTargets === 0
-				&& fixture.bridge!.getPanelSnapshotForTest().receiptCount === 0
-			));
+			await waitFor(
+				'enabled/final quota settlement',
+				() => (
+					fixture.bridge!.getPanelSnapshotForTest().activeTargets === 0
+					&& fixture.bridge!.getPanelSnapshotForTest().receiptCount === 0
+				),
+			);
+		} catch (error) {
+			primaryFailure = { error };
+			throw error;
 		} finally {
-			await fixture.cleanup();
+			await cleanupFullChainFixture(fixture, primaryFailure);
 		}
 	});
 
-	test('unsupported Host remains ping-only with no Activity lifecycle state', async () => {
+	test('unsupported Host remains ping-only with no Activity lifecycle state', async function () {
+		this.timeout(FULL_CHAIN_TEST_TIMEOUT_MS);
 		const fixture = await createFullChainFixture(false);
+		let primaryFailure: Readonly<{ error: unknown }> | undefined;
 		try {
-			const listed = await fixture.client.listTools();
+			const listed = await awaitPhase(
+				'unsupported/list tools',
+				() => fixture.client.listTools(),
+			);
 			assert.deepStrictEqual(
 				listed.tools.map(({ name }) => name),
 				[CRISPY_PING_TOOL_NAME],
 			);
-			assertPing(await fixture.client.callTool({
-				name: CRISPY_PING_TOOL_NAME,
-				arguments: {},
-			}));
-			await assert.rejects(() => fixture.client.callTool({
-				name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-				arguments: {
-					path: 'src/feature.ts',
-					targetKind: 'file',
-					activity: 'editing',
-				},
-			}));
+			assertPing(await awaitPhase(
+				'unsupported/ping call',
+				() => fixture.client.callTool({
+					name: CRISPY_PING_TOOL_NAME,
+					arguments: {},
+				}),
+			));
+			await assert.rejects(() => awaitPhase(
+				'unsupported/rejected set call',
+				() => fixture.client.callTool({
+					name: CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+					arguments: {
+						path: 'src/feature.ts',
+						targetKind: 'file',
+						activity: 'editing',
+					},
+				}),
+			));
 
 			const hostInternals = fixture.host as unknown as {
 				readonly activityLeaseStateBySession: unknown;
@@ -405,15 +492,36 @@ suite('Agent Activity production full-chain integration', () => {
 			fixture.host.detach();
 			await fixture.webview.settleAllReverse(true);
 			assert.deepStrictEqual(fixture.store.getSnapshot(), []);
+		} catch (error) {
+			primaryFailure = { error };
+			throw error;
 		} finally {
-			await fixture.cleanup();
+			await cleanupFullChainFixture(fixture, primaryFailure);
 		}
 	});
 });
 
+async function cleanupFullChainFixture(
+	fixture: FullChainFixture,
+	primaryFailure: Readonly<{ error: unknown }> | undefined,
+): Promise<void> {
+	try {
+		await fixture.cleanup();
+	} catch (cleanupError) {
+		if (primaryFailure !== undefined) {
+			throw new AggregateError(
+				[primaryFailure.error, cleanupError],
+				'Full-chain test and cleanup both failed.',
+			);
+		}
+		throw cleanupError;
+	}
+}
+
 async function createFullChainFixture(
 	agentActivityCompatible: boolean,
 ): Promise<FullChainFixture> {
+	const phasePrefix = agentActivityCompatible ? 'enabled' : 'unsupported';
 	const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'crispy-activity-chain-'));
 	await mkdir(path.join(tempRoot, 'src'));
 	await writeFile(path.join(tempRoot, 'src', 'feature.ts'), 'export {};\n');
@@ -532,24 +640,62 @@ async function createFullChainFixture(
 		}
 		cleaned = true;
 		releaseFirstValidation();
-		await client?.close().catch(() => undefined);
+		const cleanupErrors: unknown[] = [];
+		const cleanupPhase = async (
+			label: string,
+			operation: () => Promise<unknown>,
+		): Promise<void> => {
+			try {
+				await awaitPhase(
+					`${phasePrefix}/cleanup/${label}`,
+					operation,
+					FULL_CHAIN_CLEANUP_PHASE_TIMEOUT_MS,
+				);
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		};
+		await cleanupPhase('client close', () => (
+			client?.close() ?? Promise.resolve()
+		));
 		host.detach();
 		webview.deliverAllReceipts();
 		await webview.settleAllReverse(true);
-		await host.terminate().catch(() => undefined);
-		await supervisor.dispose().catch(() => undefined);
+		await cleanupPhase(
+			'host terminate',
+			() => host.terminate(),
+		);
+		await cleanupPhase(
+			'supervisor dispose',
+			() => supervisor.dispose(),
+		);
 		bridge?.disposePanel();
-		await rm(tempRoot, { recursive: true, force: true });
+		await cleanupPhase(
+			'temp root removal',
+			() => rm(tempRoot, { recursive: true, force: true }),
+		);
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(
+				cleanupErrors,
+				`Full-chain ${phasePrefix} cleanup failed.`,
+			);
+		}
 	};
 
 	try {
 		host.createTab('tab-activity-full-chain');
-		await host.handleTerminalReady('tab-activity-full-chain', 100, 30);
-		await host.switchAgent(
-			'tab-activity-full-chain',
-			'codex',
-			workspaceRootId,
-			1,
+		await awaitPhase(
+			`${phasePrefix}/terminal ready`,
+			() => host.handleTerminalReady('tab-activity-full-chain', 100, 30),
+		);
+		await awaitPhase(
+			`${phasePrefix}/switch agent`,
+			() => host.switchAgent(
+				'tab-activity-full-chain',
+				'codex',
+				workspaceRootId,
+				1,
+			),
 		);
 		assert.ok(connection !== undefined, 'full-chain MCP connection was not prepared');
 		client = new Client(
@@ -563,9 +709,19 @@ async function createFullChainFixture(
 				},
 			})
 		));
-		await client.connect(transport);
+		await awaitPhase(
+			`${phasePrefix}/client connect`,
+			() => client!.connect(transport),
+		);
 	} catch (error) {
-		await cleanup();
+		try {
+			await cleanup();
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				`Full-chain ${phasePrefix} setup and cleanup failed.`,
+			);
+		}
 		throw error;
 	}
 
@@ -646,13 +802,40 @@ function pickQuota(snapshot: Readonly<{
 	};
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-	const deadline = Date.now() + 5_000;
+async function awaitPhase<Value>(
+	label: string,
+	operation: () => Promise<Value>,
+	timeoutMs: number = FULL_CHAIN_PHASE_TIMEOUT_MS,
+): Promise<Value> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			operation(),
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => {
+					reject(new Error(
+						`Timed out during full-chain phase "${label}" after ${timeoutMs}ms.`,
+					));
+				}, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) {
+			clearTimeout(timer);
+		}
+	}
+}
+
+async function waitFor(
+	label: string,
+	predicate: () => boolean,
+): Promise<void> {
+	const deadline = Date.now() + FULL_CHAIN_STATE_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		if (predicate()) {
 			return;
 		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
-	throw new Error('Timed out waiting for full-chain state.');
+	throw new Error(`Timed out waiting for full-chain state "${label}".`);
 }

@@ -607,6 +607,15 @@ const CLICK_CODEX_PROVIDER_EXPRESSION = `(() => {
 	return true;
 })()`;
 
+const READ_MOTION_PREFERENCE_EXPRESSION = `(() => ({
+	reducedMotion: window.matchMedia(
+		'(prefers-reduced-motion: reduce)',
+	).matches,
+	noMotionPreference: window.matchMedia(
+		'(prefers-reduced-motion: no-preference)',
+	).matches,
+}))()`;
+
 const READ_ACTIVITY_DOM_EXPRESSION = `(() => {
 	const bindings = Array.from(document.querySelectorAll(
 		'.graph-agent-activity-binding',
@@ -637,6 +646,12 @@ const READ_ACTIVITY_DOM_EXPRESSION = `(() => {
 		}
 	}
 	return {
+		reducedMotion: window.matchMedia(
+			'(prefers-reduced-motion: reduce)',
+		).matches,
+		noMotionPreference: window.matchMedia(
+			'(prefers-reduced-motion: no-preference)',
+		).matches,
 		bindings: bindings
 			.map((binding) => binding.getAttribute('data-activity'))
 			.filter((activity) => typeof activity === 'string')
@@ -659,6 +674,8 @@ function matchesActivityPresentation(snapshot, expected) {
 		|| !Array.isArray(snapshot.bindings)
 		|| !Array.isArray(snapshot.effects)
 		|| !Array.isArray(snapshot.animations)
+		|| snapshot.reducedMotion !== false
+		|| snapshot.noMotionPreference !== true
 		|| snapshot.bindings.length === 0
 		|| !snapshot.bindings.every((activity) => activity === expected.activity)
 	) {
@@ -684,6 +701,8 @@ function isClearedActivityPresentation(snapshot) {
 		&& Array.isArray(snapshot.bindings)
 		&& Array.isArray(snapshot.effects)
 		&& Array.isArray(snapshot.animations)
+		&& snapshot.reducedMotion === false
+		&& snapshot.noMotionPreference === true
 		&& snapshot.bindings.length === 0
 		&& snapshot.effects.length === 0
 		&& snapshot.animations.length === 0;
@@ -711,6 +730,22 @@ async function runInstalledActivityCanvasSmoke(
 	let webviewTarget;
 	try {
 		webviewTarget = await findCrispyWebviewTarget(cdp);
+		await cdp.send('Emulation.setEmulatedMedia', {
+			media: '',
+			features: [{
+				name: 'prefers-reduced-motion',
+				value: 'no-preference',
+			}],
+		}, webviewTarget.sessionId);
+		await waitForWebviewValue(
+			cdp,
+			webviewTarget.sessionId,
+			webviewTarget.executionContextId,
+			READ_MOTION_PREFERENCE_EXPRESSION,
+			(value) => value?.reducedMotion === false
+				&& value.noMotionPreference === true,
+			'Webview did not apply no-preference motion emulation',
+		);
 		await waitForWebviewValue(
 			cdp,
 			webviewTarget.sessionId,
