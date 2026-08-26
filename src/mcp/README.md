@@ -56,11 +56,16 @@ next major는 false다. 이 경계는 `package.json`의 `engines.vscode: ^1.125.
 
 false에서도 Extension, Terminal, MCP, ping과 Graph/debug는 유지된다. Activity rate/IPC, lease,
 delivery, receipt, quota와 cleanup state는 만들지 않는다. Codex의 `enabled_tools`도 위 목록과
-exact하게 일치한다. Claude는 기존 inline HTTP config와 `alwaysLoad: true`를 유지하면서 server의
-request-local 등록과 runtime instructions를 같은 Host boolean으로 선택한다. unsupported
+exact하게 일치한다. Codex는 어느 gate에서도 `developer_instructions` CLI override를 만들지 않아
+User/Profile/Project의 effective instructions를 보존한다. OpenAI Codex에서 `--config`가 이 config
+layer들보다 우선하므로, additive composition 경로가 qualification되기 전에는 Crispy instructions를
+Codex에 주입하지 않는다.
+
+Claude는 기존 inline HTTP config와 `alwaysLoad: true`를 유지하면서 server의 request-local 등록과
+`--append-system-prompt` instructions를 같은 Host boolean으로 선택한다. unsupported Claude
 instructions에는 두 Activity Tool 이름이나 사용법이 없다.
 
-true의 provider instructions는 다음 계약을 전달한다.
+true의 Claude additive instructions는 다음 계약을 전달한다.
 
 - `path`는 tab에 배정된 root에 대한 canonical 상대 경로다. root 자체는 `.`이며
   `targetKind: "folder"`를 사용한다.
@@ -85,8 +90,9 @@ overlay하며 argv, persisted config, settings, log, telemetry 또는 Webview st
 cleanup clear는 best-effort이고, 끝나지 않는 validation/post work는 고정 cap 안에서 detach한 채 quota를
 낙관적으로 반환하지 않는다. 지원 범위 밖에서는 이 Activity 경로 전체를 inactive로 유지한다.
 
-minimum, current Stable과 current Insiders Host에서 strict parser와 true/false provider
-config/instructions, placeholder와 ping 회귀, HTTP부터 Store receipt/quota까지의 full-chain FIFO,
+minimum, current Stable과 current Insiders Host에서 strict parser와 true/false provider config,
+Codex Project/User instruction 보존, Claude additive instructions, placeholder와 ping 회귀,
+HTTP부터 Store receipt/quota까지의 full-chain FIFO,
 multi-root 및 Trust/root/restart lifecycle, unsupported zero-state, 실제 provider와 해당 native VSIX
 smoke를 검증한다. minimum 또는 major boundary를 바꿀 때에는 manifest와
 `AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION`을 함께 qualification한다. 상세 순서와 문제 해결은
@@ -174,7 +180,8 @@ awaiting_activity
 activity_observed
 ```
 
-설치된 Codex의 config parsing과 node-pty 실행 경계만 확인하려면 다음을 실행한다.
+설치된 Codex의 config parsing, node-pty 실행 경계와 effective developer instruction 보존을 확인하려면
+다음을 실행한다.
 
 ```bash
 pnpm run smoke:codex-config-compat
@@ -184,6 +191,7 @@ pnpm run smoke:codex-config-compat
 
 ```text
 [codex-config-compat-smoke] keyed-filters config parsed through node-pty.
+[codex-config-compat-smoke] Project/User developer instructions preserved for both Activity gates.
 ```
 
 Windows에서는 설치된 실제 `codex.cmd`의 config parsing과, 특수문자 경로에 둔
@@ -191,6 +199,7 @@ Windows에서는 설치된 실제 `codex.cmd`의 config parsing과, 특수문자
 
 ```text
 [codex-config-compat-smoke] keyed-filters config parsed through node-pty.
+[codex-config-compat-smoke] Project/User developer instructions preserved for both Activity gates.
 [codex-config-compat-smoke] Windows cmd-one-shot special-path launch passed.
 ```
 

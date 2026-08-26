@@ -1,7 +1,6 @@
 import * as assert from 'assert';
 import {
 	CODEX_CONFIG_OVERRIDE_ARGUMENT,
-	CODEX_DEVELOPER_INSTRUCTIONS_KEY,
 	CODEX_MCP_SERVER_NAME_PREFIX,
 	CODEX_MCP_SERVER_NAME_RANDOM_BYTES,
 	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
@@ -11,10 +10,6 @@ import {
 	createCodexProviderEnvironment,
 	sanitizeCodexProviderEnvironment,
 } from '../../mcp/codexConfig';
-import {
-	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
-	CRISPY_PING_ONLY_INSTRUCTIONS,
-} from '../../mcp/agentActivityInstructions';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import { serializeCodexTomlString } from '../../mcp/codexConfig';
 
@@ -44,10 +39,6 @@ suite('Codex MCP session config serializer', () => {
 			CODEX_CONFIG_OVERRIDE_ARGUMENT,
 			`mcp_servers.${expectedServerName}.enabled_tools=["crispy_ping"]`,
 			CODEX_CONFIG_OVERRIDE_ARGUMENT,
-			`${CODEX_DEVELOPER_INSTRUCTIONS_KEY}=${serializeCodexTomlString(
-				CRISPY_PING_ONLY_INSTRUCTIONS,
-			)}`,
-			CODEX_CONFIG_OVERRIDE_ARGUMENT,
 			CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 			CODEX_CONFIG_OVERRIDE_ARGUMENT,
 			`shell_environment_policy.filters.${CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE}="exclude"`,
@@ -64,9 +55,10 @@ suite('Codex MCP session config serializer', () => {
 		assert.strictEqual(config.args.filter(
 			(argument) => argument === CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 		).length, 1);
+		assert.strictEqual(hasDeveloperInstructionsOverride(config.args), false);
 	});
 
-	test('qualified gate serializes exactly three tools and full instructions', () => {
+	test('qualified gate serializes exactly three tools without replacing developer instructions', () => {
 		const config = createCodexMcpConfig(
 			createConnection(),
 			(size) => Buffer.alloc(size, 0xef),
@@ -77,11 +69,7 @@ suite('Codex MCP session config serializer', () => {
 		assert.strictEqual(config.args.includes(
 			`mcp_servers.${config.serverName}.enabled_tools=["crispy_ping","crispy_set_agent_activity","crispy_clear_agent_activity"]`,
 		), true);
-		assert.strictEqual(config.args.includes(
-			`${CODEX_DEVELOPER_INSTRUCTIONS_KEY}=${serializeCodexTomlString(
-				CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
-			)}`,
-		), true);
+		assert.strictEqual(hasDeveloperInstructionsOverride(config.args), false);
 		assert.strictEqual(config.args.some((argument) => argument.includes(
 			bearerToken,
 		)), false);
@@ -158,6 +146,10 @@ suite('Codex MCP session config serializer', () => {
 		);
 	});
 });
+
+function hasDeveloperInstructionsOverride(args: readonly string[]): boolean {
+	return args.some((argument) => argument.startsWith('developer_instructions='));
+}
 
 suite('Codex provider environment', () => {
 	test('stale credential과 Electron control 변형을 제거하고 입력을 보존한다', () => {

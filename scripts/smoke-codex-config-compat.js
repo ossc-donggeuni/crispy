@@ -19,12 +19,22 @@ const {
 	buildCodexMcpLaunchPlan,
 } = require('../out/mcp/codexLaunchPlan.js');
 const {
+	serializeCodexTomlString,
+} = require('../out/mcp/codexConfig.js');
+const {
 	McpConnectionDescriptor,
 } = require('../out/mcp/sessionRuntime.js');
 
 const smokeTimeoutMs = 15_000;
 const maximumOutputLength = 1024 * 1024;
 const windowsArgvMarker = 'CRISPY_WINDOWS_ARGV:';
+const projectInstructionsMarker = 'CRISPY_PROJECT_INSTRUCTIONS_PRESERVED';
+const userInstructionsMarker = 'CRISPY_USER_INSTRUCTIONS_PRESERVED';
+const promptInputMarker = 'CRISPY_PROMPT_INPUT_PROBE';
+const crispyInstructionNeedles = Object.freeze([
+	'The Crispy MCP server exposes only crispy_ping for this Host.',
+	'Use crispy_set_agent_activity when work starts on a target or changes state.',
+]);
 const windowsTransientCleanupErrorCodes = new Set([
 	'EBUSY',
 	'ENOTEMPTY',
@@ -58,6 +68,126 @@ function removeTemporaryRoot(temporaryRoot, platform = process.platform) {
 		console.warn(
 			`[codex-config-compat-smoke] Temporary cleanup deferred (${error.code}).`,
 		);
+	}
+}
+
+function createInstructionPreservationFixture(temporaryRoot) {
+	const codexHome = path.join(temporaryRoot, 'isolated-codex-home');
+	const projectWorkspace = path.join(temporaryRoot, 'project-instructions-workspace');
+	const userWorkspace = path.join(temporaryRoot, 'user-instructions-workspace');
+	fs.mkdirSync(codexHome, { recursive: true });
+	for (const workspace of [projectWorkspace, userWorkspace]) {
+		fs.mkdirSync(path.join(workspace, '.git'), { recursive: true });
+	}
+	fs.mkdirSync(path.join(projectWorkspace, '.codex'), { recursive: true });
+
+	const canonicalProjectWorkspace = fs.realpathSync.native(projectWorkspace);
+	const canonicalUserWorkspace = fs.realpathSync.native(userWorkspace);
+	fs.writeFileSync(path.join(codexHome, 'config.toml'), [
+		`developer_instructions=${serializeCodexTomlString(userInstructionsMarker)}`,
+		'',
+		`[projects.${serializeCodexTomlString(canonicalProjectWorkspace)}]`,
+		'trust_level="trusted"',
+		'',
+		`[projects.${serializeCodexTomlString(canonicalUserWorkspace)}]`,
+		'trust_level="trusted"',
+		'',
+	].join('\n'), 'utf8');
+	fs.writeFileSync(
+		path.join(projectWorkspace, '.codex', 'config.toml'),
+		`developer_instructions=${serializeCodexTomlString(projectInstructionsMarker)}\n`,
+		'utf8',
+	);
+
+	return Object.freeze({
+		codexHome,
+		projectWorkspace: canonicalProjectWorkspace,
+		userWorkspace: canonicalUserWorkspace,
+	});
+}
+
+function createIsolatedCodexEnvironment(environment, codexHome) {
+	const isolated = Object.fromEntries(Object.entries(environment).filter(
+		([name]) => name.toUpperCase() !== 'CODEX_HOME',
+	));
+	isolated.CODEX_HOME = codexHome;
+	return isolated;
+}
+
+function assertInstructionPreservationOutput(output, options) {
+	if (!output.includes(promptInputMarker)) {
+		throw smokeError('Codex prompt-input probe did not reach the user prompt.');
+	}
+	if (!output.includes(options.expectedMarker)) {
+		throw smokeError(`${options.layer} developer instructions were not preserved.`);
+	}
+	if (options.unexpectedMarker !== undefined
+		&& output.includes(options.unexpectedMarker)) {
+		throw smokeError(`${options.layer} config did not have the expected precedence.`);
+	}
+	for (const needle of crispyInstructionNeedles) {
+		if (output.includes(needle)) {
+			throw smokeError('Crispy replaced the effective Codex developer instructions.');
+		}
+	}
+	if (output.includes(options.token)) {
+		throw smokeError('Codex exposed the MCP credential in prompt-input output.');
+	}
+}
+
+async function runInstructionPreservationSmoke(options) {
+	const fixture = createInstructionPreservationFixture(options.temporaryRoot);
+	const environment = createIsolatedCodexEnvironment(
+		options.environment,
+		fixture.codexHome,
+	);
+	const cases = Object.freeze([
+		{
+			layer: 'project ping-only',
+			cwd: fixture.projectWorkspace,
+			agentActivityCompatible: false,
+			expectedMarker: projectInstructionsMarker,
+			unexpectedMarker: userInstructionsMarker,
+			randomByte: 0x71,
+		},
+		{
+			layer: 'project Activity-enabled',
+			cwd: fixture.projectWorkspace,
+			agentActivityCompatible: true,
+			expectedMarker: projectInstructionsMarker,
+			unexpectedMarker: userInstructionsMarker,
+			randomByte: 0x72,
+		},
+		{
+			layer: 'user Activity-enabled',
+			cwd: fixture.userWorkspace,
+			agentActivityCompatible: true,
+			expectedMarker: userInstructionsMarker,
+			unexpectedMarker: projectInstructionsMarker,
+			randomByte: 0x73,
+		},
+	]);
+
+	for (const testCase of cases) {
+		const plan = buildCodexMcpLaunchPlan({
+			executable: options.installed,
+			cwd: testCase.cwd,
+			connection: options.connection,
+			argsBeforeConfig: ['debug'],
+			argsAfterConfig: ['prompt-input', promptInputMarker],
+			randomBytes: (size) => Buffer.alloc(size, testCase.randomByte),
+			shellEnvironmentPolicyStyle: options.shellEnvironmentPolicyStyle,
+			agentActivityCompatible: testCase.agentActivityCompatible,
+		});
+		const request = createAgentProcessSpawnRequest(plan, {
+			platform: process.platform,
+			environment,
+		});
+		const output = await runPty(request);
+		assertInstructionPreservationOutput(output, {
+			...testCase,
+			token: options.token,
+		});
 	}
 }
 
@@ -294,6 +424,18 @@ async function main() {
 			`[codex-config-compat-smoke] ${shellEnvironmentPolicyStyle} config parsed through node-pty.`,
 		);
 
+		await runInstructionPreservationSmoke({
+			temporaryRoot,
+			installed,
+			connection,
+			environment,
+			shellEnvironmentPolicyStyle,
+			token,
+		});
+		console.log(
+			'[codex-config-compat-smoke] Project/User developer instructions preserved for both Activity gates.',
+		);
+
 		if (process.platform === 'win32') {
 			await runWindowsCmdOneShotSmoke(temporaryRoot, environment);
 			console.log(
@@ -316,6 +458,8 @@ if (require.main === module) {
 }
 
 module.exports = Object.freeze({
+	assertInstructionPreservationOutput,
+	createInstructionPreservationFixture,
 	createWindowsBatchFixtureSource,
 	createWindowsLauncherFixture,
 	shouldDeferTemporaryCleanup,

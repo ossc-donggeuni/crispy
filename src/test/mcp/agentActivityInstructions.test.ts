@@ -10,7 +10,7 @@ import {
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 } from '../../mcp/toolServer';
 
-suite('Crispy provider runtime instructions', () => {
+suite('Claude additive MCP runtime instructions', () => {
 	test('unsupported Host instructions are strictly ping-only', () => {
 		const instructions = createCrispyMcpInstructions(false);
 

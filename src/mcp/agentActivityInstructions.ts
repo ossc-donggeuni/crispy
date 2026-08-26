@@ -26,7 +26,7 @@ export const CRISPY_AGENT_ACTIVITY_INSTRUCTIONS = [
 	'The legacy mode value returned by crispy_ping applies only to that ping compatibility response and does not characterize the whole MCP server.',
 ].join(' ');
 
-/** Provider-safe instructions are selected only from the Host-owned capability. */
+/** Claude additive prompt instructions are selected only from the Host-owned capability. */
 export function createCrispyMcpInstructions(
 	agentActivityCompatible: boolean,
 ): string {

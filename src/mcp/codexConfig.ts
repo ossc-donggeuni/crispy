@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 import { MCP_LOOPBACK_HOST } from './httpPolicy';
 import { isValidMcpRouteId, type McpRandomBytes } from './sessionCredentials';
 import type { McpConnectionDescriptor } from './sessionRuntime';
-import { createCrispyMcpInstructions } from './agentActivityInstructions';
 import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
@@ -15,7 +14,6 @@ export const CODEX_MCP_SERVER_NAME_RANDOM_BYTES = 16;
 export const CODEX_CONFIG_OVERRIDE_ARGUMENT = '--config';
 export const CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT =
 	'features.shell_snapshot=false';
-export const CODEX_DEVELOPER_INSTRUCTIONS_KEY = 'developer_instructions';
 
 export type CodexShellEnvironmentPolicyStyle =
 	| 'keyed-filters'
@@ -45,7 +43,13 @@ export function createCodexMcpServerName(
 	return `${CODEX_MCP_SERVER_NAME_PREFIX}${randomValue.toString('hex')}`;
 }
 
-/** Token을 포함하지 않는 Codex session-only MCP config argv를 직렬화한다. */
+/**
+ * Token을 포함하지 않는 Codex session-only MCP config argv를 직렬화한다.
+ *
+ * `developer_instructions`는 의도적으로 설정하지 않는다. CLI `--config` override는
+ * Codex의 Project/Profile/User config보다 우선하므로 Crispy가 이 key를 설정하면
+ * 사용자의 effective repository instructions를 대체하게 된다.
+ */
 export function createCodexMcpConfig(
 	connection: McpConnectionDescriptor,
 	random?: McpRandomBytes,
@@ -69,9 +73,6 @@ export function createCodexMcpConfig(
 		`${serverKey}.enabled_tools=[${enabledTools
 			.map(serializeCodexTomlString)
 			.join(',')}]`,
-		`${CODEX_DEVELOPER_INSTRUCTIONS_KEY}=${serializeCodexTomlString(
-			createCrispyMcpInstructions(agentActivityCompatible),
-		)}`,
 		CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 		createShellEnvironmentPolicyAssignment(shellEnvironmentPolicyStyle),
 	];

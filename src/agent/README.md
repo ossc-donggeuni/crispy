@@ -580,12 +580,17 @@ crispy_set_agent_activity
 crispy_clear_agent_activity
 ```
 
-Claude는 기존 inline `type: "http"`, URL/header placeholder와 `alwaysLoad: true` shape를 유지하고
-같은 세 Tool을 server에서 노출한다. false이면 두 provider 모두 `crispy_ping`만 노출하며 runtime
-instructions에도 Activity Tool 이름이나 사용법을 넣지 않는다. `crispy_ping`의 legacy
-`mode: "observation-only"`는 ping 응답 전용이며 server 전체 capability 설명이 아니다.
+Codex에는 capability true/false 어느 쪽에서도 `developer_instructions` CLI override를 주입하지
+않는다. Codex의 `--config`가 Project/Profile/User config보다 우선하므로 해당 key를 설정하면
+repository별 workflow/safety instruction을 대체하기 때문이다. additive composition 경로를 별도로
+qualification하기 전까지 Codex에는 Tool allowlist와 MCP Tool 자체의 schema/description만 제공한다.
 
-true의 provider instructions는 assigned root 상대 path만 사용하게 한다. root는 `.`과
+Claude는 기존 inline `type: "http"`, URL/header placeholder와 `alwaysLoad: true` shape를 유지하고
+같은 세 Tool을 server에서 노출한다. false이면 두 provider 모두 `crispy_ping`만 노출하며 Claude의
+additive runtime instructions에도 Activity Tool 이름이나 사용법을 넣지 않는다. `crispy_ping`의
+legacy `mode: "observation-only"`는 ping 응답 전용이며 server 전체 capability 설명이 아니다.
+
+true의 Claude `--append-system-prompt` instructions는 assigned root 상대 path만 사용하게 한다. root는 `.`과
 `targetKind: "folder"`로 나타내고 target kind는 `file`/`folder`, activity는 `planned`, `active`,
 `editing`, `completed`, `mentioned`, `rejected` 중 하나다. 시작/전환에는 set, 종료에는 clear를
 사용하며 PTY output이나 file change로 추론하지 않는다. Tool이 root/session/runtime/URI/token/internal
@@ -608,7 +613,8 @@ Graph 연결의 현재 제약은 다음과 같다.
 - 지원 범위 밖에서는 Activity lease, bridge, receipt/quota와 cleanup state 자체를 만들지 않는다.
 - 끝나지 않는 validation/post work는 고정 cap 안에서 detach하고 quota를 낙관적으로 반환하지 않는다.
 
-minimum, current Stable과 current Insiders Host에서 parser와 gate true/false config/instructions,
+minimum, current Stable과 current Insiders Host에서 parser와 gate true/false config, Codex
+Project/User instruction 보존, Claude additive instructions,
 ping과 credential placeholder 회귀, HTTP→SDK→IPC→Supervisor→Terminal lease→selected-root
 Graph→Webview Store→receipt/quota full chain, settlement 역전/FIFO, multi-root 및
 Trust/root/restart lifecycle, unsupported zero-state를 검증한다. 이어서 실제 Codex/Claude smoke와
