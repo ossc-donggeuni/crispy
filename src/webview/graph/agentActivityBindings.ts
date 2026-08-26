@@ -8,6 +8,12 @@ import type {
 	GraphLayout,
 	GraphLayoutPosition,
 } from './graphLayout';
+import {
+	AGENT_SESSION_UNTITLED_TITLE,
+	AGENT_SESSION_WAITING_MESSAGE,
+	type AgentSessionPresentationSnapshot,
+	type AgentSessionPresentationStore,
+} from '../../agent/webview/agentSessionPresentationStore';
 import { getGraphNodeEffectRegionBounds } from './graphNodeEffectGeometry';
 import {
 	createGraphNodeLocalEffectHost,
@@ -50,8 +56,8 @@ export interface AgentActivityBindings {
 
 /** Binding Container가 Target 표시 범위 아래에 두는 고정 간격이다. */
 export const AGENT_ACTIVITY_BINDING_TOP_GAP = 6;
-/** 현재 한 줄 Agent Binding Box의 border-box 높이다. */
-export const AGENT_ACTIVITY_BINDING_ROW_HEIGHT = 26;
+/** 제목과 현재 메시지 두 줄을 담는 Agent Binding Box의 고정 border-box 높이다. */
+export const AGENT_ACTIVITY_BINDING_ROW_HEIGHT = 42;
 /** 같은 Target의 Agent Binding Box 사이 고정 간격이다. */
 export const AGENT_ACTIVITY_BINDING_ROW_GAP = 4;
 
@@ -77,7 +83,10 @@ interface TargetRegistration {
 }
 
 interface BindingRegistration {
+	readonly sessionId: string;
 	readonly element: HTMLElement;
+	readonly titleElement: HTMLElement;
+	readonly messageElement: HTMLElement;
 	readonly effectHost: GraphNodeLocalEffectHost;
 }
 
@@ -95,13 +104,44 @@ export function createAgentActivityBindings(
 	createLocalEffectHost: GraphNodeLocalEffectHostFactory = (
 		createGraphNodeLocalEffectHost
 	),
+	presentationStore?: AgentSessionPresentationStore,
 ): AgentActivityBindings {
 	const registrationsByTarget = new Map<string, Set<TargetRegistration>>();
+	const bindingsBySession = new Map<string, Set<BindingRegistration>>();
 	const bindingCountSubscribers = new Set<() => void>();
 	let snapshotsByTarget: AgentActivitiesByTarget = new Map();
 	let currentLayout: GraphLayout | undefined;
 	let currentPositions: ReadonlyMap<string, GraphLayoutPosition> = new Map();
 	let disposed = false;
+
+	const getVisibleActivities = (
+		target: GraphNodeEffectTarget,
+		byTarget: AgentActivitiesByTarget,
+	): readonly AgentSessionActivitySnapshot[] => {
+		const activities = getEffectiveAgentActivities(target, byTarget);
+		return presentationStore === undefined
+			? activities
+			: activities.filter(({ sessionId }) => (
+				presentationStore.isRunningSession(sessionId)
+			));
+	};
+
+	const getPresentation = (
+		entry: AgentSessionActivitySnapshot,
+	): AgentSessionPresentationSnapshot | undefined => {
+		if (presentationStore === undefined) {
+			return {
+				tabId: entry.sessionId,
+				sessionId: entry.sessionId,
+				title: entry.sessionId,
+				currentMessage: `[${entry.activity}]`,
+				state: 'running',
+			};
+		}
+
+		const presentation = presentationStore.getSession(entry.sessionId);
+		return presentation?.state === 'running' ? presentation : undefined;
+	};
 
 	const reconcile = (snapshot: AgentActivityStoreSnapshot): void => {
 		if (disposed) {
@@ -117,10 +157,7 @@ export function createAgentActivityBindings(
 
 			if (
 				registration
-				&& getEffectiveAgentActivities(
-					registration.target,
-					snapshotsByTarget,
-				).length !== getEffectiveAgentActivities(
+				&& registration.bindingsBySession.size !== getVisibleActivities(
 					registration.target,
 					nextSnapshotsByTarget,
 				).length
@@ -131,10 +168,12 @@ export function createAgentActivityBindings(
 			for (const registration of registrations) {
 				reconcileTarget(
 					registration,
-					getEffectiveAgentActivities(
+					getVisibleActivities(
 						registration.target,
 						nextSnapshotsByTarget,
 					),
+					getPresentation,
+					bindingsBySession,
 				);
 			}
 		}
@@ -153,6 +192,23 @@ export function createAgentActivityBindings(
 
 	reconcile(store.getSnapshot());
 	const unsubscribe = store.subscribe(reconcile);
+	const unsubscribePresentation = presentationStore?.subscribe((change) => {
+		if (disposed) {
+			return;
+		}
+		if (change.kind === 'lifecycle') {
+			reconcile(store.getSnapshot());
+			return;
+		}
+
+		const presentation = presentationStore.getSession(change.sessionId);
+		if (presentation?.state !== 'running') {
+			return;
+		}
+		for (const binding of bindingsBySession.get(change.sessionId) ?? []) {
+			updateBindingPresentation(binding, presentation);
+		}
+	});
 
 	return {
 		registerTarget(target, element, options = {}): () => void {
@@ -176,7 +232,9 @@ export function createAgentActivityBindings(
 			registrationsByTarget.set(key, registrations);
 			reconcileTarget(
 				registration,
-				getEffectiveAgentActivities(registration.target, snapshotsByTarget),
+				getVisibleActivities(registration.target, snapshotsByTarget),
+				getPresentation,
+				bindingsBySession,
 			);
 			if (currentLayout) {
 				syncTargetHorizontalGeometry(
@@ -195,7 +253,7 @@ export function createAgentActivityBindings(
 				}
 
 				registered = false;
-				clearRegistration(registration);
+				clearRegistration(registration, bindingsBySession);
 				registrations.delete(registration);
 				if (registrations.size === 0) {
 					registrationsByTarget.delete(key);
@@ -229,7 +287,7 @@ export function createAgentActivityBindings(
 		getBindingCount(target): number {
 			return disposed
 				? 0
-				: getEffectiveAgentActivities(target, snapshotsByTarget).length;
+				: getVisibleActivities(target, snapshotsByTarget).length;
 		},
 
 		subscribeBindingCountChanges(subscriber): () => void {
@@ -250,12 +308,14 @@ export function createAgentActivityBindings(
 
 			disposed = true;
 			unsubscribe();
+			unsubscribePresentation?.();
 			for (const registrations of registrationsByTarget.values()) {
 				for (const registration of registrations) {
-					clearRegistration(registration);
+					clearRegistration(registration, bindingsBySession);
 				}
 			}
 			registrationsByTarget.clear();
+			bindingsBySession.clear();
 			bindingCountSubscribers.clear();
 			snapshotsByTarget = new Map();
 			currentLayout = undefined;
@@ -268,9 +328,13 @@ export function createAgentActivityBindings(
 function reconcileTarget(
 	registration: TargetRegistration,
 	activities: readonly AgentSessionActivitySnapshot[],
+	getPresentation: (
+		entry: AgentSessionActivitySnapshot,
+	) => AgentSessionPresentationSnapshot | undefined,
+	bindingsBySession: Map<string, Set<BindingRegistration>>,
 ): void {
 	if (activities.length === 0) {
-		clearRegistration(registration);
+		clearRegistration(registration, bindingsBySession);
 		return;
 	}
 
@@ -280,6 +344,10 @@ function reconcileTarget(
 	const orderedBindings: HTMLElement[] = [];
 
 	for (const entry of activities) {
+		const presentation = getPresentation(entry);
+		if (presentation === undefined) {
+			continue;
+		}
 		currentSessionIds.add(entry.sessionId);
 		let binding = registration.bindingsBySession.get(entry.sessionId);
 
@@ -290,9 +358,12 @@ function reconcileTarget(
 				registration.createLocalEffectHost,
 			);
 			registration.bindingsBySession.set(entry.sessionId, binding);
+			const indexedBindings = bindingsBySession.get(entry.sessionId) ?? new Set();
+			indexedBindings.add(binding);
+			bindingsBySession.set(entry.sessionId, indexedBindings);
 		}
 
-		updateBindingElement(binding, entry);
+		updateBindingElement(binding, entry, presentation);
 		orderedBindings.push(binding.element);
 	}
 
@@ -301,8 +372,7 @@ function reconcileTarget(
 			continue;
 		}
 
-		binding.effectHost.dispose();
-		binding.element.remove();
+		disposeBinding(binding, bindingsBySession);
 		registration.bindingsBySession.delete(sessionId);
 	}
 
@@ -350,19 +420,20 @@ function createBindingRegistration(
 	createLocalEffectHost: GraphNodeLocalEffectHostFactory,
 ): BindingRegistration {
 	const binding = ownerDocument.createElement('div');
-	const session = ownerDocument.createElement('span');
-	const activity = ownerDocument.createElement('span');
+	const title = ownerDocument.createElement('span');
+	const message = ownerDocument.createElement('span');
 
 	binding.className = 'graph-agent-activity-binding';
 	binding.setAttribute('role', 'listitem');
 	binding.setAttribute('data-session-id', sessionId);
-	session.className = 'graph-agent-activity-session-id';
-	session.textContent = sessionId;
-	session.setAttribute('title', sessionId);
-	activity.className = 'graph-agent-activity-kind';
-	binding.append(session, activity);
+	title.className = 'graph-agent-activity-session-title';
+	message.className = 'graph-agent-activity-current-message';
+	binding.append(title, message);
 	return {
+		sessionId,
 		element: binding,
+		titleElement: title,
+		messageElement: message,
 		effectHost: createLocalEffectHost(binding),
 	};
 }
@@ -370,26 +441,57 @@ function createBindingRegistration(
 function updateBindingElement(
 	binding: BindingRegistration,
 	entry: AgentSessionActivitySnapshot,
+	presentation: AgentSessionPresentationSnapshot,
 ): void {
-	if (binding.element.getAttribute('data-activity') === entry.activity) {
-		return;
+	if (binding.element.getAttribute('data-activity') !== entry.activity) {
+		binding.element.setAttribute('data-activity', entry.activity);
+		binding.effectHost.setEffects(getAgentActivityEffects(
+			entry.sessionId,
+			entry.activity,
+		));
 	}
-
-	binding.element.setAttribute('data-activity', entry.activity);
-	const activity = binding.element.children[1];
-
-	if (activity) {
-		activity.textContent = `[${entry.activity}]`;
-	}
-	binding.effectHost.setEffects(getAgentActivityEffects(
-		entry.sessionId,
-		entry.activity,
-	));
+	updateBindingPresentation(binding, presentation);
 }
 
-function clearRegistration(registration: TargetRegistration): void {
+function updateBindingPresentation(
+	binding: BindingRegistration,
+	presentation: AgentSessionPresentationSnapshot,
+): void {
+	const title = presentation.title || AGENT_SESSION_UNTITLED_TITLE;
+	const message = presentation.currentMessage || AGENT_SESSION_WAITING_MESSAGE;
+
+	if (binding.titleElement.textContent !== title) {
+		binding.titleElement.textContent = title;
+		binding.titleElement.setAttribute('title', title);
+	}
+	if (binding.messageElement.textContent !== message) {
+		binding.messageElement.textContent = message;
+	}
+	binding.element.setAttribute(
+		'aria-label',
+		`${title}: ${message}`,
+	);
+}
+
+function disposeBinding(
+	binding: BindingRegistration,
+	bindingsBySession: Map<string, Set<BindingRegistration>>,
+): void {
+	binding.effectHost.dispose();
+	binding.element.remove();
+	const indexedBindings = bindingsBySession.get(binding.sessionId);
+	indexedBindings?.delete(binding);
+	if (indexedBindings?.size === 0) {
+		bindingsBySession.delete(binding.sessionId);
+	}
+}
+
+function clearRegistration(
+	registration: TargetRegistration,
+	bindingsBySession: Map<string, Set<BindingRegistration>>,
+): void {
 	for (const binding of registration.bindingsBySession.values()) {
-		binding.effectHost.dispose();
+		disposeBinding(binding, bindingsBySession);
 	}
 	registration.container?.remove();
 	registration.container = undefined;

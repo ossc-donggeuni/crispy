@@ -9,6 +9,7 @@ import {
 	createAgentActivityStore,
 	type AgentActivityStore,
 } from '../../agent/webview/agentActivityStore';
+import { createAgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import { createAgentActivityEffectReconciler } from '../../webview/graph/agentActivityEffects';
 import {
 	getAgentActivityEffects,
@@ -27,6 +28,33 @@ const SUCCESS_COLOR =
 const ERROR_COLOR = 'var(--vscode-errorForeground, #f14c4c)';
 
 suite('Representative Agent Activity Effects', () => {
+	test('running presentation이 있는 Session만 대표 Effect 후보로 사용한다', () => {
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const effectOwner = new RecordingGraphNodeEffectOwner();
+		const reconciler = createAgentActivityEffectReconciler(
+			store,
+			effectOwner,
+			presentations,
+		);
+
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), []);
+
+		presentations.startSession('tab-A', 'session-A', 'Agent A');
+		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), []);
+		presentations.activateSession('tab-A', 'session-A', 'Agent A');
+		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
+			{ kind: 'pulse', color: ACTIVITY_COLOR },
+		]);
+
+		presentations.updateCurrentMessage('tab-A', 'session-A', 'working');
+		assert.strictEqual(effectOwner.setCalls.length, 1);
+		presentations.endSession('session-A');
+		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), []);
+		reconciler.dispose();
+	});
+
 	test('6개 Activity를 각각 지정된 G-11 Effect 조합으로 변환한다', () => {
 		const mappings: ReadonlyArray<readonly [
 			AgentActivityKind,

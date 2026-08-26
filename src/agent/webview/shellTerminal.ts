@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import type { ITheme } from '@xterm/xterm';
 import type {
 	HostToWebviewMessage,
+	ProviderId,
 	SessionId,
 	TabId,
 	WebviewToHostMessage,
@@ -64,12 +65,73 @@ interface XtermTerminal {
 	loadAddon(addon: FitAddon): void;
 	open(container: HTMLElement): void;
 	focus(): void;
-	write(data: string): void;
+	write(data: string, callback?: () => void): void;
+	readonly buffer?: XtermBufferNamespace;
 	reset(): void;
 	onKey(listener: (event: { readonly key: string }) => void): unknown;
 	onData(listener: (data: string) => void): unknown;
 	dispose(): void;
 }
+
+interface XtermBufferNamespace {
+	readonly active: XtermBuffer;
+}
+
+interface XtermBuffer {
+	readonly baseY: number;
+	readonly cursorY: number;
+	readonly length: number;
+	getLine(index: number): XtermBufferLine | undefined;
+}
+
+interface XtermBufferLine {
+	readonly isWrapped: boolean;
+	translateToString(trimRight?: boolean): string;
+}
+
+interface TerminalBufferSnapshotLine {
+	readonly text: string;
+	readonly isWrapped: boolean;
+}
+
+/** PTY delta 적용 전후 비교에 사용하는 제한된 xterm buffer 사본이다. */
+export interface TerminalBufferSnapshot {
+	readonly startIndex: number;
+	readonly lines: readonly TerminalBufferSnapshotLine[];
+}
+
+/** PTY 출력이 xterm에 반영된 뒤 Graph 표시 계층으로 보내는 제한된 preview다. */
+export interface TerminalOutputPreviewEvent {
+	readonly tabId: TabId;
+	readonly sessionId: SessionId;
+	readonly message: string;
+}
+
+/** cursor 주변에서 현재 보이는 메시지를 찾을 때 역방향으로 탐색할 최대 행 수다. */
+export const TERMINAL_CURRENT_MESSAGE_SCAN_LINES = 64;
+
+/** TUI 하단에서 provider 동적 상태 경계를 찾을 최대 논리 행 수다. */
+export const TERMINAL_DYNAMIC_STATUS_SCAN_LOGICAL_LINES = 12;
+
+/** provider 공통 실행 중 상태가 제공하는 interrupt 안내다. */
+const TERMINAL_INTERRUPT_STATUS_PATTERN =
+	/(?:esc(?:ape)?|ctrl\s*(?:\+|-)\s*c)\s+to\s+interrupt/iu;
+
+/** Codex의 하단 `Working (...)` 상태 행만 식별하는 제한된 패턴이다. */
+const CODEX_DYNAMIC_STATUS_PATTERN =
+	/^[\s•●○◦·]*Working(?:\s*(?:…|\.{3})|\s*\([^)]*(?:\d+\s*[smh]|interrupt)[^)]*\))/iu;
+
+/** Claude의 spinner+ellipsis 상태 행과 알려진 직접 상태 동사를 식별한다. */
+const CLAUDE_DYNAMIC_STATUS_PATTERN =
+	/^(?:[\s·✢✳✶✻✽*●]+[^\r\n]{1,96}(?:…|\.{3})(?:\s*\(|\s*$)|\s*(?:Wiring|Working|Thinking|Compacting)(?:…|\.{3}))/iu;
+
+const CODEX_PROMPT_PATTERN = /(?:^[>›]\s*|\bAsk Codex\b)/iu;
+const CLAUDE_PROMPT_PATTERN = /(?:^[>❯]\s*|\bAsk Claude\b)/iu;
+
+/** xterm buffer가 없는 대역에서도 delta를 안전하게 표시하기 위한 ANSI 제어 제거다. */
+const ANSI_OSC_SEQUENCE = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu;
+const ANSI_CSI_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
+const ANSI_ESCAPE_SEQUENCE = /\u001b[@-_]/gu;
 
 /**
  * 기존 Terminal buffer를 지우지 않고 그 위에 표시하는 세션 종료 상태다.
@@ -117,6 +179,337 @@ export interface ShellTerminalDependencies {
 		isEligible(tabId: TabId, sessionId: SessionId): boolean;
 		onCandidate(event: TerminalTitleCandidateEvent): void;
 	};
+
+	/** 설정된 경우에만 xterm이 해석한 현재 메시지를 session 표시 Store로 보낸다. */
+	readonly onOutputPreview?: (event: TerminalOutputPreviewEvent) => void;
+}
+
+/** xterm active buffer에서 cursor가 속한 최신 비어 있지 않은 논리 행을 추출한다. */
+export function readCurrentTerminalMessage(
+	terminal: Pick<XtermTerminal, 'buffer'>,
+	fallbackDelta = '',
+): string {
+	const buffer = terminal.buffer?.active;
+	if (buffer !== undefined && buffer.length > 0) {
+		let lineIndex = Math.min(
+			buffer.length - 1,
+			Math.max(0, buffer.baseY + buffer.cursorY),
+		);
+		const minimumIndex = Math.max(
+			0,
+			lineIndex - TERMINAL_CURRENT_MESSAGE_SCAN_LINES + 1,
+		);
+
+		while (lineIndex >= minimumIndex) {
+			let logicalStart = lineIndex;
+			while (
+				logicalStart > minimumIndex
+				&& buffer.getLine(logicalStart)?.isWrapped === true
+			) {
+				logicalStart -= 1;
+			}
+
+			const normalized = readLogicalTerminalLine(buffer, logicalStart);
+			if (normalized.length > 0) {
+				return normalized;
+			}
+
+			lineIndex = logicalStart - 1;
+		}
+	}
+
+	return normalizeTerminalPreviewDelta(fallbackDelta);
+}
+
+/** 다음 PTY delta와 비교할 active buffer의 마지막 제한 행을 복사한다. */
+export function captureTerminalBufferSnapshot(
+	terminal: Pick<XtermTerminal, 'buffer'>,
+): TerminalBufferSnapshot | undefined {
+	const buffer = terminal.buffer?.active;
+	if (buffer === undefined || buffer.length <= 0) {
+		return undefined;
+	}
+
+	const startIndex = Math.max(
+		0,
+		buffer.length - TERMINAL_CURRENT_MESSAGE_SCAN_LINES,
+	);
+	const lines: TerminalBufferSnapshotLine[] = [];
+	for (let index = startIndex; index < buffer.length; index += 1) {
+		const line = buffer.getLine(index);
+		lines.push({
+			text: line?.translateToString(true) ?? '',
+			isWrapped: line?.isWrapped === true,
+		});
+	}
+
+	return { startIndex, lines };
+}
+
+/**
+ * PTY delta 적용 전후에 실제로 달라진 마지막 논리 행을 반환한다.
+ * Codex/Claude TUI가 출력 행을 바꾼 뒤 입력 prompt로 cursor를 복원해도
+ * cursor 위치 대신 buffer 변화 자체를 따르므로 실시간 상태를 놓치지 않는다.
+ */
+export function readChangedTerminalMessage(
+	terminal: Pick<XtermTerminal, 'buffer'>,
+	before: TerminalBufferSnapshot | undefined,
+	fallbackDelta = '',
+): string {
+	const buffer = terminal.buffer?.active;
+	if (buffer !== undefined && buffer.length > 0) {
+		const startIndex = Math.max(
+			0,
+			buffer.length - TERMINAL_CURRENT_MESSAGE_SCAN_LINES,
+		);
+		let changedLineIndex: number | undefined;
+
+		for (let index = startIndex; index < buffer.length; index += 1) {
+			const line = buffer.getLine(index);
+			const currentText = line?.translateToString(true) ?? '';
+			const beforeOffset = before === undefined
+				? -1
+				: index - before.startIndex;
+			const previous = beforeOffset >= 0
+				? before?.lines[beforeOffset]
+				: undefined;
+			const changed = previous === undefined
+				|| previous.text !== currentText
+				|| previous.isWrapped !== (line?.isWrapped === true);
+
+			if (
+				changed
+				&& normalizeTerminalPreviewText(currentText).length > 0
+			) {
+				changedLineIndex = index;
+			}
+		}
+
+		if (changedLineIndex !== undefined) {
+			let logicalStart = changedLineIndex;
+			while (
+				logicalStart > startIndex
+				&& buffer.getLine(logicalStart)?.isWrapped === true
+			) {
+				logicalStart -= 1;
+			}
+			const normalized = readLogicalTerminalLine(buffer, logicalStart);
+			if (normalized.length > 0) {
+				return normalized;
+			}
+		}
+	}
+
+	return normalizeTerminalPreviewDelta(fallbackDelta);
+}
+
+/**
+ * provider TUI의 동적 상태 행보다 앞선 마지막 정적 논리 행을 우선한다.
+ * 상태 행이 사라진 idle 화면에서는 provider 입력 prompt를 같은 경계로 사용하며,
+ * 알려진 경계를 찾지 못한 초기화/일반 Shell 출력은 기존 변경 행 추출로 복구한다.
+ */
+export function readTerminalOutputPreviewMessage(
+	terminal: Pick<XtermTerminal, 'buffer'>,
+	before: TerminalBufferSnapshot | undefined,
+	providerId: ProviderId | undefined,
+	fallbackDelta = '',
+): string {
+	const buffer = terminal.buffer?.active;
+	if (buffer !== undefined && buffer.length > 0) {
+		const minimumIndex = Math.max(
+			0,
+			buffer.length - TERMINAL_CURRENT_MESSAGE_SCAN_LINES,
+		);
+		const dynamicBoundary = findDynamicStatusBoundary(
+			buffer,
+			minimumIndex,
+			providerId,
+		);
+		if (dynamicBoundary !== undefined) {
+			return readPreviousNonEmptyLogicalLine(
+				buffer,
+				dynamicBoundary,
+				minimumIndex,
+			);
+		}
+
+		if (providerId === 'codex' || providerId === 'claude') {
+			const cursorIndex = Math.min(
+				buffer.length - 1,
+				Math.max(0, buffer.baseY + buffer.cursorY),
+			);
+			const promptStart = findLogicalTerminalLineStart(
+				buffer,
+				cursorIndex,
+				minimumIndex,
+			);
+			const prompt = readLogicalTerminalLine(buffer, promptStart);
+			if (isProviderPromptLine(prompt, providerId)) {
+				const message = readPreviousNonEmptyLogicalLine(
+					buffer,
+					promptStart,
+					minimumIndex,
+				);
+				if (message.length > 0) {
+					return message;
+				}
+			}
+		}
+	}
+
+	return readChangedTerminalMessage(terminal, before, fallbackDelta);
+}
+
+/** 하단 제한 영역에서 provider의 실행 중 상태 논리 행 시작점을 찾는다. */
+function findDynamicStatusBoundary(
+	buffer: XtermBuffer,
+	minimumIndex: number,
+	providerId: ProviderId | undefined,
+): number | undefined {
+	let lineIndex = buffer.length - 1;
+	let scannedLogicalLines = 0;
+	while (
+		lineIndex >= minimumIndex
+		&& scannedLogicalLines < TERMINAL_DYNAMIC_STATUS_SCAN_LOGICAL_LINES
+	) {
+		const logicalStart = findLogicalTerminalLineStart(
+			buffer,
+			lineIndex,
+			minimumIndex,
+		);
+		const text = readLogicalTerminalLine(buffer, logicalStart);
+		if (isProviderDynamicStatusLine(text, providerId)) {
+			return logicalStart;
+		}
+
+		scannedLogicalLines += 1;
+		lineIndex = logicalStart - 1;
+	}
+
+	return undefined;
+}
+
+/** 공통 interrupt 표식과 provider별 제한 패턴으로 동적 상태 행만 판정한다. */
+function isProviderDynamicStatusLine(
+	text: string,
+	providerId: ProviderId | undefined,
+): boolean {
+	if (TERMINAL_INTERRUPT_STATUS_PATTERN.test(text)) {
+		return true;
+	}
+	if (providerId === 'codex') {
+		return CODEX_DYNAMIC_STATUS_PATTERN.test(text);
+	}
+	if (providerId === 'claude') {
+		return CLAUDE_DYNAMIC_STATUS_PATTERN.test(text);
+	}
+	return false;
+}
+
+/** provider 입력 composer인지 확인해 idle 화면의 정적 영역 끝을 정한다. */
+function isProviderPromptLine(text: string, providerId: ProviderId): boolean {
+	if (providerId === 'codex') {
+		return CODEX_PROMPT_PATTERN.test(text);
+	}
+	if (providerId === 'claude') {
+		return CLAUDE_PROMPT_PATTERN.test(text);
+	}
+	return false;
+}
+
+/** 주어진 경계 직전에서 마지막 비어 있지 않은 wrapped 논리 행을 읽는다. */
+function readPreviousNonEmptyLogicalLine(
+	buffer: XtermBuffer,
+	boundaryStart: number,
+	minimumIndex: number,
+): string {
+	let lineIndex = boundaryStart - 1;
+	while (lineIndex >= minimumIndex) {
+		const logicalStart = findLogicalTerminalLineStart(
+			buffer,
+			lineIndex,
+			minimumIndex,
+		);
+		const text = readLogicalTerminalLine(buffer, logicalStart);
+		if (text.length > 0) {
+			return text;
+		}
+		lineIndex = logicalStart - 1;
+	}
+	return '';
+}
+
+/** continuation physical 행에서 wrapped 논리 행의 첫 physical 행으로 이동한다. */
+function findLogicalTerminalLineStart(
+	buffer: XtermBuffer,
+	lineIndex: number,
+	minimumIndex: number,
+): number {
+	let logicalStart = lineIndex;
+	while (
+		logicalStart > minimumIndex
+		&& buffer.getLine(logicalStart)?.isWrapped === true
+	) {
+		logicalStart -= 1;
+	}
+	return logicalStart;
+}
+
+/** wrapped physical 행을 하나의 표시 가능한 논리 행으로 합친다. */
+function readLogicalTerminalLine(
+	buffer: XtermBuffer,
+	logicalStart: number,
+): string {
+	let logicalEnd = logicalStart;
+	while (
+		logicalEnd + 1 < buffer.length
+		&& buffer.getLine(logicalEnd + 1)?.isWrapped === true
+	) {
+		logicalEnd += 1;
+	}
+
+	let text = '';
+	for (let index = logicalStart; index <= logicalEnd; index += 1) {
+		/**
+		 * 마지막 physical 행만 우측 공백을 제거한다. 중간 wrapped 행까지
+		 * trim하면 열 경계의 공백이 사라져 서로 다른 단어가 붙을 수 있다.
+		 */
+		text += buffer.getLine(index)?.translateToString(
+			index === logicalEnd,
+		) ?? '';
+	}
+	return normalizeTerminalPreviewText(text);
+}
+
+/** Buffer 문자열을 한 줄의 제어문자 없는 표시 문자열로 제한한다. */
+export function normalizeTerminalPreviewText(value: string): string {
+	const normalized = value
+		.replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ')
+		.replace(/\s+/gu, ' ')
+		.trim();
+
+	try {
+		return normalized.normalize('NFC');
+	} catch {
+		return normalized;
+	}
+}
+
+function normalizeTerminalPreviewDelta(value: string): string {
+	const withoutAnsi = value
+		.replace(ANSI_OSC_SEQUENCE, '')
+		.replace(ANSI_CSI_SEQUENCE, '')
+		.replace(ANSI_ESCAPE_SEQUENCE, '');
+	const candidates = withoutAnsi.split(/[\r\n]+/u);
+
+	for (let index = candidates.length - 1; index >= 0; index -= 1) {
+		const normalized = normalizeTerminalPreviewText(candidates[index] ?? '');
+		if (normalized.length > 0) {
+			return normalized;
+		}
+	}
+
+	return '';
 }
 
 /** 터미널 준비, 입력, 크기 변경과 재시작을 VS Code 웹뷰 메시지 경계로 전달하는 함수다. */
@@ -327,6 +720,13 @@ export function initializeShellTerminal(
 	let removeWindowResizeListener: (() => void) | undefined;
 	let removeVisibilityChangeListener: (() => void) | undefined;
 	let fitScheduled = false;
+	let outputPreviewScheduled = false;
+	let pendingOutputPreview: Readonly<{
+		sessionId: SessionId;
+		message: string;
+	}> | undefined;
+	let outputPreviewBaseline: TerminalBufferSnapshot | undefined;
+	let activeProviderId: ProviderId | undefined;
 	let disposed = false;
 	let readySent = false;
 	let attemptedFrames = 0;
@@ -339,6 +739,56 @@ export function initializeShellTerminal(
 			tabId,
 			(event) => dependencies.autoTitle?.onCandidate(event),
 		);
+
+	/** 여러 PTY delta를 한 frame으로 병합하고 callback 시점에도 세션 소유권을 검증한다. */
+	const scheduleOutputPreview = (
+		sessionId: SessionId,
+		message: string,
+	): void => {
+		if (
+			disposed
+			|| dependencies.onOutputPreview === undefined
+			|| activeSessionId !== sessionId
+			|| message.length === 0
+		) {
+			return;
+		}
+
+		pendingOutputPreview = { sessionId, message };
+		if (outputPreviewScheduled) {
+			return;
+		}
+
+		outputPreviewScheduled = true;
+		try {
+			dependencies.requestAnimationFrame(() => {
+				outputPreviewScheduled = false;
+				const pending = pendingOutputPreview;
+				pendingOutputPreview = undefined;
+				if (
+					disposed
+					|| pending === undefined
+					|| activeSessionId !== pending.sessionId
+				) {
+					return;
+				}
+
+				try {
+					dependencies.onOutputPreview?.({
+						tabId,
+						sessionId: pending.sessionId,
+						message: pending.message,
+					});
+				} catch {
+					/** 표시 callback 실패를 xterm 출력 경로와 격리한다. */
+				}
+			});
+		} catch {
+			outputPreviewScheduled = false;
+			pendingOutputPreview = undefined;
+			/** frame 예약 실패는 실제 Terminal 출력 처리를 막지 않는다. */
+		}
+	};
 
 	/**
 	 * 모든 layout 및 visibility 이벤트를 한 animation frame으로 병합해 xterm을 맞춘다.
@@ -525,6 +975,8 @@ export function initializeShellTerminal(
 		}
 
 		disposed = true;
+		pendingOutputPreview = undefined;
+		outputPreviewBaseline = undefined;
 		const cleanupActions = [
 			() => resizeObserver?.disconnect(),
 			() => removeWindowResizeListener?.(),
@@ -557,11 +1009,14 @@ export function initializeShellTerminal(
 					if (activeSessionId !== undefined) {
 						titleCollector?.endSession(activeSessionId);
 					}
+					activeProviderId = message.providerId;
 					activeSessionId = undefined;
 					startingSessionId = undefined;
 					restartSessionId = undefined;
 					restartRequested = false;
 					pendingKeyboardData = undefined;
+					pendingOutputPreview = undefined;
+					outputPreviewBaseline = undefined;
 					sessionEverStarted = true;
 					try {
 						terminal?.reset();
@@ -578,6 +1033,8 @@ export function initializeShellTerminal(
 					startingSessionId = message.sessionId;
 					restartSessionId = undefined;
 					restartRequested = false;
+					pendingOutputPreview = undefined;
+					outputPreviewBaseline = undefined;
 					showOverlay({ kind: 'starting' });
 					break;
 				case 'terminal.started':
@@ -589,6 +1046,7 @@ export function initializeShellTerminal(
 						const replacedSessionId = activeSessionId;
 						activeSessionId = message.sessionId;
 						startingSessionId = undefined;
+						outputPreviewBaseline = undefined;
 						seenSessionIds.add(message.sessionId);
 						titleCollector?.startSession(message.sessionId);
 						restartSessionId = undefined;
@@ -632,7 +1090,31 @@ export function initializeShellTerminal(
 					}
 
 					try {
-						terminal.write(message.data);
+						if (dependencies.onOutputPreview === undefined) {
+							terminal.write(message.data);
+						} else {
+							const sessionId = message.sessionId;
+							const before = captureTerminalBufferSnapshot(terminal);
+							terminal.write(message.data, () => {
+								if (
+									disposed
+									|| activeSessionId !== sessionId
+									|| terminal === undefined
+								) {
+									return;
+								}
+								const preview = readTerminalOutputPreviewMessage(
+									terminal,
+									outputPreviewBaseline ?? before,
+									activeProviderId,
+									message.data,
+								);
+								outputPreviewBaseline = captureTerminalBufferSnapshot(
+									terminal,
+								);
+								scheduleOutputPreview(sessionId, preview);
+							});
+						}
 					} catch {
 						/** Terminal 렌더링 오류를 다른 Webview 기능으로 전파하지 않는다. */
 					}
@@ -644,6 +1126,8 @@ export function initializeShellTerminal(
 					) {
 						titleCollector?.endSession(message.sessionId);
 						activeSessionId = undefined;
+						pendingOutputPreview = undefined;
+						outputPreviewBaseline = undefined;
 						restartSessionId = message.sessionId;
 						restartRequested = false;
 						showOverlay({
@@ -684,6 +1168,8 @@ export function initializeShellTerminal(
 
 					activeSessionId = undefined;
 					startingSessionId = undefined;
+					pendingOutputPreview = undefined;
+					outputPreviewBaseline = undefined;
 					if (message.sessionId !== undefined && message.sessionId !== null) {
 						titleCollector?.endSession(message.sessionId);
 					}

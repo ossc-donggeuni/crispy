@@ -4,6 +4,11 @@ import {
 } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
+import { createAgentSessionPresentationCoordinator } from '../agent/webview/agentSessionPresentationCoordinator';
+import {
+	createAgentSessionPresentationStore,
+	type AgentSessionPresentationStore,
+} from '../agent/webview/agentSessionPresentationStore';
 import { createDefaultAgentTerminalPool } from '../agent/webview/agentTerminalPool';
 import {
 	parseAgentActivityTrackedClearMessage,
@@ -141,6 +146,8 @@ const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
 /** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
 const agentActivityStore = createAgentActivityStore();
+/** 세션 제목과 현재 PTY 메시지도 민감한 runtime 표시 상태로만 유지한다. */
+const agentSessionPresentationStore = createAgentSessionPresentationStore();
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
@@ -173,15 +180,19 @@ const graphView = initializeGraphView(
 	},
 	initialWorkspaceState.tasks.map((record) => record.task),
 	initialWorkspaceState.tasks,
-	{ agentActivityStore },
+	{ agentActivityStore, agentSessionPresentationStore },
 );
 
 const agentActivityEffects = createAgentActivityEffectReconciler(
 	agentActivityStore,
 	graphView.createNodeEffectOwner(),
+	agentSessionPresentationStore,
 );
 
 let agentPanelUi: AgentPanelUiController | undefined;
+let agentSessionPresentationCoordinator: ReturnType<
+	typeof createAgentSessionPresentationCoordinator
+> | undefined;
 
 /** 탭마다 독립적인 xterm과 세션 소유 관계를 유지하는 Terminal 표면 모음이다. */
 const terminalPool = createDefaultAgentTerminalPool(
@@ -195,6 +206,15 @@ const terminalPool = createDefaultAgentTerminalPool(
 				tabId,
 				sessionId,
 				candidates,
+			);
+		},
+	},
+	{
+		onOutputPreview: ({ tabId, sessionId, message }) => {
+			agentSessionPresentationStore.updateCurrentMessage(
+				tabId,
+				sessionId,
+				message,
 			);
 		},
 	},
@@ -311,6 +331,7 @@ try {
 				if (!postAgentMessage({ type: 'agent.reset', tabId })) {
 					return false;
 				}
+				agentSessionPresentationCoordinator?.endTabSession(tabId);
 				/** Reset 요청과 동시에 이전 xterm input을 끊고 logical commit을 기다린다. */
 				terminalPool.resetTab(tabId);
 				return true;
@@ -322,6 +343,7 @@ try {
 
 			onTabClosed(tabId): void {
 				postAgentMessage({ type: 'tab.close', tabId });
+				agentSessionPresentationCoordinator?.endTabSession(tabId);
 				terminalPool.closeTab(tabId);
 
 				/** 탭 상태가 이미 이웃 탭으로 옮겨졌으므로 표면 표시도 함께 맞춘다. */
@@ -339,6 +361,14 @@ try {
 	);
 } catch {
 	agentPanelUi = undefined;
+}
+
+if (agentPanelUi !== undefined) {
+	agentSessionPresentationCoordinator = createAgentSessionPresentationCoordinator(
+		agentPanelUi.model,
+		agentSessionPresentationStore,
+		agentActivityStore,
+	);
 }
 
 /** Collapse 초기화 */
@@ -434,6 +464,11 @@ window.addEventListener('unload', () => {
 	unsubscribeWorkspaceSnapshot();
 	agentActivityEffects.dispose();
 	graphView.dispose();
+	if (agentSessionPresentationCoordinator === undefined) {
+		agentSessionPresentationStore.dispose();
+	} else {
+		agentSessionPresentationCoordinator.dispose();
+	}
 	terminalPool.dispose();
 	agentPanelUi?.dispose();
 }, { once: true });
@@ -476,11 +511,21 @@ function handleHostMessage(message: unknown): void {
 
 	if (agentActivityMessage) {
 		if (agentActivityMessage.type === 'agent.activity.set') {
-			agentActivityStore.setAgentActivity(
+			ensureDebugAgentSession(
 				agentActivityMessage.sessionId,
-				agentActivityMessage.target,
 				agentActivityMessage.activity,
 			);
+			if (
+				agentSessionPresentationStore.isKnownSession(
+					agentActivityMessage.sessionId,
+				)
+			) {
+				agentActivityStore.setAgentActivity(
+					agentActivityMessage.sessionId,
+					agentActivityMessage.target,
+					agentActivityMessage.activity,
+				);
+			}
 		} else {
 			applyAgentActivityClear(agentActivityMessage);
 		}
@@ -565,6 +610,7 @@ function handleHostMessage(message: unknown): void {
 			const shouldForwardToTerminal =
 				agentPanelUi?.handleHostMessage(parseResult.value) ?? true;
 			if (shouldForwardToTerminal) {
+				agentSessionPresentationCoordinator?.handleHostMessage(parseResult.value);
 				terminalPool.handleHostMessage(parseResult.value);
 			}
 			break;
@@ -578,10 +624,44 @@ function applyAgentActivityClear(
 ): void {
 	if (message.type === 'agent.activity.clear') {
 		agentActivityStore.clearAgentActivity(message.sessionId, message.target);
+		cleanupDebugAgentSession(message.sessionId, agentSessionPresentationStore);
 		return;
 	}
 
 	agentActivityStore.clearAgentActivitiesBySession(message.sessionId);
+	cleanupDebugAgentSession(message.sessionId, agentSessionPresentationStore);
+}
+
+function ensureDebugAgentSession(sessionId: string, activity: string): void {
+	if (!sessionId.startsWith('debug-g12-')) {
+		return;
+	}
+	const tabId = `debug-tab:${sessionId}`;
+
+	if (!agentSessionPresentationStore.isKnownSession(sessionId)) {
+		agentSessionPresentationStore.startSession(tabId, sessionId, 'Activity Debug');
+		agentSessionPresentationStore.activateSession(tabId, sessionId, 'Activity Debug');
+	}
+	agentSessionPresentationStore.updateCurrentMessage(
+		tabId,
+		sessionId,
+		`Sample activity: ${activity}`,
+	);
+}
+
+function cleanupDebugAgentSession(
+	sessionId: string,
+	presentationStore: AgentSessionPresentationStore,
+): void {
+	if (!sessionId.startsWith('debug-g12-')) {
+		return;
+	}
+	const stillHasActivity = agentActivityStore.getSnapshot().some(({ activities }) => (
+		activities.some((activity) => activity.sessionId === sessionId)
+	));
+	if (!stillHasActivity) {
+		presentationStore.endSession(sessionId);
+	}
 }
 
 /** Extension Host가 전송한 메시지를 Webview protocol 수신 경계로 전달한다. */

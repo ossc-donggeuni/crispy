@@ -4,6 +4,7 @@ import {
 	createAgentActivityStore,
 	type AgentActivityStore,
 } from '../../agent/webview/agentActivityStore';
+import { createAgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import {
 	AGENT_ACTIVITY_BINDING_ROW_GAP,
 	AGENT_ACTIVITY_BINDING_ROW_HEIGHT,
@@ -21,6 +22,51 @@ const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
 const TARGET_Y: GraphNodeEffectTarget = { nodeId: 'folder:workspace/src/y' };
 
 suite('Agent Activity Bindings', () => {
+	test('running 세션의 제목과 현재 메시지만 표시하고 content 갱신은 DOM과 Layout을 재사용한다', () => {
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const bindings = createAgentActivityBindings(store, undefined, presentations);
+		const elementX = createTargetElement();
+		const elementY = createTargetElement();
+
+		bindings.registerTarget(TARGET_X, elementX.asHtmlElement());
+		bindings.registerTarget(TARGET_Y, elementY.asHtmlElement());
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+		store.setAgentActivity('session-A', TARGET_Y, 'active');
+		assert.strictEqual(findBindingContainer(elementX), undefined);
+
+		presentations.startSession('tab-A', 'session-A', 'Implement bindings');
+		assert.strictEqual(findBindingContainer(elementX), undefined);
+		presentations.activateSession('tab-A', 'session-A', 'Implement bindings');
+		const bindingX = getBindingElements(elementX)[0];
+		const bindingY = getBindingElements(elementY)[0];
+		const effectLayerX = getBindingEffectLayer(bindingX);
+		let countNotifications = 0;
+		bindings.subscribeBindingCountChanges(() => countNotifications += 1);
+
+		assert.strictEqual(bindingX.children[0]?.textContent, 'Implement bindings');
+		assert.strictEqual(bindingX.children[1]?.textContent, 'Waiting for output…');
+		assert.strictEqual(bindingX.getAttribute('data-session-id'), 'session-A');
+		assert.strictEqual(bindingX.getAttribute('data-activity'), 'editing');
+
+		presentations.updateCurrentMessage('tab-A', 'session-A', 'Running tests');
+		presentations.updateTitle('session-A', 'Agent binding feature');
+
+		assert.strictEqual(getBindingElements(elementX)[0], bindingX);
+		assert.strictEqual(getBindingElements(elementY)[0], bindingY);
+		assert.strictEqual(getBindingEffectLayer(bindingX), effectLayerX);
+		assert.strictEqual(bindingX.children[0]?.textContent, 'Agent binding feature');
+		assert.strictEqual(bindingX.children[1]?.textContent, 'Running tests');
+		assert.strictEqual(bindingY.children[1]?.textContent, 'Running tests');
+		assert.strictEqual(countNotifications, 0);
+
+		presentations.endSession('session-A');
+		assert.strictEqual(findBindingContainer(elementX), undefined);
+		assert.strictEqual(findBindingContainer(elementY), undefined);
+		assert.strictEqual(countNotifications, 1);
+		bindings.dispose();
+	});
+
 	test('단일 Session Binding에 Target, Session Id와 Activity를 표시한다', () => {
 		const store = createAgentActivityStore();
 		const bindings = createAgentActivityBindings(store);
@@ -287,9 +333,9 @@ suite('Agent Activity Bindings', () => {
 
 	test('Binding CSS와 Layout이 공유하는 고정 Row footprint 규약을 노출한다', () => {
 		assert.strictEqual(AGENT_ACTIVITY_BINDING_TOP_GAP, 6);
-		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_HEIGHT, 26);
+		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_HEIGHT, 42);
 		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_GAP, 4);
-		assert.strictEqual(getAgentActivityBindingBlockHeight(2), 62);
+		assert.strictEqual(getAgentActivityBindingBlockHeight(2), 94);
 	});
 
 	test('각 Binding은 6개 Activity별 G-11 Effect 조합을 독립적으로 렌더링한다', () => {

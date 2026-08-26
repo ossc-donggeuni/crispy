@@ -666,6 +666,12 @@ suite('Webview State Wiring', () => {
 			typeof import('../agent/webview/agentActivityStore').createAgentActivityStore
 		> | undefined;
 		let createdAgentActivityStore: typeof graphAgentActivityStore;
+		let graphAgentSessionPresentationStore: ReturnType<
+			typeof import('../agent/webview/agentSessionPresentationStore').createAgentSessionPresentationStore
+		> | undefined;
+		let terminalOutputPreview: import(
+			'../agent/webview/agentTerminalPool'
+		).AgentTerminalOutputPreviewOptions | undefined;
 
 		const graphViewModulePath = require.resolve('../webview/graph/graphView');
 		const panelDockModulePath = require.resolve('../webview/panel/panelDock');
@@ -725,6 +731,8 @@ suite('Webview State Wiring', () => {
 			graphInitializeCount += 1;
 			graphViewInteractions = interactions;
 			graphAgentActivityStore = options?.agentActivityStore;
+			graphAgentSessionPresentationStore =
+				options?.agentSessionPresentationStore;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
 			assert.deepStrictEqual(restoredWorkspaceTasks, initialWorkspaceTasks);
@@ -892,7 +900,11 @@ suite('Webview State Wiring', () => {
 		agentTerminalPoolModule.createDefaultAgentTerminalPool = ((
 			_container,
 			_postMessage,
-		) => ({
+			_autoTitle,
+			outputPreview,
+		) => {
+			terminalOutputPreview = outputPreview;
+			return {
 			ensureTab(tabId): void {
 				ensuredTabs.push(tabId);
 			},
@@ -916,7 +928,8 @@ suite('Webview State Wiring', () => {
 			dispose(): void {
 				terminalPoolDisposed = true;
 			},
-		})) as typeof agentTerminalPoolModule.createDefaultAgentTerminalPool;
+			};
+		}) as typeof agentTerminalPoolModule.createDefaultAgentTerminalPool;
 
 		agentActivityStoreModule.createAgentActivityStore = (() => {
 			const store = originalCreateAgentActivityStore();
@@ -964,10 +977,15 @@ suite('Webview State Wiring', () => {
 				updateWorkspaceRootCatalog: (catalog) => {
 					agentWorkspaceCatalogUpdates.push(catalog);
 				},
-				handleHostMessage: (message) => (
-					message.type !== 'agent.switchAccepted'
-					|| message.switchAttemptId > 1
-				),
+				handleHostMessage(message): boolean {
+					if (message.type === 'terminal.started') {
+						model.setSession(message.tabId, message.sessionId);
+					} else if (message.type === 'terminal.exited') {
+						model.clearSession(message.tabId, message.sessionId);
+					}
+					return message.type !== 'agent.switchAccepted'
+						|| message.switchAttemptId > 1;
+				},
 				dispose(): void {
 					agentPanelUiDisposed = true;
 				},
@@ -1285,11 +1303,39 @@ suite('Webview State Wiring', () => {
 			hostMessageHandler({
 				data: {
 					type: 'agent.activity.set',
+					sessionId: 'session-ended',
+					target: activityTarget,
+					activity: 'planned',
+				},
+			} as MessageEvent);
+			assert.deepStrictEqual(agentActivitySets, []);
+			hostMessageHandler({
+				data: {
+					type: 'terminal.started',
+					tabId: agentTabId,
+					sessionId: 'session-activity-a',
+				},
+			} as MessageEvent);
+			terminalHostMessages.length = 0;
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.set',
 					sessionId: 'session-activity-a',
 					target: activityTarget,
 					activity: 'editing',
 				},
 			} as MessageEvent);
+			terminalOutputPreview?.onOutputPreview({
+				tabId: agentTabId,
+				sessionId: 'session-activity-a',
+				message: 'Implementing agent bindings',
+			});
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.getSession(
+					'session-activity-a',
+				)?.currentMessage,
+				'Implementing agent bindings',
+			);
 			hostMessageHandler({
 				data: {
 					type: 'agent.activity.clear',
@@ -1384,6 +1430,34 @@ suite('Webview State Wiring', () => {
 				targetClearCount: 2,
 				sessionClearCount: 2,
 			}]);
+
+			/** Host clearSession이 없어도 public exit만으로 남은 Activity를 정리한다. */
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.set',
+					sessionId: 'session-activity-a',
+					target: activityTarget,
+					activity: 'active',
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'terminal.exited',
+					tabId: agentTabId,
+					sessionId: 'session-activity-a',
+					exitCode: 0,
+				},
+			} as MessageEvent);
+			assert.deepStrictEqual(createdAgentActivityStore?.getSnapshot(), []);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.getSession('session-activity-a'),
+				undefined,
+			);
+			assert.strictEqual(
+				agentActivitySessionClears.at(-1),
+				'session-activity-a',
+			);
+			terminalHostMessages.length = 0;
 
 			const terminalStartingMessage = {
 				type: 'terminal.starting',

@@ -7360,7 +7360,10 @@ suite('Graph View', () => {
 			/\.graph-agent-activity-bindings\s*\{[^}]*\}/,
 		);
 		const sessionRule = graphViewCss.match(
-			/\.graph-agent-activity-session-id\s*\{[^}]*\}/,
+			/\.graph-agent-activity-session-title\s*\{[^}]*\}/,
+		);
+		const messageRule = graphViewCss.match(
+			/\.graph-agent-activity-current-message\s*\{[^}]*\}/,
 		);
 
 		assert.ok(containerRule);
@@ -7375,6 +7378,9 @@ suite('Graph View', () => {
 		assert.ok(sessionRule);
 		assert.match(sessionRule[0], /overflow:\s*hidden;/);
 		assert.match(sessionRule[0], /text-overflow:\s*ellipsis;/);
+		assert.ok(messageRule);
+		assert.match(messageRule[0], /overflow:\s*hidden;/);
+		assert.match(messageRule[0], /text-overflow:\s*ellipsis;/);
 		assert.match(
 			graphViewCss,
 			/\.graph-agent-activity-binding\.graph-node-effect-host\s*\{/,

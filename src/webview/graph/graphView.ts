@@ -69,6 +69,7 @@ import {
 	type GraphNodeEffectOwner,
 } from './graphNodeEffects';
 import type { AgentActivityStore } from '../../agent/webview/agentActivityStore';
+import type { AgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import {
 	AGENT_ACTIVITY_BINDING_TOP_GAP,
 	createAgentActivityBindings,
@@ -165,6 +166,7 @@ export interface GraphViewWorkspaceSnapshot {
 /** Graph View의 비영속 runtime integration만 선택적으로 주입한다. */
 export interface GraphViewRuntimeOptions {
 	readonly agentActivityStore?: AgentActivityStore;
+	readonly agentSessionPresentationStore?: AgentSessionPresentationStore;
 }
 
 /** Task Scope bounds에서 Card와 Agent Binding의 전체 표시 높이를 반환한다. */
@@ -1374,6 +1376,7 @@ export function initializeGraphView(
 		? createAgentActivityBindings(
 			runtimeOptions.agentActivityStore,
 			nodeEffects.createLocalEffectHost,
+			runtimeOptions.agentSessionPresentationStore,
 		)
 		: undefined;
 	const state = createGraphState(initialState);
