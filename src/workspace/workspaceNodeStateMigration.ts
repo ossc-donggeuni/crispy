@@ -2,21 +2,10 @@ import * as vscode from 'vscode';
 import type { WorkspaceMutableNodeKind } from '../messages';
 import type { TaskBlueprint, WorkspaceTaskRecord } from '../task';
 import {
-	createGraphLayoutNodeId,
-	getGraphLayoutRootId,
-	getGraphLayoutSourceId,
-} from '../webview/graph/graphLayout';
-import {
-	createDetachedRootId,
-	getDetachedRootNodeId,
-	getDetachedRootOrdinal,
-	getDetachedRootOriginId,
-	isDetachedRootId,
-} from '../webview/graph/graphRootPromotion';
-import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
 } from './workspaceMetadata';
+import { mapWorkspaceNodeStateId } from './workspaceNodeStateId';
 
 export type { WorkspaceMutableNodeKind } from '../messages';
 
@@ -28,7 +17,6 @@ export interface WorkspaceNodeIdRebaser {
 
 const FILE_ID_PREFIX = 'file:';
 const FOLDER_ID_PREFIX = 'folder:';
-const FILE_GROUP_SUFFIX = ':files';
 
 /**
  * 선택한 파일 또는 폴더 subtree의 canonical/Detached/occurrence ID를 새 URI로 옮긴다.
@@ -40,9 +28,7 @@ export function createWorkspaceNodeIdRebaser(
 	kind: WorkspaceMutableNodeKind,
 ): WorkspaceNodeIdRebaser {
 	const rebaseCanonicalId = (id: string): string => {
-		const fileGroup = id.endsWith(FILE_GROUP_SUFFIX);
-		const sourceId = fileGroup ? id.slice(0, -FILE_GROUP_SUFFIX.length) : id;
-		const parsed = parseCanonicalNodeId(sourceId);
+		const parsed = parseCanonicalNodeId(id);
 
 		if (!parsed) {
 			return id;
@@ -52,42 +38,12 @@ export function createWorkspaceNodeIdRebaser(
 		if (!rebasedUri) {
 			return id;
 		}
-		const rebased = `${parsed.prefix}${rebasedUri.toString()}`;
-
-		return fileGroup ? `${rebased}${FILE_GROUP_SUFFIX}` : rebased;
+		return `${parsed.prefix}${rebasedUri.toString()}`;
 	};
-	const rebaseDetachedRootId = (rootId: string): string => {
-		if (!isDetachedRootId(rootId)) {
-			return rootId;
-		}
-		const nodeId = getDetachedRootNodeId(rootId);
-		const ordinal = getDetachedRootOrdinal(rootId);
-
-		if (!nodeId || !ordinal) {
-			return rootId;
-		}
-		const originRootId = getDetachedRootOriginId(rootId);
-
-		return createDetachedRootId(
-			rebaseCanonicalId(nodeId),
-			ordinal,
-			originRootId ? rebaseDetachedRootId(originRootId) : undefined,
-		);
-	};
-	const rebase = (id: string): string => {
-		const rootId = getGraphLayoutRootId(id);
-
-		if (rootId) {
-			return createGraphLayoutNodeId(
-				rebaseDetachedRootId(rootId),
-				rebaseCanonicalId(getGraphLayoutSourceId(id)),
-			);
-		}
-		if (isDetachedRootId(id)) {
-			return rebaseDetachedRootId(id);
-		}
-		return rebaseCanonicalId(id);
-	};
+	const rebase = (id: string): string => mapWorkspaceNodeStateId(
+		id,
+		rebaseCanonicalId,
+	);
 
 	return {
 		rebase,
@@ -117,6 +73,44 @@ export function rebaseWorkspaceNodeState(
 		})),
 		taskStorageReceipts: state.taskStorageReceipts,
 	};
+}
+
+/** rename transaction에서 사용하는 모든 persistent source/state ID 변경표를 만든다. */
+export function createWorkspaceNodeStateIdChanges(
+	state: WorkspacePersistentState,
+	rebaser: WorkspaceNodeIdRebaser,
+): Record<string, string> {
+	const ids = new Set<string>();
+
+	for (const record of [
+		state.nodePositions,
+		state.fileGroupPages,
+		state.openedFolders,
+		state.detachedRootNodeIds,
+		state.hiddenNodeIds,
+	]) {
+		for (const id of Object.keys(record)) {
+			ids.add(id);
+		}
+	}
+	for (const record of [
+		...state.tasks,
+		...state.taskRelocations.map((relocation) => relocation.record),
+	]) {
+		for (const id of collectTaskTargetIds(record)) {
+			ids.add(id);
+		}
+	}
+	const changes: Record<string, string> = {};
+
+	for (const id of ids) {
+		const nextId = rebaser.rebase(id);
+
+		if (nextId !== id) {
+			changes[id] = nextId;
+		}
+	}
+	return changes;
 }
 
 /** 삭제한 파일 또는 폴더 subtree에 속한 Graph 상태와 Task 참조를 함께 제거한다. */
@@ -151,10 +145,7 @@ function createWorkspaceNodeMatcher(
 	kind: WorkspaceMutableNodeKind,
 ): (id: string) => boolean {
 	const matchesCanonicalId = (id: string): boolean => {
-		const sourceId = id.endsWith(FILE_GROUP_SUFFIX)
-			? id.slice(0, -FILE_GROUP_SUFFIX.length)
-			: id;
-		const parsed = parseCanonicalNodeId(sourceId);
+		const parsed = parseCanonicalNodeId(id);
 
 		return parsed
 			? isNodeUriInMutationScope(parsed.uri, targetUri, kind)
@@ -162,42 +153,37 @@ function createWorkspaceNodeMatcher(
 	};
 
 	return (id) => {
-		const rootId = getGraphLayoutRootId(id);
+		let matches = false;
 
-		if (rootId) {
-			return matchesCanonicalId(getGraphLayoutSourceId(id))
-				|| matchesDetachedRoot(rootId, matchesCanonicalId);
-		}
-		return isDetachedRootId(id)
-			? matchesDetachedRoot(id, matchesCanonicalId)
-			: matchesCanonicalId(id);
+		mapWorkspaceNodeStateId(id, (canonicalId) => {
+			matches ||= matchesCanonicalId(canonicalId);
+			return canonicalId;
+		});
+		return matches;
 	};
-}
-
-function matchesDetachedRoot(
-	rootId: string,
-	matchesCanonicalId: (id: string) => boolean,
-): boolean {
-	const nodeId = getDetachedRootNodeId(rootId);
-
-	if (nodeId && matchesCanonicalId(nodeId)) {
-		return true;
-	}
-	const originRootId = getDetachedRootOriginId(rootId);
-
-	return originRootId
-		? matchesDetachedRoot(originRootId, matchesCanonicalId)
-		: false;
 }
 
 function rebaseRecordKeys<Value>(
 	record: Readonly<Record<string, Value>>,
 	rebaser: WorkspaceNodeIdRebaser,
 ): Record<string, Value> {
-	return Object.fromEntries(Object.entries(record).map(([id, value]) => [
-		rebaser.rebase(id),
-		value,
-	]));
+	const rebased: Record<string, Value> = {};
+	const changed: [string, Value][] = [];
+
+	for (const [id, value] of Object.entries(record)) {
+		const nextId = rebaser.rebase(id);
+
+		if (nextId === id) {
+			rebased[id] = value;
+		} else {
+			changed.push([nextId, value]);
+		}
+	}
+	// 이전 rename의 잔여 key가 있어도 현재 물리 node에서 옮긴 값이 우선한다.
+	for (const [id, value] of changed) {
+		rebased[id] = value;
+	}
+	return rebased;
 }
 
 function filterRecordKeys<Value>(
@@ -271,6 +257,23 @@ function mapTaskTargets(
 	});
 
 	return changed ? { ...task, defaultGraphTargets, nodes } : task;
+}
+
+function collectTaskTargetIds(record: WorkspaceTaskRecord): Set<string> {
+	const ids = new Set(record.targetOrigins.map(({ sourceId }) => sourceId));
+	const collect = (targets: TaskBlueprint['defaultGraphTargets']): void => {
+		for (const id of [...targets.reference, ...targets.work]) {
+			ids.add(id);
+		}
+	};
+
+	collect(record.task.defaultGraphTargets);
+	for (const node of record.task.nodes) {
+		if (node.kind === 'work') {
+			collect(node.graphTargets);
+		}
+	}
+	return ids;
 }
 
 function filterTaskTargets(

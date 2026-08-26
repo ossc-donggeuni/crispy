@@ -1,7 +1,11 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { createDefaultTaskBlueprint } from '../../task';
-import { createDetachedRootId } from '../../webview/graph/graphRootPromotion';
+import {
+	createDetachedRootId,
+	createFileBacklinkGroupId,
+	createFolderBacklinkId,
+} from '../../webview/graph/graphRootPromotion';
 import { createGraphLayoutNodeId } from '../../webview/graph/graphLayout';
 import {
 	createDefaultWorkspacePersistentState,
@@ -9,6 +13,7 @@ import {
 	type WorkspacePersistentState,
 } from '../../workspace/workspaceMetadata';
 import {
+	createWorkspaceNodeStateIdChanges,
 	createWorkspaceNodeIdRebaser,
 	rebaseWorkspaceNodeState,
 	removeWorkspaceNodeState,
@@ -26,6 +31,12 @@ suite('Workspace Node State Migration', () => {
 		const nextChildId = `file:${nextChildUri.toString()}`;
 		const detachedRootId = createDetachedRootId(folderId, 1);
 		const occurrenceId = createGraphLayoutNodeId(detachedRootId, childId);
+		const folderBacklinkId = createFolderBacklinkId(folderId);
+		const childBacklinkId = createFileBacklinkGroupId(childId);
+		const backlinkOccurrenceId = createGraphLayoutNodeId(
+			detachedRootId,
+			childBacklinkId,
+		);
 		const task = createDefaultTaskBlueprint({
 			title: 'Rename targets',
 			defaultGraphTargets: { reference: [childId], work: [folderId] },
@@ -38,6 +49,8 @@ suite('Workspace Node State Migration', () => {
 			nodePositions: {
 				[folderId]: { x: 1, y: 2 },
 				[occurrenceId]: { x: 3, y: 4 },
+				[folderBacklinkId]: { x: 5, y: 6 },
+				[backlinkOccurrenceId]: { x: 7, y: 8 },
 			},
 			fileGroupPages: { [`${folderId}:files`]: 2 },
 			openedFolders: { [folderId]: true },
@@ -53,16 +66,28 @@ suite('Workspace Node State Migration', () => {
 				],
 			}],
 		};
-		const result = rebaseWorkspaceNodeState(
-			state,
-			createWorkspaceNodeIdRebaser(oldUri, newUri, 'folder'),
-		);
+		const rebaser = createWorkspaceNodeIdRebaser(oldUri, newUri, 'folder');
+		const stateIdChanges = createWorkspaceNodeStateIdChanges(state, rebaser);
+		const result = rebaseWorkspaceNodeState(state, rebaser);
 		const nextDetachedRootId = createDetachedRootId(nextFolderId, 1);
+		const nextFolderBacklinkId = createFolderBacklinkId(nextFolderId);
+		const nextChildBacklinkId = createFileBacklinkGroupId(nextChildId);
 
 		assert.deepStrictEqual(result.nodePositions[nextFolderId], { x: 1, y: 2 });
 		assert.deepStrictEqual(
 			result.nodePositions[createGraphLayoutNodeId(nextDetachedRootId, nextChildId)],
 			{ x: 3, y: 4 },
+		);
+		assert.deepStrictEqual(
+			result.nodePositions[nextFolderBacklinkId],
+			{ x: 5, y: 6 },
+		);
+		assert.deepStrictEqual(
+			result.nodePositions[createGraphLayoutNodeId(
+				nextDetachedRootId,
+				nextChildBacklinkId,
+			)],
+			{ x: 7, y: 8 },
 		);
 		assert.strictEqual(result.fileGroupPages[`${nextFolderId}:files`], 2);
 		assert.strictEqual(result.openedFolders[nextFolderId], true);
@@ -77,6 +102,37 @@ suite('Workspace Node State Migration', () => {
 			[nextChildId, nextFolderId],
 		);
 		assert.strictEqual(result.tasks[0]?.storageRevision, 5);
+		assert.strictEqual(stateIdChanges[folderId], nextFolderId);
+		assert.strictEqual(stateIdChanges[occurrenceId], createGraphLayoutNodeId(
+			nextDetachedRootId,
+			nextChildId,
+		));
+		assert.strictEqual(
+			stateIdChanges[backlinkOccurrenceId],
+			createGraphLayoutNodeId(nextDetachedRootId, nextChildBacklinkId),
+		);
+	});
+
+	test('rename target의 이전 상태는 동일한 새 ID에 남은 stale 상태보다 우선한다', () => {
+		const oldUri = vscode.Uri.file('/workspace/old.ts');
+		const newUri = vscode.Uri.file('/workspace/new.ts');
+		const oldId = `file:${oldUri.toString()}`;
+		const newId = `file:${newUri.toString()}`;
+		const state: WorkspacePersistentState = {
+			...createDefaultWorkspacePersistentState(),
+			nodePositions: {
+				[oldId]: { x: 100, y: 200 },
+				[newId]: { x: -1, y: -1 },
+			},
+		};
+		const result = rebaseWorkspaceNodeState(
+			state,
+			createWorkspaceNodeIdRebaser(oldUri, newUri, 'file'),
+		);
+
+		assert.deepStrictEqual(result.nodePositions, {
+			[newId]: { x: 100, y: 200 },
+		});
 	});
 
 	test('folder delete는 subtree 상태와 Task target/provenance만 제거한다', () => {

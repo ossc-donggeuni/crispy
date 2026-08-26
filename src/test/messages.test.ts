@@ -7,6 +7,7 @@ import {
 	parseAgentActivityTrackedClearMessage,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
+	parseWorkspaceNodeRequestMessage,
 	parseWorkspaceToWebviewMessage,
 	setAgentActivity,
 	type AgentActivityClearAppliedReceipt,
@@ -20,12 +21,16 @@ import {
 	type TaskJsonCopyMessage,
 	type WebviewToExtensionMessage,
 	type WorkspaceOpenFileMessage,
+	type WorkspaceNodeRenameRequestMessage,
 	type WorkspaceStateChangedMessage,
 	type WorkspaceToWebviewMessage,
 } from '../messages';
 import type { Graph, Project } from '../webview/graph/graphModel';
 import { createDefaultTaskBlueprint } from '../task';
-import { WORKSPACE_PERSISTENT_STATE_VERSION } from '../workspace/workspaceMetadata';
+import {
+	createDefaultWorkspacePersistentState,
+	WORKSPACE_PERSISTENT_STATE_VERSION,
+} from '../workspace/workspaceMetadata';
 
 suite('Extension to Webview Workspace messages', () => {
 	test('Workspace Persistent State 전체 snapshot을 Webview에서 Host로 전달한다', () => {
@@ -70,6 +75,33 @@ suite('Extension to Webview Workspace messages', () => {
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
 
 		assert.deepStrictEqual(webviewMessage, workspaceMessage);
+	});
+
+	test('Node rename 요청은 같은 mutation에 적용할 최신 Workspace snapshot을 포함한다', () => {
+		const request = {
+			type: 'workspace.nodeRename.request',
+			requestId: 9,
+			nodeId: 'folder:file:///workspace/app/old',
+			kind: 'folder',
+			newName: 'new',
+			workspaceRevision: 3,
+			state: {
+				...createDefaultWorkspacePersistentState(),
+				nodePositions: {
+					'file:file:///workspace/app/old/index.ts': { x: 120, y: 240 },
+				},
+			},
+		} satisfies WorkspaceNodeRenameRequestMessage;
+
+		assert.deepStrictEqual(parseWorkspaceNodeRequestMessage(request), request);
+		assert.strictEqual(parseWorkspaceNodeRequestMessage({
+			...request,
+			state: undefined,
+		}), undefined);
+		assert.strictEqual(parseWorkspaceNodeRequestMessage({
+			...request,
+			state: { ...request.state, nodePositions: { broken: { x: NaN, y: 0 } } },
+		}), undefined);
 	});
 
 	test('Task JSON clipboard 요청은 전송 JSON만 Host union에 연결된다', () => {

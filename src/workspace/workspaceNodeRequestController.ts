@@ -13,6 +13,7 @@ import {
 	type WorkspaceNodeOperationHost,
 } from './workspaceNodeOperations';
 import {
+	createWorkspaceNodeStateIdChanges,
 	createWorkspaceNodeIdRebaser,
 	rebaseWorkspaceNodeState,
 	removeWorkspaceNodeState,
@@ -95,22 +96,38 @@ export function createWorkspaceNodeRequestController(
 			postMutationFailure(request.requestId, operation, 'stale');
 			return;
 		}
+		// Webview의 rename 요청 snapshot은 사용자가 버튼을 누른 정확한 시점의
+		// Graph 상태다. 파일시스템 watcher나 Host 저장 지연이 끼어들기 전에 이를
+		// transaction 기준점으로 고정해야 하위 좌표를 잃지 않는다.
+		const hostState = dependencies.getWorkspaceState();
+		const mutationBaseState = request.type === 'workspace.nodeRename.request'
+			? {
+				...request.state,
+				// 이 두 필드는 Host persistence transaction이 소유하므로 Webview의
+				// 의도적으로 비어 있는 projection으로 덮어쓰지 않는다.
+				taskRelocations: hostState.taskRelocations,
+				taskStorageReceipts: hostState.taskStorageReceipts,
+			}
+			: hostState;
+
 		try {
 			const mutation = request.type === 'workspace.nodeRename.request'
 				? await renameWorkspaceNode(request, dependencies.operationHost)
 				: await deleteWorkspaceNode(request, dependencies.operationHost);
-			const currentState = dependencies.getWorkspaceState();
-			const state = mutation.newUri
-				? rebaseWorkspaceNodeState(
-					currentState,
-					createWorkspaceNodeIdRebaser(
-						mutation.oldUri,
-						mutation.newUri,
-						mutation.kind,
-					),
+			const rebaser = mutation.newUri
+				? createWorkspaceNodeIdRebaser(
+					mutation.oldUri,
+					mutation.newUri,
+					mutation.kind,
 				)
+				: undefined;
+			const stateIdChanges = rebaser
+				? createWorkspaceNodeStateIdChanges(mutationBaseState, rebaser)
+				: undefined;
+			const state = rebaser
+				? rebaseWorkspaceNodeState(mutationBaseState, rebaser)
 				: removeWorkspaceNodeState(
-					currentState,
+					mutationBaseState,
 					mutation.oldUri,
 					mutation.kind,
 				);
@@ -136,6 +153,7 @@ export function createWorkspaceNodeRequestController(
 				presentation,
 				state,
 				...(mutation.nodeId ? { nodeId: mutation.nodeId } : {}),
+				...(stateIdChanges ? { stateIdChanges } : {}),
 			});
 		} catch (error) {
 			postMutationFailure(request.requestId, operation, getFailureReason(error));

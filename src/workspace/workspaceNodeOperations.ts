@@ -137,9 +137,9 @@ export async function readWorkspaceNodeDetails(
 
 /** 명시 버튼에서 전달된 basename만 같은 parent 아래로 rename한다. */
 export async function renameWorkspaceNode(
-	request: Extract<WorkspaceNodeRequestMessage, {
+	request: Omit<Extract<WorkspaceNodeRequestMessage, {
 		readonly type: 'workspace.nodeRename.request';
-	}>,
+	}>, 'state'>,
 	host: WorkspaceNodeOperationHost = defaultWorkspaceNodeOperationHost,
 ): Promise<WorkspaceNodeMutation> {
 	assertMutationAllowed(host);

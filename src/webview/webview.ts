@@ -218,6 +218,9 @@ if (typeof graphArea.querySelector === 'function' && monacoWorkerUri) {
 			monacoWorkerUri,
 			{
 				getWorkspaceRevision: () => currentWorkspaceRevision,
+				getWorkspaceState: () => createWorkspacePersistentState(
+					graphView.getWorkspaceSnapshot(),
+				),
 				postRequest: (message) => vscodeApi.postMessage(message),
 				resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
 					viewport,
@@ -630,6 +633,7 @@ function handleHostMessage(message: unknown): void {
 				},
 				tasks: nodeMutationMessage.state.tasks,
 			},
+			nodeMutationMessage.stateIdChanges,
 		);
 		agentPanelUi?.updateWorkspaceRootCatalog(
 			nodeMutationMessage.presentation.rootCatalog,

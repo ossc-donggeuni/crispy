@@ -90,6 +90,7 @@ export {
 } from './workspaceRefresh';
 export { watchWorkspaceChanges } from './workspaceWatcher';
 export {
+	createWorkspaceNodeStateIdChanges,
 	createWorkspaceNodeIdRebaser,
 	rebaseWorkspaceNodeState,
 	removeWorkspaceNodeState,

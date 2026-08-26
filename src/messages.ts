@@ -61,6 +61,8 @@ export interface WorkspaceNodeRenameRequestMessage {
 	kind: WorkspaceMutableNodeKind;
 	newName: string;
 	workspaceRevision: number;
+	/** rename과 ID 이전이 공유하는 Webview의 최신 Workspace snapshot이다. */
+	state: WorkspacePersistentState;
 }
 
 export interface WorkspaceNodeDeleteRequestMessage {
@@ -105,6 +107,9 @@ export type WorkspaceNodeFailureReason =
 	| 'unsupported'
 	| 'failed';
 
+/** rename 전 Graph state ID를 rename 후 ID로 연결하는 Host 계산 변경표다. */
+export type WorkspaceNodeStateIdChanges = Readonly<Record<string, string>>;
+
 export type WorkspaceNodeDetailsResultMessage = {
 	readonly type: 'workspace.nodeDetails.result';
 	readonly requestId: number;
@@ -127,6 +132,7 @@ export type WorkspaceNodeMutationResultMessage = {
 		readonly presentation: WorkspacePresentation;
 		readonly state: WorkspacePersistentState;
 		readonly nodeId?: string;
+		readonly stateIdChanges?: WorkspaceNodeStateIdChanges;
 	}
 	| { readonly status: 'error'; readonly reason: WorkspaceNodeFailureReason }
 );
@@ -629,7 +635,7 @@ export function parseWorkspaceNodeRequestMessage(
 	}
 	const baseKeys = ['type', 'requestId', 'nodeId', 'kind', 'workspaceRevision'];
 	const keys = value.type === 'workspace.nodeRename.request'
-		? [...baseKeys, 'newName']
+		? [...baseKeys, 'newName', 'state']
 		: baseKeys;
 
 	if (
@@ -663,6 +669,11 @@ export function parseWorkspaceNodeRequestMessage(
 	) {
 		return undefined;
 	}
+	const state = parseWorkspacePersistentState(value.state);
+
+	if (!state) {
+		return undefined;
+	}
 	return {
 		type: value.type,
 		requestId: value.requestId as number,
@@ -670,6 +681,7 @@ export function parseWorkspaceNodeRequestMessage(
 		kind: value.kind as WorkspaceMutableNodeKind,
 		newName: value.newName,
 		workspaceRevision: value.workspaceRevision as number,
+		state,
 	};
 }
 
@@ -724,12 +736,17 @@ export function parseWorkspaceNodeMutationResultMessage(
 	if (!hasOnlyKeys(value, [
 		'type', 'requestId', 'operation', 'workspaceRevision', 'status',
 		'contextGeneration', 'rootIds', 'presentation', 'state', 'nodeId',
+		'stateIdChanges',
 	]) || !Object.hasOwn(value, 'contextGeneration')
 		|| !Object.hasOwn(value, 'rootIds')
 		|| !Object.hasOwn(value, 'presentation')
 		|| !Object.hasOwn(value, 'state')
 		|| !isSafeRevision(value.contextGeneration)
-		|| (value.nodeId !== undefined && typeof value.nodeId !== 'string')) {
+		|| (value.nodeId !== undefined && typeof value.nodeId !== 'string')
+		|| !isWorkspaceNodeMutationStateIdChanges(
+			value.operation,
+			value.stateIdChanges,
+		)) {
 		return undefined;
 	}
 	const presentation = parseWorkspacePresentation(value.presentation);
@@ -753,8 +770,26 @@ export function parseWorkspaceNodeMutationResultMessage(
 			presentation,
 			state,
 			...(typeof value.nodeId === 'string' ? { nodeId: value.nodeId } : {}),
+			...(isRecord(value.stateIdChanges)
+				? { stateIdChanges: { ...value.stateIdChanges } as Record<string, string> }
+				: {}),
 		}
 		: undefined;
+}
+
+function isWorkspaceNodeMutationStateIdChanges(
+	operation: 'rename' | 'delete',
+	value: unknown,
+): boolean {
+	if (operation === 'delete') {
+		return value === undefined;
+	}
+	return isRecord(value) && Object.entries(value).every(([previousId, nextId]) => (
+		previousId.length > 0
+		&& typeof nextId === 'string'
+		&& nextId.length > 0
+		&& previousId !== nextId
+	));
 }
 
 function isWorkspaceNodeRequestBase(value: Record<string, unknown>): boolean {

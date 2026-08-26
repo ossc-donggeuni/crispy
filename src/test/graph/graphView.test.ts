@@ -480,6 +480,354 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('updateWorkspace는 rename 변경표로 하위 manual 배치 ID까지 원자적으로 옮긴다', () => {
+		const oldFolder = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/app/old',
+			name: 'old',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'workspace-root:file:///workspace/app',
+			name: 'app',
+			status: 'loaded',
+			children: [oldFolder],
+		};
+		const graph = createSingleRootGraph(project);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: { [project.id]: true },
+		}, graph);
+		const folder = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			oldFolder.id,
+		);
+		const automaticPosition = readTranslate(folder.style.transform);
+
+		performNodeDrop(folder, 1_200, 900);
+		const movedState = graphView.state.getState();
+
+		// 좌표 값만 자동 배치점과 같게 만들어 ID 변경표 없이는 manual 판별이
+		// 복구할 수 없는 경계를 재현한다.
+		graphView.state.setState({
+			camera: movedState.camera,
+			nodePositions: {
+				...movedState.nodePositions,
+				[oldFolder.id]: automaticPosition,
+			},
+		});
+		const before = graphView.getWorkspaceSnapshot();
+		const oldPosition = before.graph.nodePositions[oldFolder.id];
+
+		assert.ok(oldPosition);
+		const newFolder = {
+			...oldFolder,
+			id: 'folder:file:///workspace/app/new',
+			name: 'new',
+		};
+		const nextProject = { ...project, children: [newFolder] };
+		const nextGraph = createSingleRootGraph(nextProject);
+
+		graphView.updateWorkspace(nextGraph, {
+			graph: {
+				...before.graph,
+				nodePositions: { [newFolder.id]: oldPosition },
+			},
+			tasks: before.tasks,
+		}, { [oldFolder.id]: newFolder.id });
+		const after = graphView.getWorkspaceSnapshot();
+
+		assert.strictEqual(after.graph.nodePositions[oldFolder.id], undefined);
+		assert.deepStrictEqual(after.graph.nodePositions[newFolder.id], oldPosition);
+		graphView.dispose();
+	});
+
+	test('상위 Folder rename의 watcher 선행 갱신 뒤에도 singleton standalone File 위치를 복원한다', () => {
+		const oldFile = {
+			kind: 'file' as const,
+			id: 'file:file:///workspace/app/old/index.ts',
+			name: 'index.ts',
+		};
+		const oldFolder = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/app/old',
+			name: 'old',
+			status: 'loaded' as const,
+			children: [oldFile],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'workspace-root:file:///workspace/app',
+			name: 'app',
+			status: 'loaded',
+			children: [oldFolder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[oldFolder.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const oldStandalone = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			oldFile.id,
+		);
+
+		performNodeDrop(oldStandalone, 1_200, 900);
+		const before = graphView.getWorkspaceSnapshot();
+		const oldPosition = before.graph.nodePositions[oldFile.id];
+
+		assert.ok(oldPosition);
+		const newFile = {
+			...oldFile,
+			id: 'file:file:///workspace/app/new/index.ts',
+		};
+		const newFolder = {
+			...oldFolder,
+			id: 'folder:file:///workspace/app/new',
+			name: 'new',
+			children: [newFile],
+		};
+		const nextGraph = createSingleRootGraph({
+			...project,
+			children: [newFolder],
+		});
+
+		// 파일시스템 watcher가 mutation success보다 먼저 새 ID Graph를 보낸다.
+		graphView.updateGraph(nextGraph);
+		graphView.updateWorkspace(nextGraph, {
+			graph: {
+				...before.graph,
+				nodePositions: { [newFile.id]: oldPosition },
+				openedFolders: {
+					[project.id]: true,
+					[newFolder.id]: true,
+				},
+			},
+			tasks: before.tasks,
+		}, {
+			[oldFolder.id]: newFolder.id,
+			[oldFile.id]: newFile.id,
+		});
+		const after = graphView.getWorkspaceSnapshot();
+		const newStandalone = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			newFile.id,
+		);
+
+		assert.strictEqual(after.graph.nodePositions[oldFile.id], undefined);
+		assert.deepStrictEqual(after.graph.nodePositions[newFile.id], oldPosition);
+		assert.deepStrictEqual(
+			readTranslate(newStandalone.style.transform),
+			oldPosition,
+		);
+		graphView.dispose();
+	});
+
+	test('이동된 상위 Folder rename 뒤 arranged singleton standalone File의 파생 위치를 보존한다', () => {
+		const oldFile = {
+			kind: 'file' as const,
+			id: 'file:file:///workspace/app/old/index.ts',
+			name: 'index.ts',
+		};
+		const oldFolder = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/app/old',
+			name: 'old',
+			status: 'loaded' as const,
+			children: [oldFile],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'workspace-root:file:///workspace/app',
+			name: 'app',
+			status: 'loaded',
+			children: [oldFolder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[oldFolder.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const oldFolderElement = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			oldFolder.id,
+		);
+
+		performNodeDrop(oldFolderElement, 1_200, 900);
+		const before = graphView.getWorkspaceSnapshot();
+		const oldFolderPosition = before.graph.nodePositions[oldFolder.id];
+		const oldFilePosition = before.graph.nodePositions[oldFile.id];
+
+		assert.ok(oldFolderPosition);
+		assert.ok(oldFilePosition);
+		const newFile = {
+			...oldFile,
+			id: 'file:file:///workspace/app/new/index.ts',
+		};
+		const newFolder = {
+			...oldFolder,
+			id: 'folder:file:///workspace/app/new',
+			name: 'new',
+			children: [newFile],
+		};
+		const nextGraph = createSingleRootGraph({
+			...project,
+			children: [newFolder],
+		});
+
+		graphView.updateGraph(nextGraph);
+		graphView.updateWorkspace(nextGraph, {
+			graph: {
+				...before.graph,
+				nodePositions: {
+					[newFolder.id]: oldFolderPosition,
+					[newFile.id]: oldFilePosition,
+				},
+				openedFolders: {
+					[project.id]: true,
+					[newFolder.id]: true,
+				},
+			},
+			tasks: before.tasks,
+		}, {
+			[oldFolder.id]: newFolder.id,
+			[oldFile.id]: newFile.id,
+		});
+		const after = graphView.getWorkspaceSnapshot();
+		const newStandalone = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			newFile.id,
+		);
+
+		assert.deepStrictEqual(
+			after.graph.nodePositions[newFolder.id],
+			oldFolderPosition,
+		);
+		assert.deepStrictEqual(
+			after.graph.nodePositions[newFile.id],
+			oldFilePosition,
+		);
+		assert.deepStrictEqual(
+			readTranslate(newStandalone.style.transform),
+			oldFilePosition,
+		);
+		graphView.dispose();
+	});
+
+	test('상위 Folder rename의 mutation 직접 적용에서도 분리된 standalone File 위치를 복원한다', () => {
+		const oldFiles = ['a', 'b'].map((name) => ({
+			kind: 'file' as const,
+			id: `file:file:///workspace/app/old/${name}.ts`,
+			name: `${name}.ts`,
+		}));
+		const oldFolder = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/app/old',
+			name: 'old',
+			status: 'loaded' as const,
+			children: oldFiles,
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'workspace-root:file:///workspace/app',
+			name: 'app',
+			status: 'loaded',
+			children: [oldFolder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[oldFolder.id]: true,
+			},
+		}, createSingleRootGraph(project));
+		const oldFile = oldFiles[0] ?? assert.fail();
+		const oldFileGroup = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			createFileGroupId(oldFolder.id),
+		);
+		const oldRow = getDescendantByAttribute(
+			oldFileGroup,
+			'data-file-id',
+			oldFile.id,
+		);
+
+		oldRow.dispatch('pointerdown', createPointerEvent(oldRow, 10, 10));
+		oldRow.dispatch('pointermove', createPointerEvent(oldRow, -500, -500));
+		oldRow.dispatch('pointerup', createPointerEvent(oldRow, -500, -500));
+		const before = graphView.getWorkspaceSnapshot();
+		const oldPosition = before.graph.nodePositions[oldFile.id];
+
+		assert.ok(oldPosition);
+		const newFiles = oldFiles.map((file) => ({
+			...file,
+			id: file.id.replace('/old/', '/new/'),
+		}));
+		const newFile = newFiles[0] ?? assert.fail();
+		const newFolder = {
+			...oldFolder,
+			id: 'folder:file:///workspace/app/new',
+			name: 'new',
+			children: newFiles,
+		};
+		const nextGraph = createSingleRootGraph({
+			...project,
+			children: [newFolder],
+		});
+
+		graphView.updateWorkspace(nextGraph, {
+			graph: {
+				...before.graph,
+				nodePositions: { [newFile.id]: oldPosition },
+				openedFolders: {
+					[project.id]: true,
+					[newFolder.id]: true,
+				},
+			},
+			tasks: before.tasks,
+		}, Object.fromEntries([
+			[oldFolder.id, newFolder.id],
+			...oldFiles.map((file, index) => [
+				file.id,
+				newFiles[index]?.id ?? assert.fail(),
+			] as const),
+		]));
+		const after = graphView.getWorkspaceSnapshot();
+		const newStandalone = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			newFile.id,
+		);
+
+		assert.strictEqual(after.graph.nodePositions[oldFile.id], undefined);
+		assert.deepStrictEqual(after.graph.nodePositions[newFile.id], oldPosition);
+		assert.deepStrictEqual(
+			readTranslate(newStandalone.style.transform),
+			oldPosition,
+		);
+		graphView.dispose();
+	});
+
 	test('nested Root 추가와 제거는 현재 Source membership을 유지하고 provenance만 실제 owner로 이관한다', () => {
 		const fixture = createNestedPersistenceWorkspaceFixture();
 		const initial = createPersistenceTaskRecord({

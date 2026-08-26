@@ -12,6 +12,7 @@ import type {
 	WorkspaceNodeMutationResultMessage,
 	WorkspaceNodeRequestMessage,
 } from '../messages';
+import type { WorkspacePersistentState } from '../workspace/workspaceMetadata';
 
 export interface WorkspaceNodeInspector {
 	handleDetailsResult(message: WorkspaceNodeDetailsResultMessage): void;
@@ -22,6 +23,7 @@ export interface WorkspaceNodeInspector {
 
 export interface WorkspaceNodeInspectorInteractions {
 	getWorkspaceRevision(): number;
+	getWorkspaceState(): WorkspacePersistentState;
 	postRequest(message: WorkspaceNodeRequestMessage): void;
 	resolveVisibleGraphArea(viewport: HTMLElement): GraphVisibleArea;
 }
@@ -50,11 +52,23 @@ export function initializeWorkspaceNodeInspector(
 	let details: WorkspaceNodeDetails | undefined;
 	let editor: Monaco.editor.IStandaloneCodeEditor | undefined;
 	let model: Monaco.editor.ITextModel | undefined;
+	let monacoApi: typeof Monaco | undefined;
 	let previewGeneration = 0;
 	let requestId = 0;
 	let pendingDetailsRequestId: number | undefined;
 	let pendingMutationRequestId: number | undefined;
 	let disposed = false;
+	const ThemeMutationObserver = ownerDocument.defaultView?.MutationObserver;
+	const themeObserver = ThemeMutationObserver
+		? new ThemeMutationObserver(() => {
+			monacoApi?.editor.setTheme(resolveMonacoTheme(ownerDocument.body));
+		})
+		: undefined;
+
+	themeObserver?.observe(ownerDocument.body, {
+		attributes: true,
+		attributeFilter: ['class', 'data-vscode-theme-kind'],
+	});
 
 	(globalThis as typeof globalThis & {
 		MonacoEnvironment?: { getWorker(): Worker };
@@ -272,6 +286,7 @@ export function initializeWorkspaceNodeInspector(
 				kind: focused.kind,
 				newName: nameInput.value,
 				workspaceRevision: interactions.getWorkspaceRevision(),
+				state: interactions.getWorkspaceState(),
 			});
 		});
 		nameRow.append(nameInput, renameButton);
@@ -341,6 +356,8 @@ export function initializeWorkspaceNodeInspector(
 			}
 			container.classList.remove('is-loading');
 			container.textContent = '';
+			monacoApi = monaco;
+			monaco.editor.setTheme(resolveMonacoTheme(ownerDocument.body));
 			model = monaco.editor.createModel(preview.text, preview.languageId);
 			editor = monaco.editor.create(container, {
 				model,
@@ -381,6 +398,7 @@ export function initializeWorkspaceNodeInspector(
 			: '이 파일을 휴지통으로 이동합니다. 연결된 그래프 상태와 Task 참조도 제거됩니다.';
 		actions.className = 'workspace-node-confirm-actions';
 		cancel.type = 'button';
+		cancel.className = 'workspace-node-confirm-cancel';
 		cancel.textContent = '취소';
 		cancel.addEventListener('click', () => dialog.remove());
 		confirm.type = 'button';
@@ -486,6 +504,8 @@ export function initializeWorkspaceNodeInspector(
 			disposed = true;
 			graphArea.removeEventListener('contextmenu', handleContextMenu);
 			ownerDocument.removeEventListener('keydown', handleKeyDown);
+			themeObserver?.disconnect();
+			monacoApi = undefined;
 			close();
 		},
 	};
@@ -582,13 +602,24 @@ function formatTimestamp(timestamp: number): string {
 }
 
 function resolveMonacoTheme(body: HTMLElement): string {
-	if (body.classList.contains('vscode-high-contrast-light')) {
+	const themeKind = body.getAttribute('data-vscode-theme-kind');
+
+	if (
+		body.classList.contains('vscode-high-contrast-light')
+		|| themeKind === 'vscode-high-contrast-light'
+	) {
 		return 'hc-light';
 	}
-	if (body.classList.contains('vscode-high-contrast')) {
+	if (
+		body.classList.contains('vscode-high-contrast')
+		|| themeKind === 'vscode-high-contrast'
+	) {
 		return 'hc-black';
 	}
-	return body.classList.contains('vscode-light') ? 'vs' : 'vs-dark';
+	return body.classList.contains('vscode-light')
+		|| themeKind === 'vscode-light'
+		? 'vs'
+		: 'vs-dark';
 }
 
 function formatFailure(reason: string): string {
