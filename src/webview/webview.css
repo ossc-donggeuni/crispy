@@ -18,6 +18,282 @@ body {
 	overflow: hidden;
 }
 
+.graph-node.is-workspace-node-focused,
+.graph-file-item.is-workspace-node-focused {
+	outline: 2px solid var(--vscode-focusBorder, var(--vscode-contrastActiveBorder));
+	outline-offset: 3px;
+}
+
+.workspace-node-inspector {
+	position: absolute;
+	z-index: 8;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr);
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(
+		--vscode-widget-border,
+		var(--vscode-contrastBorder, var(--vscode-panel-border))
+	);
+	border-radius: 8px;
+	box-shadow: var(--graph-floating-control-shadow);
+	pointer-events: auto;
+}
+
+.workspace-node-inspector-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	min-height: 36px;
+	padding: 8px 12px;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: var(
+		--vscode-editorGroupHeader-tabsBackground,
+		var(--vscode-editorWidget-background, var(--vscode-editor-background))
+	);
+	border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.workspace-node-inspector-header strong {
+	font-size: 11px;
+	letter-spacing: 0.1em;
+}
+
+.workspace-node-inspector-close {
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	font-size: 18px;
+	line-height: 20px;
+	color: var(--vscode-icon-foreground, var(--vscode-foreground));
+	background: transparent;
+	border: 0;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.workspace-node-inspector-close:hover {
+	color: var(--vscode-icon-foreground, var(--vscode-foreground));
+	background: var(
+		--vscode-toolbar-hoverBackground,
+		var(--vscode-list-hoverBackground, transparent)
+	);
+}
+
+.workspace-node-inspector-close:active {
+	background: var(
+		--vscode-toolbar-activeBackground,
+		var(--vscode-toolbar-hoverBackground, transparent)
+	);
+}
+
+.workspace-node-inspector-body {
+	display: grid;
+	min-height: 0;
+	max-height: inherit;
+	overflow: hidden;
+}
+
+.workspace-node-inspector.is-file .workspace-node-inspector-body {
+	grid-template-columns: minmax(0, 7fr) minmax(240px, 3fr);
+}
+
+.workspace-node-code-preview {
+	position: relative;
+	min-width: 0;
+	min-height: 0;
+	background: var(--vscode-editor-background);
+	border-right: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.workspace-node-code-preview.is-unavailable {
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+	text-align: center;
+}
+
+.workspace-node-code-preview.is-loading {
+	display: grid;
+	place-items: center;
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.workspace-node-inspector-controls {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	min-width: 0;
+	padding: 14px;
+	overflow: auto;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+.workspace-node-inspector.is-folder .workspace-node-inspector-controls {
+	width: min(560px, 100%);
+}
+
+.workspace-node-name-field {
+	display: grid;
+	gap: 6px;
+	font-size: 12px;
+}
+
+.workspace-node-name-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px;
+}
+
+.workspace-node-name-row input {
+	min-width: 0;
+	padding: 6px 8px;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-input-border, var(--vscode-contrastBorder));
+	border-radius: 2px;
+	outline: none;
+}
+
+.workspace-node-name-row input:focus {
+	border-color: var(--vscode-focusBorder, var(--vscode-contrastActiveBorder));
+	outline: 1px solid var(--vscode-focusBorder, transparent);
+	outline-offset: -1px;
+}
+
+.workspace-node-name-row input::selection {
+	color: var(--vscode-editor-selectionForeground, inherit);
+	background: var(--vscode-editor-selectionBackground);
+}
+
+.workspace-node-name-row button,
+.workspace-node-delete,
+.workspace-node-confirm button {
+	padding: 6px 10px;
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+	border: 1px solid transparent;
+	border-radius: 3px;
+}
+
+.workspace-node-name-row button:hover:not(:disabled),
+.workspace-node-confirm button:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.workspace-node-confirm .workspace-node-confirm-cancel {
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+.workspace-node-confirm .workspace-node-confirm-cancel:hover:not(:disabled) {
+	background: var(
+		--vscode-button-secondaryHoverBackground,
+		var(--vscode-toolbar-hoverBackground)
+	);
+}
+
+.workspace-node-delete,
+.workspace-node-confirm .workspace-node-confirm-delete {
+	margin-top: auto;
+	color: var(--vscode-errorForeground, var(--vscode-button-foreground));
+	background: transparent;
+	border-color: var(--vscode-errorForeground, var(--vscode-button-background));
+}
+
+.workspace-node-delete:hover:not(:disabled),
+.workspace-node-confirm .workspace-node-confirm-delete:hover:not(:disabled) {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-errorForeground, var(--vscode-button-background));
+}
+
+.workspace-node-inspector button:disabled,
+.workspace-node-inspector input:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+.workspace-node-metadata {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 6px 10px;
+	margin: 0;
+	font-size: 12px;
+}
+
+.workspace-node-metadata dt {
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.workspace-node-metadata dd {
+	min-width: 0;
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.workspace-node-mutation-notice,
+.workspace-node-inspector-status {
+	margin: 0;
+	padding: 14px;
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.workspace-node-inspector-status.is-error {
+	color: var(--vscode-errorForeground);
+}
+
+.workspace-node-inspector.is-loading {
+	grid-template-rows: 1fr;
+	place-items: center;
+}
+
+.workspace-node-confirm {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	display: grid;
+	place-content: center;
+	gap: 16px;
+	padding: 28px;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: color-mix(
+		in srgb,
+		var(--vscode-editorWidget-background, var(--vscode-editor-background)) 94%,
+		transparent
+	);
+	text-align: center;
+}
+
+.workspace-node-confirm-actions {
+	display: flex;
+	justify-content: center;
+	gap: 8px;
+}
+
+.vscode-high-contrast .workspace-node-inspector,
+.vscode-high-contrast-light .workspace-node-inspector {
+	border-color: var(--vscode-contrastBorder, var(--vscode-widget-border));
+	box-shadow: none;
+}
+
+@media (max-width: 720px) {
+	.workspace-node-inspector.is-file .workspace-node-inspector-body {
+		grid-template-columns: 1fr;
+		overflow: auto;
+	}
+
+	.workspace-node-code-preview {
+		min-height: 240px;
+		border-right: 0;
+		border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	}
+}
+
 body {
 	color: var(--vscode-foreground);
 	background-color: var(--vscode-editor-background);

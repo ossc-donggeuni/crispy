@@ -33,6 +33,8 @@ export interface WorkspaceStateChangedMessage {
 	contextGeneration: number;
 	/** 이 snapshot을 만든 Webview Graph의 Project Root node IDs다. */
 	rootIds: readonly WorkspaceRootId[];
+	/** 같은 Root context 안의 Host 파일 mutation revision이다. */
+	workspaceRevision?: number;
 	state: WorkspacePersistentState;
 }
 
@@ -41,6 +43,99 @@ export interface WorkspaceOpenFileMessage {
 	type: 'workspace.openFile';
 	fileId: string;
 }
+
+export type WorkspaceMutableNodeKind = 'file' | 'folder';
+
+export interface WorkspaceNodeDetailsRequestMessage {
+	type: 'workspace.nodeDetails.request';
+	requestId: number;
+	nodeId: string;
+	kind: WorkspaceMutableNodeKind;
+	workspaceRevision: number;
+}
+
+export interface WorkspaceNodeRenameRequestMessage {
+	type: 'workspace.nodeRename.request';
+	requestId: number;
+	nodeId: string;
+	kind: WorkspaceMutableNodeKind;
+	newName: string;
+	workspaceRevision: number;
+	/** rename과 ID 이전이 공유하는 Webview의 최신 Workspace snapshot이다. */
+	state: WorkspacePersistentState;
+}
+
+export interface WorkspaceNodeDeleteRequestMessage {
+	type: 'workspace.nodeDelete.request';
+	requestId: number;
+	nodeId: string;
+	kind: WorkspaceMutableNodeKind;
+	workspaceRevision: number;
+}
+
+export type WorkspaceNodeRequestMessage =
+	| WorkspaceNodeDetailsRequestMessage
+	| WorkspaceNodeRenameRequestMessage
+	| WorkspaceNodeDeleteRequestMessage;
+
+export type WorkspaceFilePreview =
+	| { readonly status: 'ready'; readonly text: string; readonly languageId: string }
+	| { readonly status: 'too-large' | 'binary' | 'unavailable' };
+
+export interface WorkspaceNodeDetails {
+	readonly nodeId: string;
+	readonly kind: WorkspaceMutableNodeKind;
+	readonly name: string;
+	readonly relativePath: string;
+	readonly size?: number;
+	readonly createdAt?: number;
+	readonly modifiedAt?: number;
+	readonly readonly: boolean;
+	readonly canMutate: boolean;
+	readonly childFileCount?: number;
+	readonly childFolderCount?: number;
+	readonly preview?: WorkspaceFilePreview;
+}
+
+export type WorkspaceNodeFailureReason =
+	| 'stale'
+	| 'not-found'
+	| 'not-allowed'
+	| 'read-only'
+	| 'conflict'
+	| 'invalid-name'
+	| 'unsupported'
+	| 'failed';
+
+/** rename 전 Graph state ID를 rename 후 ID로 연결하는 Host 계산 변경표다. */
+export type WorkspaceNodeStateIdChanges = Readonly<Record<string, string>>;
+
+export type WorkspaceNodeDetailsResultMessage = {
+	readonly type: 'workspace.nodeDetails.result';
+	readonly requestId: number;
+	readonly workspaceRevision: number;
+} & (
+	| { readonly status: 'success'; readonly details: WorkspaceNodeDetails }
+	| { readonly status: 'error'; readonly reason: WorkspaceNodeFailureReason }
+);
+
+export type WorkspaceNodeMutationResultMessage = {
+	readonly type: 'workspace.nodeMutation.result';
+	readonly requestId: number;
+	readonly operation: 'rename' | 'delete';
+	readonly workspaceRevision: number;
+} & (
+	| {
+		readonly status: 'success';
+		readonly contextGeneration: number;
+		readonly rootIds: readonly WorkspaceRootId[];
+		readonly presentation: WorkspacePresentation;
+		readonly state: WorkspacePersistentState;
+		readonly nodeId?: string;
+		readonly stateIdChanges?: WorkspaceNodeStateIdChanges;
+	}
+	| { readonly status: 'error'; readonly reason: WorkspaceNodeFailureReason }
+);
 
 /** Webview가 tracked clear 적용 직후 Host에 돌려주는 quota 정산 receipt다. */
 export interface AgentActivityClearAppliedReceipt {
@@ -66,6 +161,7 @@ export type WebviewToExtensionMessage =
 	| WebviewStateChangedMessage
 	| WorkspaceStateChangedMessage
 	| WorkspaceOpenFileMessage
+	| WorkspaceNodeRequestMessage
 	| AgentActivityClearAppliedReceipt
 	| TaskJsonCopyMessage
 	| TaskJsonCopyFailedMessage;
@@ -78,6 +174,8 @@ export type WorkspaceToWebviewMessage = {
 	contextGeneration: number;
 	/** Graph와 state가 함께 채취된 Project Root context다. */
 	rootIds: readonly WorkspaceRootId[];
+	/** 같은 Root context 안의 Host 파일 mutation revision이다. */
+	workspaceRevision?: number;
 	/** Root 구성이 바뀔 때 Graph와 원자적으로 교체할 Workspace 상태다. */
 	state?: WorkspacePersistentState;
 };
@@ -210,6 +308,8 @@ export type GraphNodeEffectToWebviewMessage =
 export type ExtensionToWebviewMessage =
 	| HostToWebviewWireMessage
 	| WorkspaceToWebviewMessage
+	| WorkspaceNodeDetailsResultMessage
+	| WorkspaceNodeMutationResultMessage
 	| AgentActivityToWebviewMessage
 	| AgentActivityTrackedClearMessage
 	| GraphNodeEffectToWebviewMessage;
@@ -526,6 +626,254 @@ export function parseWorkspaceRootIds(
 	return rootIds;
 }
 
+/** Webview의 Workspace node 조회/mutation 요청을 exact-key로 검증한다. */
+export function parseWorkspaceNodeRequestMessage(
+	value: unknown,
+): WorkspaceNodeRequestMessage | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const baseKeys = ['type', 'requestId', 'nodeId', 'kind', 'workspaceRevision'];
+	const keys = value.type === 'workspace.nodeRename.request'
+		? [...baseKeys, 'newName', 'state']
+		: baseKeys;
+
+	if (
+		!hasExactKeys(value, keys)
+		|| !isWorkspaceNodeRequestBase(value)
+	) {
+		return undefined;
+	}
+	if (value.type === 'workspace.nodeDetails.request') {
+		return {
+			type: value.type,
+			requestId: value.requestId as number,
+			nodeId: value.nodeId as string,
+			kind: value.kind as WorkspaceMutableNodeKind,
+			workspaceRevision: value.workspaceRevision as number,
+		};
+	}
+	if (value.type === 'workspace.nodeDelete.request') {
+		return {
+			type: value.type,
+			requestId: value.requestId as number,
+			nodeId: value.nodeId as string,
+			kind: value.kind as WorkspaceMutableNodeKind,
+			workspaceRevision: value.workspaceRevision as number,
+		};
+	}
+	if (
+		value.type !== 'workspace.nodeRename.request'
+		|| typeof value.newName !== 'string'
+		|| value.newName.length > 4_096
+	) {
+		return undefined;
+	}
+	const state = parseWorkspacePersistentState(value.state);
+
+	if (!state) {
+		return undefined;
+	}
+	return {
+		type: value.type,
+		requestId: value.requestId as number,
+		nodeId: value.nodeId as string,
+		kind: value.kind as WorkspaceMutableNodeKind,
+		newName: value.newName,
+		workspaceRevision: value.workspaceRevision as number,
+		state,
+	};
+}
+
+/** Host의 Workspace node 상세 응답을 민감 정보가 새지 않도록 strict하게 검증한다. */
+export function parseWorkspaceNodeDetailsResultMessage(
+	value: unknown,
+): WorkspaceNodeDetailsResultMessage | undefined {
+	if (
+		!isRecord(value)
+		|| value.type !== 'workspace.nodeDetails.result'
+		|| !isSafeRevision(value.requestId)
+		|| !isSafeRevision(value.workspaceRevision)
+		|| (value.status !== 'success' && value.status !== 'error')
+	) {
+		return undefined;
+	}
+	if (value.status === 'error') {
+		return hasExactKeys(value, [
+			'type', 'requestId', 'workspaceRevision', 'status', 'reason',
+		]) && isWorkspaceNodeFailureReason(value.reason)
+			? value as WorkspaceNodeDetailsResultMessage
+			: undefined;
+	}
+	return hasExactKeys(value, [
+		'type', 'requestId', 'workspaceRevision', 'status', 'details',
+	]) && isWorkspaceNodeDetails(value.details)
+		? value as WorkspaceNodeDetailsResultMessage
+		: undefined;
+}
+
+/** mutation 성공 payload의 Presentation/State/Root context를 함께 검증한다. */
+export function parseWorkspaceNodeMutationResultMessage(
+	value: unknown,
+): WorkspaceNodeMutationResultMessage | undefined {
+	if (
+		!isRecord(value)
+		|| value.type !== 'workspace.nodeMutation.result'
+		|| !isSafeRevision(value.requestId)
+		|| !isSafeRevision(value.workspaceRevision)
+		|| (value.operation !== 'rename' && value.operation !== 'delete')
+		|| (value.status !== 'success' && value.status !== 'error')
+	) {
+		return undefined;
+	}
+	if (value.status === 'error') {
+		return hasExactKeys(value, [
+			'type', 'requestId', 'operation', 'workspaceRevision', 'status', 'reason',
+		]) && isWorkspaceNodeFailureReason(value.reason)
+			? value as WorkspaceNodeMutationResultMessage
+			: undefined;
+	}
+	if (!hasOnlyKeys(value, [
+		'type', 'requestId', 'operation', 'workspaceRevision', 'status',
+		'contextGeneration', 'rootIds', 'presentation', 'state', 'nodeId',
+		'stateIdChanges',
+	]) || !Object.hasOwn(value, 'contextGeneration')
+		|| !Object.hasOwn(value, 'rootIds')
+		|| !Object.hasOwn(value, 'presentation')
+		|| !Object.hasOwn(value, 'state')
+		|| !isSafeRevision(value.contextGeneration)
+		|| (value.nodeId !== undefined && typeof value.nodeId !== 'string')
+		|| !isWorkspaceNodeMutationStateIdChanges(
+			value.operation,
+			value.stateIdChanges,
+		)) {
+		return undefined;
+	}
+	const presentation = parseWorkspacePresentation(value.presentation);
+	const state = parseWorkspacePersistentState(value.state);
+	const rootIds = parseWorkspaceRootIds(value.rootIds);
+	const graphRootIds = presentation
+		? getWorkspaceGraphRootIds(presentation.graph)
+		: undefined;
+
+	return presentation && state && rootIds && graphRootIds
+		&& haveSameOrderedStrings(rootIds, graphRootIds)
+		&& haveSameOrderedStrings(rootIds, presentation.rootCatalog.map(({ id }) => id))
+		? {
+			type: value.type,
+			requestId: value.requestId as number,
+			operation: value.operation,
+			workspaceRevision: value.workspaceRevision as number,
+			status: 'success',
+			contextGeneration: value.contextGeneration as number,
+			rootIds,
+			presentation,
+			state,
+			...(typeof value.nodeId === 'string' ? { nodeId: value.nodeId } : {}),
+			...(isRecord(value.stateIdChanges)
+				? { stateIdChanges: { ...value.stateIdChanges } as Record<string, string> }
+				: {}),
+		}
+		: undefined;
+}
+
+function isWorkspaceNodeMutationStateIdChanges(
+	operation: 'rename' | 'delete',
+	value: unknown,
+): boolean {
+	if (operation === 'delete') {
+		return value === undefined;
+	}
+	return isRecord(value) && Object.entries(value).every(([previousId, nextId]) => (
+		previousId.length > 0
+		&& typeof nextId === 'string'
+		&& nextId.length > 0
+		&& previousId !== nextId
+	));
+}
+
+function isWorkspaceNodeRequestBase(value: Record<string, unknown>): boolean {
+	if (
+		value.type !== 'workspace.nodeDetails.request'
+		&& value.type !== 'workspace.nodeRename.request'
+		&& value.type !== 'workspace.nodeDelete.request'
+	) {
+		return false;
+	}
+	if (
+		!isSafeRevision(value.requestId)
+		|| !isSafeRevision(value.workspaceRevision)
+		|| (value.kind !== 'file' && value.kind !== 'folder')
+		|| typeof value.nodeId !== 'string'
+	) {
+		return false;
+	}
+	return value.nodeId.startsWith(`${value.kind}:`)
+		&& value.nodeId.length > `${value.kind}:`.length
+		&& value.nodeId.length <= 8_192;
+}
+
+function isWorkspaceNodeDetails(value: unknown): value is WorkspaceNodeDetails {
+	if (!isRecord(value) || !hasOnlyKeys(value, [
+		'nodeId', 'kind', 'name', 'relativePath', 'size', 'createdAt', 'modifiedAt',
+		'readonly', 'canMutate', 'childFileCount', 'childFolderCount', 'preview',
+	])) {
+		return false;
+	}
+	return typeof value.nodeId === 'string'
+		&& (value.kind === 'file' || value.kind === 'folder')
+		&& value.nodeId.startsWith(`${value.kind}:`)
+		&& typeof value.name === 'string'
+		&& typeof value.relativePath === 'string'
+		&& typeof value.readonly === 'boolean'
+		&& typeof value.canMutate === 'boolean'
+		&& isOptionalSafeNonNegative(value.size)
+		&& isOptionalSafeNonNegative(value.createdAt)
+		&& isOptionalSafeNonNegative(value.modifiedAt)
+		&& isOptionalSafeNonNegative(value.childFileCount)
+		&& isOptionalSafeNonNegative(value.childFolderCount)
+		&& (value.preview === undefined || isWorkspaceFilePreview(value.preview));
+}
+
+function isWorkspaceFilePreview(value: unknown): value is WorkspaceFilePreview {
+	if (!isRecord(value)) {
+		return false;
+	}
+	if (value.status === 'ready') {
+		return hasExactKeys(value, ['status', 'text', 'languageId'])
+			&& typeof value.text === 'string'
+			&& value.text.length <= 1_048_576
+			&& typeof value.languageId === 'string';
+	}
+	return (value.status === 'too-large'
+		|| value.status === 'binary'
+		|| value.status === 'unavailable')
+		&& hasExactKeys(value, ['status']);
+}
+
+function isWorkspaceNodeFailureReason(value: unknown): value is WorkspaceNodeFailureReason {
+	return value === 'stale' || value === 'not-found' || value === 'not-allowed'
+		|| value === 'read-only' || value === 'conflict' || value === 'invalid-name'
+		|| value === 'unsupported' || value === 'failed';
+}
+
+function isSafeRevision(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isOptionalSafeNonNegative(value: unknown): boolean {
+	return value === undefined
+		|| (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
+function haveSameOrderedStrings(
+	left: readonly string[],
+	right: readonly string[],
+): boolean {
+	return left.length === right.length
+		&& left.every((entry, index) => entry === right[index]);
+}
+
 /**
  * unknown Host 메시지에서 현재 Workspace 도메인 계약만 구조적으로 검증한다.
  * 다른 도메인 메시지와 잘못된 Graph는 기존 수신 정책과 같이 조용히 무시한다.
@@ -546,6 +894,7 @@ export function parseWorkspaceToWebviewMessage(
 			'presentation',
 			'contextGeneration',
 			'rootIds',
+			'workspaceRevision',
 			'state',
 		])
 		|| !Object.hasOwn(candidate, 'presentation')
@@ -553,6 +902,8 @@ export function parseWorkspaceToWebviewMessage(
 		|| !Object.hasOwn(candidate, 'rootIds')
 		|| !Number.isSafeInteger(candidate.contextGeneration)
 		|| (candidate.contextGeneration as number) < 0
+		|| (candidate.workspaceRevision !== undefined
+			&& !isSafeRevision(candidate.workspaceRevision))
 	) {
 		return undefined;
 	}
@@ -584,6 +935,9 @@ export function parseWorkspaceToWebviewMessage(
 			presentation,
 			contextGeneration: candidate.contextGeneration as number,
 			rootIds,
+			...(candidate.workspaceRevision !== undefined
+				? { workspaceRevision: candidate.workspaceRevision as number }
+				: {}),
 			...(state ? { state } : {}),
 		}
 		: undefined;

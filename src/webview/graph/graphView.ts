@@ -63,6 +63,7 @@ import type {
 	GraphNodeEffect,
 	GraphNodeEffectKind,
 	GraphNodeEffectTarget,
+	WorkspaceNodeStateIdChanges,
 } from '../../messages';
 import {
 	createGraphNodeEffects,
@@ -151,7 +152,11 @@ export interface GraphView {
 	/** 기존 View와 Workspace Graph를 유지하며 Task Blueprint 목록을 적용한다. */
 	updateTasks(tasks: readonly TaskBlueprint[]): void;
 	/** Root Graph와 해당 Root들에서 복원한 전체 Workspace 상태를 원자적으로 적용한다. */
-	updateWorkspace(graph: Graph, snapshot: GraphViewWorkspaceSnapshot): void;
+	updateWorkspace(
+		graph: Graph,
+		snapshot: GraphViewWorkspaceSnapshot,
+		stateIdChanges?: WorkspaceNodeStateIdChanges,
+	): void;
 	/** Host가 지정한 transient 시각 효과를 같은 kind 기준으로 적용 또는 교체한다. */
 	setNodeEffect(target: GraphNodeEffectTarget, effect: GraphNodeEffect): void;
 	/** 특정 target의 한 kind 또는 모든 transient 시각 효과를 제거한다. */
@@ -3947,12 +3952,24 @@ export function initializeGraphView(
 				applyTaskState();
 			}
 		},
-		updateWorkspace(graph, snapshot): void {
+		updateWorkspace(graph, snapshot, stateIdChanges): void {
 			if (disposed) {
 				return;
 			}
 			suppressWorkspaceNotifications += 1;
 			try {
+				if (stateIdChanges) {
+					const rebaseIds = (ids: ReadonlySet<string>): Set<string> => new Set(
+						[...ids].map((id) => stateIdChanges[id] ?? id),
+					);
+
+					currentManualUnarrangedNodeIds = rebaseIds(
+						currentManualUnarrangedNodeIds,
+					);
+					currentTaskScopeBoundaryNodeIds = rebaseIds(
+						currentTaskScopeBoundaryNodeIds,
+					);
+				}
 				pendingWorkspaceTaskRecords = sanitizeWorkspaceTaskRecords(
 					snapshot.tasks,
 					graph,

@@ -164,7 +164,14 @@ export function rebaseNodePositions(
 		const parentId = parentByChild.get(nodeId);
 		let nextPosition: GraphLayoutPosition | undefined;
 
-		if (!parentId) {
+		if (
+			unarrangedNodeIds.has(nodeId)
+			&& previousPosition
+			&& !previousNodesById.has(nodeId)
+		) {
+			// Rename 등으로 새 ID가 처음 나타난 수동 Node는 이전된 절대 좌표가 기준이다.
+			nextPosition = previousPosition;
+		} else if (!parentId) {
 			nextPosition = unarrangedNodeIds.has(nodeId) && previousPosition
 				? previousPosition
 				: nextNode?.position ?? previousPosition;

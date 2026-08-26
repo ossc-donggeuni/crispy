@@ -11,6 +11,7 @@ import {
 	createWorkspaceRootId,
 	WORKSPACE_ROOT_ID_PREFIX,
 } from './workspaceRootId';
+import { collectWorkspaceNodeStateCanonicalIds } from './workspaceNodeStateId';
 
 type WorkspacePersistenceFileSystem = Pick<
 	typeof vscode.workspace.fs,
@@ -650,19 +651,29 @@ function findOwningRootIndex(
 	id: string,
 	rootUris: readonly vscode.Uri[],
 ): number {
-	if (id.endsWith(':files')) {
-		const parentUri = parseNodeUri(id.slice(0, -':files'.length));
+	let ownerIndex = -1;
+	let ownerPathLength = -1;
 
-		if (parentUri) {
-			return findMostSpecificRootIndex(parentUri, rootUris);
+	for (const sourceId of collectWorkspaceNodeStateCanonicalIds(id)) {
+		const uri = parseNodeUri(sourceId);
+
+		if (!uri) {
+			continue;
+		}
+		const candidateIndex = findMostSpecificRootIndex(uri, rootUris);
+		const candidateRoot = candidateIndex < 0
+			? undefined
+			: rootUris[candidateIndex];
+
+		if (
+			candidateRoot
+			&& normalizeUriPath(candidateRoot.path).length > ownerPathLength
+		) {
+			ownerIndex = candidateIndex;
+			ownerPathLength = normalizeUriPath(candidateRoot.path).length;
 		}
 	}
-
-	const directUri = parseNodeUri(id);
-
-	return directUri
-		? findMostSpecificRootIndex(directUri, rootUris)
-		: -1;
+	return ownerIndex;
 }
 
 /** 알려진 Workspace/Graph Node ID prefix 뒤의 URI를 복원한다. */

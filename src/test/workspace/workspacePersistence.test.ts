@@ -1,6 +1,12 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import type { WorkspaceTaskRecord } from '../../task/workspaceTaskState';
+import { createGraphLayoutNodeId } from '../../webview/graph/graphLayout';
+import {
+	createDetachedRootId,
+	createFileBacklinkGroupId,
+	createFolderBacklinkId,
+} from '../../webview/graph/graphRootPromotion';
 import {
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
@@ -274,6 +280,40 @@ suite('Workspace Persistence', () => {
 	});
 
 	suite('Root ownership and partition', () => {
+		test('Detached occurrence와 Backlink 상태도 source URI의 Root에 보존한다', () => {
+			const rootUri = vscode.Uri.file('/workspace/app');
+			const folderNodeId = folderId(vscode.Uri.joinPath(rootUri, 'src'));
+			const fileNodeId = fileId(vscode.Uri.joinPath(rootUri, 'src', 'index.ts'));
+			const detachedRootId = createDetachedRootId(folderNodeId, 1);
+			const occurrenceId = createGraphLayoutNodeId(
+				detachedRootId,
+				fileNodeId,
+			);
+			const folderBacklinkId = createFolderBacklinkId(folderNodeId);
+			const fileBacklinkId = createFileBacklinkGroupId(fileNodeId);
+			const state: WorkspacePersistentState = {
+				...createDefaultWorkspacePersistentState(),
+				nodePositions: {
+					[occurrenceId]: { x: 10, y: 20 },
+					[folderBacklinkId]: { x: 30, y: 40 },
+					[fileBacklinkId]: { x: 50, y: 60 },
+				},
+				detachedRootNodeIds: { [detachedRootId]: true },
+			};
+
+			const [partitioned] = partitionWorkspacePersistentStateByRoot(
+				state,
+				[rootUri],
+			);
+
+			assert.ok(partitioned);
+			assert.deepStrictEqual(partitioned.state.nodePositions, state.nodePositions);
+			assert.deepStrictEqual(
+				partitioned.state.detachedRootNodeIds,
+				state.detachedRootNodeIds,
+			);
+		});
+
 		test('Root, Folder, File, File Group, Detached와 Filter ID를 URI 경계로 분배한다', () => {
 			const appUri = vscode.Uri.file('/workspace/app');
 			const appOldUri = vscode.Uri.file('/workspace/app-old');

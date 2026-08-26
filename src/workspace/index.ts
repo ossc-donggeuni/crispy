@@ -89,3 +89,26 @@ export {
 	type WorkspaceSnapshotDependencies,
 } from './workspaceRefresh';
 export { watchWorkspaceChanges } from './workspaceWatcher';
+export {
+	createWorkspaceNodeStateIdChanges,
+	createWorkspaceNodeIdRebaser,
+	rebaseWorkspaceNodeState,
+	removeWorkspaceNodeState,
+	type WorkspaceMutableNodeKind,
+	type WorkspaceNodeIdRebaser,
+} from './workspaceNodeStateMigration';
+export {
+	WORKSPACE_FILE_PREVIEW_MAX_BYTES,
+	WorkspaceNodeOperationError,
+	defaultWorkspaceNodeOperationHost,
+	deleteWorkspaceNode,
+	readWorkspaceNodeDetails,
+	renameWorkspaceNode,
+	type WorkspaceNodeMutation,
+	type WorkspaceNodeOperationHost,
+} from './workspaceNodeOperations';
+export {
+	createWorkspaceNodeRequestController,
+	type WorkspaceNodeRequestController,
+	type WorkspaceNodeRequestControllerDependencies,
+} from './workspaceNodeRequestController';

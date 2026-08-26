@@ -44,6 +44,8 @@ export interface WorkspaceRefreshDependencies
 	): Promise<WorkspacePersistentState | undefined>;
 	/** loadWorkspaceState가 확정한 Host Root context epoch를 반환한다. */
 	getWorkspaceContextGeneration?(): number;
+	/** 같은 Root context 안에서 완료된 Host 파일 mutation revision을 반환한다. */
+	getWorkspaceRevision?(): number;
 	postMessage(message: WorkspaceToWebviewMessage): PromiseLike<boolean>;
 }
 
@@ -147,6 +149,7 @@ export function createWorkspaceRefreshCoordinator(
 					}
 					const contextGeneration =
 						dependencies.getWorkspaceContextGeneration?.() ?? 0;
+					const workspaceRevision = dependencies.getWorkspaceRevision?.();
 
 					if (
 						!Number.isSafeInteger(contextGeneration)
@@ -154,12 +157,20 @@ export function createWorkspaceRefreshCoordinator(
 					) {
 						throw new Error('Invalid Workspace context generation.');
 					}
+					if (workspaceRevision !== undefined && (
+						!Number.isSafeInteger(workspaceRevision) || workspaceRevision < 0
+					)) {
+						throw new Error('Invalid Workspace revision.');
+					}
 
 					if (!disposed) {
 						await dependencies.postMessage({
 							type: 'workspace.snapshotUpdated',
 							presentation,
 							contextGeneration,
+							...(workspaceRevision !== undefined && workspaceRevision > 0
+								? { workspaceRevision }
+								: {}),
 							rootIds,
 							...(workspaceState ? { state: workspaceState } : {}),
 						} satisfies WorkspaceToWebviewMessage);
