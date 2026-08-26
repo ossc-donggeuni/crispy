@@ -70,6 +70,7 @@ import {
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
+import { resolveAgentSessionColor } from '../../agent/agentSessionColor';
 import { createAgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import { createAgentActivityEffectReconciler } from '../../webview/graph/agentActivityEffects';
 import {
@@ -9855,9 +9856,9 @@ suite('Graph View', () => {
 			getNodeEffect(
 				getEffectRegion(root, firstLayoutNodeId),
 				'outline',
-			).style.getPropertyValue('--graph-node-effect-color'),
-			'var(--vscode-errorForeground, #f14c4c)',
-		);
+				).style.getPropertyValue('--graph-node-effect-color'),
+				resolveAgentSessionColor('session-A'),
+			);
 		assert.strictEqual(
 			getDirectNodeEffect(firstCard, 'icon').getAttribute(
 				'data-graph-node-effect-icon',

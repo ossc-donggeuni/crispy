@@ -22,10 +22,8 @@ import type {
 
 const TARGET_X: GraphNodeEffectTarget = { nodeId: 'file:workspace/src/x.ts' };
 const TARGET_Y: GraphNodeEffectTarget = { nodeId: 'folder:workspace/src/y' };
-const ACTIVITY_COLOR = 'var(--graph-viewport-accent-color, #007acc)';
-const SUCCESS_COLOR =
-	'var(--vscode-testing-iconPassed, var(--vscode-charts-green, #73c991))';
-const ERROR_COLOR = 'var(--vscode-errorForeground, #f14c4c)';
+const SESSION_A_COLOR = resolveAgentActivityColor('session-A', 'active');
+const SESSION_B_COLOR = resolveAgentActivityColor('session-B', 'active');
 
 suite('Representative Agent Activity Effects', () => {
 	test('running presentation이 있는 Session만 대표 Effect 후보로 사용한다', () => {
@@ -45,7 +43,7 @@ suite('Representative Agent Activity Effects', () => {
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), []);
 		presentations.activateSession('tab-A', 'session-A', 'Agent A');
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_A_COLOR },
 		]);
 
 		presentations.updateCurrentMessage('tab-A', 'session-A', 'working');
@@ -61,19 +59,19 @@ suite('Representative Agent Activity Effects', () => {
 			readonly GraphNodeEffect[],
 		]> = [
 			['planned', [
-				{ kind: 'marching-dash', color: ACTIVITY_COLOR },
-				{ kind: 'icon', icon: 'alert', color: ACTIVITY_COLOR },
+				{ kind: 'marching-dash', color: SESSION_A_COLOR },
+				{ kind: 'icon', icon: 'alert', color: SESSION_A_COLOR },
 			]],
-			['active', [{ kind: 'shimmer', color: ACTIVITY_COLOR }]],
-			['editing', [{ kind: 'pulse', color: ACTIVITY_COLOR }]],
+			['active', [{ kind: 'shimmer', color: SESSION_A_COLOR }]],
+			['editing', [{ kind: 'pulse', color: SESSION_A_COLOR }]],
 			['completed', [
-				{ kind: 'outline', color: SUCCESS_COLOR },
-				{ kind: 'icon', icon: 'check', color: SUCCESS_COLOR },
+				{ kind: 'outline', color: SESSION_A_COLOR },
+				{ kind: 'icon', icon: 'check', color: SESSION_A_COLOR },
 			]],
-			['mentioned', [{ kind: 'outline-strong', color: ACTIVITY_COLOR }]],
+			['mentioned', [{ kind: 'outline-strong', color: SESSION_A_COLOR }]],
 			['rejected', [
-				{ kind: 'outline', color: ERROR_COLOR },
-				{ kind: 'icon', icon: 'cancel', color: ERROR_COLOR },
+				{ kind: 'outline', color: SESSION_A_COLOR },
+				{ kind: 'icon', icon: 'cancel', color: SESSION_A_COLOR },
 			]],
 		];
 		const store = createAgentActivityStore();
@@ -109,18 +107,19 @@ suite('Representative Agent Activity Effects', () => {
 		);
 	});
 
-	test('production Session은 기존 semantic color 정책을 유지한다', () => {
+	test('production Session의 6개 Activity는 형태만 달라지고 같은 Session 색을 쓴다', () => {
 		assert.deepStrictEqual(getAgentActivityEffects('session-A', 'active'), [
-			{ kind: 'shimmer', color: ACTIVITY_COLOR },
+			{ kind: 'shimmer', color: SESSION_A_COLOR },
 		]);
 		assert.deepStrictEqual(getAgentActivityEffects('session-A', 'completed'), [
-			{ kind: 'outline', color: SUCCESS_COLOR },
-			{ kind: 'icon', icon: 'check', color: SUCCESS_COLOR },
+			{ kind: 'outline', color: SESSION_A_COLOR },
+			{ kind: 'icon', icon: 'check', color: SESSION_A_COLOR },
 		]);
 		assert.deepStrictEqual(getAgentActivityEffects('session-A', 'rejected'), [
-			{ kind: 'outline', color: ERROR_COLOR },
-			{ kind: 'icon', icon: 'cancel', color: ERROR_COLOR },
+			{ kind: 'outline', color: SESSION_A_COLOR },
+			{ kind: 'icon', icon: 'cancel', color: SESSION_A_COLOR },
 		]);
+		assert.notStrictEqual(SESSION_A_COLOR, SESSION_B_COLOR);
 	});
 
 	test('G-12.3 ordered 조회의 첫 Activity만 대표 Effect로 사용한다', () => {
@@ -137,7 +136,7 @@ suite('Representative Agent Activity Effects', () => {
 			['editing', 'active', 'planned'],
 		);
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_B_COLOR },
 		]);
 		assert.strictEqual(effectOwner.setCalls.length, 3);
 
@@ -161,7 +160,7 @@ suite('Representative Agent Activity Effects', () => {
 
 		assert.strictEqual(getActivitiesCallCount, 0);
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_A_COLOR },
 		]);
 
 		reconciler.dispose();
@@ -177,8 +176,8 @@ suite('Representative Agent Activity Effects', () => {
 		store.clearAgentActivity('session-A', TARGET_X);
 
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
-			{ kind: 'marching-dash', color: ACTIVITY_COLOR },
-			{ kind: 'icon', icon: 'alert', color: ACTIVITY_COLOR },
+			{ kind: 'marching-dash', color: SESSION_B_COLOR },
+			{ kind: 'icon', icon: 'alert', color: SESSION_B_COLOR },
 		]);
 		assert.strictEqual(effectOwner.replaceCalls.length, 2);
 
@@ -202,7 +201,7 @@ suite('Representative Agent Activity Effects', () => {
 		assert.strictEqual(effectOwner.clearCalls.length, clearCount);
 		assert.strictEqual(effectOwner.replaceCalls.length, replaceCount);
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_A_COLOR },
 		]);
 
 		reconciler.dispose();
@@ -268,10 +267,10 @@ suite('Representative Agent Activity Effects', () => {
 		store.setAgentActivity('session-A', TARGET_Y, 'active');
 
 		assert.deepStrictEqual(agentEffectOwner.getEffects(TARGET_X), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_A_COLOR },
 		]);
 		assert.deepStrictEqual(agentEffectOwner.getEffects(TARGET_Y), [
-			{ kind: 'shimmer', color: ACTIVITY_COLOR },
+			{ kind: 'shimmer', color: SESSION_A_COLOR },
 		]);
 
 		store.clearAgentActivitiesBySession('session-A');
@@ -283,8 +282,8 @@ suite('Representative Agent Activity Effects', () => {
 		}]);
 		assert.deepStrictEqual(store.getActivities(TARGET_Y), []);
 		assert.deepStrictEqual(agentEffectOwner.getEffects(TARGET_X), [
-			{ kind: 'marching-dash', color: ACTIVITY_COLOR },
-			{ kind: 'icon', icon: 'alert', color: ACTIVITY_COLOR },
+			{ kind: 'marching-dash', color: SESSION_B_COLOR },
+			{ kind: 'icon', icon: 'alert', color: SESSION_B_COLOR },
 		]);
 		assert.deepStrictEqual(agentEffectOwner.getEffects(TARGET_Y), []);
 		assert.deepStrictEqual(agentEffectOwner.clearCalls, [
@@ -318,7 +317,7 @@ suite('Representative Agent Activity Effects', () => {
 		store.setAgentActivity('session-A', occurrenceTarget, 'editing');
 
 		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_A_COLOR },
 		]);
 		assert.deepStrictEqual(
 			effectOwner.replaceCalls.at(-1)?.options,
@@ -329,8 +328,8 @@ suite('Representative Agent Activity Effects', () => {
 
 		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), []);
 		assert.deepStrictEqual(effectOwner.getEffects(TARGET_X), [
-			{ kind: 'marching-dash', color: ACTIVITY_COLOR },
-			{ kind: 'icon', icon: 'alert', color: ACTIVITY_COLOR },
+			{ kind: 'marching-dash', color: SESSION_A_COLOR },
+			{ kind: 'icon', icon: 'alert', color: SESSION_A_COLOR },
 		]);
 
 		reconciler.dispose();
@@ -349,15 +348,15 @@ suite('Representative Agent Activity Effects', () => {
 		store.setAgentActivity('session-B', occurrenceTarget, 'planned');
 
 		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), [
-			{ kind: 'outline', color: ERROR_COLOR },
-			{ kind: 'icon', icon: 'cancel', color: ERROR_COLOR },
+			{ kind: 'outline', color: SESSION_A_COLOR },
+			{ kind: 'icon', icon: 'cancel', color: SESSION_A_COLOR },
 		]);
 
 		store.setAgentActivity('session-A', TARGET_X, 'planned');
 		store.setAgentActivity('session-B', occurrenceTarget, 'editing');
 
 		assert.deepStrictEqual(effectOwner.getEffects(occurrenceTarget), [
-			{ kind: 'pulse', color: ACTIVITY_COLOR },
+			{ kind: 'pulse', color: SESSION_B_COLOR },
 		]);
 
 		reconciler.dispose();

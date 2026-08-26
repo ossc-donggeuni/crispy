@@ -561,7 +561,7 @@
 }
 
 .agent-tab {
-	--agent-tab-provider-color: transparent;
+	--agent-tab-session-color: transparent;
 
 	position: relative;
 	display: flex;
@@ -574,14 +574,14 @@
 	background-color: var(--vscode-tab-inactiveBackground, transparent);
 }
 
-/* provider 색상은 내용과 MCP 점 opacity에 영향을 주지 않는 별도 pseudo bar다. */
+/* 세션 색상은 내용과 MCP 상태의 opacity에 영향을 주지 않는 별도 pseudo bar다. */
 .agent-tab::before {
 	position: absolute;
 	top: -1px;
 	right: -1px;
 	left: -1px;
 	height: 2px;
-	background-color: var(--agent-tab-provider-color);
+	background-color: var(--agent-tab-session-color);
 	border-radius: 2px 2px 0 0;
 	content: '';
 	opacity: 0.55;

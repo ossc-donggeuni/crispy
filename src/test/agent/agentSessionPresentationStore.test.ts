@@ -10,6 +10,7 @@ import {
 	AGENT_SESSION_CURRENT_MESSAGE_MAX_CODE_POINTS,
 	createAgentSessionPresentationStore,
 } from '../../agent/webview/agentSessionPresentationStore';
+import { resolveAgentSessionColor } from '../../agent/agentSessionColor';
 
 suite('Agent Session Presentation Store', () => {
 	test('수명주기와 고빈도 content 변경을 분리하고 exact session만 갱신한다', () => {
@@ -30,6 +31,7 @@ suite('Agent Session Presentation Store', () => {
 		assert.deepStrictEqual(store.getSession('session-A'), {
 			tabId: 'tab-A',
 			sessionId: 'session-A',
+			color: resolveAgentSessionColor('session-A'),
 			title: 'Implement bindings',
 			currentMessage: 'compiling project',
 			state: 'running',
@@ -102,6 +104,7 @@ suite('Agent Session Presentation Coordinator', () => {
 		assert.deepStrictEqual(presentations.getSession('session-A'), {
 			tabId: 'tab-A',
 			sessionId: 'session-A',
+			color: resolveAgentSessionColor('session-A'),
 			title: 'Session title',
 			currentMessage: '',
 			state: 'running',

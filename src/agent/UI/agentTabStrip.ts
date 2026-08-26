@@ -3,10 +3,7 @@ import type {
 	AgentTabModelSnapshot,
 	AgentTabSnapshot,
 } from './agentTabModel';
-import {
-	AGENT_PROVIDER_LABELS,
-	AGENT_PROVIDER_TAB_COLORS,
-} from './agentProviders';
+import { AGENT_PROVIDER_LABELS } from './agentProviders';
 import { createAgentTabContextMenu } from './agentTabContextMenu';
 import {
 	defaultAgentUiDependencies,
@@ -100,12 +97,8 @@ export function initializeAgentTabStrip(
 				const tabElement = dependencies.createElement('div');
 				tabElement.className = 'agent-tab';
 				tabElement.dataset.tabId = tab.id;
-				if (tab.providerId !== undefined) {
-					tabElement.dataset.provider = tab.providerId;
-					const providerColor = AGENT_PROVIDER_TAB_COLORS[tab.providerId];
-					if (providerColor !== undefined) {
-						tabElement.style.setProperty('--agent-tab-provider-color', providerColor);
-					}
+				if (tab.sessionColor !== undefined) {
+					tabElement.style.setProperty('--agent-tab-session-color', tab.sessionColor);
 				}
 				if (tab.isPinned) {
 					tabElement.dataset.pinned = 'true';

@@ -133,6 +133,10 @@ export function createAgentActivityBindings(
 			return {
 				tabId: entry.sessionId,
 				sessionId: entry.sessionId,
+				color: getAgentActivityEffects(
+					entry.sessionId,
+					entry.activity,
+				)[0]?.color ?? 'transparent',
 				title: entry.sessionId,
 				currentMessage: `[${entry.activity}]`,
 				state: 'running',
@@ -448,6 +452,7 @@ function updateBindingElement(
 		binding.effectHost.setEffects(getAgentActivityEffects(
 			entry.sessionId,
 			entry.activity,
+			presentation.color,
 		));
 	}
 	updateBindingPresentation(binding, presentation);

@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { createAgentTabModel } from '../agent/UI/agentTabModel';
+import { AGENT_SESSION_COLOR_PALETTE } from '../agent/agentSessionColor';
 import type { AgentPanelUiCallbacks } from '../agent/UI/agentPanelUi';
 import type {
 	AgentActivityKind,
@@ -1388,10 +1389,10 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(agentEffectSets, [{
 				target: activityTarget,
-				effect: {
-					kind: 'pulse',
-					color: 'var(--graph-viewport-accent-color, #007acc)',
-				},
+					effect: {
+						kind: 'pulse',
+						color: AGENT_SESSION_COLOR_PALETTE[0],
+					},
 			}]);
 			assert.deepStrictEqual(agentEffectClears, [{
 				target: activityTarget,
