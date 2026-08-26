@@ -11,7 +11,7 @@ export const AGENT_ACTIVITY_FLOATING_NOTIFICATION_SEQUENCE_ATTRIBUTE =
 	'data-agent-activity-floating-notification-sequence';
 export const AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_ANIMATION =
 	'graph-agent-activity-floating-notification-exit';
-export const AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS = 5_000;
+export const AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS = 10_000;
 export const AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_MS = 180;
 
 /** Floating 알림의 시간 경계를 테스트와 Webview runtime에서 공통으로 주입한다. */

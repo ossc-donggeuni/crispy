@@ -8702,7 +8702,7 @@ suite('Graph View', () => {
 
 		assert.ok(focusPoint);
 		assert.deepStrictEqual(fileOpenRequests, []);
-		assert.strictEqual(panel.hidden, true);
+		assert.strictEqual(panel.hidden, false);
 		assert.strictEqual(focusedState.openedFolders[GRAPH_MOCK_PROJECT.id], true);
 		assert.strictEqual(
 			focusedState.openedFolders['folder:pagination-samples'],
@@ -8763,12 +8763,12 @@ suite('Graph View', () => {
 			[],
 		);
 		focusPoint = undefined;
-		trigger.dispatch('click', createClickEvent(trigger));
 		getDescendantByClass(
 			olderItem,
 			'graph-agent-activity-notification-focus',
 		).dispatch('click', createClickEvent(olderItem));
 		assert.ok(focusPoint);
+		assert.strictEqual(panel.hidden, false);
 		assert.strictEqual(
 			graphView.state.getState().openedFolders[folderTarget.nodeId],
 			undefined,
@@ -8787,7 +8787,7 @@ suite('Graph View', () => {
 		presentations.dispose();
 	});
 
-	test('새 Activity만 Bell 왼쪽에 쌓고 5초 후 퇴장하며 남은 알림을 당긴다', () => {
+	test('새 Activity만 Bell 왼쪽에 쌓고 10초 후 퇴장하며 남은 알림을 당긴다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const scheduler = new FakeTimeoutScheduler();
@@ -8945,6 +8945,10 @@ suite('Graph View', () => {
 			__dirname,
 			'../../../src/webview/graph/graphView.css',
 		), 'utf8');
+		const webviewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/webview.css',
+		), 'utf8');
 		const floatingRule = graphViewCss.match(
 			/\.graph-agent-activity-floating-notification\s*\{[^}]*\}/s,
 		);
@@ -8967,6 +8971,22 @@ suite('Graph View', () => {
 		assert.match(
 			graphViewCss,
 			/@keyframes graph-agent-activity-floating-notification-exit/,
+		);
+		assert.match(
+			webviewCss,
+			/#graph-area\s*\{[^}]*z-index:\s*auto;/s,
+		);
+		assert.match(
+			webviewCss,
+			/#agent-chat-area\s*\{[^}]*z-index:\s*1;/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.graph-overlay-layer\s*\{[^}]*z-index:\s*2;/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.graph-agent-activity-notification-panel\s*\{[^}]*background:\s*color-mix\([^}]*transparent[^}]*backdrop-filter:\s*blur\(12px\);/s,
 		);
 
 		graphView.dispose();

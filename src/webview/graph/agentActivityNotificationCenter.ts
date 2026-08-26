@@ -218,7 +218,6 @@ export function initializeAgentActivityNotificationCenter(
 					entry,
 					createLocalEffectHost,
 					interactions,
-					() => setOpen(false),
 				);
 				registrations.set(entry.key, registration);
 			}
@@ -312,7 +311,6 @@ function createNotificationRegistration(
 	entry: AgentActivityNotificationEntry,
 	createLocalEffectHost: GraphNodeLocalEffectHostFactory,
 	interactions: AgentActivityNotificationCenterInteractions,
-	closePanel: () => void,
 ): NotificationRegistration {
 	const element = ownerDocument.createElement('li');
 	const focusButton = ownerDocument.createElement('button');
@@ -366,7 +364,6 @@ function createNotificationRegistration(
 	registration.handleFocus = (event: MouseEvent): void => {
 		event.preventDefault();
 		event.stopPropagation();
-		closePanel();
 		interactions.onFocus?.(registration.entry);
 	};
 	registration.handleDismiss = (event: MouseEvent): void => {

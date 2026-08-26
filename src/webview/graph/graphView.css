@@ -1860,11 +1860,17 @@ body.vscode-high-contrast-light .graph-viewport {
 	margin-top: 8px;
 	overflow: hidden;
 	color: var(--vscode-foreground);
-	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	background: color-mix(
+		in srgb,
+		var(--vscode-editorWidget-background, var(--vscode-editor-background)) 76%,
+		transparent
+	);
 	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
 	border-radius: 8px;
 	box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgb(0 0 0 / 36%));
+	backdrop-filter: blur(12px);
 	font-family: var(--vscode-font-family);
+	-webkit-backdrop-filter: blur(12px);
 }
 
 .graph-agent-activity-notification-header {

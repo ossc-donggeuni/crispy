@@ -69,9 +69,10 @@ src/webview/graph/
 
 - 현재 Activity 수 Badge, 빈 상태와 최신순 Scroll 목록 표시
 - 각 알림에 Graph의 동일한 Activity Effect recipe와 연속 Animation timeline 적용
-- 알림 본문 Click은 Focus callback, 별도 삭제 Button은 exact Target×Session dismiss callback으로 분리
+- 알림 본문 Click은 Panel을 유지한 채 Focus callback, 별도 삭제 Button은 exact Target×Session dismiss callback으로 분리
 - Escape, 외부 Pointer와 Focus 복원 및 Camera 입력 차단 attribute 처리
 - Agent Panel dock을 제외한 실제 Graph 가시 영역의 우측 상단에 위치
+- 반투명 blur 표면을 사용하고 Graph overlay stacking을 Chat Panel 위에 유지
 - Store/Session 구독, 행별 Effect host와 Listener를 `dispose()`에서 정리
 
 ### `agentActivityFloatingNotifications.ts`
@@ -81,7 +82,7 @@ src/webview/graph/
 - 초기 마운트의 기존 알림은 재생하지 않고 새 Store sequence만 수신순으로 쌓음
 - Bell과 같은 40px 높이에 Session 제목과 Activity 상태만 표시하고 현재 Session 메시지와 Target 경로는 숨김
 - Graph와 같은 Activity Effect recipe와 Animation timeline을 재사용
-- 새 박스는 기존 stack의 왼쪽으로 slide-in하고 5초 후 exit Animation 뒤 제거되며 남은 박스가 오른쪽으로 재배치
+- 새 박스는 기존 stack의 왼쪽으로 slide-in하고 10초 후 exit Animation 뒤 제거되며 남은 박스가 오른쪽으로 재배치
 - Click은 자신의 퇴장을 시작하고 기존 알림과 같은 Graph reveal/Focus callback만 호출
 - Scheduler, Listener와 local Effect host를 자신의 dispose 경계에서 정리
 
