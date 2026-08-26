@@ -448,6 +448,8 @@ export function sanitizeWorkspaceTaskRecords(
 export interface GraphViewInteractions {
 	/** 내부 Promotion 처리 뒤 Detach 완료 요청을 관찰하는 선택적 callback이다. */
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
+	/** Session별 Activity Animation Binding이 가리킨 정확한 Session을 Agent Panel에 표시한다. */
+	onAgentSessionOpenRequest?: (sessionId: string) => void;
 	/** 일반 File Row의 Editor 열기 요청을 안정적인 File ID로 전달한다. */
 	onFileOpenRequest?: (fileId: string) => void;
 	/** 생성한 Task 전송 JSON을 Host clipboard 경계로 전달한다. */
@@ -1395,6 +1397,11 @@ export function initializeGraphView(
 			runtimeOptions.agentActivityStore,
 			nodeEffects.createLocalEffectHost,
 			runtimeOptions.agentSessionPresentationStore,
+			{
+				onSessionOpenRequest: (sessionId) => {
+					interactions.onAgentSessionOpenRequest?.(sessionId);
+				},
+			},
 		)
 		: undefined;
 	const state = createGraphState(initialState);

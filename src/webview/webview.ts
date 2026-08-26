@@ -166,11 +166,15 @@ const agentSessionColors = createAgentSessionColorRegistry();
 const agentSessionPresentationStore = createAgentSessionPresentationStore(
 	agentSessionColors.resolve,
 );
+let openAgentSessionFromGraph = (_sessionId: string): void => undefined;
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
 	workspacePresentation.graph,
 	{
+		onAgentSessionOpenRequest: (sessionId) => {
+			openAgentSessionFromGraph(sessionId);
+		},
 		onFileOpenRequest: (fileId) => {
 			vscodeApi.postMessage({
 				type: 'workspace.openFile',
@@ -446,6 +450,34 @@ const refreshCollapse = initializePanelCollapse(
 		workspaceNodeInspector.refreshPosition();
 	},
 );
+
+/**
+ * Graph Activity Animation이 가리킨 Session의 소유 탭을 표시하고,
+ * Agent Panel이 접혀 있으면 같은 Dock/크기로 다시 펼친다.
+ */
+openAgentSessionFromGraph = (sessionId): void => {
+	const panelUi = agentPanelUi;
+	const presentation = agentSessionPresentationStore.getSession(sessionId);
+
+	if (!panelUi || presentation?.state !== 'running') {
+		return;
+	}
+
+	const snapshot = panelUi.getSnapshot();
+	const sessionTab = snapshot.tabs.find((tab) => (
+		tab.id === presentation.tabId && tab.sessionId === sessionId
+	));
+
+	if (!sessionTab) {
+		return;
+	}
+
+	if (snapshot.activeTabId !== sessionTab.id) {
+		panelUi.model.selectTab(sessionTab.id);
+		activateTab(sessionTab.id);
+	}
+	refreshCollapse.expand();
+};
 /** Dock 초기화 */
 const refreshDock = initializePanelDock(
 	layout,

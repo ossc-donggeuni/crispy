@@ -5,6 +5,7 @@ import {
 	initializePanelCollapse,
 	PANEL_COLLAPSE_TRACKING_MAX_MS,
 	type PanelCollapseAnimationFrameScheduler,
+	type PanelCollapseController,
 } from '../../webview/panel/panelCollapse';
 import {
 	INITIAL_SIDE_SIZE,
@@ -121,6 +122,23 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.getExpandCount(), 1);
 	});
 
+	test('외부 이벤트도 제어 경계를 통해 접힌 Panel을 같은 동작으로 펼친다', () => {
+		const fixture = createCollapseFixture(
+			'bottom',
+			INITIAL_SIDE_SIZE,
+			INITIAL_VERTICAL_SIZE,
+			true,
+		);
+
+		fixture.refreshCollapse.expand();
+
+		assert.strictEqual(fixture.state.collapsed, false);
+		assert.strictEqual(fixture.chatPanel.dataset.collapseMotion, 'slide');
+		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.getCollapsedChangeCount(), 1);
+		assert.strictEqual(fixture.getExpandCount(), 1);
+	});
+
 	test('Chat transform의 실제 frame마다 Overlay 갱신을 전달하고 종료 시 정리한다', () => {
 		const fixture = createCollapseFixture('right');
 
@@ -208,7 +226,7 @@ interface CollapseFixture {
 	collapseButton: FakeElement;
 	stickerOpener: FakeElement;
 	state: PanelLayoutState;
-	refreshCollapse(): void;
+	refreshCollapse: PanelCollapseController;
 	getCollapsedChangeCount(): number;
 	getExpandCount(): number;
 	getTransitionFrameCount(): number;

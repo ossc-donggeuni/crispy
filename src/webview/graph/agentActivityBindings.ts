@@ -32,6 +32,12 @@ export interface AgentActivityBindingRegistrationOptions {
 	readonly layoutNodeId?: string;
 }
 
+/** Session별 이벤트 Animation 표시에서 발생한 사용자 동작이다. */
+export interface AgentActivityBindingInteractions {
+	/** Binding을 Double Click한 정확한 Session을 Agent Panel에 표시한다. */
+	onSessionOpenRequest?: (sessionId: string) => void;
+}
+
 /** Graph Target DOM과 Agent Activity Binding Box의 독립적인 수명주기다. */
 export interface AgentActivityBindings {
 	/** 현재 마운트된 정확한 Target DOM에 Store snapshot을 연결한다. */
@@ -77,6 +83,7 @@ interface TargetRegistration {
 	readonly target: Readonly<GraphNodeEffectTarget>;
 	readonly bindingsBySession: Map<string, BindingRegistration>;
 	readonly createLocalEffectHost: GraphNodeLocalEffectHostFactory;
+	readonly interactions: AgentActivityBindingInteractions;
 	readonly layoutNodeId?: string;
 	container?: HTMLElement;
 	horizontalBounds?: Readonly<{ left: number; width: number }>;
@@ -88,6 +95,9 @@ interface BindingRegistration {
 	readonly titleElement: HTMLElement;
 	readonly messageElement: HTMLElement;
 	readonly effectHost: GraphNodeLocalEffectHost;
+	readonly handlePointerDown: (event: PointerEvent) => void;
+	readonly handleClick: (event: MouseEvent) => void;
+	readonly handleDoubleClick: (event: MouseEvent) => void;
 }
 
 type GraphNodeLocalEffectHostFactory = (
@@ -105,6 +115,7 @@ export function createAgentActivityBindings(
 		createGraphNodeLocalEffectHost
 	),
 	presentationStore?: AgentSessionPresentationStore,
+	interactions: AgentActivityBindingInteractions = {},
 ): AgentActivityBindings {
 	const registrationsByTarget = new Map<string, Set<TargetRegistration>>();
 	const bindingsBySession = new Map<string, Set<BindingRegistration>>();
@@ -226,6 +237,7 @@ export function createAgentActivityBindings(
 				target: createTargetSnapshot(target),
 				bindingsBySession: new Map(),
 				createLocalEffectHost,
+				interactions,
 				...(options.layoutNodeId
 					? { layoutNodeId: options.layoutNodeId }
 					: {}),
@@ -360,6 +372,7 @@ function reconcileTarget(
 				registration.element.ownerDocument,
 				entry.sessionId,
 				registration.createLocalEffectHost,
+				registration.interactions,
 			);
 			registration.bindingsBySession.set(entry.sessionId, binding);
 			const indexedBindings = bindingsBySession.get(entry.sessionId) ?? new Set();
@@ -422,6 +435,7 @@ function createBindingRegistration(
 	ownerDocument: Document,
 	sessionId: string,
 	createLocalEffectHost: GraphNodeLocalEffectHostFactory,
+	interactions: AgentActivityBindingInteractions,
 ): BindingRegistration {
 	const binding = ownerDocument.createElement('div');
 	const title = ownerDocument.createElement('span');
@@ -433,12 +447,34 @@ function createBindingRegistration(
 	title.className = 'graph-agent-activity-session-title';
 	message.className = 'graph-agent-activity-current-message';
 	binding.append(title, message);
+	const handlePointerDown = (event: PointerEvent): void => {
+		event.stopPropagation();
+	};
+	const handleClick = (event: MouseEvent): void => {
+		event.preventDefault();
+		event.stopPropagation();
+	};
+	const handleDoubleClick = (event: MouseEvent): void => {
+		handleClick(event);
+
+		try {
+			interactions.onSessionOpenRequest?.(sessionId);
+		} catch {
+			/** Session 표시 실패가 Activity DOM과 기존 File interaction으로 전파되지 않게 한다. */
+		}
+	};
+	binding.addEventListener('pointerdown', handlePointerDown);
+	binding.addEventListener('click', handleClick);
+	binding.addEventListener('dblclick', handleDoubleClick);
 	return {
 		sessionId,
 		element: binding,
 		titleElement: title,
 		messageElement: message,
 		effectHost: createLocalEffectHost(binding),
+		handlePointerDown,
+		handleClick,
+		handleDoubleClick,
 	};
 }
 
@@ -482,6 +518,9 @@ function disposeBinding(
 	binding: BindingRegistration,
 	bindingsBySession: Map<string, Set<BindingRegistration>>,
 ): void {
+	binding.element.removeEventListener('pointerdown', binding.handlePointerDown);
+	binding.element.removeEventListener('click', binding.handleClick);
+	binding.element.removeEventListener('dblclick', binding.handleDoubleClick);
 	binding.effectHost.dispose();
 	binding.element.remove();
 	const indexedBindings = bindingsBySession.get(binding.sessionId);

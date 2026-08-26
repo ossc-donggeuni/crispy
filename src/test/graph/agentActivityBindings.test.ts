@@ -88,6 +88,53 @@ suite('Agent Activity Bindings', () => {
 		bindings.dispose();
 	});
 
+	test('이벤트 Animation Binding을 Double Click하면 정확한 Session을 요청하고 상위 File을 건드리지 않는다', () => {
+		const store = createAgentActivityStore();
+		const sessionOpenRequests: string[] = [];
+		const bindings = createAgentActivityBindings(
+			store,
+			undefined,
+			undefined,
+			{
+				onSessionOpenRequest: (sessionId) => {
+					sessionOpenRequests.push(sessionId);
+				},
+			},
+		);
+		const element = createTargetElement();
+
+		bindings.registerTarget(TARGET_X, element.asHtmlElement());
+		store.setAgentActivity('session-A', TARGET_X, 'editing');
+		store.setAgentActivity('session-B', TARGET_X, 'planned');
+		const [sessionABinding, sessionBBinding] = getBindingElements(element);
+		let prevented = false;
+		let propagationStopped = false;
+		let pointerPropagationStopped = false;
+
+		sessionBBinding.dispatch('pointerdown', {
+			stopPropagation: () => pointerPropagationStopped = true,
+		});
+		sessionBBinding.dispatch('click', {
+			preventDefault: () => prevented = true,
+			stopPropagation: () => propagationStopped = true,
+		});
+		sessionBBinding.dispatch('dblclick', {
+			preventDefault: () => prevented = true,
+			stopPropagation: () => propagationStopped = true,
+		});
+
+		assert.deepStrictEqual(sessionOpenRequests, ['session-B']);
+		assert.strictEqual(prevented, true);
+		assert.strictEqual(propagationStopped, true);
+		assert.strictEqual(pointerPropagationStopped, true);
+		bindings.dispose();
+		sessionABinding.dispatch('dblclick', {
+			preventDefault: () => undefined,
+			stopPropagation: () => undefined,
+		});
+		assert.deepStrictEqual(sessionOpenRequests, ['session-B']);
+	});
+
 	test('Store snapshot의 정렬 순서를 재조회나 재정렬 없이 그대로 렌더링한다', () => {
 		const sourceStore = createAgentActivityStore();
 		let getActivitiesCallCount = 0;
@@ -563,6 +610,10 @@ class FakeElement {
 	textContent = '';
 	private readonly classNames = new Set<string>();
 	private readonly attributes = new Map<string, string>();
+	private readonly eventListeners = new Map<
+		string,
+		Set<EventListenerOrEventListenerObject>
+	>();
 	private readonly styleProperties = new Map<string, string>();
 	private parent: FakeElement | undefined;
 
@@ -612,6 +663,33 @@ class FakeElement {
 	hasClass(className: string): boolean {
 		return this.classNames.has(className)
 			|| this.className.split(/\s+/).includes(className);
+	}
+
+	addEventListener(
+		type: string,
+		listener: EventListenerOrEventListenerObject,
+	): void {
+		const listeners = this.eventListeners.get(type) ?? new Set();
+
+		listeners.add(listener);
+		this.eventListeners.set(type, listeners);
+	}
+
+	removeEventListener(
+		type: string,
+		listener: EventListenerOrEventListenerObject,
+	): void {
+		this.eventListeners.get(type)?.delete(listener);
+	}
+
+	dispatch(type: string, event: Partial<Event>): void {
+		for (const listener of this.eventListeners.get(type) ?? []) {
+			if (typeof listener === 'function') {
+				listener(event as Event);
+			} else {
+				listener.handleEvent(event as Event);
+			}
+		}
 	}
 }
 

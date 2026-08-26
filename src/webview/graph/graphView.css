@@ -396,6 +396,8 @@ body.vscode-high-contrast-light .graph-viewport {
 	font-size: 11px;
 	font-weight: 400;
 	line-height: 16px;
+	pointer-events: auto;
+	cursor: pointer;
 }
 
 /* 각 Session Binding은 Target registration과 분리된 G-11 local Effect host다. */

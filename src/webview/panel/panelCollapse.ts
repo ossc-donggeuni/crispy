@@ -21,6 +21,13 @@ export interface PanelCollapseAnimationFrameScheduler {
 	cancel(requestId: number): void;
 }
 
+/** Dock 변경 후 동기화와 외부 기능의 명시적 Panel 표시를 함께 제공한다. */
+export interface PanelCollapseController {
+	(): void;
+	expand(): void;
+	collapse(): void;
+}
+
 /** transitionend 누락이나 숨겨진 Webview에서도 추적을 끝내는 상한이다. */
 export const PANEL_COLLAPSE_TRACKING_MAX_MS = 320;
 
@@ -52,7 +59,7 @@ const OPENER_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
  * @param onExpand 다시 펼친 뒤 layout 의존 기능을 갱신하는 콜백
  * @param onTransitionFrame Chat slide의 각 frame에서 Graph overlay 위치를 갱신하는 콜백
  * @param animationFrameScheduler 테스트 또는 runtime requestAnimationFrame 경계
- * @returns Dock 위치가 바뀐 뒤 접힘 UI를 다시 반영하는 함수
+ * @returns Dock 동기화 함수이자 명시적 expand/collapse를 제공하는 제어 경계
  */
 export function initializePanelCollapse(
 	elements: PanelCollapseElements,
@@ -62,7 +69,7 @@ export function initializePanelCollapse(
 	onTransitionFrame: () => void = () => undefined,
 	animationFrameScheduler: PanelCollapseAnimationFrameScheduler | undefined =
 		resolveAnimationFrameScheduler(elements.chatPanel),
-): () => void {
+): PanelCollapseController {
 	let transitionFrameId: number | undefined;
 	let transitionStartedAt: number | undefined;
 
@@ -171,7 +178,10 @@ export function initializePanelCollapse(
 	elements.chatPanel.addEventListener('transitionend', handleTransitionSettled);
 	refreshCollapse();
 
-	return refreshCollapse;
+	return Object.assign(refreshCollapse, {
+		expand: handleExpand,
+		collapse: handleCollapse,
+	});
 }
 
 function resolveAnimationFrameScheduler(

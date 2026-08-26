@@ -643,6 +643,7 @@ suite('Webview State Wiring', () => {
 		let collapseFit: (() => void) | undefined;
 		let collapseTransitionFrame: (() => void) | undefined;
 		let collapseRefreshCount = 0;
+		let collapseExpandRequestCount = 0;
 		let persistResizeState: (() => void) | undefined;
 		let resizeRefresh: (() => void) | undefined;
 		let resizeFit: (() => void) | undefined;
@@ -676,6 +677,7 @@ suite('Webview State Wiring', () => {
 		let terminalOutputPreview: import(
 			'../agent/webview/agentTerminalPool'
 		).AgentTerminalOutputPreviewOptions | undefined;
+		let agentPanelModel: ReturnType<typeof createAgentTabModel> | undefined;
 
 		const graphViewModulePath = require.resolve('../webview/graph/graphView');
 		const panelDockModulePath = require.resolve('../webview/panel/panelDock');
@@ -888,7 +890,7 @@ suite('Webview State Wiring', () => {
 
 		panelCollapseModule.initializePanelCollapse = ((
 			_elements,
-			_state,
+			state,
 			onCollapsedChange,
 			onExpand,
 			onTransitionFrame,
@@ -897,9 +899,27 @@ suite('Webview State Wiring', () => {
 			collapseFit = onExpand;
 			collapseTransitionFrame = onTransitionFrame;
 
-			return () => {
+			const refresh = () => {
 				collapseRefreshCount += 1;
 			};
+			return Object.assign(refresh, {
+				expand(): void {
+					collapseExpandRequestCount += 1;
+					if (!state.collapsed) {
+						return;
+					}
+					state.collapsed = false;
+					onCollapsedChange();
+					onExpand?.();
+				},
+				collapse(): void {
+					if (state.collapsed) {
+						return;
+					}
+					state.collapsed = true;
+					onCollapsedChange();
+				},
+			});
 		}) as typeof panelCollapseModule.initializePanelCollapse;
 
 		/** 실제 xterm 없이 Webview entrypoint가 호출하는 Terminal Pool API만 관찰한다. */
@@ -973,7 +993,14 @@ suite('Webview State Wiring', () => {
 			agentProviderSelect = callbacks?.onProviderSelected;
 			initialAgentWorkspaceCatalog = options?.initialWorkspaceRootCatalog;
 
-			const model = createAgentTabModel(() => agentTabId);
+			let generatedTabCount = 0;
+			const model = createAgentTabModel(() => {
+				generatedTabCount += 1;
+				return generatedTabCount === 1
+					? agentTabId
+					: `${agentTabId}-${generatedTabCount}`;
+			});
+			agentPanelModel = model;
 			callbacks?.onTabCreated?.(model.createTab());
 
 			return {
@@ -1773,6 +1800,30 @@ suite('Webview State Wiring', () => {
 			collapseFit();
 
 			assert.strictEqual(terminalFitCount, fitCountBeforeExpand + 1);
+
+			/** Event Animation이 가리킨 Session 탭으로 이동하며 접힌 Panel도 펼친다. */
+			hostMessageHandler({
+				data: {
+					type: 'terminal.started',
+					tabId: agentTabId,
+					sessionId: 'session-navigation',
+				},
+			} as MessageEvent);
+			const otherTabId = agentPanelModel?.createTab();
+
+			assert.ok(otherTabId);
+			assert.strictEqual(agentPanelModel?.getSnapshot().activeTabId, otherTabId);
+			graphViewInteractions?.onAgentSessionOpenRequest?.('session-navigation');
+			assert.strictEqual(agentPanelModel?.getSnapshot().activeTabId, agentTabId);
+			assert.strictEqual(activeTabs.at(-1), agentTabId);
+			assert.strictEqual(panelState.collapsed, false);
+			assert.strictEqual(collapseExpandRequestCount, 1);
+			assert.strictEqual(savedStates.length, 5);
+			assert.strictEqual(savedStates[4]?.panel.collapsed, false);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'tab.switch').at(-1),
+				{ type: 'tab.switch', tabId: agentTabId },
+			);
 
 			const graphRefreshBeforeVisibility = graphVisibleRefreshCount;
 			const collapseRefreshBeforeVisibility = collapseRefreshCount;
