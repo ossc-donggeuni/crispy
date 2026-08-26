@@ -1,7 +1,11 @@
 import * as assert from 'assert';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { initializePanelCollapse } from '../../webview/panel/panelCollapse';
+import {
+	initializePanelCollapse,
+	PANEL_COLLAPSE_TRACKING_MAX_MS,
+	type PanelCollapseAnimationFrameScheduler,
+} from '../../webview/panel/panelCollapse';
 import {
 	INITIAL_SIDE_SIZE,
 	INITIAL_VERTICAL_SIZE,
@@ -117,6 +121,37 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.getExpandCount(), 1);
 	});
 
+	test('Chat transform의 실제 frame마다 Overlay 갱신을 전달하고 종료 시 정리한다', () => {
+		const fixture = createCollapseFixture('right');
+
+		fixture.collapseButton.click();
+		assert.strictEqual(fixture.getTransitionFrameCount(), 1);
+		assert.strictEqual(fixture.scheduler.pendingCount, 1);
+
+		fixture.scheduler.runNext(0);
+		fixture.scheduler.runNext(120);
+		assert.strictEqual(fixture.getTransitionFrameCount(), 3);
+
+		fixture.chatPanel.dispatchTransitionEnd('visibility');
+		assert.strictEqual(fixture.getTransitionFrameCount(), 3);
+		assert.strictEqual(fixture.scheduler.pendingCount, 1);
+
+		fixture.chatPanel.dispatchTransitionEnd('transform');
+		assert.strictEqual(fixture.getTransitionFrameCount(), 4);
+		assert.strictEqual(fixture.scheduler.pendingCount, 0);
+	});
+
+	test('transitionend가 없어도 추적 상한 뒤 frame 예약을 종료한다', () => {
+		const fixture = createCollapseFixture('bottom');
+
+		fixture.collapseButton.click();
+		fixture.scheduler.runNext(10);
+		fixture.scheduler.runNext(10 + PANEL_COLLAPSE_TRACKING_MAX_MS);
+
+		assert.strictEqual(fixture.getTransitionFrameCount(), 3);
+		assert.strictEqual(fixture.scheduler.pendingCount, 0);
+	});
+
 	test('접힌 상태로 복원하면 처음부터 Sticker만 표시한다', () => {
 		const fixture = createCollapseFixture('top', INITIAL_SIDE_SIZE, 340, true);
 
@@ -176,6 +211,8 @@ interface CollapseFixture {
 	refreshCollapse(): void;
 	getCollapsedChangeCount(): number;
 	getExpandCount(): number;
+	getTransitionFrameCount(): number;
+	readonly scheduler: FakeAnimationFrameScheduler;
 }
 
 function createCollapseFixture(
@@ -188,6 +225,7 @@ function createCollapseFixture(
 	const resizeHandle = new FakeElement();
 	const collapseButton = new FakeElement();
 	const stickerOpener = new FakeElement();
+	const scheduler = new FakeAnimationFrameScheduler();
 	const state: PanelLayoutState = {
 		preferredDock,
 		sideSize,
@@ -196,6 +234,7 @@ function createCollapseFixture(
 	};
 	let collapsedChangeCount = 0;
 	let expandCount = 0;
+	let transitionFrameCount = 0;
 
 	const refreshCollapse = initializePanelCollapse(
 		{
@@ -207,6 +246,8 @@ function createCollapseFixture(
 		state,
 		() => collapsedChangeCount++,
 		() => expandCount++,
+		() => transitionFrameCount++,
+		scheduler,
 	);
 
 	return {
@@ -218,24 +259,65 @@ function createCollapseFixture(
 		refreshCollapse,
 		getCollapsedChangeCount: () => collapsedChangeCount,
 		getExpandCount: () => expandCount,
+		getTransitionFrameCount: () => transitionFrameCount,
+		scheduler,
 	};
+}
+
+class FakeAnimationFrameScheduler
+	implements PanelCollapseAnimationFrameScheduler {
+	private nextRequestId = 1;
+	private readonly callbacks = new Map<number, FrameRequestCallback>();
+
+	get pendingCount(): number {
+		return this.callbacks.size;
+	}
+
+	request(callback: FrameRequestCallback): number {
+		const requestId = this.nextRequestId;
+
+		this.nextRequestId += 1;
+		this.callbacks.set(requestId, callback);
+		return requestId;
+	}
+
+	cancel(requestId: number): void {
+		this.callbacks.delete(requestId);
+	}
+
+	runNext(timestamp: number): void {
+		const next = this.callbacks.entries().next().value as
+			| [number, FrameRequestCallback]
+			| undefined;
+
+		assert.ok(next);
+		this.callbacks.delete(next[0]);
+		next[1](timestamp);
+	}
 }
 
 class FakeElement {
 	readonly dataset = {} as DOMStringMap;
 	hidden = false;
 	inert = false;
-	private readonly listeners = new Map<string, () => void>();
+	private readonly listeners = new Map<string, (event?: Event) => void>();
 
 	asHtmlElement(): HTMLElement {
 		return this as unknown as HTMLElement;
 	}
 
-	addEventListener(type: string, listener: () => void): void {
+	addEventListener(type: string, listener: (event?: Event) => void): void {
 		this.listeners.set(type, listener);
 	}
 
 	click(): void {
 		this.listeners.get('click')?.();
+	}
+
+	dispatchTransitionEnd(propertyName: string): void {
+		this.listeners.get('transitionend')?.({
+			target: this,
+			propertyName,
+		} as unknown as TransitionEvent);
 	}
 }

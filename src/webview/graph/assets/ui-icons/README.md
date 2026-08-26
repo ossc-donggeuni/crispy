@@ -92,6 +92,7 @@ Attribution required: No
 - toolbar-add.svg
 - toolbar-switch.svg
 - toolbar-restart.svg
+- notification-bell.svg
 Source: Authored for Crispy
 License: MIT (same as this project)
 Author: Crispy contributors

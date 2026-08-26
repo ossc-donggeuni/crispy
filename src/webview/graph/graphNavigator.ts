@@ -767,13 +767,27 @@ export function initializeGraphNavigator(
 		if (disposed) {
 			return;
 		}
+		if (viewport.clientWidth <= 0 || viewport.clientHeight <= 0) {
+			renderMinimapViewportIndicator();
+			return;
+		}
 
 		const visibleArea = getVisibleGraphArea();
 		const rightInset = Math.max(0, viewport.clientWidth - visibleArea.right);
 		const bottomInset = Math.max(0, viewport.clientHeight - visibleArea.bottom);
+		const navigatorWidth = navigator.offsetWidth || navigator.clientWidth;
+		const navigatorHeight = navigator.offsetHeight || navigator.clientHeight;
+		const maximumRight = Math.max(0, viewport.clientWidth - navigatorWidth);
+		const maximumBottom = Math.max(0, viewport.clientHeight - navigatorHeight);
 
-		navigator.style.right = `${rightInset + NAVIGATOR_VIEWPORT_MARGIN}px`;
-		navigator.style.bottom = `${bottomInset + NAVIGATOR_VIEWPORT_MARGIN}px`;
+		navigator.style.right = `${Math.min(
+			rightInset + NAVIGATOR_VIEWPORT_MARGIN,
+			maximumRight,
+		)}px`;
+		navigator.style.bottom = `${Math.min(
+			bottomInset + NAVIGATOR_VIEWPORT_MARGIN,
+			maximumBottom,
+		)}px`;
 		renderMinimapViewportIndicator();
 	};
 

@@ -76,6 +76,18 @@ import {
 	getAgentActivityBindingBlockHeight,
 } from './agentActivityBindings';
 import {
+	createAgentActivityTargetRevealState,
+	resolveAgentActivityTargetFocusPoint,
+} from './agentActivityFocus';
+import {
+	initializeAgentActivityNotificationCenter,
+	type AgentActivityNotificationCenter,
+} from './agentActivityNotificationCenter';
+import type {
+	AgentActivityNotificationScheduler,
+} from './agentActivityFloatingNotifications';
+import type { AgentActivityNotificationEntry } from './agentActivityNotifications';
+import {
 	TASK_DEFAULT_END_POSITION,
 	type TaskBlueprint,
 	type TaskNodePosition,
@@ -167,6 +179,7 @@ export interface GraphViewWorkspaceSnapshot {
 export interface GraphViewRuntimeOptions {
 	readonly agentActivityStore?: AgentActivityStore;
 	readonly agentSessionPresentationStore?: AgentSessionPresentationStore;
+	readonly agentActivityNotificationScheduler?: AgentActivityNotificationScheduler;
 }
 
 /** Task Scope bounds에서 Card와 Agent Binding의 전체 표시 높이를 반환한다. */
@@ -1530,6 +1543,10 @@ export function initializeGraphView(
 		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
+	let agentActivityNotificationCenter: AgentActivityNotificationCenter | undefined;
+	let pendingAgentActivityNotificationFocus:
+		| AgentActivityNotificationEntry
+		| undefined;
 	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
 	const taskScopeOccurrencesByBinding = new Map<string, Set<string>>();
 	let applyingTaskState = false;
@@ -1851,6 +1868,66 @@ export function initializeGraphView(
 			camera,
 			rootId,
 		);
+	};
+	const attemptAgentActivityNotificationFocus = (
+		entry: AgentActivityNotificationEntry,
+	): boolean => {
+		if (disposed) {
+			return false;
+		}
+		const snapshot = state.getState();
+		const reveal = createAgentActivityTargetRevealState(
+			currentGraph,
+			taskGraphTargetIndex,
+			entry.target,
+			snapshot,
+		);
+
+		if (!reveal) {
+			return false;
+		}
+		state.setState(reveal.state);
+		const currentSnapshot = state.getState();
+		const focusPoint = resolveAgentActivityTargetFocusPoint(
+			currentLayout,
+			currentSnapshot.nodePositions,
+			entry.target,
+			reveal?.preferredRootId,
+		);
+
+		if (!focusPoint) {
+			return false;
+		}
+
+		pendingAgentActivityNotificationFocus = undefined;
+		camera.focusOn(focusPoint);
+		return true;
+	};
+	const handleAgentActivityNotificationFocus = (
+		entry: AgentActivityNotificationEntry,
+	): void => {
+		if (entry.availability === 'outside') {
+			pendingAgentActivityNotificationFocus = undefined;
+			return;
+		}
+		pendingAgentActivityNotificationFocus = entry;
+		attemptAgentActivityNotificationFocus(entry);
+	};
+	const retryPendingAgentActivityNotificationFocus = (): void => {
+		const pending = pendingAgentActivityNotificationFocus;
+
+		if (!pending) {
+			return;
+		}
+		const stillCurrent = runtimeOptions.agentActivityStore
+			?.getActivities(pending.target)
+			.some(({ sessionId }) => sessionId === pending.sessionId) === true;
+
+		if (!stillCurrent) {
+			pendingAgentActivityNotificationFocus = undefined;
+			return;
+		}
+		attemptAgentActivityNotificationFocus(pending);
 	};
 	const performArrangeAll = (): void => {
 		const snapshot = state.getState();
@@ -3496,6 +3573,35 @@ export function initializeGraphView(
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
+	if (
+		runtimeOptions.agentActivityStore
+		&& runtimeOptions.agentSessionPresentationStore
+	) {
+		agentActivityNotificationCenter = initializeAgentActivityNotificationCenter(
+			overlayLayer,
+			viewport,
+			runtimeOptions.agentActivityStore,
+			runtimeOptions.agentSessionPresentationStore,
+			workspaceGraph,
+			nodeEffects.createLocalEffectHost,
+			{
+				onFocus: handleAgentActivityNotificationFocus,
+				onDismiss: (entry) => {
+					if (
+						pendingAgentActivityNotificationFocus?.key === entry.key
+					) {
+						pendingAgentActivityNotificationFocus = undefined;
+					}
+					runtimeOptions.agentActivityStore?.clearAgentActivity(
+						entry.sessionId,
+						entry.target,
+					);
+				},
+			},
+			getVisibleGraphArea,
+			runtimeOptions.agentActivityNotificationScheduler,
+		);
+	}
 	let renderedTaskScopeFileGroupPages = state.getState().fileGroupPages;
 	let renderedTaskScopeOpenedFolders = state.getState().openedFolders;
 	let renderedTaskScopeHiddenNodeIds = state.getState().hiddenNodeIds;
@@ -3628,8 +3734,13 @@ export function initializeGraphView(
 			};
 		},
 		refreshVisibleGraphArea(): void {
-			if (!disposed) {
+			if (
+				!disposed
+				&& viewport.clientWidth > 0
+				&& viewport.clientHeight > 0
+			) {
 				navigator.refreshVisibleGraphArea();
+				agentActivityNotificationCenter?.refreshVisibleGraphArea();
 				taskInspector?.refreshPosition();
 			}
 		},
@@ -3778,7 +3889,9 @@ export function initializeGraphView(
 			}, { baseNodePositions: nodePositions });
 			syncNavigatorRoots();
 			navigator.setWorkspaceGraph(workspaceGraph);
+			agentActivityNotificationCenter?.setGraph(workspaceGraph);
 			applyTaskState();
+			retryPendingAgentActivityNotificationFocus();
 		},
 		updateTasks(tasks): void {
 			if (!disposed) {
@@ -3870,6 +3983,7 @@ export function initializeGraphView(
 			}
 
 			disposed = true;
+			pendingAgentActivityNotificationFocus = undefined;
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
 			taskImportDialog.dispose();
@@ -3881,6 +3995,8 @@ export function initializeGraphView(
 			unsubscribeWorkspaceTasks();
 			workspaceSubscribers.clear();
 			navigator.dispose();
+			agentActivityNotificationCenter?.dispose();
+			agentActivityNotificationCenter = undefined;
 			taskInspector?.dispose();
 			taskInspector = undefined;
 			focusedTaskNode = undefined;

@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
+	resolveGraphVisibleArea,
 } from '../../webview/graph/graphVisibleArea';
 
 suite('Graph Visible Area', () => {
@@ -82,7 +83,88 @@ suite('Graph Visible Area', () => {
 			false,
 		), fullArea);
 	});
+
+	test('Runtime resolver는 Chat transform의 실제 bounds를 따라 연속 이동한다', () => {
+		const viewport = createMeasuredElement(
+			1000,
+			800,
+			createBounds(100, 50, 1000, 800),
+		);
+		const panel = createMeasuredElement(
+			460,
+			776,
+			createBounds(728, 62, 460, 776),
+		);
+
+		assert.deepStrictEqual(
+			resolveGraphVisibleArea(viewport, panel, 'right'),
+			createExpectedArea(0, 0, 628, 800),
+		);
+
+		panel.setBounds(createBounds(900, 62, 460, 776));
+		assert.deepStrictEqual(
+			resolveGraphVisibleArea(viewport, panel, 'right'),
+			createExpectedArea(0, 0, 800, 800),
+		);
+	});
+
+	test('Runtime resolver는 창 전환 중 0 또는 역전 bounds를 전체 Viewport로 복구한다', () => {
+		const viewport = createMeasuredElement(
+			1000,
+			800,
+			createBounds(100, 50, 1000, 800),
+		);
+		const panel = createMeasuredElement(
+			460,
+			776,
+			createBounds(0, 62, 460, 776),
+		);
+		const fullArea = createFullGraphVisibleArea(viewportSize);
+
+		assert.deepStrictEqual(
+			resolveGraphVisibleArea(viewport, panel, 'right'),
+			fullArea,
+		);
+
+		viewport.clientWidth = 0;
+		viewport.clientHeight = 0;
+		assert.deepStrictEqual(
+			resolveGraphVisibleArea(viewport, panel, 'right'),
+			createFullGraphVisibleArea({ width: 0, height: 0 }),
+		);
+	});
 });
+
+function createMeasuredElement(
+	clientWidth: number,
+	clientHeight: number,
+	initialBounds: ReturnType<typeof createBounds>,
+): HTMLElement & {
+	clientWidth: number;
+	clientHeight: number;
+	setBounds(bounds: ReturnType<typeof createBounds>): void;
+} {
+	let bounds = initialBounds;
+
+	return {
+		clientWidth,
+		clientHeight,
+		hidden: false,
+		getBoundingClientRect: () => ({
+			...bounds,
+			x: bounds.left,
+			y: bounds.top,
+			toJSON: () => ({}),
+		}),
+		setBounds: (nextBounds: ReturnType<typeof createBounds>) => {
+			bounds = nextBounds;
+		},
+	} as unknown as HTMLElement & {
+		clientWidth: number;
+		clientHeight: number;
+		setBounds(bounds: ReturnType<typeof createBounds>): void;
+	};
+}
 
 function createBounds(
 	left: number,
