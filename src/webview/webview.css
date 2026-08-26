@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import './graph/graphView.css';
+@import './task/taskView.css';
 @import '../agent/UI/agentPanelUi.css';
 
 *,

@@ -743,11 +743,11 @@ suite('Graph Navigator', () => {
 		);
 	});
 
-	test('Action Rail에 Panel Toggle과 전체 정렬 Command를 접근 가능한 버튼으로 생성한다', () => {
+	test('Action Rail에 Panel Toggle, 전체 정렬과 Task 추가 Command를 생성한다', () => {
 		const fixture = createNavigatorFixture();
 
 		assert.strictEqual(fixture.actionRail.hasClass('graph-navigator-action-rail'), true);
-		assert.strictEqual(fixture.actionRail.children.length, 3);
+		assert.strictEqual(fixture.actionRail.children.length, 4);
 		assert.strictEqual(fixture.actionRail.getAttribute('role'), 'toolbar');
 		assert.strictEqual(
 			fixture.actionRail.hasAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE),
@@ -806,6 +806,18 @@ suite('Graph Navigator', () => {
 			fixture.arrangeAllIcon.getAttribute('data-navigator-icon'),
 			'clean.svg',
 		);
+		assert.strictEqual(fixture.addTaskButton.type, 'button');
+		assert.strictEqual(
+			fixture.addTaskButton.getAttribute('aria-label'),
+			'Task 추가',
+		);
+		assert.strictEqual(fixture.addTaskButton.title, 'Task 추가');
+		assert.strictEqual(fixture.addTaskButton.hasAttribute('aria-controls'), false);
+		assert.strictEqual(fixture.addTaskButton.hasAttribute('aria-expanded'), false);
+		assert.strictEqual(
+			fixture.addTaskIcon.getAttribute('data-navigator-icon'),
+			'task-add.svg',
+		);
 	});
 
 	test('전체 정렬 Command는 Panel 상태를 만들지 않고 interaction callback을 즉시 호출한다', () => {
@@ -821,6 +833,21 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.rootListPanel.hidden, true);
 		assert.strictEqual(fixture.filterPanel.hidden, true);
 		assert.strictEqual(fixture.arrangeAllButton.hasClass('is-active'), false);
+	});
+
+	test('Task 추가 Command는 Panel 상태 없이 생성 callback을 정확히 한 번 호출한다', () => {
+		let taskCreateCalls = 0;
+		const fixture = createNavigatorFixture(
+			undefined,
+			{ onTaskCreate: () => taskCreateCalls += 1 },
+		);
+
+		fixture.addTaskButton.dispatch('click', {} as Event);
+
+		assert.strictEqual(taskCreateCalls, 1);
+		assert.strictEqual(fixture.rootListPanel.hidden, true);
+		assert.strictEqual(fixture.filterPanel.hidden, true);
+		assert.strictEqual(fixture.addTaskButton.hasClass('is-active'), false);
 	});
 
 	test('Project, Folder와 File Root를 전달 순서와 기존 Icon 규약으로 렌더링한다', () => {
@@ -1843,9 +1870,10 @@ suite('Graph Navigator', () => {
 	});
 
 	test('dispose 이후 State 구독과 Action/Zoom 버튼 Listener를 정리한다', () => {
+		let taskCreateCalls = 0;
 		const fixture = createNavigatorFixture(
 			undefined,
-			{},
+			{ onTaskCreate: () => taskCreateCalls += 1 },
 			createLargeMinimapLayout(),
 		);
 		const displayedCoordinate = fixture.coordinate.textContent;
@@ -1878,7 +1906,9 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(fixture.camera.getState(), { x: 50, y: 60, scale: 2 });
 
 		fixture.rootListButton.dispatch('click', {} as Event);
+		fixture.addTaskButton.dispatch('click', {} as Event);
 		assert.strictEqual(fixture.rootListPanel.hidden, false);
+		assert.strictEqual(taskCreateCalls, 0);
 		assert.strictEqual(
 			fixture.rootListButton.getAttribute('aria-expanded'),
 			'true',
@@ -1939,6 +1969,8 @@ function createNavigatorFixture(
 	const filterIcon = getChild(filterButton, 0);
 	const arrangeAllButton = getChild(actionRail, 2);
 	const arrangeAllIcon = getChild(arrangeAllButton, 0);
+	const addTaskButton = getChild(actionRail, 3);
+	const addTaskIcon = getChild(addTaskButton, 0);
 	const filterPanel = getChild(featureRow, 2);
 	const filterTitle = getChild(filterPanel, 0);
 	const filterTree = getChild(filterPanel, 1);
@@ -1973,6 +2005,8 @@ function createNavigatorFixture(
 		filterIcon,
 		arrangeAllButton,
 		arrangeAllIcon,
+		addTaskButton,
+		addTaskIcon,
 		filterPanel,
 		filterTitle,
 		filterTree,

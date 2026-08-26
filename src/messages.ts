@@ -5,11 +5,20 @@ import type {
 } from './agent/protocol';
 import { ID_MAX_LENGTH, ID_PATTERN } from './agent/protocol/limits';
 import type { WebviewSessionState } from './webview/webviewState';
-import type { WorkspacePersistentState } from './workspace/workspaceMetadata';
+import type { TaskTransferSerializeFailureReason } from './task/taskTransfer';
+import type { Graph } from './webview/graph/graphModel';
+import {
+	parseWorkspacePersistentState,
+	type WorkspacePersistentState,
+} from './workspace/workspaceMetadata';
 import {
 	parseWorkspacePresentation,
 	type WorkspacePresentation,
 } from './workspace/workspacePresentation';
+import {
+	validateWorkspaceRootId,
+	type WorkspaceRootId,
+} from './workspace/workspaceRootId';
 
 /** Webview Session snapshot 변경을 Extension Host에 전달하는 상태 경계 메시지다. */
 export interface WebviewStateChangedMessage {
@@ -20,6 +29,10 @@ export interface WebviewStateChangedMessage {
 /** Workspace Persistent State 전체 snapshot 변경을 Extension Host에 전달한다. */
 export interface WorkspaceStateChangedMessage {
 	type: 'workspace.stateChanged';
+	/** Host가 발급하고 Webview가 그대로 반사하는 Root context epoch다. */
+	contextGeneration: number;
+	/** 이 snapshot을 만든 Webview Graph의 Project Root node IDs다. */
+	rootIds: readonly WorkspaceRootId[];
 	state: WorkspacePersistentState;
 }
 
@@ -34,6 +47,18 @@ export interface AgentActivityClearAppliedReceipt {
 	readonly type: 'agent.activity.clearApplied';
 	readonly receiptId: number;
 }
+  
+/** 생성한 Task 전송 JSON을 Extension Host clipboard에 기록하도록 요청한다. */
+export interface TaskJsonCopyMessage {
+	type: 'task.copyJson';
+	json: string;
+}
+
+/** Webview에서 Task 전송 JSON 생성 실패를 안전한 reason으로 알린다. */
+export interface TaskJsonCopyFailedMessage {
+	type: 'task.copyJsonFailed';
+	reason: TaskTransferSerializeFailureReason;
+}
 
 /** Webview에서 Extension Host로 전송하는 Agent wire 및 상태 경계 메시지다. */
 export type WebviewToExtensionMessage =
@@ -41,12 +66,20 @@ export type WebviewToExtensionMessage =
 	| WebviewStateChangedMessage
 	| WorkspaceStateChangedMessage
 	| WorkspaceOpenFileMessage
-	| AgentActivityClearAppliedReceipt;
+	| AgentActivityClearAppliedReceipt
+	| TaskJsonCopyMessage
+	| TaskJsonCopyFailedMessage;
 
 /** Extension Host에서 Webview로 전송하는 Workspace 도메인 메시지다. */
 export type WorkspaceToWebviewMessage = {
 	type: 'workspace.snapshotUpdated';
 	presentation: WorkspacePresentation;
+	/** 같은 Root 집합의 ABA 전환까지 구분하는 Host 발급 epoch다. */
+	contextGeneration: number;
+	/** Graph와 state가 함께 채취된 Project Root context다. */
+	rootIds: readonly WorkspaceRootId[];
+	/** Root 구성이 바뀔 때 Graph와 원자적으로 교체할 Workspace 상태다. */
+	state?: WorkspacePersistentState;
 };
 
 /** Host가 지정할 수 있는 Graph Node 시각 효과 종류다. */
@@ -464,6 +497,35 @@ function hasExactTrackedPublicClearKeys(value: unknown): boolean {
 		&& hasExactOwnKeys(value, ['type', 'sessionId']);
 }
 
+/** Graph의 실제 Project Root node IDs를 표시 순서대로 반환한다. */
+export function getWorkspaceGraphRootIds(graph: Graph): string[] {
+	return graph.roots.flatMap((root) => (
+		graph.rootNodes[root.nodeId]?.kind === 'project' ? [root.nodeId] : []
+	));
+}
+
+/** Workspace context Root ID 배열의 문법·중복 불변 조건을 검증한다. */
+export function parseWorkspaceRootIds(
+	value: unknown,
+): WorkspaceRootId[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	const rootIds: WorkspaceRootId[] = [];
+	const seen = new Set<string>();
+
+	for (const entry of value) {
+		const validation = validateWorkspaceRootId(entry);
+
+		if (!validation.ok || seen.has(validation.value)) {
+			return undefined;
+		}
+		seen.add(validation.value);
+		rootIds.push(validation.value);
+	}
+	return rootIds;
+}
+
 /**
  * unknown Host 메시지에서 현재 Workspace 도메인 계약만 구조적으로 검증한다.
  * 다른 도메인 메시지와 잘못된 Graph는 기존 수신 정책과 같이 조용히 무시한다.
@@ -479,16 +541,51 @@ export function parseWorkspaceToWebviewMessage(
 
 	if (
 		candidate.type !== 'workspace.snapshotUpdated'
-		|| Object.keys(candidate).length !== 2
+		|| !hasOnlyKeys(candidate, [
+			'type',
+			'presentation',
+			'contextGeneration',
+			'rootIds',
+			'state',
+		])
 		|| !Object.hasOwn(candidate, 'presentation')
+		|| !Object.hasOwn(candidate, 'contextGeneration')
+		|| !Object.hasOwn(candidate, 'rootIds')
+		|| !Number.isSafeInteger(candidate.contextGeneration)
+		|| (candidate.contextGeneration as number) < 0
 	) {
 		return undefined;
 	}
 
 	const presentation = parseWorkspacePresentation(candidate.presentation);
+	const rootIds = parseWorkspaceRootIds(candidate.rootIds);
+	const state = candidate.state === undefined
+		? undefined
+		: parseWorkspacePersistentState(candidate.state);
+	const graphRootIds = presentation
+		? getWorkspaceGraphRootIds(presentation.graph)
+		: undefined;
+	const catalogRootIds = presentation
+		? presentation.rootCatalog.map(({ id }) => id)
+		: undefined;
+	const hasMatchingRootContext = rootIds && graphRootIds && catalogRootIds
+		&& rootIds.length === graphRootIds.length
+		&& rootIds.length === catalogRootIds.length
+		&& rootIds.every((rootId, index) => (
+			rootId === graphRootIds[index]
+			&& rootId === catalogRootIds[index]
+		));
 
 	return presentation
-		? { type: 'workspace.snapshotUpdated', presentation }
+		&& hasMatchingRootContext
+		&& (candidate.state === undefined || state)
+		? {
+			type: 'workspace.snapshotUpdated',
+			presentation,
+			contextGeneration: candidate.contextGeneration as number,
+			rootIds,
+			...(state ? { state } : {}),
+		}
 		: undefined;
 }
 
