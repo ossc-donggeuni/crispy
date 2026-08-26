@@ -6,12 +6,14 @@ interface InspectVsixModule {
 	findExtensionManifestCapabilityProblems(
 		manifest: unknown,
 	): readonly string[];
+	findMissingCrispyMcpToolNames(source: string): readonly string[];
 	findUnresolvedMcpRuntimeSpecifiers(source: string): readonly string[];
 	findUnexpectedVsixPayloadEntries(entryNames: Iterable<string>): readonly string[];
 }
 
 const {
 	findExtensionManifestCapabilityProblems,
+	findMissingCrispyMcpToolNames,
 	findUnresolvedMcpRuntimeSpecifiers,
 	findUnexpectedVsixPayloadEntries,
 } = require(
@@ -23,12 +25,17 @@ suite('MCP VSIX bundle dependency inspection', () => {
 		const manifest = JSON.parse(
 			readFileSync(join(__dirname, '../../../package.json'), 'utf8'),
 		) as {
+			readonly engines?: unknown;
 			readonly capabilities?: {
 				readonly untrustedWorkspaces?: unknown;
 				readonly virtualWorkspaces?: unknown;
 			};
 		};
 
+		assert.deepStrictEqual(manifest.engines, {
+			node: '24.x',
+			vscode: '^1.125.0',
+		});
 		assert.deepStrictEqual(manifest.capabilities, {
 			untrustedWorkspaces: {
 				supported: 'limited',
@@ -48,7 +55,7 @@ suite('MCP VSIX bundle dependency inspection', () => {
 		);
 	});
 
-	test('VSIX manifest 검사기는 entrypoint, Node와 Workspace capability 누락을 열거한다', () => {
+	test('VSIX manifest 검사기는 entrypoint, Node, exact VS Code와 Workspace capability 누락을 열거한다', () => {
 		assert.deepStrictEqual(
 			findExtensionManifestCapabilityProblems({
 				main: './unexpected.js',
@@ -64,11 +71,49 @@ suite('MCP VSIX bundle dependency inspection', () => {
 			[
 				'main',
 				'engines.node',
+				'engines.vscode',
 				'capabilities.untrustedWorkspaces.supported',
 				'capabilities.untrustedWorkspaces.restrictedConfigurations',
 				'capabilities.virtualWorkspaces.supported',
 			],
 		);
+	});
+
+	test('VSIX manifest 검사기는 VS Code engines range 변경을 exact mismatch로 거부한다', () => {
+		const manifest = {
+			main: './dist/extension.js',
+			engines: { node: '24.x', vscode: '^1.125.1' },
+			capabilities: {
+				untrustedWorkspaces: {
+					supported: 'limited',
+					restrictedConfigurations: [
+						'crispy.codexCliPath',
+						'crispy.claudeCliPath',
+						'crispy.antigravityCliPath',
+					],
+				},
+				virtualWorkspaces: { supported: 'limited' },
+			},
+		};
+
+		assert.deepStrictEqual(
+			findExtensionManifestCapabilityProblems(manifest),
+			['engines.vscode'],
+		);
+	});
+
+	test('production MCP bundle에는 세 Crispy Tool 이름이 모두 있어야 한다', () => {
+		assert.deepStrictEqual(findMissingCrispyMcpToolNames([
+			'crispy_ping',
+			'crispy_set_agent_activity',
+			'crispy_clear_agent_activity',
+		].join('\n')), []);
+		assert.deepStrictEqual(findMissingCrispyMcpToolNames(
+			'const ping = "crispy_ping";',
+		), [
+			'crispy_set_agent_activity',
+			'crispy_clear_agent_activity',
+		]);
 	});
 
 	test('실제 import와 require에서 Node builtin만 허용한다', () => {

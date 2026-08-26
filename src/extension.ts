@@ -6,11 +6,18 @@ import {
 } from './agent/protocol';
 import { nodePtyAdapter } from './agent/host/terminal/nodePtyAdapter';
 import { TerminalHost } from './agent/host/terminal/terminalHost';
+import {
+	createAgentActivityGraphBridge,
+	type AgentActivityGraphBridge,
+} from './agent/host/terminal/agentActivityGraphBridge';
 import { createAgentAutoRunInputResolver } from './agent/host/agent/agentProviderLaunch';
 import { McpAdapterSupervisor } from './mcp/adapterSupervisor';
 import { createPrepareCodexTerminalLaunch } from './mcp/codexTerminalLaunch';
 import { createPrepareClaudeTerminalLaunch } from './mcp/claudeTerminalLaunch';
 import { resolveAgentExecutable } from './mcp/agentExecutableResolver';
+import {
+	isAgentActivityVscodeVersionAllowed,
+} from './mcp/agentActivityCapability';
 import { resolveCurrentWorkspace } from './agent/host/workspace/workspaceResolver';
 import {
 	createTerminalRuntimeCleanup,
@@ -80,6 +87,7 @@ import {
 import {
 	createCurrentWorkspaceGraph,
 	createCurrentWorkspacePresentation,
+	createWorkspaceRootId,
 	createWorkspaceRootCatalog,
 	createWorkspaceRefreshCoordinator,
 	convertWorkspaceSnapshotToGraph,
@@ -619,12 +627,19 @@ export interface CrispyExtensionApi {
 	): Thenable<boolean> | undefined;
 }
 
+/** Reads the production Host version without accepting provider or environment input. */
+export function readAgentActivityCompatibilityFromHost(): boolean {
+	return isAgentActivityVscodeVersionAllowed(vscode.version);
+}
+
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
  *
  * @param context 확장의 구독 항목과 설치 경로를 제공하는 VS Code 확장 컨텍스트
  */
 export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
+	/** Production capability is captured exactly once from the activated Host. */
+	const agentActivityCompatible = readAgentActivityCompatibilityFromHost();
 	const workspacePersistence = createWorkspacePersistenceCoordinator();
 	activeWorkspacePersistence = workspacePersistence;
 	const workspaceGraphDependencies = {
@@ -682,13 +697,25 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				.get<string>(`${providerId}CliPath`);
 		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
+		let agentActivityBridge: AgentActivityGraphBridge | undefined;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,
 			parentEnvironment: { ...process.env },
+			agentActivityCompatible,
 			onEvent: (event) => terminalHost?.handleMcpRuntimeEvent(event),
 		});
+		if (agentActivityCompatible) {
+			agentActivityBridge = createAgentActivityGraphBridge({
+				postMessage: (message) => panel.webview.postMessage(message),
+				resolveWorkspace: resolveCurrentWorkspace,
+				invalidateLease: (lease, failure) => {
+					terminalHost.handleAgentActivityWorkspaceFailure(lease, failure);
+				},
+			});
+		}
 		terminalHost = new TerminalHost({
 			ptyAdapter: nodePtyAdapter,
+			agentActivityCompatible,
 			readWorkspaceTrust: () => vscode.workspace.isTrusted,
 			onWorkspaceTrustRevoked: () => requestWorkspaceTrustRefresh(),
 			resolveAgentAutoRunInput: createAgentAutoRunInputResolver({
@@ -709,6 +736,12 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				getCliPath: () => readProviderCliPath('claude'),
 			}),
 			mcpSupervisor,
+			onAgentActivityRequest: (request) => {
+				agentActivityBridge?.handleAgentActivityRequest(request);
+			},
+			onActivityLeaseRevoked: (lease) => {
+				agentActivityBridge?.revokeLease(lease);
+			},
 			emitMessage: (message) => {
 				void Promise.resolve(panel.webview.postMessage(message)).catch(
 					() => undefined,
@@ -727,6 +760,9 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		/** Webview snapshot과 Agent protocol을 각 validation boundary로 전달한다. */
 		const messageSubscription = panel.webview.onDidReceiveMessage(
 			(message: unknown) => {
+				if (agentActivityBridge?.handleWebviewMessage(message) === true) {
+					return;
+				}
 				handleWebviewMessage(
 					panel.webview,
 					message,
@@ -768,16 +804,29 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		requestWorkspaceTrustRefresh = () => {
 			void workspaceRefresh.requestWorkspaceRefresh();
 		};
+		const terminalRuntime: DetachableTerminalRuntime =
+			agentActivityBridge === undefined
+				? terminalHost
+				: createAgentActivityCanvasTerminalRuntime(
+					terminalHost,
+					agentActivityBridge,
+				);
 		runtime = createCanvasRuntime(
 			panel,
-			terminalHost,
+			terminalRuntime,
 			[messageSubscription],
 			workspaceRefresh,
+			undefined,
+			(event) => terminalHost.handleAgentActivityWorkspaceFoldersChanged(
+				event.removed.map(({ uri }) => createWorkspaceRootId(uri)),
+			),
 		);
 		let panelDisposed = false;
 
 		panel.onDidDispose(() => {
 			panelDisposed = true;
+			/** 이미 dispose된 Webview에는 cleanup clear를 post하지 않는다. */
+			agentActivityBridge?.disposePanel();
 			if (currentRuntime === runtime) {
 				debugEffectMessages = [];
 			}
@@ -1008,9 +1057,10 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
  *
  * @param panel 정리 대상 Terminal을 표시하던 Webview Panel
  * @param terminalHost Panel이 소유한 Terminal session 및 PTY 정리 경계
- * @param subscriptions Host 정리 뒤 해제할 Webview message listener 구독 목록
+ * @param subscriptions Host detach 전에 해제할 Webview message listener 구독 목록
  * @param workspaceRefresh Panel과 함께 유지할 Workspace Refresh coordinator
  * @param watchWorkspace Canvas에 귀속할 Workspace 변경 watcher 생성 함수
+ * @param onWorkspaceFoldersChange Graph refresh 전에 Root ownership을 검사할 callback
  * @returns Panel dispose와 deactivate가 공유하는 멱등한 정리 경계
  */
 export function createCanvasRuntime(
@@ -1018,8 +1068,21 @@ export function createCanvasRuntime(
 	terminalHost: DetachableTerminalRuntime,
 	subscriptions: readonly vscode.Disposable[],
 	workspaceRefresh: WorkspaceRefreshCoordinator,
-	watchWorkspace: (onChange: () => void) => vscode.Disposable
-		= watchWorkspaceChanges,
+	watchWorkspace: (
+		onChange: () => void,
+		onWorkspaceFoldersChange?: (
+			event: vscode.WorkspaceFoldersChangeEvent,
+		) => void,
+	) => vscode.Disposable = (onChange, onWorkspaceFoldersChange) => (
+		watchWorkspaceChanges(
+			onChange,
+			vscode.workspace,
+			onWorkspaceFoldersChange,
+		)
+	),
+	onWorkspaceFoldersChange: (
+		event: vscode.WorkspaceFoldersChangeEvent,
+	) => void = () => undefined,
 ): CanvasRuntime {
 	let webviewReady = false;
 	let refreshPendingUntilReady = false;
@@ -1035,7 +1098,7 @@ export function createCanvasRuntime(
 		}
 
 		void workspaceRefresh.requestWorkspaceRefresh();
-	});
+	}, onWorkspaceFoldersChange);
 	const cleanup = createTerminalRuntimeCleanup(
 		terminalHost,
 		[...subscriptions, workspaceWatcher],
@@ -1072,6 +1135,27 @@ export function createCanvasRuntime(
 			cleanup.detach();
 		},
 		terminate: cleanup.terminate,
+	};
+}
+
+/**
+ * Live Canvas detach에서는 TerminalHost가 exact leases를 revoke하고 cleanup clear를
+ * admission한 뒤 bridge를 panel에서 분리한다. 이미 dispose된 panel 경로는 호출자가
+ * 먼저 `bridge.disposePanel()`을 실행해 post를 금지한다.
+ */
+export function createAgentActivityCanvasTerminalRuntime(
+	terminalHost: DetachableTerminalRuntime,
+	bridge: Pick<AgentActivityGraphBridge, 'disposePanel'>,
+): DetachableTerminalRuntime {
+	return {
+		detach(): void {
+			try {
+				terminalHost.detach();
+			} finally {
+				bridge.disposePanel();
+			}
+		},
+		terminate: () => terminalHost.terminate(),
 	};
 }
 

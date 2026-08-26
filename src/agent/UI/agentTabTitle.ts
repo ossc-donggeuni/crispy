@@ -69,6 +69,39 @@ function createPromptPreview(input: string, maximumCodePoints: number): string {
 }
 
 /**
+ * 이미 열린 자동 제목과 충돌할 때 12자 안에서 구분 가능한 제목을 만든다.
+ * 기존 말줄임표를 제거한 원문 prefix를 다시 줄여 `·2`, `·3` suffix 공간을 확보한다.
+ */
+export function createDisambiguatedAutomaticAgentTabTitle(
+	candidate: string,
+	ordinal: number,
+): string | undefined {
+	if (!Number.isSafeInteger(ordinal) || ordinal < 2) {
+		return undefined;
+	}
+
+	const suffix = `·${ordinal}`;
+	const prefixLimit = AGENT_TAB_TITLE_PREVIEW_CODE_POINTS
+		- countUnicodeCodePoints(suffix);
+	if (prefixLimit < 1) {
+		return undefined;
+	}
+
+	const normalizedCandidate = candidate
+		.normalize('NFC')
+		.trim()
+		.replace(/\s+/gu, ' ');
+	const sourcePrefix = normalizedCandidate.endsWith('…')
+		? normalizedCandidate.slice(0, -1).trimEnd()
+		: normalizedCandidate;
+	if (sourcePrefix.length === 0) {
+		return undefined;
+	}
+
+	return `${createPromptPreview(sourcePrefix, prefixLimit)}${suffix}`;
+}
+
+/**
  * 첫 안전 프롬프트의 원문 prefix를 자동 제목 후보로 바꾼다.
  * `undefined`는 제어/선택 응답 또는 안전하지 않은 입력으로 시도하지 않아야 함을 뜻한다.
  *

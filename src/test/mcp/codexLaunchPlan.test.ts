@@ -56,12 +56,32 @@ suite('Codex AgentLaunchPlan builder', () => {
 		assert.strictEqual(plan.args.includes(
 			'features.shell_snapshot=false',
 		), true);
+		assert.strictEqual(plan.args.some(
+			(argument) => argument.startsWith('developer_instructions='),
+		), false);
 		assert.strictEqual(plan.args.some((argument) => argument.includes(token)), false);
 		assert.strictEqual(JSON.stringify(plan).includes(token), false);
 		assert.strictEqual(Object.keys(plan).includes('envOverlay'), false);
 		assert.strictEqual(environment.CRISPY_MCP_TOKEN, token);
 		assert.strictEqual(environment.crispy_mcp_token, undefined);
 		assert.strictEqual(environment.ELECTRON_RUN_AS_NODE, undefined);
+	});
+
+	test('caller developer instructions를 Crispy config 뒤에서도 보존한다', () => {
+		const projectInstructions = 'developer_instructions="PROJECT_MARKER"';
+		const plan = buildCodexMcpLaunchPlan({
+			executable: { executable: '/opt/codex', launcherKind: 'direct' },
+			cwd: '/workspace',
+			connection: createConnection(),
+			argsBeforeConfig: ['--config', projectInstructions],
+			agentActivityCompatible: true,
+			shellEnvironmentPolicyStyle: 'keyed-filters',
+		});
+		const developerInstructionAssignments = plan.args.filter(
+			(argument) => argument.startsWith('developer_instructions='),
+		);
+
+		assert.deepStrictEqual(developerInstructionAssignments, [projectInstructions]);
 	});
 
 	test('revoked connection으로 MCP plan을 만들 수 없다', () => {

@@ -6,11 +6,13 @@ import {
 	TerminalHost,
 	type CodexMcpSupervisor,
 } from '../../agent/host/terminal/terminalHost';
+import type { SupervisorRuntimeEvent } from '../../mcp/adapterSupervisor';
 import { buildCodexMcpLaunchPlan } from '../../mcp/codexLaunchPlan';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type {
 	McpPrepareResult,
 	McpRuntimeLifecycle,
+	McpSessionRuntime,
 	McpSessionRuntimeEvent,
 } from '../../mcp/sessionRuntime';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
@@ -27,9 +29,15 @@ const shellPolicy: ShellLaunchPolicy = {
 };
 const WORKSPACE_ROOT_ID = 'workspace-root:file:///trusted/workspace';
 const workspaceRoot = {
+	id: WORKSPACE_ROOT_ID,
 	scheme: 'file',
 	fsPath: '/trusted/workspace',
-} as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
+	workspaceFolder: {
+		name: 'trusted-workspace',
+		index: 0,
+		uri: { toString: () => 'file:///trusted/workspace' },
+	},
+} as unknown as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
 
 const successfulShellPrepare: PrepareTerminalLaunch = async () => ({
 	ok: true,
@@ -40,7 +48,10 @@ class FakeCodexRuntime {
 	lifecycle: McpRuntimeLifecycle = 'running';
 	markProviderStartedCount = 0;
 
-	constructor(readonly generation: string) {}
+	constructor(
+		readonly sessionId: string,
+		readonly generation: string,
+	) {}
 
 	markProviderStarted(): boolean {
 		if (this.lifecycle !== 'running') {
@@ -51,6 +62,8 @@ class FakeCodexRuntime {
 	}
 }
 
+type FakeCodexRuntimeHandle = FakeCodexRuntime & McpSessionRuntime;
+
 class FakeCodexSupervisor implements CodexMcpSupervisor {
 	readonly prepareCalls: string[] = [];
 	readonly stopCalls: string[] = [];
@@ -58,7 +71,9 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 	prepareFailure: McpPrepareResult | undefined;
 	deferPrepare = false;
 	private generationIndex = 0;
-	private readonly runtimes = new Map<string, FakeCodexRuntime>();
+	private disposePromise: Promise<void> | undefined;
+	private readonly runtimes = new Map<string, FakeCodexRuntimeHandle>();
+	private readonly retirements = new Map<McpSessionRuntime, Promise<void>>();
 	private readonly connections = new Map<string, McpConnectionDescriptor>();
 	private readonly pending = new Map<string, {
 		readonly resolve: (result: McpPrepareResult) => void;
@@ -67,11 +82,13 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 	prepareSession(sessionId: string): Promise<McpPrepareResult> {
 		this.prepareCalls.push(sessionId);
 		if (this.prepareFailure !== undefined) {
+			this.createRuntime(sessionId, 'stopped');
 			return Promise.resolve(this.prepareFailure);
 		}
 		if (!this.deferPrepare) {
 			return Promise.resolve(this.createSuccess(sessionId));
 		}
+		this.createRuntime(sessionId);
 		return new Promise((resolve) => {
 			this.pending.set(sessionId, { resolve });
 		});
@@ -84,41 +101,57 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 		pending.resolve(this.createSuccess(sessionId));
 	}
 
-	stopSession(sessionId: string): Promise<void> {
-		this.stopCalls.push(sessionId);
-		this.connections.get(sessionId)?.invalidate();
-		this.connections.delete(sessionId);
-		const runtime = this.runtimes.get(sessionId);
-		if (runtime !== undefined) {
-			runtime.lifecycle = 'stopped';
-		}
-		this.runtimes.delete(sessionId);
-		return Promise.resolve();
-	}
-
-	getSessionRuntime(sessionId: string): FakeCodexRuntime | undefined {
+	getSessionRuntime(sessionId: string): FakeCodexRuntimeHandle | undefined {
 		return this.runtimes.get(sessionId);
 	}
 
-	dispose(): Promise<void> {
-		this.disposeCallCount += 1;
-		for (const connection of this.connections.values()) {
-			connection.invalidate();
+	retireExactRuntime(runtime: McpSessionRuntime): Promise<void> {
+		const existing = this.retirements.get(runtime);
+		if (existing !== undefined) {
+			return existing;
 		}
-		for (const runtime of this.runtimes.values()) {
-			runtime.lifecycle = 'stopped';
+		if (this.runtimes.get(runtime.sessionId) !== runtime) {
+			return Promise.resolve();
 		}
-		this.connections.clear();
-		this.runtimes.clear();
-		return Promise.resolve();
+
+		let resolveRetirement!: () => void;
+		const retirement = new Promise<void>((resolve) => {
+			resolveRetirement = resolve;
+		});
+		this.retirements.set(runtime, retirement);
+		this.stopCalls.push(runtime.sessionId);
+		this.connections.get(runtime.sessionId)?.invalidate();
+		this.connections.delete(runtime.sessionId);
+		(runtime as FakeCodexRuntimeHandle).lifecycle = 'stopped';
+		this.runtimes.delete(runtime.sessionId);
+		resolveRetirement();
+		void retirement.then(() => {
+			if (this.retirements.get(runtime) === retirement) {
+				this.retirements.delete(runtime);
+			}
+		});
+		return retirement;
 	}
 
-	crash(sessionId: string): McpSessionRuntimeEvent {
+	dispose(): Promise<void> {
+		if (this.disposePromise !== undefined) {
+			return this.disposePromise;
+		}
+		this.disposeCallCount += 1;
+		this.disposePromise = Promise.all(
+			[...this.runtimes.values()].map(
+				(runtime) => this.retireExactRuntime(runtime),
+			),
+		).then(() => undefined);
+		return this.disposePromise;
+	}
+
+	crash(sessionId: string): SupervisorRuntimeEvent {
 		const runtime = this.runtimes.get(sessionId);
 		assert.ok(runtime !== undefined);
 		runtime.lifecycle = 'crashed';
 		this.connections.get(sessionId)?.invalidate();
-		return {
+		const event: McpSessionRuntimeEvent = {
 			type: 'runtime.failure',
 			generation: runtime.generation,
 			sessionId,
@@ -128,21 +161,24 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 				? 'keep_running'
 				: 'continue_without_mcp',
 		};
+		return { sourceRuntime: runtime, event };
 	}
 
-	activity(sessionId: string): McpSessionRuntimeEvent {
+	activity(sessionId: string): SupervisorRuntimeEvent {
 		const runtime = this.runtimes.get(sessionId);
 		assert.ok(runtime !== undefined);
-		return {
+		const event: McpSessionRuntimeEvent = {
 			type: 'session.mcpActivityObserved',
 			generation: runtime.generation,
 			sessionId,
 		};
+		return { sourceRuntime: runtime, event };
 	}
 
 	private createSuccess(sessionId: string): McpPrepareResult {
-		this.generationIndex += 1;
-		const generation = `generation-${this.generationIndex}`;
+		const runtime = this.runtimes.get(sessionId)
+			?? this.createRuntime(sessionId);
+		const generation = runtime.generation;
 		const route = Buffer.alloc(24, this.generationIndex).toString('base64url');
 		const credential = Buffer.alloc(32, this.generationIndex + 16)
 			.toString('base64url');
@@ -153,8 +189,24 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 			credential,
 		);
 		this.connections.set(sessionId, connection);
-		this.runtimes.set(sessionId, new FakeCodexRuntime(generation));
 		return { ok: true, connection };
+	}
+
+	private createRuntime(
+		sessionId: string,
+		lifecycle: McpRuntimeLifecycle = 'running',
+	): FakeCodexRuntimeHandle {
+		this.generationIndex += 1;
+		const runtime = new FakeCodexRuntime(
+			sessionId,
+			`generation-${this.generationIndex}`,
+		) as unknown as FakeCodexRuntimeHandle;
+		runtime.lifecycle = lifecycle;
+		this.runtimes.set(
+			sessionId,
+			runtime,
+		);
+		return runtime;
 	}
 }
 
@@ -1080,40 +1132,29 @@ suite('Codex stale attempt and cleanup', () => {
 		});
 	});
 
-	test('MCP cleanup 중 Workspace가 사라지면 CLI와 failed status를 유지하고 거부한다', async () => {
-		let releaseMcpCleanup!: () => void;
-		const mcpCleanupGate = new Promise<void>((resolve) => {
-			releaseMcpCleanup = resolve;
-		});
-		let workspaceAvailable = true;
-		const supervisor = new FakeCodexSupervisor();
-		const originalStopSession = supervisor.stopSession.bind(supervisor);
-		let cleanupStarted = false;
-		supervisor.stopSession = async (sessionId) => {
-			cleanupStarted = true;
-			await mcpCleanupGate;
-			await originalStopSession(sessionId);
-		};
+	test('MCP restart 두 번째 Workspace preflight 실패도 CLI와 failed status를 유지하고 거부한다', async () => {
+		let workspaceCalls = 0;
 		const fixture = createFixture({
-			supervisor,
-			workspaceResolver: () => workspaceAvailable
-				? { ok: true, root: workspaceRoot }
-				: { ok: false, code: 'workspace_path_invalid' },
+			workspaceResolver: () => {
+				workspaceCalls += 1;
+				return workspaceCalls === 4
+					? { ok: false, code: 'workspace_path_invalid' }
+					: { ok: true, root: workspaceRoot };
+			},
 		});
 		await beginCodex(fixture.host, 'tab-mcp-post-cleanup-rejected');
 		const session = fixture.host.getActiveSession('tab-mcp-post-cleanup-rejected');
 		assert.ok(session !== undefined);
-		fixture.host.handleMcpRuntimeEvent(supervisor.crash(session.sessionId));
+		fixture.host.handleMcpRuntimeEvent(
+			fixture.supervisor.crash(session.sessionId),
+		);
 
-		const restarting = fixture.host.restartMcpSession(
+		await fixture.host.restartMcpSession(
 			session.tabId,
 			session.sessionId,
 		);
-		await waitUntil(() => cleanupStarted);
-		workspaceAvailable = false;
-		releaseMcpCleanup();
-		await restarting;
 
+		assert.strictEqual(workspaceCalls, 4);
 		assert.strictEqual(
 			fixture.host.getActiveSession('tab-mcp-post-cleanup-rejected'),
 			session,
@@ -1131,7 +1172,7 @@ suite('Codex stale attempt and cleanup', () => {
 		});
 	});
 
-	test('MCP restart 최초 Workspace 조회 예외는 live CLI를 정리하고 retry 오류로 전이한다', async () => {
+	test('MCP restart 최초 Workspace 조회 예외는 workspace rejection으로 live CLI를 보존한다', async () => {
 		let throwWorkspaceError = false;
 		const fixture = createFixture({
 			workspaceResolver: () => {
@@ -1147,28 +1188,27 @@ suite('Codex stale attempt and cleanup', () => {
 		fixture.host.handleMcpRuntimeEvent(
 			fixture.supervisor.crash(session.sessionId),
 		);
+		const stopCount = fixture.supervisor.stopCalls.length;
 		throwWorkspaceError = true;
 
 		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
 
-		assert.deepStrictEqual(session.state, {
-			kind: 'error',
-			code: 'internal_error',
-		});
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), session);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
-		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
-		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId), undefined);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.strictEqual(fixture.supervisor.stopCalls.length, stopCount);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId)?.status, 'failed');
 		assert.deepStrictEqual(fixture.messages.at(-1), {
-			type: 'terminal.error',
+			type: 'mcp.restartRejected',
 			tabId: session.tabId,
 			sessionId: session.sessionId,
-			code: 'internal_error',
-			message: 'Terminal launch policy could not be prepared.',
-			canRestart: true,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
 		});
 	});
 
-	test('MCP cleanup 이후 Workspace 조회 예외도 live CLI를 정리하고 retry 오류로 전이한다', async () => {
+	test('MCP restart 두 번째 Workspace 조회 예외도 workspace rejection으로 live CLI를 보존한다', async () => {
 		let workspaceCalls = 0;
 		const fixture = createFixture({
 			workspaceResolver: () => {
@@ -1185,28 +1225,27 @@ suite('Codex stale attempt and cleanup', () => {
 		fixture.host.handleMcpRuntimeEvent(
 			fixture.supervisor.crash(session.sessionId),
 		);
+		const stopCount = fixture.supervisor.stopCalls.length;
 
 		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
 
 		assert.strictEqual(workspaceCalls, 4);
-		assert.deepStrictEqual(session.state, {
-			kind: 'error',
-			code: 'internal_error',
-		});
+		assert.strictEqual(session.state.kind, 'running');
+		assert.strictEqual(fixture.host.getActiveSession(session.tabId), session);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
-		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 1);
-		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId), undefined);
+		assert.strictEqual(fixture.adapter.handles[0].killCallCount, 0);
+		assert.strictEqual(fixture.supervisor.stopCalls.length, stopCount);
+		assert.strictEqual(fixture.host.getMcpStatus(session.sessionId)?.status, 'failed');
 		assert.deepStrictEqual(fixture.messages.at(-1), {
-			type: 'terminal.error',
+			type: 'mcp.restartRejected',
 			tabId: session.tabId,
 			sessionId: session.sessionId,
-			code: 'internal_error',
-			message: 'Terminal launch policy could not be prepared.',
-			canRestart: true,
+			code: 'workspace_root_unavailable',
+			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
 		});
 	});
 
-	test('MCP 내부 실패 cleanup 중 Host terminate는 detached CLI tree 종료를 기다린다', async () => {
+	test('MCP restart rejection은 teardown하지 않고 이후 Host terminate가 detached CLI tree 종료를 기다린다', async () => {
 		let releaseTermination!: () => void;
 		const terminationGate = new Promise<void>((resolve) => {
 			releaseTermination = resolve;
@@ -1232,21 +1271,23 @@ suite('Codex stale attempt and cleanup', () => {
 		);
 		throwWorkspaceError = true;
 
-		const restarting = fixture.host.restartMcpSession(
+		await fixture.host.restartMcpSession(
 			session.tabId,
 			session.sessionId,
 		);
-		await waitUntil(() => controller.calls.includes('terminate:7201'));
+		assert.deepStrictEqual(controller.calls, []);
+		assert.strictEqual(session.state.kind, 'running');
 		fixture.host.detach();
 		let terminationSettled = false;
 		const terminating = fixture.host.terminate().then(() => {
 			terminationSettled = true;
 		});
+		await waitUntil(() => controller.calls.includes('terminate:7201'));
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
 		assert.strictEqual(terminationSettled, false);
 		releaseTermination();
-		await Promise.all([restarting, terminating]);
+		await terminating;
 		assert.strictEqual(terminationSettled, true);
 	});
 
@@ -1427,13 +1468,24 @@ suite('Codex stale attempt and cleanup', () => {
 		await beginCodex(fixture.host, 'tab-stale-mcp-trust');
 		const session = fixture.host.getActiveSession('tab-stale-mcp-trust');
 		assert.ok(session !== undefined);
+		const staleActivity = fixture.supervisor.activity(session.sessionId);
 		fixture.host.handleMcpRuntimeEvent(
 			fixture.supervisor.crash(session.sessionId),
 		);
 		trusted = false;
-		fixture.host.handleMcpRuntimeEvent(
-			fixture.supervisor.activity(session.sessionId),
-		);
+		fixture.host.handleMcpRuntimeEvent(staleActivity);
+		assert.strictEqual(session.state.kind, 'running');
+		fixture.host.routeInput({
+			type: 'terminal.input',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			data: 'trigger-trust-revoke',
+		});
+		await Promise.resolve();
+		assert.deepStrictEqual(session.state, {
+			kind: 'error',
+			code: 'workspace_untrusted',
+		});
 
 		await fixture.host.restartMcpSession(session.tabId, session.sessionId);
 

@@ -25,7 +25,8 @@ export const TERMINAL_CLEANUP_TIMEOUT_MS = 3000;
 
 /**
  * Panel dispose와 Extension deactivate가 공유하는 분리·종료 경계를 만든다.
- * 동기 detach에서 routing과 Webview 구독을 먼저 해제하고 비동기 terminate는
+ * 동기 detach에서 Webview 구독을 먼저 해제한 뒤 routing을 분리하고,
+ * 비동기 terminate는
  * 별도 멱등 Promise로 실행하며, 개별 실패를 호출자에게 전파하지 않는다.
  *
  * @param terminalRuntime PTY와 session 참조를 정리하는 Host 소유 runtime
@@ -45,18 +46,18 @@ export function createTerminalRuntimeCleanup(
 		}
 		detached = true;
 
-		try {
-			terminalRuntime.detach();
-		} catch {
-			/** routing 분리 실패가 Webview 구독 해제를 막지 않게 한다. */
-		}
-
 		for (const subscription of subscriptions) {
 			try {
 				subscription.dispose();
 			} catch {
 				/** 개별 구독 해제 실패가 나머지 정리를 막지 않게 한다. */
 			}
+		}
+
+		try {
+			terminalRuntime.detach();
+		} catch {
+			/** routing 분리 실패를 cleanup 호출자에게 전파하지 않는다. */
 		}
 	};
 

@@ -64,7 +64,7 @@ class FakeProcessTreeController implements ProcessTreeController {
 }
 
 suite('Terminal runtime detach/terminate composition', () => {
-	test('detach가 runtime routing과 Webview 구독을 동기적으로 먼저 해제한다', () => {
+	test('detach가 Webview 구독을 먼저 해제한 뒤 runtime routing을 분리한다', () => {
 		const order: string[] = [];
 		const runtime: DetachableTerminalRuntime = {
 			detach: () => order.push('runtime.detach'),
@@ -80,9 +80,9 @@ suite('Terminal runtime detach/terminate composition', () => {
 		cleanup.detach();
 
 		assert.deepStrictEqual(order, [
-			'runtime.detach',
 			'subscription-one',
 			'subscription-two',
+			'runtime.detach',
 		]);
 	});
 
@@ -127,7 +127,7 @@ suite('Terminal runtime detach/terminate composition', () => {
 		const duplicate = cleanup.terminate();
 
 		assert.strictEqual(duplicate, first);
-		assert.deepStrictEqual(order, ['detach', 'subscription']);
+		assert.deepStrictEqual(order, ['subscription', 'detach']);
 		release();
 		await first;
 	});

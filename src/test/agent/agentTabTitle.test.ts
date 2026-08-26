@@ -5,6 +5,7 @@ import {
 	countUnicodeCodePoints,
 	createAgentTabNameKey,
 	createAutomaticAgentTabTitleCandidates,
+	createDisambiguatedAutomaticAgentTabTitle,
 	normalizeManualAgentTabName,
 } from '../../agent/UI/agentTabTitle';
 
@@ -98,6 +99,23 @@ suite('Agent Tab Title', () => {
 			ok: false,
 			error: 'tooLong',
 		});
+	});
+
+	test('중복 자동 제목 suffix도 12 code point 안에서 원문 prefix를 보존한다', () => {
+		const duplicate = createDisambiguatedAutomaticAgentTabTitle(
+			'Workspace 파…',
+			2,
+		);
+		assert.strictEqual(duplicate, 'Workspace…·2');
+		assert.strictEqual(countUnicodeCodePoints(duplicate ?? ''), 12);
+		assert.strictEqual(
+			createDisambiguatedAutomaticAgentTabTitle('클로드 자동 탭명 변…', 3),
+			'클로드 자동 탭명…·3',
+		);
+		assert.strictEqual(
+			createDisambiguatedAutomaticAgentTabTitle('invalid', 1),
+			undefined,
+		);
 	});
 
 	test('수동 이름은 control과 공백을 정리하지만 kebab-case를 강제하지 않는다', () => {

@@ -1,12 +1,17 @@
 import * as assert from 'node:assert/strict';
 import {
 	CLAUDE_MCP_CONFIG_ARGUMENT,
+	CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
 	CLAUDE_MCP_SERVER_NAME_PREFIX,
 	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
 	CLAUDE_MCP_TOKEN_PLACEHOLDER,
 	createClaudeMcpConfig,
 	createClaudeMcpServerName,
 } from '../../mcp/claudeConfig';
+import {
+	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+	CRISPY_PING_ONLY_INSTRUCTIONS,
+} from '../../mcp/agentActivityInstructions';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 
 const routeId = Buffer.alloc(24, 0x23).toString('base64url');
@@ -33,6 +38,8 @@ suite('Claude MCP session config serializer', () => {
 
 		assert.strictEqual(config.serverName, expectedName);
 		assert.deepStrictEqual(config.args, [
+			CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
+			CRISPY_PING_ONLY_INSTRUCTIONS,
 			CLAUDE_MCP_CONFIG_ARGUMENT,
 			config.inlineConfig,
 		]);
@@ -50,6 +57,25 @@ suite('Claude MCP session config serializer', () => {
 		});
 		assert.strictEqual(config.inlineConfig.includes(bearerToken), false);
 		assert.strictEqual(config.serverName === 'crispy', false);
+	});
+
+	test('qualified gate keeps inline config and appends all Tool instructions', () => {
+		const config = createClaudeMcpConfig(
+			createConnection(),
+			(size) => Buffer.alloc(size, 0xcd),
+			true,
+		);
+
+		assert.deepStrictEqual(config.args.slice(0, 2), [
+			CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
+			CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+		]);
+		assert.deepStrictEqual(config.args.slice(-2), [
+			CLAUDE_MCP_CONFIG_ARGUMENT,
+			config.inlineConfig,
+		]);
+		assert.strictEqual(config.inlineConfig.includes('alwaysLoad'), true);
+		assert.strictEqual(config.inlineConfig.includes(bearerToken), false);
 	});
 
 	test('strict, cache, global tool restriction을 config나 argv에 주입하지 않는다', () => {

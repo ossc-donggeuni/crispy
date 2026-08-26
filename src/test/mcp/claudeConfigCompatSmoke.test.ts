@@ -33,6 +33,7 @@ suite('Claude config compatibility smoke', () => {
 			readHelpOutput: () => [
 				'--mcp-config <configs...>',
 				'--strict-mcp-config',
+				'--append-system-prompt <prompt>',
 			].join('\n'),
 		});
 
@@ -100,15 +101,22 @@ suite('Claude config compatibility smoke', () => {
 		});
 	});
 
-	test('두 공식 flag를 token이나 inline config parsing 없이 찾는다', () => {
+	test('세 공식 flag를 token이나 inline config parsing 없이 찾는다', () => {
 		assert.strictEqual(hasClaudeSessionMcpConfigSurface(
-			'  --mcp-config <configs...>\n  --strict-mcp-config\n',
+			[
+				'  --mcp-config <configs...>',
+				'  --strict-mcp-config',
+				'  --append-system-prompt <prompt>',
+			].join('\n'),
 		), true);
 		assert.strictEqual(hasClaudeSessionMcpConfigSurface(
-			'--strict-mcp-config',
+			'--strict-mcp-config --append-system-prompt <prompt>',
 		), false);
 		assert.strictEqual(hasClaudeSessionMcpConfigSurface(
-			'--mcp-config-file --strict-mcp-config-extra',
+			'--mcp-config <configs...> --strict-mcp-config',
+		), false);
+		assert.strictEqual(hasClaudeSessionMcpConfigSurface(
+			'--mcp-config-file --strict-mcp-config-extra --append-system-prompt-extra',
 		), false);
 	});
 });

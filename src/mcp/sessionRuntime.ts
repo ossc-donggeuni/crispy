@@ -17,6 +17,7 @@ import {
 	type McpChildToHostMessage,
 } from './ipcProtocol';
 import { MCP_CHILD_GENERATION_ENV } from './childBootstrap';
+import type { AgentActivityRequested } from './agentActivityProtocol';
 import {
 	createMcpSessionCredentials,
 	isValidMcpOpaqueId,
@@ -72,7 +73,8 @@ export interface McpRuntimePingEvent {
 export type McpSessionRuntimeEvent =
 	| McpRuntimeFailureEvent
 	| McpRuntimeActivityEvent
-	| McpRuntimePingEvent;
+	| McpRuntimePingEvent
+	| AgentActivityRequested;
 
 export type McpPrepareResult =
 	| {
@@ -162,6 +164,7 @@ export interface McpSessionRuntimeOptions {
 	readonly spawnChild?: McpChildSpawner;
 	readonly createRequestId?: () => string;
 	readonly onEvent?: (event: McpSessionRuntimeEvent) => void;
+	readonly agentActivityCompatible?: boolean;
 }
 
 interface PendingOperation {
@@ -310,6 +313,7 @@ export class McpSessionRuntime {
 	private readonly spawnChild: McpChildSpawner;
 	private readonly createRequestId: () => string;
 	private readonly onEvent: (event: McpSessionRuntimeEvent) => void;
+	private readonly agentActivityCompatible: boolean;
 	private lifecycleValue: McpRuntimeLifecycle = 'stopped';
 	private startedOnce = false;
 	private stage: 'idle' | 'ready' | 'registering' | 'running' = 'idle';
@@ -327,6 +331,7 @@ export class McpSessionRuntime {
 	private activityObserved = false;
 	private pingObserved = false;
 	private failureEmitted = false;
+	private startupFault: RuntimeSignal | undefined;
 
 	private readonly childMessageListener = (message: unknown): void => {
 		this.handleChildMessage(message);
@@ -362,6 +367,7 @@ export class McpSessionRuntime {
 		this.createRequestId = options.createRequestId
 			?? (() => `request-${randomUUID()}`);
 		this.onEvent = options.onEvent ?? (() => undefined);
+		this.agentActivityCompatible = options.agentActivityCompatible === true;
 	}
 
 	get lifecycle(): McpRuntimeLifecycle {
@@ -459,6 +465,7 @@ export class McpSessionRuntime {
 				sessionId: this.sessionId,
 				routeId: credentials.routeId,
 				token: credentials.token,
+				agentActivityCompatible: this.agentActivityCompatible,
 			}, 'auth.registered', this.timeouts.registrationMs);
 			this.assertCurrentStarting();
 
@@ -535,12 +542,34 @@ export class McpSessionRuntime {
 	}
 
 	private handleChildMessage(value: unknown): void {
-		const parsed = parseMcpChildToHostMessage(value);
+		let parsed: ReturnType<typeof parseMcpChildToHostMessage>;
+		try {
+			parsed = parseMcpChildToHostMessage(value);
+		} catch {
+			this.failProtocol();
+			return;
+		}
 		if (!parsed.ok) {
 			this.failProtocol();
 			return;
 		}
 		const message = parsed.value;
+		if (message.type === 'session.agentActivityRequested') {
+			if (
+				message.generation !== this.generation
+				|| message.sessionId !== this.sessionId
+			) {
+				this.failProtocol();
+				return;
+			}
+			if (
+				this.lifecycleValue === 'running'
+				&& this.agentActivityCompatible
+			) {
+				this.emit(message);
+			}
+			return;
+		}
 		if (message.generation !== this.generation) {
 			return;
 		}
@@ -658,7 +687,11 @@ export class McpSessionRuntime {
 	}
 
 	private failProtocol(): void {
-		this.rejectAwaiters(new RuntimeSignal('protocol'));
+		const error = new RuntimeSignal('protocol');
+		if (this.lifecycleValue === 'starting') {
+			this.startupFault ??= error;
+		}
+		this.rejectAwaiters(error);
 		if (this.lifecycleValue === 'running') {
 			this.beginCrash();
 		}
@@ -681,7 +714,11 @@ export class McpSessionRuntime {
 	}
 
 	private handleChildError(): void {
-		this.rejectAwaiters(new RuntimeSignal('child_ended'));
+		const error = new RuntimeSignal('child_ended');
+		if (this.lifecycleValue === 'starting') {
+			this.startupFault ??= error;
+		}
+		this.rejectAwaiters(error);
 		if (this.lifecycleValue === 'running') {
 			this.beginCrash();
 		}
@@ -826,6 +863,9 @@ export class McpSessionRuntime {
 	}
 
 	private assertCurrentStarting(): void {
+		if (this.startupFault !== undefined) {
+			throw this.startupFault;
+		}
 		if (this.lifecycleValue !== 'starting' || this.childEnded) {
 			throw new RuntimeSignal('cancelled');
 		}

@@ -2,7 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { MCP_LOOPBACK_HOST } from './httpPolicy';
 import { isValidMcpRouteId, type McpRandomBytes } from './sessionCredentials';
 import type { McpConnectionDescriptor } from './sessionRuntime';
-import { CRISPY_PING_TOOL_NAME } from './toolServer';
+import {
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_PING_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+} from './toolServer';
 
 export const CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
 export const CODEX_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
@@ -39,20 +43,36 @@ export function createCodexMcpServerName(
 	return `${CODEX_MCP_SERVER_NAME_PREFIX}${randomValue.toString('hex')}`;
 }
 
-/** Token을 포함하지 않는 Codex session-only MCP config argv를 직렬화한다. */
+/**
+ * Token을 포함하지 않는 Codex session-only MCP config argv를 직렬화한다.
+ *
+ * `developer_instructions`는 의도적으로 설정하지 않는다. CLI `--config` override는
+ * Codex의 Project/Profile/User config보다 우선하므로 Crispy가 이 key를 설정하면
+ * 사용자의 effective repository instructions를 대체하게 된다.
+ */
 export function createCodexMcpConfig(
 	connection: McpConnectionDescriptor,
 	random?: McpRandomBytes,
 	shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle = 'keyed-filters',
+	agentActivityCompatible = false,
 ): CodexMcpConfig {
 	assertValidCodexMcpUrl(connection.url);
 	const serverName = createCodexMcpServerName(random);
 	const serverKey = `mcp_servers.${serverName}`;
+	const enabledTools = agentActivityCompatible
+		? [
+			CRISPY_PING_TOOL_NAME,
+			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+			CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+		]
+		: [CRISPY_PING_TOOL_NAME];
 	const assignments = [
 		`${serverKey}.url=${serializeCodexTomlString(connection.url)}`,
 		`${serverKey}.bearer_token_env_var=${serializeCodexTomlString(CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE)}`,
 		`${serverKey}.required=false`,
-		`${serverKey}.enabled_tools=[${serializeCodexTomlString(CRISPY_PING_TOOL_NAME)}]`,
+		`${serverKey}.enabled_tools=[${enabledTools
+			.map(serializeCodexTomlString)
+			.join(',')}]`,
 		CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 		createShellEnvironmentPolicyAssignment(shellEnvironmentPolicyStyle),
 	];

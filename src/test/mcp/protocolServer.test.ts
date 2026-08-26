@@ -124,14 +124,16 @@ suite('Crispy MCP protocol server', () => {
 
 	test('browser Origin과 non-loopback Host를 공식 validation helper로 거부한다', async () => {
 		const fixture = await startFixture();
+		const originMarker = 'origin-validation-sensitive-marker';
+		const hostMarker = 'host-validation-sensitive-marker.invalid';
 		const originRejected = await postJson(
 			fixture.url,
 			fixture.token,
 			toolsListRequest(1),
-			{ Origin: 'https://example.invalid' },
+			{ Origin: `https://${originMarker}` },
 		);
 		const hostRejected = await rawRequest(fixture.url, {
-			Host: 'example.invalid',
+			Host: hostMarker,
 			Authorization: `Bearer ${fixture.token}`,
 			'Content-Type': 'application/json',
 			Accept: 'application/json, text/event-stream',
@@ -141,6 +143,8 @@ suite('Crispy MCP protocol server', () => {
 		assert.strictEqual(hostRejected.status, 403);
 		assert.strictEqual(originRejected.headers.get('access-control-allow-origin'), null);
 		assert.strictEqual(hostRejected.headers['access-control-allow-origin'], undefined);
+		assert.doesNotMatch(await originRejected.text(), new RegExp(originMarker));
+		assert.doesNotMatch(hostRejected.body, new RegExp(hostMarker));
 		assert.deepStrictEqual(fixture.activity, []);
 	});
 
@@ -416,7 +420,7 @@ suite('Crispy MCP protocol server', () => {
 		);
 
 		assert.throws(
-			() => fixture.server.registerSession(duplicate),
+			() => fixture.server.registerSession(duplicate, false),
 			(error: unknown) => {
 				assert.ok(error instanceof Error);
 				assert.doesNotMatch(error.message, new RegExp(duplicate.token));
@@ -521,7 +525,7 @@ async function startFixture(
 	runningServers.add(server);
 	await server.start();
 	const credentials = createMcpSessionCredentials(generation, sessionId);
-	const registered = server.registerSession(credentials);
+	const registered = server.registerSession(credentials, false);
 	return {
 		server,
 		url: registered.url,

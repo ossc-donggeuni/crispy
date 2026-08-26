@@ -42,6 +42,12 @@ export interface WorkspaceOpenFileMessage {
 	fileId: string;
 }
 
+/** Webview가 tracked clear 적용 직후 Host에 돌려주는 quota 정산 receipt다. */
+export interface AgentActivityClearAppliedReceipt {
+	readonly type: 'agent.activity.clearApplied';
+	readonly receiptId: number;
+}
+  
 /** 생성한 Task 전송 JSON을 Extension Host clipboard에 기록하도록 요청한다. */
 export interface TaskJsonCopyMessage {
 	type: 'task.copyJson';
@@ -60,6 +66,7 @@ export type WebviewToExtensionMessage =
 	| WebviewStateChangedMessage
 	| WorkspaceStateChangedMessage
 	| WorkspaceOpenFileMessage
+	| AgentActivityClearAppliedReceipt
 	| TaskJsonCopyMessage
 	| TaskJsonCopyFailedMessage;
 
@@ -126,6 +133,15 @@ export interface AgentActivityClearMessage {
 export interface AgentActivityClearSessionMessage {
 	readonly type: 'agent.activity.clearSession';
 	readonly sessionId: SessionId;
+}
+
+/** Host가 clear 적용과 quota 정산을 연결할 때만 사용하는 tracked wrapper다. */
+export interface AgentActivityTrackedClearMessage {
+	readonly type: 'agent.activity.clearTracked';
+	readonly receiptId: number;
+	readonly publicMessage:
+		| AgentActivityClearMessage
+		| AgentActivityClearSessionMessage;
 }
 
 /** Extension Host에서 Webview로 전달하는 Agent Activity 변경 계약이다. */
@@ -195,6 +211,7 @@ export type ExtensionToWebviewMessage =
 	| HostToWebviewWireMessage
 	| WorkspaceToWebviewMessage
 	| AgentActivityToWebviewMessage
+	| AgentActivityTrackedClearMessage
 	| GraphNodeEffectToWebviewMessage;
 
 /** unknown 값에서 순수 Agent Activity Event 계약을 strict하게 검증한다. */
@@ -249,6 +266,54 @@ export function parseAgentActivityToWebviewMessage(
 	}
 
 	return undefined;
+}
+
+/** tracked wrapper를 exact own-key로 검증하고 nested public clear parser를 재사용한다. */
+export function parseAgentActivityTrackedClearMessage(
+	value: unknown,
+): AgentActivityTrackedClearMessage | undefined {
+	if (
+		!isRecord(value)
+		|| value.type !== 'agent.activity.clearTracked'
+		|| !hasExactOwnKeys(value, ['type', 'receiptId', 'publicMessage'])
+		|| !isReceiptId(value.receiptId)
+		|| !hasExactTrackedPublicClearKeys(value.publicMessage)
+	) {
+		return undefined;
+	}
+
+	const publicMessage = parseAgentActivityToWebviewMessage(value.publicMessage);
+	if (
+		publicMessage === undefined
+		|| publicMessage.type === 'agent.activity.set'
+	) {
+		return undefined;
+	}
+
+	return {
+		type: 'agent.activity.clearTracked',
+		receiptId: value.receiptId,
+		publicMessage,
+	};
+}
+
+/** Webview clear receipt를 payload 반사 없이 exact own-key로 검증한다. */
+export function parseAgentActivityClearAppliedReceipt(
+	value: unknown,
+): AgentActivityClearAppliedReceipt | undefined {
+	if (
+		!isRecord(value)
+		|| value.type !== 'agent.activity.clearApplied'
+		|| !hasExactOwnKeys(value, ['type', 'receiptId'])
+		|| !isReceiptId(value.receiptId)
+	) {
+		return undefined;
+	}
+
+	return {
+		type: 'agent.activity.clearApplied',
+		receiptId: value.receiptId,
+	};
 }
 
 /** unknown Host 메시지에서 transient Graph 효과 계약을 구조적으로 검증한다. */
@@ -346,6 +411,10 @@ function isAgentActivityKind(value: unknown): value is AgentActivityKind {
 		&& (AGENT_ACTIVITY_KINDS as readonly string[]).includes(value);
 }
 
+function isReceiptId(value: unknown): value is number {
+	return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
 function parseGraphNodeEffect(value: unknown): GraphNodeEffect | undefined {
 	if (
 		!isRecord(value)
@@ -403,6 +472,29 @@ function hasOnlyKeys(
 	const allowed = new Set(keys);
 
 	return Object.keys(value).every((key) => allowed.has(key));
+}
+
+/** 새 tracked wire만 enumerable 여부와 symbol을 포함한 exact own-key로 제한한다. */
+function hasExactOwnKeys(
+	value: Readonly<Record<string, unknown>>,
+	keys: readonly string[],
+): boolean {
+	const allowed = new Set(keys);
+	const ownKeys = Reflect.ownKeys(value);
+	return ownKeys.length === keys.length
+		&& ownKeys.every((key) => typeof key === 'string' && allowed.has(key));
+}
+
+/** Nested public parser 동작은 유지하면서 tracked wrapper 안의 wire만 exact하게 고정한다. */
+function hasExactTrackedPublicClearKeys(value: unknown): boolean {
+	if (!isRecord(value)) {
+		return false;
+	}
+	if (value.type === 'agent.activity.clear') {
+		return hasExactOwnKeys(value, ['type', 'sessionId', 'target']);
+	}
+	return value.type === 'agent.activity.clearSession'
+		&& hasExactOwnKeys(value, ['type', 'sessionId']);
 }
 
 /** Graph의 실제 Project Root node IDs를 표시 순서대로 반환한다. */

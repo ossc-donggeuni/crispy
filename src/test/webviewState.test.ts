@@ -593,6 +593,11 @@ suite('Webview State Wiring', () => {
 			readonly target: GraphNodeEffectTarget;
 		}> = [];
 		const agentActivitySessionClears: string[] = [];
+		const clearReceiptSnapshots: Array<{
+			readonly receiptId: number;
+			readonly targetClearCount: number;
+			readonly sessionClearCount: number;
+		}> = [];
 		const terminalHostMessages: unknown[] = [];
 		let currentGraphState: GraphStateSnapshot = {
 			camera: initialState.graph.camera,
@@ -977,6 +982,13 @@ suite('Webview State Wiring', () => {
 				savedStates.push(state);
 			},
 			postMessage: (message) => {
+				if (message.type === 'agent.activity.clearApplied') {
+					clearReceiptSnapshots.push({
+						receiptId: message.receiptId,
+						targetClearCount: agentActivityClears.length,
+						sessionClearCount: agentActivitySessionClears.length,
+					});
+				}
 				postedMessages.push(message);
 			},
 		};
@@ -1314,6 +1326,63 @@ suite('Webview State Wiring', () => {
 			}]);
 			assert.deepStrictEqual(agentEffectClears, [{
 				target: activityTarget,
+			}]);
+			assert.deepStrictEqual(
+				getAgentActivityClearAppliedReceipts(postedMessages),
+				[],
+			);
+
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.clearTracked',
+					receiptId: 0,
+					publicMessage: {
+						type: 'agent.activity.clear',
+						sessionId: 'session-activity-a',
+						target: activityTarget,
+					},
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'agent.activity.clearTracked',
+					receiptId: 2,
+					publicMessage: {
+						type: 'agent.activity.clearSession',
+						sessionId: 'session-activity-b',
+					},
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(agentActivityClears, [{
+				sessionId: 'session-activity-a',
+				target: activityTarget,
+			}, {
+				sessionId: 'session-activity-a',
+				target: activityTarget,
+			}]);
+			assert.deepStrictEqual(
+				agentActivitySessionClears,
+				['session-activity-b', 'session-activity-b'],
+			);
+			assert.deepStrictEqual(
+				getAgentActivityClearAppliedReceipts(postedMessages),
+				[{
+					type: 'agent.activity.clearApplied',
+					receiptId: 0,
+				}, {
+					type: 'agent.activity.clearApplied',
+					receiptId: 2,
+				}],
+			);
+			assert.deepStrictEqual(clearReceiptSnapshots, [{
+				receiptId: 0,
+				targetClearCount: 2,
+				sessionClearCount: 1,
+			}, {
+				receiptId: 2,
+				targetClearCount: 2,
+				sessionClearCount: 2,
 			}]);
 
 			const terminalStartingMessage = {
@@ -1678,6 +1747,20 @@ function getWorkspaceStateChangedMessages(
 			WebviewToExtensionMessage,
 			{ type: 'workspace.stateChanged' }
 		> => message.type === 'workspace.stateChanged',
+	);
+}
+
+function getAgentActivityClearAppliedReceipts(
+	messages: WebviewToExtensionMessage[],
+): Array<Extract<
+	WebviewToExtensionMessage,
+	{ type: 'agent.activity.clearApplied' }
+>> {
+	return messages.filter(
+		(message): message is Extract<
+			WebviewToExtensionMessage,
+			{ type: 'agent.activity.clearApplied' }
+		> => message.type === 'agent.activity.clearApplied',
 	);
 }
 

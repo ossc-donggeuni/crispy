@@ -2,7 +2,7 @@ import { CrispyMcpProtocolServer } from './protocolServer';
 import {
 	parseHostToMcpChildMessage,
 	type McpChildOperationFailureReason,
-	type McpChildToHostMessage,
+	type McpChildControlMessage,
 } from './ipcProtocol';
 import { isValidMcpOpaqueId } from './sessionCredentials';
 import { MCP_CHILD_GENERATION_ENV } from './childBootstrap';
@@ -18,6 +18,15 @@ function startChild(childGeneration: string): void {
 	let shutdownPromise: Promise<void> | undefined;
 	const server = new CrispyMcpProtocolServer({
 		generation: childGeneration,
+		agentActivityTransport: {
+			isConnected: () => process.connected && typeof process.send === 'function',
+			send: (event, callback) => {
+				if (typeof process.send !== 'function') {
+					throw new Error('MCP child IPC is unavailable.');
+				}
+				return process.send(event, callback);
+			},
+		},
 		onActivityObserved: (event) => {
 			sendSafe({
 				type: event.type,
@@ -85,7 +94,7 @@ function startChild(childGeneration: string): void {
 						sessionId: message.sessionId,
 						routeId: message.routeId,
 						token: message.token,
-					});
+					}, message.agentActivityCompatible);
 					sendSafe({
 						type: 'auth.registered',
 						requestId: message.requestId,
@@ -149,7 +158,7 @@ function startChild(childGeneration: string): void {
 }
 
 /** IPC send 오류와 callback 오류는 payload나 원본 exception을 출력하지 않는다. */
-function sendSafe(message: McpChildToHostMessage): void {
+function sendSafe(message: McpChildControlMessage): void {
 	if (!process.connected || typeof process.send !== 'function') {
 		return;
 	}

@@ -2,6 +2,11 @@ import * as assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import {
+	ACTIVITY_IPC_MAX_UTF8_BYTES,
+	createClearAgentActivityRequested,
+	createSetAgentActivityRequested,
+} from '../../mcp/agentActivityProtocol';
+import {
 	createMcpChildEnvironment,
 	createMcpChildSpawnOptions,
 	McpSessionRuntime,
@@ -278,6 +283,11 @@ suite('MCP session runtime lifecycle', () => {
 		assert.ok(!JSON.stringify(result.connection).includes(token));
 		assert.ok(!Object.keys(result.connection).includes('token'));
 		assert.strictEqual(runtime.lifecycle, 'running');
+		const defaultRegister = child.sent.find(
+			(message) => message.type === 'auth.register',
+		);
+		assert.ok(defaultRegister?.type === 'auth.register');
+		assert.strictEqual(defaultRegister.agentActivityCompatible, false);
 
 		const firstStop = runtime.stop();
 		assert.strictEqual(runtime.stop(), firstStop);
@@ -292,6 +302,21 @@ suite('MCP session runtime lifecycle', () => {
 		assert.strictEqual(child.listenerCount('exit'), 0);
 		const stoppedRestart = await runtime.start();
 		assert.strictEqual(stoppedRestart.ok, false);
+	});
+
+	test('Host-owned explicit Activity capability만 auth.register에 immutable 전달한다', async () => {
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime', port: 42_005,
+		});
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+			agentActivityCompatible: true,
+		});
+		assert.strictEqual((await runtime.start()).ok, true);
+		const register = child.sent.find((message) => message.type === 'auth.register');
+		assert.ok(register?.type === 'auth.register');
+		assert.strictEqual(register.agentActivityCompatible, true);
+		await runtime.stop();
 	});
 
 	test('revoke ACK와 shutdown timeout 뒤에도 kill fallback과 listener 정리를 완료한다', async () => {
@@ -338,6 +363,250 @@ suite('MCP session runtime lifecycle', () => {
 		]);
 		assert.strictEqual(child.listenerCount('message'), 0);
 		assert.strictEqual(runtime.lifecycle, 'stopped');
+	});
+
+	test('matching Agent Activity는 매 call distinct 전달하고 ping observation dedupe를 보존한다', async () => {
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime', port: 42_013,
+		});
+		const events: McpSessionRuntimeEvent[] = [];
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+			agentActivityCompatible: true,
+			onEvent: (event) => events.push(event),
+		});
+		assert.strictEqual((await runtime.start()).ok, true);
+
+		const rawSet: Record<string, unknown> = {
+			...createSetAgentActivityRequested({
+				sessionId: 'session-runtime',
+				generation: 'generation-runtime',
+				path: 'src/runtime.ts',
+				targetKind: 'file',
+				activity: 'editing',
+			}),
+		};
+		child.emitMessage(rawSet);
+		rawSet.path = 'mutated-after-emit.ts';
+		child.emitMessage(createClearAgentActivityRequested({
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			path: 'src/runtime.ts',
+			targetKind: 'file',
+		}));
+		child.emitMessage(createClearAgentActivityRequested({
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			path: 'src/runtime.ts',
+			targetKind: 'file',
+		}));
+		for (let index = 0; index < 2; index += 1) {
+			child.emitMessage({
+				type: 'session.crispyPingObserved',
+				generation: 'generation-runtime',
+				sessionId: 'session-runtime',
+			});
+		}
+
+		assert.deepStrictEqual(events.map((event) => event.type), [
+			'session.agentActivityRequested',
+			'session.agentActivityRequested',
+			'session.agentActivityRequested',
+			'session.crispyPingObserved',
+		]);
+		const first = events[0];
+		assert.strictEqual(first.type, 'session.agentActivityRequested');
+		if (first.type === 'session.agentActivityRequested') {
+			assert.strictEqual(first.path, 'src/runtime.ts');
+			assert.strictEqual(first.operation, 'set');
+			assert.strictEqual(Object.isFrozen(first), true);
+			assert.notStrictEqual(first, rawSet);
+		}
+		assert.notStrictEqual(events[1], events[2]);
+		await runtime.stop();
+	});
+
+	test('capability false는 valid Agent Activity를 protocol failure 없이 silent drop한다', async () => {
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime', port: 42_014,
+		});
+		const events: McpSessionRuntimeEvent[] = [];
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+			onEvent: (event) => events.push(event),
+		});
+		assert.strictEqual((await runtime.start()).ok, true);
+		child.emitMessage(createSetAgentActivityRequested({
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			path: 'src/capability.ts',
+			targetKind: 'file',
+			activity: 'active',
+		}));
+		assert.strictEqual(runtime.lifecycle, 'running');
+		assert.deepStrictEqual(events, []);
+		await runtime.stop();
+	});
+
+	test('malformed와 oversized Agent Activity는 source runtime을 fail-closed 처리한다', async () => {
+		const malformed = {
+			type: 'session.agentActivityRequested',
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			operation: 'set',
+			path: 'src//noncanonical.ts',
+			targetKind: 'file',
+			activity: 'active',
+		};
+		const emptyEvent = createSetAgentActivityRequested({
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			path: '',
+			targetKind: 'folder',
+			activity: 'completed',
+		});
+		const fixedBytes = Buffer.byteLength(JSON.stringify(emptyEvent), 'utf8');
+		const quoteCountAtLimit = ACTIVITY_IPC_MAX_UTF8_BYTES
+			- fixedBytes
+			- 4_096;
+		const oversizedPath = `${'"'.repeat(quoteCountAtLimit + 1)}${
+			'a'.repeat(4_096 - quoteCountAtLimit - 1)
+		}`;
+		const oversized = createSetAgentActivityRequested({
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			path: oversizedPath,
+			targetKind: 'folder',
+			activity: 'completed',
+		});
+		assert.strictEqual(
+			Buffer.byteLength(JSON.stringify(oversized), 'utf8'),
+			ACTIVITY_IPC_MAX_UTF8_BYTES + 1,
+		);
+
+		for (const [index, message] of [malformed, oversized].entries()) {
+			const child = createReadyFakeChild({
+				generation: 'generation-runtime', port: 42_015 + index,
+			});
+			const events: McpSessionRuntimeEvent[] = [];
+			const runtime = createRuntime({
+				spawnChild: () => child.asChildProcess(),
+				agentActivityCompatible: true,
+				onEvent: (event) => events.push(event),
+			});
+			assert.strictEqual((await runtime.start()).ok, true);
+			child.emitMessage(message);
+			await waitUntil(() => runtime.lifecycle === 'crashed');
+			assert.deepStrictEqual(events.map((event) => event.type), [
+				'runtime.failure',
+			]);
+			await runtime.stop();
+		}
+	});
+
+	test('ready resolve 직후 protocol fault도 시작 성공으로 빠지지 않는다', async () => {
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime',
+			port: 42_019,
+			announceReady: false,
+		});
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+			agentActivityCompatible: true,
+		});
+
+		const starting = runtime.start();
+		child.announceReady();
+		child.emitMessage({
+			type: 'session.agentActivityRequested',
+			generation: 'generation-runtime',
+			sessionId: 'session-runtime',
+			operation: 'set',
+			path: 'src//noncanonical.ts',
+			targetKind: 'file',
+			activity: 'editing',
+		});
+
+		assert.strictEqual((await starting).ok, false);
+		assert.strictEqual(runtime.lifecycle, 'stopped');
+	});
+
+	test('registration ACK 직후 child error도 시작 성공으로 빠지지 않는다', async () => {
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime',
+			port: 42_020,
+			acknowledgeRegistration: false,
+		});
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+		});
+
+		const starting = runtime.start();
+		await waitUntil(() => child.sent.some(
+			(message) => message.type === 'auth.register',
+		));
+		const register = child.sent.find(
+			(message) => message.type === 'auth.register',
+		);
+		assert.ok(register?.type === 'auth.register');
+		child.emitMessage({
+			type: 'auth.registered',
+			requestId: register.requestId,
+			generation: register.generation,
+			sessionId: register.sessionId,
+		});
+		child.emit('error', new Error('synchronous post-ACK child error'));
+
+		assert.strictEqual((await starting).ok, false);
+		assert.strictEqual(runtime.lifecycle, 'stopped');
+	});
+
+	test('Runtime A가 B identity를 주장하면 A만 fail-closed하고 B는 불변이다', async () => {
+		const firstChild = createReadyFakeChild({
+			generation: 'generation-first', port: 42_017,
+		});
+		const secondChild = createReadyFakeChild({
+			generation: 'generation-second', port: 42_018, announceReady: false,
+		});
+		const firstEvents: McpSessionRuntimeEvent[] = [];
+		const secondEvents: McpSessionRuntimeEvent[] = [];
+		const first = createRuntime({
+			generation: 'generation-first',
+			sessionId: 'session-first',
+			spawnChild: () => firstChild.asChildProcess(),
+			agentActivityCompatible: true,
+			onEvent: (event) => firstEvents.push(event),
+		});
+		const second = createRuntime({
+			generation: 'generation-second',
+			sessionId: 'session-second',
+			spawnChild: () => secondChild.asChildProcess(),
+			agentActivityCompatible: true,
+			onEvent: (event) => secondEvents.push(event),
+		});
+		assert.strictEqual((await first.start()).ok, true);
+		const secondStart = second.start();
+		secondChild.announceReady();
+		assert.strictEqual((await secondStart).ok, true);
+
+		firstChild.emitMessage(createSetAgentActivityRequested({
+			sessionId: 'session-second',
+			generation: 'generation-second',
+			path: 'src/forged.ts',
+			targetKind: 'file',
+			activity: 'editing',
+		}));
+		await waitUntil(() => first.lifecycle === 'crashed');
+		assert.deepStrictEqual(firstEvents.map((event) => event.type), [
+			'runtime.failure',
+		]);
+		assert.deepStrictEqual(secondEvents, []);
+		assert.strictEqual(second.lifecycle, 'running');
+		assert.deepStrictEqual(secondChild.sent.map((message) => message.type), [
+			'auth.register',
+		]);
+		await first.stop();
+		await second.stop();
 	});
 
 	test('stale generation/request ACK를 무시하고 current activity를 한 번만 전달한다', async () => {

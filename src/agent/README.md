@@ -312,9 +312,18 @@ pnpm run smoke:installed-vsix -- --target darwin-arm64
 ```
 
 첫 명령은 production bundle, target별 `node-pty` staging, native header와 PTY smoke,
-VSIX 생성 및 ZIP archive 검사를 수행한다. 두 번째 명령은 VS Code `1.125.0`의 clean
+VSIX 생성 및 ZIP archive 검사를 수행한다. 두 번째 명령은 기본적으로 VS Code `1.125.0`의 clean
 profile에 생성된 VSIX를 설치하고 실제 Extension Host에서 module resolution, PTY
-input/output, resize와 정상 종료를 확인한다.
+input/output, resize와 정상 종료를 확인한다. 이어서 disposable Codex-compatible process를 실제
+Canvas에서 선택해 세 MCP Tool, Host/lease/Graph 경로, Webview Activity binding/effect DOM,
+continuous CSS animation과 clear 후 제거까지 검증한다.
+
+현재 Stable 또는 Insiders Host를 지정하려면 같은 명령에 version을 추가한다.
+
+```bash
+pnpm run smoke:installed-vsix -- --target <target> --vscode-version stable
+pnpm run smoke:installed-vsix -- --target <target> --vscode-version insiders
+```
 
 Linux에서는 packaging 후 ABI baseline도 확인한다.
 
@@ -548,5 +557,67 @@ L4에서는 Claude `2.1.121` inclusive minimum, 현재 설치 `2.1.239`, minimum
 workflow에서 계속 확인하고, authenticated header expansion과 `crispy_ping`은 로그인된 provider
 smoke로 분리한다. 상세 명령, 실기 결과와 OS별 `not_run` 기록은 `../mcp/README.md`를 따른다.
 
-Antigravity는 계속 기존 bare `agy` 동작만 유지한다. Graph report tool/state와 사용자-visible
+이 L3/L4 기록 시점에는 Graph report tool/state를 연결하지 않았다. 이후 2026-08-26 Phase 5에서
+아래 VS Code Host capability gate를 통해 Codex/Claude Agent Activity와 Graph/Store 연결을 추가했다.
+Antigravity는 계속 기존 bare `agy` 동작만 유지하고 사용자-visible
 `provider_update_required` 정책도 별도 제품 결정 전에는 연결하지 않는다.
+
+## Codex/Claude Agent Activity production 연결 — 2026-08-26
+
+Extension은 activation 때 `vscode.version`을 strict canonical version으로 한 번 parse한다.
+`AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION`은 `1.125.0`이며 stable Host는 `2.0.0` 전까지 지원한다.
+prerelease는 core version이 minimum stable보다 새 버전일 때만 허용하고, malformed, 구버전,
+minimum prerelease와 next major는 false다. 이 경계는 manifest의 `engines.vscode: ^1.125.0` stable
+지원 범위와 맞춘다. provider, child, environment, setting과 persisted session은 Host가 capture한
+boolean을 바꿀 수 없다.
+
+true이면 Codex의 session-only `enabled_tools`와 request-local MCP 등록에 다음 세 Tool이 exact
+순서로 들어간다.
+
+```text
+crispy_ping
+crispy_set_agent_activity
+crispy_clear_agent_activity
+```
+
+Codex에는 capability true/false 어느 쪽에서도 `developer_instructions` CLI override를 주입하지
+않는다. Codex의 `--config`가 Project/Profile/User config보다 우선하므로 해당 key를 설정하면
+repository별 workflow/safety instruction을 대체하기 때문이다. additive composition 경로를 별도로
+qualification하기 전까지 Codex에는 Tool allowlist와 MCP Tool 자체의 schema/description만 제공한다.
+
+Claude는 기존 inline `type: "http"`, URL/header placeholder와 `alwaysLoad: true` shape를 유지하고
+같은 세 Tool을 server에서 노출한다. false이면 두 provider 모두 `crispy_ping`만 노출하며 Claude의
+additive runtime instructions에도 Activity Tool 이름이나 사용법을 넣지 않는다. `crispy_ping`의
+legacy `mode: "observation-only"`는 ping 응답 전용이며 server 전체 capability 설명이 아니다.
+
+true의 Claude `--append-system-prompt` instructions는 assigned root 상대 path만 사용하게 한다. root는 `.`과
+`targetKind: "folder"`로 나타내고 target kind는 `file`/`folder`, activity는 `planned`, `active`,
+`editing`, `completed`, `mentioned`, `rejected` 중 하나다. 시작/전환에는 set, 종료에는 clear를
+사용하며 PTY output이나 file change로 추론하지 않는다. Tool이 root/session/runtime/URI/token/internal
+identity를 제공하거나 선택하는 필드는 없다.
+
+Tool success는 MCP child의 handoff 수락까지만 의미한다. exact lease, selected-root validation,
+Host quota, Webview delivery, Store 적용과 화면 표시의 ACK가 아니다. `postMessage: true`도 같은
+이유로 delivery proof가 아니며 tracked clear receipt는 Host occupancy/quota 정산에만 사용한다.
+cleanup은 lease revoke 뒤 best-effort `clearSession`을 보내므로 Webview 반영을 보장하지 않는다.
+
+Codex config에는 `CRISPY_MCP_TOKEN` environment 변수 이름만, Claude inline header에는 literal
+`${CRISPY_MCP_TOKEN}` placeholder만 들어간다. token 값은 final PTY spawn environment에서만 합성하며
+argv, config, setting, Webview state, log와 telemetry에는 넣지 않는다.
+
+Graph 연결의 현재 제약은 다음과 같다.
+
+- set의 bounded Node path walk는 fail-closed하지만 atomic하지 않아 TOCTOU 가능성이 남는다.
+- 같은 Panel의 `postMessage` invocation FIFO를 pinned assumption으로 사용한다. Promise settlement
+  순서가 뒤집혀도 wire 순서를 바꾸지 않으며 public sequence는 추가하지 않는다.
+- 지원 범위 밖에서는 Activity lease, bridge, receipt/quota와 cleanup state 자체를 만들지 않는다.
+- 끝나지 않는 validation/post work는 고정 cap 안에서 detach하고 quota를 낙관적으로 반환하지 않는다.
+
+minimum, current Stable과 current Insiders Host에서 parser와 gate true/false config, Codex
+Project/User instruction 보존, Claude additive instructions,
+ping과 credential placeholder 회귀, HTTP→SDK→IPC→Supervisor→Terminal lease→selected-root
+Graph→Webview Store→receipt/quota full chain, settlement 역전/FIFO, multi-root 및
+Trust/root/restart lifecycle, unsupported zero-state를 검증한다. 이어서 실제 Codex/Claude smoke와
+해당 native VSIX smoke를 실행하고 환경과 미실행 항목을 기록한다. minimum 또는 major boundary를
+바꿀 때에는 manifest와 capability constant를 함께 갱신한다. 상세 명령과 진단은
+`../mcp/README.md`, repository `README.md`, `TROUBLESHOOTING.md`를 따른다.

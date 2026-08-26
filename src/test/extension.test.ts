@@ -27,6 +27,7 @@ import {
 	shouldLoadWorkspacePersistenceState,
 	postAgentActivityDebugClearMessages,
 	postAgentActivityDebugMessages,
+	readAgentActivityCompatibilityFromHost,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
@@ -199,6 +200,10 @@ suite('Crispy Extension Host', () => {
 		assert.ok(registeredCommands.includes(CLEAR_NODE_EFFECTS_COMMAND_ID));
 		assert.ok(registeredCommands.includes(DEBUG_AGENT_ACTIVITIES_COMMAND_ID));
 		assert.ok(registeredCommands.includes(CLEAR_AGENT_ACTIVITIES_COMMAND_ID));
+	});
+
+	test('production activation은 현재 supported VS Code Host capability를 읽는다', () => {
+		assert.strictEqual(readAgentActivityCompatibilityFromHost(), true);
 	});
 
 	test('Debug Effect 메시지는 Root 직계 Source 순서대로 6종과 icon 조합에 임의 색을 배정한다', () => {

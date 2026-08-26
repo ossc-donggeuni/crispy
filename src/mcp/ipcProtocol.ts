@@ -1,4 +1,13 @@
 import {
+	ACTIVITY_IPC_MAX_UTF8_BYTES,
+	createClearAgentActivityRequested,
+	createSetAgentActivityRequested,
+	isAgentActivityKind,
+	isAgentActivityTargetKind,
+	isCanonicalAgentActivityPath,
+	type AgentActivityRequested,
+} from './agentActivityProtocol';
+import {
 	isValidMcpBearerToken,
 	isValidMcpOpaqueId,
 	isValidMcpRouteId,
@@ -12,6 +21,7 @@ export type HostToMcpChildMessage =
 		readonly sessionId: string;
 		readonly routeId: string;
 		readonly token: string;
+		readonly agentActivityCompatible: boolean;
 	}
 	| {
 		readonly type: 'auth.revoke';
@@ -36,7 +46,7 @@ export const MCP_CHILD_OPERATION_FAILURE_REASONS = Object.freeze([
 export type McpChildOperationFailureReason =
 	typeof MCP_CHILD_OPERATION_FAILURE_REASONS[number];
 
-export type McpChildToHostMessage =
+export type McpChildControlMessage =
 	| {
 		readonly type: 'server.ready';
 		readonly generation: string;
@@ -72,6 +82,8 @@ export type McpChildToHostMessage =
 		readonly reason: McpChildOperationFailureReason;
 	};
 
+export type McpChildToHostMessage = McpChildControlMessage | AgentActivityRequested;
+
 export type McpIpcValidationErrorCode =
 	| 'invalid_message'
 	| 'missing_field'
@@ -103,6 +115,7 @@ const port = field((value) => Number.isSafeInteger(value)
 	&& Number(value) <= 65535);
 const failureReason = field((value) => typeof value === 'string'
 	&& (MCP_CHILD_OPERATION_FAILURE_REASONS as readonly string[]).includes(value));
+const compatible = field((value) => typeof value === 'boolean');
 
 const HOST_TO_CHILD_SCHEMAS = registry({
 	'auth.register': {
@@ -111,6 +124,7 @@ const HOST_TO_CHILD_SCHEMAS = registry({
 		sessionId: id,
 		routeId: route,
 		token,
+		agentActivityCompatible: compatible,
 	},
 	'auth.revoke': {
 		requestId: id,
@@ -164,14 +178,110 @@ export function parseHostToMcpChildMessage(
 	) as McpIpcParseResult<HostToMcpChildMessage>;
 }
 
-/** Dedicated IPC channel에서 Host가 받는 unknown payload를 exact schema로 복사한다. */
+/** Child IPC payload를 exact schema의 새 frozen object로 복사한다. */
 export function parseMcpChildToHostMessage(
 	value: unknown,
 ): McpIpcParseResult<McpChildToHostMessage> {
+	if (
+		isRecord(value)
+		&& Object.hasOwn(value, 'type')
+		&& value.type === 'session.agentActivityRequested'
+	) {
+		return parseAgentActivityRequested(value);
+	}
 	return parseMessage(
 		value,
 		CHILD_TO_HOST_SCHEMAS,
 	) as McpIpcParseResult<McpChildToHostMessage>;
+}
+
+function parseAgentActivityRequested(
+	value: Record<string, unknown>,
+): McpIpcParseResult<AgentActivityRequested> {
+	const ownPropertyNames = Object.getOwnPropertyNames(value);
+	if (!ownPropertyNames.includes('operation')) {
+		return failure('missing_field', 'operation');
+	}
+	const operation = value.operation;
+	if (operation !== 'set' && operation !== 'clear') {
+		return failure('invalid_field', 'operation');
+	}
+
+	const expectedKeys = operation === 'set'
+		? [
+			'type',
+			'sessionId',
+			'generation',
+			'operation',
+			'path',
+			'targetKind',
+			'activity',
+		] as const
+		: [
+			'type',
+			'sessionId',
+			'generation',
+			'operation',
+			'path',
+			'targetKind',
+		] as const;
+	for (const name of expectedKeys) {
+		if (!ownPropertyNames.includes(name)) {
+			return failure('missing_field', name);
+		}
+	}
+	for (const name of ownPropertyNames) {
+		if (!(expectedKeys as readonly string[]).includes(name)) {
+			return failure('unexpected_field', name);
+		}
+	}
+
+	const sessionId = value.sessionId;
+	const generation = value.generation;
+	const path = value.path;
+	const targetKind = value.targetKind;
+	if (!isValidMcpOpaqueId(sessionId)) {
+		return failure('invalid_field', 'sessionId');
+	}
+	if (!isValidMcpOpaqueId(generation)) {
+		return failure('invalid_field', 'generation');
+	}
+	if (!isAgentActivityTargetKind(targetKind)) {
+		return failure('invalid_field', 'targetKind');
+	}
+	if (!isCanonicalAgentActivityPath(path, targetKind)) {
+		return failure('invalid_field', 'path');
+	}
+
+	let event: AgentActivityRequested;
+	if (operation === 'set') {
+		const activity = value.activity;
+		if (!isAgentActivityKind(activity)) {
+			return failure('invalid_field', 'activity');
+		}
+		event = createSetAgentActivityRequested({
+			sessionId,
+			generation,
+			path,
+			targetKind,
+			activity,
+		});
+	} else {
+		event = createClearAgentActivityRequested({
+			sessionId,
+			generation,
+			path,
+			targetKind,
+		});
+	}
+
+	if (
+		Buffer.byteLength(JSON.stringify(event), 'utf8')
+		> ACTIVITY_IPC_MAX_UTF8_BYTES
+	) {
+		return failure('invalid_field', 'path');
+	}
+	return { ok: true, value: event };
 }
 
 function parseMessage(
@@ -190,8 +300,14 @@ function parseMessage(
 	if (!Object.hasOwn(schemas, value.type)) {
 		return failure('unknown_type', 'type');
 	}
+	return parseKnownMessage(value, value.type, schemas[value.type]);
+}
 
-	const fields = schemas[value.type];
+function parseKnownMessage(
+	value: Record<string, unknown>,
+	type: string,
+	fields: MessageFields,
+): McpIpcParseResult<Record<string, unknown>> {
 	for (const [name, schema] of Object.entries(fields)) {
 		if (!Object.hasOwn(value, name) && schema.optional !== true) {
 			return failure('missing_field', name);
@@ -203,7 +319,7 @@ function parseMessage(
 		}
 	}
 
-	const parsed: Record<string, unknown> = { type: value.type };
+	const parsed: Record<string, unknown> = { type };
 	for (const [name, schema] of Object.entries(fields)) {
 		if (!Object.hasOwn(value, name) && schema.optional === true) {
 			continue;

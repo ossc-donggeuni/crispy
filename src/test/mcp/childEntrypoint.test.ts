@@ -18,7 +18,7 @@ const childEntryPath = path.resolve(
 );
 
 suite('Standalone MCP child transaction', () => {
-	test('random loopback ready→register→ping→revoke→shutdown 뒤 old port를 닫는다', async () => {
+	test('random loopback ready→register→Activity/ping→revoke→shutdown 뒤 old port를 닫는다', async () => {
 		const identity = createIdentity();
 		const child = launchChild(identity.generation);
 		try {
@@ -39,10 +39,53 @@ suite('Standalone MCP child transaction', () => {
 			await send(child, {
 				type: 'auth.register',
 				requestId: 'request-register',
+				agentActivityCompatible: true,
 				...identity,
 			});
 			const registered = await registeredPromise;
 			assert.strictEqual(registered.sessionId, identity.sessionId);
+
+			const activityRequestedPromise = waitForMessage(
+				child,
+				(message): message is Extract<McpChildToHostMessage, {
+					type: 'session.agentActivityRequested';
+				}> => message.type === 'session.agentActivityRequested',
+			);
+			const activityResponse = await fetch(
+				`http://127.0.0.1:${ready.port}/mcp/${identity.routeId}`,
+				{
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${identity.token}`,
+						'Content-Type': 'application/json',
+						Accept: 'application/json, text/event-stream',
+					},
+					body: JSON.stringify({
+						jsonrpc: '2.0',
+						id: 0,
+						method: 'tools/call',
+						params: {
+							name: 'crispy_set_agent_activity',
+							arguments: {
+								path: 'src//child.ts',
+								targetKind: 'file',
+								activity: 'active',
+							},
+						},
+					}),
+				},
+			);
+			assert.strictEqual(activityResponse.status, 200);
+			assert.match(await activityResponse.text(), /\\"accepted\\":true/);
+			assert.deepStrictEqual(await activityRequestedPromise, {
+				type: 'session.agentActivityRequested',
+				sessionId: identity.sessionId,
+				generation: identity.generation,
+				operation: 'set',
+				path: 'src/child.ts',
+				targetKind: 'file',
+				activity: 'active',
+			});
 
 			const pingObservedPromise = waitForMessage(
 				child,
@@ -122,7 +165,10 @@ suite('Standalone MCP child transaction', () => {
 				message.type === 'auth.registered'
 				&& message.requestId === 'request-first');
 			await send(child, {
-				type: 'auth.register', requestId: 'request-first', ...first,
+				type: 'auth.register',
+				requestId: 'request-first',
+				agentActivityCompatible: false,
+				...first,
 			});
 			await registered;
 
@@ -136,6 +182,7 @@ suite('Standalone MCP child transaction', () => {
 				sessionId: 'session-second',
 				routeId: randomBytes(24).toString('base64url'),
 				token: randomBytes(32).toString('base64url'),
+				agentActivityCompatible: false,
 			});
 			const registrationFailure = await secondFailure;
 			assert.strictEqual(

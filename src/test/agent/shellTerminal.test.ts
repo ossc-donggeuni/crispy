@@ -688,6 +688,39 @@ suite('Shell Terminal Webview', () => {
 		);
 	});
 
+	test('Claude UI 제어키는 빈 prompt를 오염시키지 않고 다음 입력으로 자동 제목을 만든다', () => {
+		const terminal = new FakeTerminal();
+		const messages: unknown[] = [];
+		let title = '';
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			{
+				...createDependencies(terminal),
+				autoTitle: {
+					isEligible: () => true,
+					onCandidate: (event) => title = event.candidates[0] ?? '',
+				},
+			},
+		);
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+
+		/** Claude Code의 실행 모드 전환은 Shift+Tab을 CSI Z로 전달한다. */
+		terminal.emitKeyData('\u001b[Z');
+		terminal.emitData('클로드 자동 탭명 변경을 확인해줘');
+		terminal.emitKeyData('\r');
+
+		assert.strictEqual(title, '클로드 자동 탭명 변…');
+		assert.deepStrictEqual(
+			messages.map((message) => (message as { data: string }).data),
+			['\u001b[Z', '클로드 자동 탭명 변경을 확인해줘', '\r'],
+		);
+	});
+
 	test('실제 keyboard 방향키는 protocol 응답과 구분해 session을 fail-closed 처리한다', () => {
 		const terminal = new FakeTerminal();
 		let title = '';
