@@ -526,11 +526,12 @@ async function createFullChainFixture(
 	await mkdir(path.join(tempRoot, 'src'));
 	await writeFile(path.join(tempRoot, 'src', 'feature.ts'), 'export {};\n');
 	const rootUri = vscode.Uri.file(tempRoot);
+	const rootFsPath = rootUri.fsPath as ValidatedWorkspaceFsPath;
 	const workspaceRootId = createWorkspaceRootId(rootUri);
 	const root = {
 		id: workspaceRootId,
 		scheme: 'file',
-		fsPath: tempRoot as ValidatedWorkspaceFsPath,
+		fsPath: rootFsPath,
 		workspaceFolder: {
 			uri: rootUri,
 			name: 'activity-full-chain',
@@ -603,7 +604,7 @@ async function createFullChainFixture(
 					executable: '/resolved/codex',
 					launcherKind: 'direct',
 				},
-				cwd: tempRoot,
+				cwd: rootFsPath,
 				environment: { PATH: '/bin' },
 				platform: process.platform,
 				shellEnvironmentPolicyStyle: 'keyed-filters',
