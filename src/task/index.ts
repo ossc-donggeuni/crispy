@@ -56,8 +56,11 @@ export {
 	type WorkspaceTaskStateSubscriber,
 } from './workspaceTaskState';
 export {
+	createTaskExecutionActivitySessionId,
+	createTaskExecutionActivityTabId,
 	createTaskWorkExecutionPlan,
 	createTaskExecutionScheduler,
+	isTaskExecutionActivityTabId,
 	isTaskExecutionActive,
 	type TaskExecutionScopeTarget,
 	type TaskExecutionScheduler,

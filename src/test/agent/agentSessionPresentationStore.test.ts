@@ -11,6 +11,11 @@ import {
 	createAgentSessionPresentationStore,
 } from '../../agent/webview/agentSessionPresentationStore';
 import { resolveAgentSessionColor } from '../../agent/agentSessionColor';
+import {
+	createTaskExecutionActivitySessionId,
+	createTaskExecutionActivityTabId,
+	isTaskExecutionActivityTabId,
+} from '../../task';
 
 suite('Agent Session Presentation Store', () => {
 	test('수명주기와 고빈도 content 변경을 분리하고 exact session만 갱신한다', () => {
@@ -213,6 +218,56 @@ suite('Agent Session Presentation Coordinator', () => {
 
 		assert.deepStrictEqual(activities.getSnapshot(), []);
 		assert.strictEqual(presentations.getSession('session-A'), undefined);
+		coordinator.dispose();
+	});
+
+	test('외부 소유 Task 표시 세션은 탭 모델 동기화에서 보존하고 stale 일반 세션만 정리한다', () => {
+		const model = new FakeAgentTabModel(createSnapshot('Current'));
+		const presentations = createAgentSessionPresentationStore();
+		const activities = createAgentActivityStore();
+		const taskSessionId = createTaskExecutionActivitySessionId(
+			'execution-A',
+			'work-A',
+		);
+		const taskTabId = createTaskExecutionActivityTabId('execution-A', 'work-A');
+		const coordinator = createAgentSessionPresentationCoordinator(
+			model.asModel(),
+			presentations,
+			activities,
+			{
+				isSessionExternallyManaged: ({ tabId }) => (
+					isTaskExecutionActivityTabId(tabId)
+				),
+			},
+		);
+
+		presentations.activateSession(taskTabId, taskSessionId, 'Task Work');
+		activities.setAgentActivity(
+			taskSessionId,
+			{ nodeId: 'task-node:work-A' },
+			'active',
+		);
+		presentations.activateSession('missing-tab', 'stale-session', 'Stale');
+		activities.setAgentActivity(
+			'stale-session',
+			{ nodeId: 'file:stale.ts' },
+			'editing',
+		);
+
+		model.setSnapshot(createSnapshot('Current'));
+
+		assert.strictEqual(presentations.isRunningSession(taskSessionId), true);
+		assert.deepStrictEqual(
+			activities.getActivities({ nodeId: 'task-node:work-A' }).map(
+				({ sessionId, activity }) => ({ sessionId, activity }),
+			),
+			[{ sessionId: taskSessionId, activity: 'active' }],
+		);
+		assert.strictEqual(presentations.getSession('stale-session'), undefined);
+		assert.deepStrictEqual(
+			activities.getActivities({ nodeId: 'file:stale.ts' }),
+			[],
+		);
 		coordinator.dispose();
 	});
 });

@@ -1,5 +1,6 @@
 import { AGENT_PROVIDER_LABELS } from '../../agent/UI/agentProviders';
 import {
+	createTaskExecutionActivitySessionId,
 	isTaskExecutionActive,
 	type TaskExecutionSnapshot,
 	type TaskNodePosition,
@@ -1804,7 +1805,7 @@ function createTaskExecutionNodeEffects(
 	return activity === undefined || execution === undefined
 		? []
 		: getAgentActivityEffects(
-			`task:${execution.executionId}:${node.id}`,
+			createTaskExecutionActivitySessionId(execution.executionId, node.id),
 			activity,
 			color,
 		);

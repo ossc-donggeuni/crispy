@@ -42,6 +42,29 @@ export interface TaskExecutionSnapshot {
 	readonly works: readonly TaskWorkExecutionSnapshot[];
 }
 
+const TASK_EXECUTION_ACTIVITY_TAB_PREFIX = 'task-runtime-tab:';
+
+/** Task Graph가 AgentActivity 표시를 위해 소유하는 가상 session ID다. */
+export function createTaskExecutionActivitySessionId(
+	executionId: string,
+	nodeId: string,
+): string {
+	return `task:${executionId}:${nodeId}`;
+}
+
+/** 실제 Agent 탭과 충돌하지 않는 Task Graph 소유 표시 tab ID다. */
+export function createTaskExecutionActivityTabId(
+	executionId: string,
+	nodeId: string,
+): string {
+	return `${TASK_EXECUTION_ACTIVITY_TAB_PREFIX}${executionId}:${nodeId}`;
+}
+
+/** 일반 Agent 탭 lifecycle이 Task Graph 소유 표시 세션을 정리하지 않게 구분한다. */
+export function isTaskExecutionActivityTabId(tabId: string): boolean {
+	return tabId.startsWith(TASK_EXECUTION_ACTIVITY_TAB_PREFIX);
+}
+
 /** terminal Start 상태와 별개로 Agent process가 더 진행 중인지 판별한다. */
 export function isTaskExecutionActive(snapshot: TaskExecutionSnapshot): boolean {
 	return snapshot.state === 'running' || snapshot.works.some(({ state }) => (

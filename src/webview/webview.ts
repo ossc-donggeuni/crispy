@@ -57,7 +57,10 @@ import {
 	type WebviewSessionState,
 	type WebviewStateApi,
 } from './webviewState';
-import { parseTaskExecutionToWebviewMessage } from '../task/taskExecutionProtocol';
+import {
+	isTaskExecutionActivityTabId,
+	parseTaskExecutionToWebviewMessage,
+} from '../task';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
@@ -446,6 +449,11 @@ if (agentPanelUi !== undefined) {
 		agentPanelUi.model,
 		agentSessionPresentationStore,
 		agentActivityStore,
+		{
+			isSessionExternallyManaged: ({ tabId }) => (
+				isTaskExecutionActivityTabId(tabId)
+			),
+		},
 	);
 }
 

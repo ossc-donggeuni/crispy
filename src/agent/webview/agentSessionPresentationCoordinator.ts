@@ -1,7 +1,10 @@
 import type { AgentTabModel, AgentTabModelSnapshot } from '../UI/agentTabModel';
 import type { HostToWebviewMessage, SessionId, TabId } from '../protocol';
 import type { AgentActivityStore } from './agentActivityStore';
-import type { AgentSessionPresentationStore } from './agentSessionPresentationStore';
+import type {
+	AgentSessionPresentationSnapshot,
+	AgentSessionPresentationStore,
+} from './agentSessionPresentationStore';
 
 /** Host lifecycle, 탭 제목과 Activity 정리를 한 세션 identity로 묶는다. */
 export interface AgentSessionPresentationCoordinator {
@@ -10,11 +13,19 @@ export interface AgentSessionPresentationCoordinator {
 	dispose(): void;
 }
 
+export interface AgentSessionPresentationCoordinatorOptions {
+	/** 실제 AgentTabModel이 아니라 다른 UI runtime이 lifecycle을 소유한 세션이다. */
+	readonly isSessionExternallyManaged?: (
+		session: AgentSessionPresentationSnapshot,
+	) => boolean;
+}
+
 /** 활성 PTY만 Graph Binding에 노출하고 종료 시 모든 Target Activity를 정리한다. */
 export function createAgentSessionPresentationCoordinator(
 	model: AgentTabModel,
 	presentationStore: AgentSessionPresentationStore,
 	activityStore: AgentActivityStore,
+	options: AgentSessionPresentationCoordinatorOptions = {},
 ): AgentSessionPresentationCoordinator {
 	let disposed = false;
 
@@ -43,6 +54,9 @@ export function createAgentSessionPresentationCoordinator(
 		for (const session of presentationStore.getSnapshot()) {
 			const tab = tabsById.get(session.tabId);
 			if (tab === undefined) {
+				if (options.isSessionExternallyManaged?.(session) === true) {
+					continue;
+				}
 				terminateSession(session.sessionId);
 				continue;
 			}

@@ -90,6 +90,8 @@ import type {
 } from './agentActivityFloatingNotifications';
 import type { AgentActivityNotificationEntry } from './agentActivityNotifications';
 import {
+	createTaskExecutionActivitySessionId,
+	createTaskExecutionActivityTabId,
 	TASK_DEFAULT_END_POSITION,
 	isTaskExecutionActive,
 	type TaskBlueprint,
@@ -2419,7 +2421,10 @@ export function initializeGraphView(
 			snapshot.startNodeId,
 			...snapshot.works.map(({ nodeId }) => nodeId),
 		]) {
-			const sessionId = `task:${snapshot.executionId}:${nodeId}`;
+			const sessionId = createTaskExecutionActivitySessionId(
+				snapshot.executionId,
+				nodeId,
+			);
 			taskActivityStateBySessionId.delete(sessionId);
 			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(sessionId);
 			runtimeOptions.agentSessionPresentationStore?.endSession(sessionId);
@@ -2437,12 +2442,18 @@ export function initializeGraphView(
 		if (!store || !presentations) {
 			return;
 		}
-		const sessionId = `task:${snapshot.executionId}:${nodeId}`;
+		const sessionId = createTaskExecutionActivitySessionId(
+			snapshot.executionId,
+			nodeId,
+		);
 		if (taskActivityStateBySessionId.get(sessionId) === activity) {
 			return;
 		}
 		taskActivityStateBySessionId.set(sessionId, activity);
-		const tabId = `task-runtime-tab:${snapshot.executionId}:${nodeId}`;
+		const tabId = createTaskExecutionActivityTabId(
+			snapshot.executionId,
+			nodeId,
+		);
 		if (!presentations.isKnownSession(sessionId)) {
 			presentations.startSession(tabId, sessionId, title);
 			presentations.activateSession(tabId, sessionId, title);
