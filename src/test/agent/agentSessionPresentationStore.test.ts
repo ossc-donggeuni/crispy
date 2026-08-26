@@ -72,15 +72,6 @@ suite('Agent Session Presentation Store', () => {
 		assert.strictEqual(store.getSessionForTab('tab-A')?.sessionId, 'session-new');
 	});
 
-	test('외부 표시 세션은 생성 시 실제 Agent 세션 색상을 그대로 이어받는다', () => {
-		const store = createAgentSessionPresentationStore(() => '#fallback');
-
-		store.activateSession('task-tab', 'task-session', 'Task Work', '#12ab34');
-
-		assert.strictEqual(store.getSession('task-session')?.color, '#12ab34');
-		store.activateSession('task-tab', 'task-session', 'Renamed', '#ffffff');
-		assert.strictEqual(store.getSession('task-session')?.color, '#12ab34');
-	});
 });
 
 suite('Agent Session Presentation Coordinator', () => {
@@ -278,6 +269,52 @@ suite('Agent Session Presentation Coordinator', () => {
 			activities.getActivities({ nodeId: 'file:stale.ts' }),
 			[],
 		);
+		coordinator.dispose();
+	});
+
+	test('실제 Task Work 세션은 terminal 종료 뒤에도 완료 Activity 소유권을 보존한다', () => {
+		const model = new FakeAgentTabModel(createSnapshot('Task Work', 'session-task'));
+		const presentations = createAgentSessionPresentationStore();
+		const activities = createAgentActivityStore();
+		const coordinator = createAgentSessionPresentationCoordinator(
+			model.asModel(),
+			presentations,
+			activities,
+			{
+				isSessionExternallyManaged: ({ sessionId }) => (
+					sessionId === 'session-task'
+				),
+			},
+		);
+
+		coordinator.handleHostMessage({
+			type: 'terminal.started',
+			tabId: 'tab-A',
+			sessionId: 'session-task',
+		});
+		activities.setAgentActivity(
+			'session-task',
+			{ nodeId: 'task-node:work-A' },
+			'completed',
+		);
+		model.setSnapshot(createSnapshot('Task Work'));
+		coordinator.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: 'tab-A',
+			sessionId: 'session-task',
+			exitCode: 0,
+		});
+
+		assert.strictEqual(presentations.isRunningSession('session-task'), true);
+		assert.deepStrictEqual(
+			activities.getActivities({ nodeId: 'task-node:work-A' }).map(
+				({ sessionId, activity }) => ({ sessionId, activity }),
+			),
+			[{ sessionId: 'session-task', activity: 'completed' }],
+		);
+		coordinator.endTabSession('tab-A');
+		assert.strictEqual(presentations.getSession('session-task'), undefined);
+		assert.deepStrictEqual(activities.getSnapshot(), []);
 		coordinator.dispose();
 	});
 });

@@ -228,6 +228,18 @@ const taskWorkByTabId = new Map<string, Readonly<{
 	executionId: string;
 	workNodeId: string;
 }>>();
+/** 종료 뒤에도 완료 Activity와 원래 탭의 실제 session identity를 보존한다. */
+const taskWorkAgentSessionIds = new Set<string>();
+const unsubscribeTaskWorkAgentSessions = agentSessionPresentationStore.subscribe(
+	(change) => {
+		if (
+			change.kind === 'lifecycle'
+			&& !agentSessionPresentationStore.isKnownSession(change.sessionId)
+		) {
+			taskWorkAgentSessionIds.delete(change.sessionId);
+		}
+	},
+);
 const workspaceNodeInspectorFallback: WorkspaceNodeInspector = {
 	handleDetailsResult: () => undefined,
 	handleMutationResult: () => undefined,
@@ -454,8 +466,9 @@ if (agentPanelUi !== undefined) {
 		agentSessionPresentationStore,
 		agentActivityStore,
 		{
-			isSessionExternallyManaged: ({ tabId }) => (
+			isSessionExternallyManaged: ({ tabId, sessionId }) => (
 				isTaskExecutionActivityTabId(tabId)
+				|| taskWorkAgentSessionIds.has(sessionId)
 			),
 		},
 	);
@@ -495,7 +508,11 @@ openAgentSessionFromGraph = (sessionId): void => {
 
 	const snapshot = panelUi.getSnapshot();
 	const sessionTab = snapshot.tabs.find((tab) => (
-		tab.id === presentation.tabId && tab.sessionId === sessionId
+		tab.id === presentation.tabId
+		&& (
+			tab.sessionId === sessionId
+			|| taskWorkAgentSessionIds.has(sessionId)
+		)
 	));
 
 	if (!sessionTab) {
@@ -604,6 +621,7 @@ if (
 
 window.addEventListener('unload', () => {
 	document.removeEventListener('visibilitychange', handleWebviewVisibilityChange);
+	unsubscribeTaskWorkAgentSessions();
 	unsubscribeGraphState();
 	unsubscribeWorkspaceSnapshot();
 	agentActivityEffects.dispose();
@@ -875,6 +893,7 @@ function handleHostMessage(message: unknown): void {
 				const taskWork = taskWorkByTabId.get(agentMessage.tabId);
 
 				if (taskWork) {
+					taskWorkAgentSessionIds.add(agentMessage.sessionId);
 					graphView.assignTaskWorkAgentSession?.(
 						taskWork.executionId,
 						taskWork.workNodeId,

@@ -1410,8 +1410,11 @@ export function initializeGraphView(
 	);
 	const taskWorkAgentSessions = new Map<string, Readonly<{
 		actualSessionId: string;
-		color: string;
 	}>>();
+	const createTaskWorkAgentSessionKey = (
+		executionId: string,
+		workNodeId: string,
+	): string => JSON.stringify([executionId, workNodeId]);
 	const taskActivityKindsBySessionId = new Map<
 		string,
 		Map<string, 'planned' | 'active' | 'editing' | 'completed' | 'rejected'>
@@ -1423,9 +1426,7 @@ export function initializeGraphView(
 			runtimeOptions.agentSessionPresentationStore,
 			{
 				onSessionOpenRequest: (sessionId) => {
-					interactions.onAgentSessionOpenRequest?.(
-						taskWorkAgentSessions.get(sessionId)?.actualSessionId ?? sessionId,
-					);
+					interactions.onAgentSessionOpenRequest?.(sessionId);
 				},
 			},
 		)
@@ -2432,20 +2433,33 @@ export function initializeGraphView(
 		return snapshot !== undefined && isTaskExecutionActive(snapshot);
 	};
 	const clearTaskExecutionActivities = (snapshot: TaskExecutionSnapshot): void => {
-		const activityNodeIds = [
+		const taskSessionId = createTaskExecutionActivitySessionId(
+			snapshot.executionId,
 			snapshot.startNodeId,
-			...snapshot.works.map(({ nodeId }) => nodeId),
-		];
+		);
 
-		for (const nodeId of activityNodeIds) {
-			const sessionId = createTaskExecutionActivitySessionId(
+		runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+			taskSessionId,
+		);
+		runtimeOptions.agentSessionPresentationStore?.endSession(taskSessionId);
+		taskActivityKindsBySessionId.delete(taskSessionId);
+		for (const { nodeId } of snapshot.works) {
+			const assignmentKey = createTaskWorkAgentSessionKey(
 				snapshot.executionId,
 				nodeId,
 			);
-			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(sessionId);
-			runtimeOptions.agentSessionPresentationStore?.endSession(sessionId);
-			taskWorkAgentSessions.delete(sessionId);
-			taskActivityKindsBySessionId.delete(sessionId);
+			const assignedSession = taskWorkAgentSessions.get(assignmentKey);
+
+			if (assignedSession) {
+				runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+					assignedSession.actualSessionId,
+				);
+				runtimeOptions.agentSessionPresentationStore?.endSession(
+					assignedSession.actualSessionId,
+				);
+				taskActivityKindsBySessionId.delete(assignedSession.actualSessionId);
+			}
+			taskWorkAgentSessions.delete(assignmentKey);
 		}
 	};
 	const publishTaskExecutionActivity = (
@@ -2455,7 +2469,6 @@ export function initializeGraphView(
 		title: string,
 		activity: 'planned' | 'active' | 'editing' | 'completed' | 'rejected',
 		message: string,
-		initialColor?: string,
 	): void => {
 		const store = runtimeOptions.agentActivityStore;
 		const presentations = runtimeOptions.agentSessionPresentationStore;
@@ -2475,10 +2488,45 @@ export function initializeGraphView(
 				tabId,
 				sessionId,
 				title,
-				initialColor,
 			);
 		}
 		presentations.updateCurrentMessage(tabId, sessionId, message);
+		const activityKindsByTarget = taskActivityKindsBySessionId.get(sessionId)
+			?? new Map();
+
+		if (activityKindsByTarget.get(targetNodeId) === activity) {
+			return;
+		}
+		activityKindsByTarget.set(targetNodeId, activity);
+		taskActivityKindsBySessionId.set(sessionId, activityKindsByTarget);
+		store.setAgentActivity(sessionId, { nodeId: targetNodeId }, activity);
+	};
+	const publishTaskWorkAgentActivity = (
+		sessionId: string,
+		targetNodeId: string,
+		activity: 'planned' | 'active' | 'completed' | 'rejected',
+	): void => {
+		const store = runtimeOptions.agentActivityStore;
+		const presentations = runtimeOptions.agentSessionPresentationStore;
+
+		if (!store || !presentations?.isRunningSession(sessionId)) {
+			return;
+		}
+		if (activity === 'completed' || activity === 'rejected') {
+			for (const targetSnapshot of store.getSnapshot()) {
+				if (
+					targetSnapshot.target.nodeId === targetNodeId
+					&& targetSnapshot.target.rootId === undefined
+				) {
+					continue;
+				}
+				if (targetSnapshot.activities.some((entry) => (
+					entry.sessionId === sessionId
+				))) {
+					store.clearAgentActivity(sessionId, targetSnapshot.target);
+				}
+			}
+		}
 		const activityKindsByTarget = taskActivityKindsBySessionId.get(sessionId)
 			?? new Map();
 
@@ -2494,7 +2542,7 @@ export function initializeGraphView(
 		const taskTitle = record?.task.title ?? 'Task';
 		for (const work of snapshot.works) {
 			const assignedSession = taskWorkAgentSessions.get(
-				createTaskExecutionActivitySessionId(
+				createTaskWorkAgentSessionKey(
 					snapshot.executionId,
 					work.nodeId,
 				),
@@ -2516,26 +2564,10 @@ export function initializeGraphView(
 			if (!activity) {
 				continue;
 			}
-			const node = record?.task.nodes.find(({ id }) => id === work.nodeId);
-			const title = node?.kind === 'work' ? node.title : 'Task Work';
-			publishTaskExecutionActivity(
-				snapshot.executionId,
+			publishTaskWorkAgentActivity(
+				assignedSession.actualSessionId,
 				work.nodeId,
-				work.nodeId,
-				title,
 				activity,
-				work.summary ?? (
-					work.state === 'completed'
-						? 'Work가 완료되었습니다.'
-						: work.state === 'rejected'
-							|| work.state === 'failed'
-							|| work.state === 'blocked'
-							? 'Work가 중단되었습니다.'
-							: work.state === 'waiting-approval'
-								? '추가 영역 접근에 대한 사용자 결정을 기다립니다.'
-								: 'Work를 수행하고 있습니다.'
-				),
-				assignedSession.color,
 			);
 		}
 
@@ -4256,16 +4288,22 @@ export function initializeGraphView(
 			) {
 				return;
 			}
-			const activitySessionId = createTaskExecutionActivitySessionId(
+			const assignmentKey = createTaskWorkAgentSessionKey(
 				executionId,
 				workNodeId,
 			);
+			const previousSession = taskWorkAgentSessions.get(assignmentKey);
 
+			if (
+				previousSession
+				&& previousSession.actualSessionId !== sessionId
+			) {
+				taskActivityKindsBySessionId.delete(previousSession.actualSessionId);
+			}
 			taskWorkAgentSessions.set(
-				activitySessionId,
+				assignmentKey,
 				Object.freeze({
 					actualSessionId: sessionId,
-					color: presentation.color,
 				}),
 			);
 			syncTaskExecutionActivities(snapshot);

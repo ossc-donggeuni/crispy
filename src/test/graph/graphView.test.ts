@@ -7526,6 +7526,11 @@ suite('Graph View', () => {
 			'agent-session',
 			'Assigned Agent',
 		);
+		presentations.updateCurrentMessage(
+			'agent-tab',
+			'agent-session',
+			'Actual session output',
+		);
 		graphView.assignTaskWorkAgentSession?.(
 			'execution-ui',
 			workNode.id,
@@ -7563,7 +7568,7 @@ suite('Graph View', () => {
 			'#2468ac',
 		);
 		assert.deepStrictEqual(getAgentBindingState(workElement), [[
-			`task:execution-ui:${workNode.id}`,
+			'agent-session',
 			'active',
 		]]);
 		const runningWorkBinding = getAgentBindingElements(workElement)[0];
@@ -7586,13 +7591,13 @@ suite('Graph View', () => {
 		), [{ sessionId: `task:execution-ui:${startNode.id}`, activity: 'editing' }]);
 		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
 			({ sessionId, activity }) => ({ sessionId, activity }),
-		), [{ sessionId: `task:execution-ui:${workNode.id}`, activity: 'active' }]);
+		), [{ sessionId: 'agent-session', activity: 'active' }]);
 		assert.strictEqual(
-			presentations.getSession(`task:execution-ui:${workNode.id}`)?.currentMessage,
-			'Work를 수행하고 있습니다.',
+			presentations.getSession('agent-session')?.currentMessage,
+			'Actual session output',
 		);
 		assert.strictEqual(
-			presentations.getSession(`task:execution-ui:${workNode.id}`)?.color,
+			presentations.getSession('agent-session')?.color,
 			'#2468ac',
 		);
 		graphView.applyTaskExecutionSnapshot?.({
@@ -7605,8 +7610,8 @@ suite('Graph View', () => {
 			works: [{ nodeId: workNode.id, state: 'waiting-approval' }],
 		});
 		assert.strictEqual(
-			presentations.getSession(`task:execution-ui:${workNode.id}`)?.currentMessage,
-			'추가 영역 접근에 대한 사용자 결정을 기다립니다.',
+			presentations.getSession('agent-session')?.currentMessage,
+			'Actual session output',
 		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui',
@@ -7640,6 +7645,11 @@ suite('Graph View', () => {
 				startElement, 'data-graph-node-effect', 'icon',
 			).style.getPropertyValue('--graph-node-effect-color'),
 			'#13579b',
+		);
+		store.setAgentActivity(
+			'agent-session',
+			{ nodeId: 'folder:app' },
+			'active',
 		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui',
@@ -7691,7 +7701,7 @@ suite('Graph View', () => {
 			({ sessionId, activity }) => ({ sessionId, activity }),
 		), [
 			{
-				sessionId: `task:execution-ui:${workNode.id}`,
+				sessionId: 'agent-session',
 				activity: 'completed',
 			},
 			{
@@ -7705,6 +7715,11 @@ suite('Graph View', () => {
 			sessionId: `task:execution-ui:${startNode.id}`,
 			activity: 'completed',
 		}]);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: 'folder:app' }),
+			[],
+			'Task session 종료 시 Work 외의 진행 중 Activity는 남지 않아야 한다.',
+		);
 		assert.strictEqual(
 			getDescendantByAttribute(
 				endElement,
@@ -7721,17 +7736,8 @@ suite('Graph View', () => {
 			).style.getPropertyValue('--graph-node-effect-color'),
 			'#2468ac',
 		);
-		presentations.endSession('agent-session');
-		assert.strictEqual(
-			getDescendantByAttribute(
-				workElement,
-				'data-graph-node-effect',
-				'outline',
-			).style.getPropertyValue('--graph-node-effect-color'),
-			'#2468ac',
-		);
 		assert.deepStrictEqual(getAgentBindingState(workElement), [
-			[`task:execution-ui:${workNode.id}`, 'completed'],
+			['agent-session', 'completed'],
 			[`task:execution-ui:${startNode.id}`, 'completed'],
 		]);
 		const taskCompletionSessionId = `task:execution-ui:${startNode.id}`;
@@ -7776,7 +7782,7 @@ suite('Graph View', () => {
 		assert.deepStrictEqual(store.getActivities({ nodeId: startNode.id }), []);
 		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
 			({ sessionId }) => sessionId,
-		), [`task:execution-ui:${workNode.id}`]);
+		), ['agent-session']);
 		assert.deepStrictEqual(store.getActivities({ nodeId: endNode.id }), []);
 		assert.strictEqual(
 			findDescendantByAttribute(
@@ -7817,6 +7823,7 @@ suite('Graph View', () => {
 			presentations.isKnownSession(`task:execution-ui:${startNode.id}`),
 			false,
 		);
+		assert.strictEqual(presentations.isKnownSession('agent-session'), false);
 
 		activityEffects.dispose();
 		graphView.dispose();

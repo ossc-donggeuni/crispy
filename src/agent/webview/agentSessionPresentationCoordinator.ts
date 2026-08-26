@@ -20,7 +20,7 @@ export interface AgentSessionPresentationCoordinatorOptions {
 	) => boolean;
 }
 
-/** 활성 PTY만 Graph Binding에 노출하고 종료 시 모든 Target Activity를 정리한다. */
+/** 일반 PTY는 종료 시 정리하고, 외부 관리 Session은 소유 runtime의 정리까지 보존한다. */
 export function createAgentSessionPresentationCoordinator(
 	model: AgentTabModel,
 	presentationStore: AgentSessionPresentationStore,
@@ -68,6 +68,9 @@ export function createAgentSessionPresentationCoordinator(
 					&& tab.sessionId !== session.sessionId
 				)
 			) {
+				if (options.isSessionExternallyManaged?.(session) === true) {
+					continue;
+				}
 				terminateSession(session.sessionId);
 				continue;
 			}
@@ -121,7 +124,10 @@ export function createAgentSessionPresentationCoordinator(
 				}
 				case 'terminal.exited': {
 					const current = presentationStore.getSessionForTab(message.tabId);
-					if (current?.sessionId === message.sessionId) {
+					if (
+						current?.sessionId === message.sessionId
+						&& options.isSessionExternallyManaged?.(current) !== true
+					) {
 						terminateSession(message.sessionId);
 					}
 					break;
@@ -131,7 +137,10 @@ export function createAgentSessionPresentationCoordinator(
 						break;
 					}
 					const current = presentationStore.getSessionForTab(message.tabId);
-					if (current?.sessionId === message.sessionId) {
+					if (
+						current?.sessionId === message.sessionId
+						&& options.isSessionExternallyManaged?.(current) !== true
+					) {
 						terminateSession(message.sessionId);
 					}
 					break;

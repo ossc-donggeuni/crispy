@@ -1588,6 +1588,43 @@ suite('Webview State Wiring', () => {
 					?.tabId,
 				taskTabId,
 			);
+			hostMessageHandler({
+				data: {
+					type: 'terminal.started',
+					tabId: taskTabId,
+					sessionId: 'session-task-work',
+				},
+			} as MessageEvent);
+			assert.deepStrictEqual(taskWorkAgentSessionAssignments, [{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+			}, {
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+			}]);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.isRunningSession(
+					'session-task-work',
+				),
+				true,
+			);
+			hostMessageHandler({
+				data: {
+					type: 'terminal.exited',
+					tabId: taskTabId,
+					sessionId: 'session-task-work',
+					exitCode: 0,
+				},
+			} as MessageEvent);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.isRunningSession(
+					'session-task-work',
+				),
+				true,
+				'Task Work의 실제 session presentation은 완료 Activity를 위해 보존한다.',
+			);
 			terminalHostMessages.length = 0;
 
 			const terminalStartingMessage = {
