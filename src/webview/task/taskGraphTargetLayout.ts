@@ -15,6 +15,11 @@ import {
 	GRAPH_ROOT_CONTEXT_LINE_HEIGHT,
 } from '../graph/graphRootContext';
 import {
+	getNormalizedGraphUriPathLength,
+	isGraphNodeUriWithinRoot,
+	parseGraphNodeUri,
+} from '../graph/graphNodeUri';
+import {
 	TASK_NODE_WIDTH,
 	TASK_SCOPE_AREA_MIN_HEIGHT,
 	type TaskGraphTargetAreaLayout,
@@ -149,11 +154,14 @@ export function resolveTaskGraphTargetSourceRootId(
 	for (const rootNodeId of rootNodeIds) {
 		const rootUri = parseGraphNodeUri(rootNodeId);
 
-		if (!rootUri || !isUriWithinRoot(sourceUri, rootUri)) {
+		if (
+			!rootUri
+			|| !isGraphNodeUriWithinRoot(sourceUri.uri, rootUri.uri)
+		) {
 			continue;
 		}
 
-		const rootPathLength = normalizeUriPath(rootUri.pathname).length;
+		const rootPathLength = getNormalizedGraphUriPathLength(rootUri.uri);
 
 		if (
 			rootPathLength > ownerPathLength
@@ -394,48 +402,6 @@ function collectOwnershipRootNodeIds(
 	return workspaceRootNodeIds.length > 0
 		? workspaceRootNodeIds
 		: roots.map((root) => root.nodeId);
-}
-
-/** 알려진 Graph Node ID 뒤의 absolute URI를 URL 비교 값으로 복원한다. */
-function parseGraphNodeUri(nodeId: string): URL | undefined {
-	const prefixes = ['workspace-root:', 'folder:', 'file:'] as const;
-	const prefix = prefixes.find((candidate) => nodeId.startsWith(candidate));
-
-	if (!prefix) {
-		return undefined;
-	}
-
-	try {
-		return new URL(nodeId.slice(prefix.length));
-	} catch {
-		return undefined;
-	}
-}
-
-/** scheme/authority와 path segment 경계를 보존해 Source의 Root 포함 여부를 판별한다. */
-function isUriWithinRoot(uri: URL, rootUri: URL): boolean {
-	if (
-		uri.protocol !== rootUri.protocol
-		|| uri.username !== rootUri.username
-		|| uri.password !== rootUri.password
-		|| uri.host !== rootUri.host
-	) {
-		return false;
-	}
-
-	const rootPath = normalizeUriPath(rootUri.pathname);
-	const candidatePath = normalizeUriPath(uri.pathname);
-
-	return candidatePath === rootPath
-		|| rootPath === '/'
-		|| candidatePath.startsWith(`${rootPath}/`);
-}
-
-/** `/` 이외 URI path의 trailing slash를 제거한다. */
-function normalizeUriPath(path: string): string {
-	return path.length > 1 && path.endsWith('/')
-		? path.replace(/\/+$/, '')
-		: path;
 }
 
 /** locale 설정과 무관한 Source ID tie-breaker다. */

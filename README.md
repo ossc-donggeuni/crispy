@@ -122,9 +122,12 @@ not a public or provider-visible delivery acknowledgement.
 The Canvas notification center projects every current Activity for running sessions
 in newest-received order and reuses the same animation recipes as the graph. Selecting
 an entry reveals its collapsed, filtered, or paginated target before focusing the
-camera. Dismissing an entry clears that exact target/session pair through the same
-Webview Activity Store, so its notification, graph binding, and representative effect
-disappear together without introducing another Host or MCP protocol path.
+camera. A target that is inside a current Workspace URI but has not reached the Graph
+snapshot remains pending and completes the reveal/focus after the next Graph refresh;
+only targets outside every current Workspace URI use the unavailable state. Dismissing
+an entry clears that exact target/session pair through the same Webview Activity Store,
+so its notification, graph binding, and representative effect disappear together
+without introducing another Host or MCP protocol path.
 
 Provider credentials keep the existing placeholder boundary. Codex argv contains
 only the environment variable name `CRISPY_MCP_TOKEN` through

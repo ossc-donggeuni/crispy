@@ -1540,6 +1540,9 @@ export function initializeGraphView(
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
 	let agentActivityNotificationCenter: AgentActivityNotificationCenter | undefined;
+	let pendingAgentActivityNotificationFocus:
+		| AgentActivityNotificationEntry
+		| undefined;
 	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
 	const taskScopeOccurrencesByBinding = new Map<string, Set<string>>();
 	let applyingTaskState = false;
@@ -1862,9 +1865,12 @@ export function initializeGraphView(
 			rootId,
 		);
 	};
-	const handleAgentActivityNotificationFocus = (
+	const attemptAgentActivityNotificationFocus = (
 		entry: AgentActivityNotificationEntry,
-	): void => {
+	): boolean => {
+		if (disposed) {
+			return false;
+		}
 		const snapshot = state.getState();
 		const reveal = createAgentActivityTargetRevealState(
 			currentGraph,
@@ -1873,9 +1879,10 @@ export function initializeGraphView(
 			snapshot,
 		);
 
-		if (reveal) {
-			state.setState(reveal.state);
+		if (!reveal) {
+			return false;
 		}
+		state.setState(reveal.state);
 		const currentSnapshot = state.getState();
 		const focusPoint = resolveAgentActivityTargetFocusPoint(
 			currentLayout,
@@ -1884,9 +1891,39 @@ export function initializeGraphView(
 			reveal?.preferredRootId,
 		);
 
-		if (focusPoint) {
-			camera.focusOn(focusPoint);
+		if (!focusPoint) {
+			return false;
 		}
+
+		pendingAgentActivityNotificationFocus = undefined;
+		camera.focusOn(focusPoint);
+		return true;
+	};
+	const handleAgentActivityNotificationFocus = (
+		entry: AgentActivityNotificationEntry,
+	): void => {
+		if (entry.availability === 'outside') {
+			pendingAgentActivityNotificationFocus = undefined;
+			return;
+		}
+		pendingAgentActivityNotificationFocus = entry;
+		attemptAgentActivityNotificationFocus(entry);
+	};
+	const retryPendingAgentActivityNotificationFocus = (): void => {
+		const pending = pendingAgentActivityNotificationFocus;
+
+		if (!pending) {
+			return;
+		}
+		const stillCurrent = runtimeOptions.agentActivityStore
+			?.getActivities(pending.target)
+			.some(({ sessionId }) => sessionId === pending.sessionId) === true;
+
+		if (!stillCurrent) {
+			pendingAgentActivityNotificationFocus = undefined;
+			return;
+		}
+		attemptAgentActivityNotificationFocus(pending);
 	};
 	const performArrangeAll = (): void => {
 		const snapshot = state.getState();
@@ -3545,10 +3582,15 @@ export function initializeGraphView(
 			nodeEffects.createLocalEffectHost,
 			{
 				onFocus: handleAgentActivityNotificationFocus,
-				onDismiss: ({ sessionId, target }) => {
+				onDismiss: (entry) => {
+					if (
+						pendingAgentActivityNotificationFocus?.key === entry.key
+					) {
+						pendingAgentActivityNotificationFocus = undefined;
+					}
 					runtimeOptions.agentActivityStore?.clearAgentActivity(
-						sessionId,
-						target,
+						entry.sessionId,
+						entry.target,
 					);
 				},
 			},
@@ -3840,6 +3882,7 @@ export function initializeGraphView(
 			navigator.setWorkspaceGraph(workspaceGraph);
 			agentActivityNotificationCenter?.setGraph(workspaceGraph);
 			applyTaskState();
+			retryPendingAgentActivityNotificationFocus();
 		},
 		updateTasks(tasks): void {
 			if (!disposed) {
@@ -3931,6 +3974,7 @@ export function initializeGraphView(
 			}
 
 			disposed = true;
+			pendingAgentActivityNotificationFocus = undefined;
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
 			taskImportDialog.dispose();

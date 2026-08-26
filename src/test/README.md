@@ -201,7 +201,8 @@
 - 더보기와 접기가 File Group size, sibling 위치와 Edge를 함께 Reflow한다
 - Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛰며 Renderer/Navigator에 같은 Layout을 전달한다
 - 알림 Center를 실제 가시 Graph 우측 상단에 배치하고 최신 Activity 정보와 동일 Effect를 표시한다
-- 알림 Click으로 숨긴 조상과 File page를 복원해 Camera Focus하고 exact 삭제를 알림, Binding과 대표 Effect에 동기화한다
+- 알림 Click으로 Target 자신의 하위는 열지 않고 Target 표시에 필요한 조상과 File page만 복원해 Camera Focus하며 File Editor도 열지 않는다
+- Workspace 범위 안 pending Target은 Graph 갱신 뒤 조상/Filter를 열어 Focus하고 같은 알림 DOM을 present 상태로 전환한다
 - Graph View dispose에서 알림 Store 구독, Effect와 Overlay DOM을 함께 정리한다
 
 ## `graph/agentActivityNotifications.test.ts`
@@ -209,6 +210,7 @@
 - 모든 Target의 현재 Activity를 전역 수신 sequence 최신순으로 투영한다
 - 같은 Target×Session 상태 전환에서 안정적인 key를 유지하고 중복 행을 만들지 않는다
 - 실행 중인 Session만 표시하고 누락 Target의 내부 ID를 노출하지 않는다
+- Graph snapshot에 없는 Workspace 내부 URI는 decoded pending 경로로, URI 경계 밖 Target만 unavailable로 구분한다
 - Multi-Root context를 포함한 Target 경로와 Activity 상태명을 생성한다
 
 ## `graph/agentActivityFocus.test.ts`
@@ -217,6 +219,13 @@
 - Grouped File Row의 저장 위치와 앞선 Agent Binding footprint로 정확한 중심을 계산한다
 - 명시적인 occurrence와 preferred Detached Root를 source occurrence보다 우선한다
 - 존재하지 않는 Target의 State 복원과 Focus를 안전하게 생략한다
+
+## `graph/graphNodeUri.test.ts`
+
+- production Graph Node prefix와 absolute URI만 구조적으로 복원한다
+- scheme, authority와 path segment 경계를 보존해 Workspace Root 포함 여부를 판정한다
+- Root 상대 URI segment를 사용자 표시 단계에서만 decode한다
+- trailing slash를 제외한 Root path 길이로 nested Root 구체성을 비교한다
 
 ## `graph/graphNavigator.test.ts`
 

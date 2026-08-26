@@ -1797,6 +1797,15 @@ body.vscode-high-contrast-light .graph-viewport {
 	background: var(--vscode-list-hoverBackground, var(--vscode-toolbar-hoverBackground));
 }
 
+.graph-agent-activity-notification-focus:disabled {
+	cursor: default;
+	opacity: 0.72;
+}
+
+.graph-agent-activity-notification-focus:disabled:hover {
+	background: transparent;
+}
+
 .graph-agent-activity-notification-focus.graph-node-effect-host
 	> .graph-node-effect-layer
 	> .graph-node-effect-marching-dash {

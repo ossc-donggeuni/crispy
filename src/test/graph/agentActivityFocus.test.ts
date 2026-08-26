@@ -214,6 +214,53 @@ suite('Agent Activity Focus', () => {
 		assert.ok(result);
 		assert.strictEqual(result.preferredRootId, detachedRootId);
 		assert.deepStrictEqual(result.state.openedFolders, {});
+		assert.strictEqual(result.state.openedFolders?.[targetId], undefined);
+	});
+
+	test('Target이 나올 때까지 조상만 열고 Target 자신은 열지 않는다', () => {
+		const targetIndex = createTaskGraphTargetIndex(GRAPH_MOCK);
+		const projectResult = createAgentActivityTargetRevealState(
+			GRAPH_MOCK,
+			targetIndex,
+			{ nodeId: GRAPH_MOCK_PROJECT.id },
+			INITIAL_GRAPH_STATE,
+		);
+		const folderResult = createAgentActivityTargetRevealState(
+			GRAPH_MOCK,
+			targetIndex,
+			{ nodeId: 'folder:app/src' },
+			INITIAL_GRAPH_STATE,
+		);
+		const fileResult = createAgentActivityTargetRevealState(
+			GRAPH_MOCK,
+			targetIndex,
+			{ nodeId: 'file:app/package.json' },
+			INITIAL_GRAPH_STATE,
+		);
+
+		assert.ok(projectResult);
+		assert.strictEqual(
+			projectResult.state.openedFolders?.[GRAPH_MOCK_PROJECT.id],
+			undefined,
+		);
+		assert.ok(folderResult);
+		assert.strictEqual(
+			folderResult.state.openedFolders?.[GRAPH_MOCK_PROJECT.id],
+			true,
+		);
+		assert.strictEqual(
+			folderResult.state.openedFolders?.['folder:app'],
+			true,
+		);
+		assert.strictEqual(
+			folderResult.state.openedFolders?.['folder:app/src'],
+			undefined,
+		);
+		assert.ok(fileResult);
+		assert.strictEqual(
+			fileResult.state.openedFolders?.['file:app/package.json'],
+			undefined,
+		);
 	});
 
 	test('존재하지 않는 Target은 reveal과 focus를 안전하게 생략한다', () => {

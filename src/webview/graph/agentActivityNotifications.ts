@@ -17,6 +17,11 @@ import type {
 	GraphRootNode,
 	ProjectEntry,
 } from './graphModel';
+import {
+	getGraphNodeUriRelativeSegments,
+	getNormalizedGraphUriPathLength,
+	parseGraphNodeUri,
+} from './graphNodeUri';
 
 export type AgentActivityNotificationTargetKind =
 	| GraphRootNode['kind']
@@ -34,18 +39,28 @@ export interface AgentActivityNotificationEntry {
 	readonly targetName: string;
 	readonly targetPath: string;
 	readonly targetKind: AgentActivityNotificationTargetKind;
+	/** present는 Graph source 존재, pending은 Workspace 범위 안의 다음 Graph 갱신 대기다. */
+	readonly availability: 'present' | 'pending' | 'outside';
 }
 
 export interface AgentActivityTargetPresentation {
 	readonly name: string;
 	readonly path: string;
 	readonly kind: GraphRootNode['kind'];
+	readonly availability: 'present' | 'pending';
 }
 
-export type AgentActivityTargetPresentationIndex = ReadonlyMap<
-	string,
-	AgentActivityTargetPresentation
->;
+interface AgentActivityTargetScopeRoot {
+	readonly id: string;
+	readonly name: string;
+	readonly path: readonly string[];
+	readonly uri: URL;
+}
+
+export interface AgentActivityTargetPresentationIndex {
+	readonly presentations: ReadonlyMap<string, AgentActivityTargetPresentation>;
+	readonly scopeRoots: readonly AgentActivityTargetScopeRoot[];
+}
 
 const UNAVAILABLE_TARGET_NAME = '사용할 수 없는 그래프 대상';
 const UNAVAILABLE_TARGET_PATH = 'Workspace에서 대상을 찾을 수 없습니다.';
@@ -95,11 +110,14 @@ export function createAgentActivityNotificationEntriesFromIndex(
 	const entries: AgentActivityNotificationEntry[] = [];
 
 	for (const targetSnapshot of snapshot) {
-		const targetPresentation = targets.get(
+		const targetPresentation = targets.presentations.get(
 			createTargetPresentationKey(targetSnapshot.target),
-		) ?? targets.get(createTargetPresentationKey({
+		) ?? targets.presentations.get(createTargetPresentationKey({
 			nodeId: targetSnapshot.target.nodeId,
-		}));
+		})) ?? createPendingTargetPresentation(
+			targetSnapshot.target,
+			targets.scopeRoots,
+		);
 
 		for (const activity of targetSnapshot.activities) {
 			const session = presentationStore.getSession(activity.sessionId);
@@ -140,6 +158,7 @@ function createNotificationEntry(
 		targetName: presentation?.name ?? UNAVAILABLE_TARGET_NAME,
 		targetPath: presentation?.path ?? UNAVAILABLE_TARGET_PATH,
 		targetKind: presentation?.kind ?? 'unavailable',
+		availability: presentation?.availability ?? 'outside',
 	};
 }
 
@@ -172,6 +191,7 @@ export function createAgentActivityTargetPresentationIndex(
 	graph: Graph,
 ): AgentActivityTargetPresentationIndex {
 	const presentations = new Map<string, AgentActivityTargetPresentation>();
+	const scopeRoots: AgentActivityTargetScopeRoot[] = [];
 
 	for (const root of graph.roots) {
 		const rootNode = graph.rootNodes[root.nodeId];
@@ -180,9 +200,22 @@ export function createAgentActivityTargetPresentationIndex(
 			continue;
 		}
 		indexGraphRoot(root, rootNode, presentations);
+		const parsedRoot = parseGraphNodeUri(rootNode.id);
+
+		if (parsedRoot) {
+			scopeRoots.push(Object.freeze({
+				id: root.id,
+				name: rootNode.name,
+				path: Object.freeze(splitGraphPath(root.context?.relativePath)),
+				uri: parsedRoot.uri,
+			}));
+		}
 	}
 
-	return presentations;
+	return Object.freeze({
+		presentations,
+		scopeRoots: Object.freeze(scopeRoots),
+	});
 }
 
 function indexGraphRoot(
@@ -229,6 +262,7 @@ function appendTargetPresentation(
 		name: node.name,
 		path: path.filter(Boolean).join('/'),
 		kind: node.kind,
+		availability: 'present' as const,
 	});
 	const exactKey = createTargetPresentationKey({
 		nodeId: node.id,
@@ -242,6 +276,70 @@ function appendTargetPresentation(
 	if (!presentations.has(sourceKey)) {
 		presentations.set(sourceKey, presentation);
 	}
+}
+
+/**
+ * Source가 아직 Graph snapshot에 없더라도 URI가 현재 Root 안이면 표시 경로를
+ * 복원한다. 이 경우 unavailable로 오인하지 않고 다음 Graph 갱신 Focus를 기다린다.
+ */
+function createPendingTargetPresentation(
+	target: Readonly<GraphNodeEffectTarget>,
+	scopeRoots: readonly AgentActivityTargetScopeRoot[],
+): AgentActivityTargetPresentation | undefined {
+	const parsedTarget = parseGraphNodeUri(target.nodeId);
+
+	if (!parsedTarget) {
+		return undefined;
+	}
+
+	let selected: {
+		readonly root: AgentActivityTargetScopeRoot;
+		readonly relativeSegments: readonly string[];
+	} | undefined;
+
+	for (const root of scopeRoots) {
+		const relativeSegments = getGraphNodeUriRelativeSegments(
+			parsedTarget.uri,
+			root.uri,
+		);
+
+		if (!relativeSegments) {
+			continue;
+		}
+		if (!selected) {
+			selected = { root, relativeSegments };
+			continue;
+		}
+
+		const exactRoot = target.rootId === root.id;
+		const selectedExactRoot = target.rootId === selected.root.id;
+		if (
+			(exactRoot && !selectedExactRoot)
+			|| (
+				exactRoot === selectedExactRoot
+				&& getNormalizedGraphUriPathLength(root.uri)
+					> getNormalizedGraphUriPathLength(selected.root.uri)
+			)
+		) {
+			selected = { root, relativeSegments };
+		}
+	}
+
+	if (!selected) {
+		return undefined;
+	}
+	const pathSegments = [
+		...selected.root.path,
+		selected.root.name,
+		...selected.relativeSegments,
+	].filter(Boolean);
+
+	return Object.freeze({
+		name: selected.relativeSegments.at(-1) ?? selected.root.name,
+		path: pathSegments.join('/'),
+		kind: parsedTarget.kind,
+		availability: 'pending',
+	});
 }
 
 function createTargetPresentationKey(

@@ -77,6 +77,8 @@ export function createAgentActivityTargetRevealState(
 	}
 
 	const openedFolders = { ...snapshot.openedFolders };
+	// Target Card/Row가 나오는 데 필요한 조상만 연다. Folder/Project
+	// Target 자신을 열면 하위 Node까지 드러나므로 Target은 제외한다.
 	for (const ancestorId of ancestorIds) {
 		openedFolders[toOccurrenceStateId(preferredRootId, ancestorId)] = true;
 	}

@@ -8569,6 +8569,7 @@ suite('Graph View', () => {
 	test('알림 Center는 최신 Activity를 표시하고 Focus와 exact dismiss를 Graph에 동기화한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
+		const fileOpenRequests: string[] = [];
 		const store = createAgentActivityStore();
 		const presentations = createAgentSessionPresentationStore();
 		const folderTarget = { nodeId: 'folder:app' };
@@ -8604,7 +8605,10 @@ suite('Graph View', () => {
 				},
 			},
 			GRAPH_MOCK,
-			{ resolveVisibleGraphArea: () => visibleArea },
+			{
+				onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
+				resolveVisibleGraphArea: () => visibleArea,
+			},
 			[],
 			undefined,
 			{
@@ -8682,6 +8686,7 @@ suite('Graph View', () => {
 		const focusedState = graphView.state.getState();
 
 		assert.ok(focusPoint);
+		assert.deepStrictEqual(fileOpenRequests, []);
 		assert.strictEqual(panel.hidden, true);
 		assert.strictEqual(focusedState.openedFolders[GRAPH_MOCK_PROJECT.id], true);
 		assert.strictEqual(
@@ -8742,6 +8747,18 @@ suite('Graph View', () => {
 			),
 			[],
 		);
+		focusPoint = undefined;
+		trigger.dispatch('click', createClickEvent(trigger));
+		getDescendantByClass(
+			olderItem,
+			'graph-agent-activity-notification-focus',
+		).dispatch('click', createClickEvent(olderItem));
+		assert.ok(focusPoint);
+		assert.strictEqual(
+			graphView.state.getState().openedFolders[folderTarget.nodeId],
+			undefined,
+		);
+		assert.deepStrictEqual(fileOpenRequests, []);
 
 		activityEffects.dispose();
 		graphView.dispose();
@@ -8752,6 +8769,160 @@ suite('Graph View', () => {
 		), undefined);
 		store.setAgentActivity('session-file', fileTarget, 'active');
 		assert.strictEqual(root.children.length, 0);
+		presentations.dispose();
+	});
+
+	test('Workspace 범위 안의 pending 알림 Focus는 Graph 갱신 뒤 Target을 열고 완료한다', () => {
+		const projectId = 'workspace-root:file:///workspace';
+		const folderId = 'folder:file:///workspace/src';
+		const fileId = 'file:file:///workspace/src/new.ts';
+		const rootId = `root:${projectId}`;
+		const initialProject: Project = {
+			kind: 'project',
+			id: projectId,
+			name: 'workspace',
+			status: 'loaded',
+			children: [],
+		};
+		const file = { kind: 'file' as const, id: fileId, name: 'new.ts' };
+		const folder = {
+			kind: 'folder' as const,
+			id: folderId,
+			name: 'src',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const fullProject: Project = {
+			...initialProject,
+			children: [folder],
+		};
+		const initialGraph: Graph = {
+			roots: [{ id: rootId, nodeId: projectId }],
+			rootNodes: { [projectId]: initialProject },
+		};
+		const fullGraph: Graph = {
+			roots: initialGraph.roots,
+			rootNodes: { [projectId]: fullProject },
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const target = { nodeId: fileId };
+
+		presentations.activateSession('tab-pending', 'session-pending', 'Pending');
+		store.setAgentActivity('session-pending', target, 'editing');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				hiddenNodeIds: { [folderId]: true, [fileId]: true },
+			},
+			initialGraph,
+			{},
+			[],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const list = getDescendantByClass(
+			root,
+			'graph-agent-activity-notification-list',
+		);
+		const item = list.children[0];
+
+		assert.ok(item);
+		assert.strictEqual(item.getAttribute('data-availability'), 'pending');
+		assert.strictEqual(
+			getDescendantByClass(
+				item,
+				'graph-agent-activity-notification-target-path',
+			).textContent,
+			'workspace/src/new.ts',
+		);
+		let focusPoint: { readonly x: number; readonly y: number } | undefined;
+
+		graphView.camera.focusOn = (point) => {
+			focusPoint = point;
+		};
+		getDescendantByClass(
+			item,
+			'graph-agent-activity-notification-focus',
+		).dispatch('click', createClickEvent(item));
+		assert.strictEqual(focusPoint, undefined);
+
+		graphView.updateGraph(fullGraph);
+		const focusedState = graphView.state.getState();
+
+		assert.ok(focusPoint);
+		assert.strictEqual(list.children[0], item);
+		assert.strictEqual(item.getAttribute('data-availability'), 'present');
+		assert.strictEqual(focusedState.openedFolders[projectId], true);
+		assert.strictEqual(focusedState.openedFolders[folderId], true);
+		assert.strictEqual(focusedState.hiddenNodeIds[folderId], undefined);
+		assert.strictEqual(focusedState.hiddenNodeIds[fileId], undefined);
+		assert.ok(getDescendantByAttribute(root, 'data-graph-node-id', fileId));
+
+		graphView.dispose();
+		presentations.dispose();
+	});
+
+	test('현재 Workspace URI 범위 밖 알림은 Focus를 비활성화하고 삭제만 허용한다', () => {
+		const project: Project = {
+			kind: 'project',
+			id: 'workspace-root:file:///workspace',
+			name: 'workspace',
+			status: 'loaded',
+			children: [],
+		};
+		const graph = createSingleRootGraph(project, `root:${project.id}`);
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const target = { nodeId: 'file:file:///outside/private.ts' };
+
+		presentations.activateSession('tab-outside', 'session-outside', 'Outside');
+		store.setAgentActivity('session-outside', target, 'active');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			graph,
+			{},
+			[],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const item = getDescendantByClass(
+			root,
+			'graph-agent-activity-notification-item',
+		);
+		const focus = getDescendantByClass(
+			item,
+			'graph-agent-activity-notification-focus',
+		);
+
+		assert.strictEqual(item.getAttribute('data-availability'), 'outside');
+		assert.strictEqual(focus.disabled, true);
+		assert.strictEqual(
+			getDescendantByClass(
+				item,
+				'graph-agent-activity-notification-target-path',
+			).textContent,
+			'Workspace에서 대상을 찾을 수 없습니다.',
+		);
+		getDescendantByClass(
+			item,
+			'graph-agent-activity-notification-dismiss',
+		).dispatch('click', createClickEvent(item));
+		assert.deepStrictEqual(store.getActivities(target), []);
+
+		graphView.dispose();
 		presentations.dispose();
 	});
 

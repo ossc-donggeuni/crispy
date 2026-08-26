@@ -169,6 +169,77 @@ suite('Agent Activity Notifications', () => {
 		presentations.dispose();
 	});
 
+	test('Graph snapshot에 아직 없어도 Workspace Root 안의 URI는 pending 경로로 표시한다', () => {
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const project = {
+			kind: 'project' as const,
+			id: 'workspace-root:file:///workspace',
+			name: 'workspace',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const graph = {
+			roots: [{ id: `root:${project.id}`, nodeId: project.id }],
+			rootNodes: { [project.id]: project },
+		};
+
+		presentations.activateSession('tab-pending', 'session-pending', 'Pending');
+		store.setAgentActivity('session-pending', {
+			nodeId: 'file:file:///workspace/src/new%20file.ts',
+		}, 'editing');
+		const [entry] = createAgentActivityNotificationEntries(
+			store.getSnapshot(),
+			presentations,
+			graph,
+		);
+
+		assert.strictEqual(entry?.availability, 'pending');
+		assert.strictEqual(entry?.targetKind, 'file');
+		assert.strictEqual(entry?.targetName, 'new file.ts');
+		assert.strictEqual(entry?.targetPath, 'workspace/src/new file.ts');
+		assert.strictEqual(
+			entry?.targetPath.includes('Workspace에서 대상을 찾을 수 없습니다.'),
+			false,
+		);
+		presentations.dispose();
+	});
+
+	test('Workspace Root URI 범위 밖 Target만 unavailable로 표시한다', () => {
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const project = {
+			kind: 'project' as const,
+			id: 'workspace-root:file:///workspace',
+			name: 'workspace',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const graph = {
+			roots: [{ id: `root:${project.id}`, nodeId: project.id }],
+			rootNodes: { [project.id]: project },
+		};
+
+		presentations.activateSession('tab-outside', 'session-outside', 'Outside');
+		store.setAgentActivity('session-outside', {
+			nodeId: 'file:file:///workspace-sibling/private.ts',
+		}, 'active');
+		const [entry] = createAgentActivityNotificationEntries(
+			store.getSnapshot(),
+			presentations,
+			graph,
+		);
+
+		assert.strictEqual(entry?.availability, 'outside');
+		assert.strictEqual(entry?.targetKind, 'unavailable');
+		assert.strictEqual(
+			entry?.targetPath,
+			'Workspace에서 대상을 찾을 수 없습니다.',
+		);
+		assert.strictEqual(entry?.targetPath.includes('private.ts'), false);
+		presentations.dispose();
+	});
+
 	test('독립 Graph Root context를 포함한 사용자 경로와 상태명을 만든다', () => {
 		const store = createAgentActivityStore();
 		const presentations = createAgentSessionPresentationStore();

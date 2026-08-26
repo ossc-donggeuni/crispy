@@ -37,6 +37,7 @@ src/webview/
 - Camera Pan / Zoom, Viewport / World 좌표 변환 및 ease-out Focus Animation
 - 실행 중인 MCP Activity를 최신 수신순 Animation 행으로 보여주는 우측 상단 알림 Center
 - 알림 Target의 접힘, Filter와 File page를 열어 Camera Focus하고 개별 삭제를 Graph clear와 동기화
+- Workspace URI 범위 안의 snapshot 대기 Target은 Graph 갱신 후 Focus하고 범위 밖 Target만 unavailable 처리
 - Camera scale을 고려한 Node 자유 이동
 - Drag 중 Node / Edge DOM 갱신과 종료 시 최종 World 위치 저장
 - Camera, 이동한 Node, File Group page와 열린 Folder를 저장하고 나머지는 기본 Layout 상태 사용

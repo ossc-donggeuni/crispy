@@ -352,13 +352,17 @@ function updateNotificationRegistration(
 ): void {
 	registration.entry = entry;
 	registration.element.setAttribute('data-activity', entry.activity);
+	registration.element.setAttribute('data-availability', entry.availability);
 	registration.focusButton.setAttribute(
 		'aria-label',
 		`${entry.sessionTitle}, ${entry.targetPath}, ${getAgentActivityNotificationStatusLabel(
 			entry.activity,
 		)}`,
 	);
-	registration.focusButton.title = entry.targetPath;
+	registration.focusButton.disabled = entry.availability === 'outside';
+	registration.focusButton.title = entry.availability === 'outside'
+		? '현재 Workspace Graph 범위 밖의 대상입니다.'
+		: entry.targetPath;
 	registration.sessionTitle.textContent = entry.sessionTitle;
 	registration.status.textContent = getAgentActivityNotificationStatusLabel(
 		entry.activity,
