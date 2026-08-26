@@ -14,10 +14,14 @@ export class FakeAgentElement {
 	hidden = false;
 	tabIndex = 0;
 	selectCount = 0;
+	private readonly styleProperties = new Map<string, string>();
 	readonly style = {
 		left: '',
 		top: '',
-		setProperty: (_name: string, _value: string) => undefined,
+		setProperty: (name: string, value: string) => {
+			this.styleProperties.set(name, value);
+		},
+		getPropertyValue: (name: string) => this.styleProperties.get(name) ?? '',
 	};
 	readonly rect = {
 		left: 0,

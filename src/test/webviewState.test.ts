@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { createAgentTabModel } from '../agent/UI/agentTabModel';
+import { AGENT_SESSION_COLOR_PALETTE } from '../agent/agentSessionColor';
 import type { AgentPanelUiCallbacks } from '../agent/UI/agentPanelUi';
 import type {
 	AgentActivityKind,
@@ -640,6 +641,7 @@ suite('Webview State Wiring', () => {
 		let dockFit: (() => void) | undefined;
 		let persistCollapsedState: (() => void) | undefined;
 		let collapseFit: (() => void) | undefined;
+		let collapseTransitionFrame: (() => void) | undefined;
 		let collapseRefreshCount = 0;
 		let persistResizeState: (() => void) | undefined;
 		let resizeRefresh: (() => void) | undefined;
@@ -650,6 +652,8 @@ suite('Webview State Wiring', () => {
 		let initialAgentWorkspaceCatalog: unknown;
 		let unloadHandler: (() => void) | undefined;
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
+		let visibilityHandler: (() => void) | undefined;
+		let visibilityHandlerRemoved = false;
 		let graphInitializeCount = 0;
 		let graphVisibleRefreshCount = 0;
 		let graphViewInteractions:
@@ -887,9 +891,11 @@ suite('Webview State Wiring', () => {
 			_state,
 			onCollapsedChange,
 			onExpand,
+			onTransitionFrame,
 		) => {
 			persistCollapsedState = onCollapsedChange;
 			collapseFit = onExpand;
+			collapseTransitionFrame = onTransitionFrame;
 
 			return () => {
 				collapseRefreshCount += 1;
@@ -1045,6 +1051,7 @@ suite('Webview State Wiring', () => {
 			['#agent-rename-dialog-host', {} as HTMLElement],
 		]);
 		const documentMock = {
+			visibilityState: 'visible',
 			currentScript: {
 				getAttribute: (attribute: string) => {
 					if (attribute === 'data-workspace-state') {
@@ -1057,6 +1064,22 @@ suite('Webview State Wiring', () => {
 				},
 			},
 			querySelector: (selector: string) => elements.get(selector) ?? null,
+			addEventListener: (
+				type: string,
+				listener: EventListenerOrEventListenerObject,
+			) => {
+				if (type === 'visibilitychange' && typeof listener === 'function') {
+					visibilityHandler = listener as () => void;
+				}
+			},
+			removeEventListener: (
+				type: string,
+				listener: EventListenerOrEventListenerObject,
+			) => {
+				if (type === 'visibilitychange' && listener === visibilityHandler) {
+					visibilityHandlerRemoved = true;
+				}
+			},
 		};
 		const windowMock = {
 			addEventListener: (
@@ -1101,6 +1124,7 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(graphInitializeCount, 1);
 			assert.strictEqual(graphAgentActivityStore, createdAgentActivityStore);
 			assert.strictEqual(graphVisibleRefreshCount, 1);
+			assert.ok(visibilityHandler);
 			assert.ok(hostMessageHandler);
 			assert.ok(agentProviderSelect);
 
@@ -1365,10 +1389,10 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(agentEffectSets, [{
 				target: activityTarget,
-				effect: {
-					kind: 'pulse',
-					color: 'var(--graph-viewport-accent-color, #007acc)',
-				},
+					effect: {
+						kind: 'pulse',
+						color: AGENT_SESSION_COLOR_PALETTE[0],
+					},
 			}]);
 			assert.deepStrictEqual(agentEffectClears, [{
 				target: activityTarget,
@@ -1708,9 +1732,15 @@ suite('Webview State Wiring', () => {
 
 			assert.ok(persistCollapsedState);
 			assert.ok(collapseFit);
+			assert.ok(collapseTransitionFrame);
 			panelState.collapsed = true;
 			const graphRefreshBeforeCollapse = graphVisibleRefreshCount;
 			persistCollapsedState();
+			assert.strictEqual(
+				graphVisibleRefreshCount,
+				graphRefreshBeforeCollapse,
+			);
+			collapseTransitionFrame();
 			assert.strictEqual(
 				graphVisibleRefreshCount,
 				graphRefreshBeforeCollapse + 1,
@@ -1744,6 +1774,20 @@ suite('Webview State Wiring', () => {
 
 			assert.strictEqual(terminalFitCount, fitCountBeforeExpand + 1);
 
+			const graphRefreshBeforeVisibility = graphVisibleRefreshCount;
+			const collapseRefreshBeforeVisibility = collapseRefreshCount;
+			const fitCountBeforeVisibility = terminalFitCount;
+			visibilityHandler();
+			assert.strictEqual(
+				graphVisibleRefreshCount,
+				graphRefreshBeforeVisibility + 1,
+			);
+			assert.strictEqual(
+				collapseRefreshCount,
+				collapseRefreshBeforeVisibility + 1,
+			);
+			assert.strictEqual(terminalFitCount, fitCountBeforeVisibility + 1);
+
 			assert.ok(unloadHandler);
 			unloadHandler();
 
@@ -1753,6 +1797,7 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(agentEffectOwnerDisposed, true);
 			assert.strictEqual(terminalPoolDisposed, true);
 			assert.strictEqual(agentPanelUiDisposed, true);
+			assert.strictEqual(visibilityHandlerRemoved, true);
 		} finally {
 			delete require.cache[webviewModulePath];
 			graphViewModule.initializeGraphView = originalInitializeGraphView;

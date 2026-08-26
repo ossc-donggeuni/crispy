@@ -7,7 +7,6 @@ import type { AgentLauncherKind } from './agentLaunchPlan';
 const AGENT_EXECUTABLE_NAMES: ProviderRegistry<string> = Object.freeze({
 	codex: 'codex',
 	claude: 'claude',
-	antigravity: 'agy',
 });
 const DEFAULT_WINDOWS_EXECUTABLE_EXTENSIONS = Object.freeze(['.EXE', '.CMD']);
 

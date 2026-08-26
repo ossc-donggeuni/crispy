@@ -1,7 +1,7 @@
 # Crispy
 
-Crispy is a VS Code extension for visualizing a project and running Codex, Claude,
-or Antigravity in tab-scoped terminals. In a multi-root Workspace, every Agent tab
+Crispy is a VS Code extension for visualizing a project and running Codex or Claude
+in tab-scoped terminals. In a multi-root Workspace, every Agent tab
 selects one local root. The Extension Host resolves that selection again at every
 start, restart, MCP restart, fallback, and final spawn boundary, then uses the fresh
 folder path as the process `cwd`.
@@ -119,6 +119,19 @@ Store applied it, or that the UI displayed it. Likewise, a successful
 an internal acknowledgement used only to settle Host occupancy and quota; it is
 not a public or provider-visible delivery acknowledgement.
 
+The Canvas notification center projects every current Activity for running sessions
+in newest-received order and reuses the same animation recipes as the graph. Selecting
+an entry reveals its collapsed, filtered, or paginated target before focusing the
+camera. A target that is inside a current Workspace URI but has not reached the Graph
+snapshot remains pending and completes the reveal/focus after the next Graph refresh;
+only targets outside every current Workspace URI use the unavailable state. Dismissing
+an entry clears that exact target/session pair through the same Webview Activity Store,
+so its notification, graph binding, and representative effect disappear together
+without introducing another Host or MCP protocol path. Each newly received Activity
+also creates a compact, animated card to the left of the bell. Cards contain only the
+session title and Activity status, stack outward in receive order, expire with an exit
+animation after five seconds, and reuse the same graph reveal/focus action when clicked.
+
 Provider credentials keep the existing placeholder boundary. Codex argv contains
 only the environment variable name `CRISPY_MCP_TOKEN` through
 `bearer_token_env_var`; Claude inline config contains only the literal placeholder
@@ -171,7 +184,8 @@ compatibility matrix rather than added to a per-version allowlist.
 Automated coverage includes protocol strictness, atomic Workspace presentation,
 multi-root exact lookup and per-tab `cwd`, reset/switch races, stale async ownership,
 restart and MCP restart preflights, Trust revoke cleanup, POSIX/Windows path policy,
-generic launch, Codex structured/bare launch, and manifest capability checks.
+generic launch, Codex structured/bare launch, notification ordering/focus/dismiss,
+and manifest capability checks.
 
 Run the release-oriented checks with the target matching the current host:
 

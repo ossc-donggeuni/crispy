@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { AgentConfirmDialog } from '../../agent/UI/agentConfirmDialog';
 import {
 	initializeAgentPanelUi,
@@ -96,7 +98,10 @@ function createFixture(
 		},
 		callbacks,
 		dependencies,
-		{ initialWorkspaceRootCatalog: workspaceRootCatalog },
+		{
+			initialWorkspaceRootCatalog: workspaceRootCatalog,
+			resolveSessionColor: (sessionId) => `color:${sessionId}`,
+		},
 	);
 
 	return {
@@ -173,7 +178,7 @@ suite('Agent Panel UI', () => {
 		}
 	});
 
-	test('미선택 탭은 xterm 중앙에 세 provider를 세로 목록으로 표시한다', () => {
+	test('미선택 탭은 xterm 중앙에 두 provider를 세로 목록으로 표시한다', () => {
 		const fixture = createFixture();
 		const options = fixture.providerPicker.findAll('agent-provider-option');
 
@@ -197,13 +202,25 @@ suite('Agent Panel UI', () => {
 			fixture.providerPicker
 				.findAll('agent-provider-option-label')
 				.map((label) => label.textContent),
-			['Codex', 'Claude Code', 'Antigravity'],
+			['Codex', 'Claude Code'],
 		);
 		assert.deepStrictEqual(
 			fixture.providerPicker
 				.findAll('agent-provider-mark')
 				.map((mark) => mark.textContent),
-			['>_', '>_', '>_'],
+			['', ''],
+		);
+		assert.deepStrictEqual(
+			fixture.providerPicker
+				.findAll('agent-provider-logo')
+				.map((logo) => logo.dataset.providerLogo),
+			['openai', 'claude'],
+		);
+		assert.deepStrictEqual(
+			fixture.providerPicker
+				.findAll('agent-provider-mark')
+				.map((mark) => mark.getAttribute('aria-hidden')),
+			['true', 'true'],
 		);
 		assert.strictEqual(
 			fixture.providerPicker.find('agent-provider-picker-hints'),
@@ -239,6 +256,35 @@ suite('Agent Panel UI', () => {
 			workspaceOption?.getAttribute('aria-label'),
 			'workspace, file:///workspace',
 		);
+	});
+
+	test('provider logo는 공식 SVG를 로컬 asset으로 묶고 32px·테마 상태를 유지한다', () => {
+		const css = readFileSync(resolve(
+			__dirname,
+			'../../../src/agent/UI/agentPanelUi.css',
+		), 'utf8');
+		const openAiLogo = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/assets/provider-logos/openai.svg',
+		), 'utf8');
+		const claudeLogo = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/assets/provider-logos/claude.svg',
+		), 'utf8');
+
+		assert.match(css, /\.agent-provider-mark\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;/s);
+		assert.match(css, /provider-logos\/openai\.svg/);
+		assert.match(css, /provider-logos\/claude\.svg/);
+		assert.doesNotMatch(css, /https?:\/\//);
+		assert.match(css, /\.vscode-dark[^}]*data-provider-logo='openai'[^}]*filter:\s*invert\(1\);/s);
+		assert.match(css, /@media \(forced-colors:\s*active\)[\s\S]*\.agent-provider-logo\s*\{[^}]*forced-color-adjust:\s*none;/);
+		assert.match(css, /\.agent-provider-option:disabled \.agent-provider-mark\s*\{[^}]*opacity:\s*0\.72;/s);
+
+		assert.match(openAiLogo, /viewBox="0 0 41 41"/);
+		assert.match(openAiLogo, /M37\.5324 16\.8707/);
+		assert.match(claudeLogo, /viewBox="0 0 573 125"/);
+		assert.match(claudeLogo, /M54\.375 118\.75/);
+		assert.match(claudeLogo, /fill="#D97757"/);
 	});
 
 	test('Workspace combobox는 카드 내부 listbox와 키보드·바깥 클릭 닫기를 제공한다', () => {
@@ -357,9 +403,8 @@ suite('Agent Panel UI', () => {
 		assert.deepStrictEqual(options.map((option) => option.dataset.focused), [
 			undefined,
 			undefined,
-			undefined,
 		]);
-		assert.deepStrictEqual(options.map((option) => option.focusCount), [0, 0, 0]);
+		assert.deepStrictEqual(options.map((option) => option.focusCount), [0, 0]);
 	});
 
 	test('Workspace Picker는 다중 root를 명시 선택하고 pending 동안 provider와 root를 잠근다', () => {
@@ -403,12 +448,10 @@ suite('Agent Panel UI', () => {
 		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
 			true,
 			true,
-			true,
 		]);
 
 		selectWorkspace(fixture.providerPicker, 'workspace-root:file:///repo/beta');
 		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
-			false,
 			false,
 			false,
 		]);
@@ -718,8 +761,8 @@ suite('Agent Panel UI', () => {
 					.findAll('agent-provider-option')
 					.map((option) => option.disabled),
 				scenario.expected === null
-					? [true, true, true]
-					: [false, false, false],
+					? [true, true]
+					: [false, false],
 				scenario.name,
 			);
 
@@ -785,7 +828,6 @@ suite('Agent Panel UI', () => {
 		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
 			true,
 			true,
-			true,
 		]);
 
 		assert.strictEqual(fixture.controller.handleHostMessage({
@@ -807,7 +849,6 @@ suite('Agent Panel UI', () => {
 			workspaceB.id,
 		);
 		assert.deepStrictEqual(providerOptions.map((option) => option.disabled), [
-			false,
 			false,
 			false,
 		]);
@@ -914,6 +955,53 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(tab.providerId, 'claude');
 		assert.strictEqual(tab.label, 'Claude Code #1');
 		assert.deepStrictEqual(selections, [{ tabId: tab.id, providerId: 'claude' }]);
+	});
+
+	test('탭 색은 provider가 아니라 현재 또는 가장 최근 Session을 따른다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		let tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'',
+			'provider 배정만으로는 Agent 고정색을 만들지 않는다.',
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId,
+			sessionId: 'session-first',
+		});
+		tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'color:session-first',
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId,
+			sessionId: 'session-first',
+			exitCode: 0,
+		});
+		tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'color:session-first',
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId,
+			sessionId: 'session-second',
+		});
+		tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'color:session-second',
+		);
 	});
 
 	test('provider 요청 거부 또는 실패 시 미선택 상태와 picker를 유지한다', () => {
@@ -1056,7 +1144,7 @@ suite('Agent Panel UI', () => {
 			fixture.providerPicker
 				.findAll('agent-provider-option')
 				.map((option) => option.disabled),
-			[false, false, false],
+			[false, false],
 		);
 	});
 
@@ -1224,7 +1312,7 @@ suite('Agent Panel UI', () => {
 			fixture.providerPicker
 				.findAll('agent-provider-option')
 				.map((option) => option.disabled),
-			[false, false, false],
+			[false, false],
 		);
 	});
 
@@ -1234,7 +1322,7 @@ suite('Agent Panel UI', () => {
 			onAgentReselectionRequested: (tabId) => restarts.push(tabId),
 		});
 
-		selectProvider(fixture.providerPicker, 'antigravity');
+		selectProvider(fixture.providerPicker, 'claude');
 		requireElement(fixture.topBar, 'agent-restart-session').click();
 		fixture.dialog.answer(false);
 		await flushMicrotasks();
@@ -1243,7 +1331,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.providerPicker.hidden, true);
 		assert.strictEqual(
 			fixture.controller.getSnapshot().tabs[0].providerId,
-			'antigravity',
+			'claude',
 		);
 	});
 
@@ -1305,14 +1393,19 @@ suite('Agent Panel UI', () => {
 		);
 	});
 
-	test('MCP status는 current tab 우측 점으로 표시하고 retryable failure에만 재시작을 제공한다', () => {
+	test('MCP status는 하단 bar 우측에 표시하고 retryable failure에만 재시작을 제공한다', () => {
 		const fixture = createFixture();
 		selectProvider(fixture.providerPicker, 'codex');
 		const tabId = fixture.controller.getSnapshot().tabs[0].id;
 		const failureDetail = requireElement(fixture.topBar, 'agent-mcp-status');
 		const restart = requireElement(fixture.topBar, 'agent-mcp-restart');
+		const connectionStatus = requireElement(
+			fixture.workspaceStatusBar,
+			'agent-mcp-connection-status',
+		);
 
 		assert.strictEqual(failureDetail.hidden, true);
+		assert.strictEqual(connectionStatus.hidden, true);
 		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		fixture.controller.handleHostMessage({
 			type: 'terminal.started', tabId, sessionId: 'session-current',
@@ -1331,10 +1424,17 @@ suite('Agent Panel UI', () => {
 			sessionId: 'session-current',
 			status: 'connected',
 		});
-		const connected = requireElement(fixture.tabStrip, 'agent-tab-mcp-indicator');
-		assert.strictEqual(connected.dataset.kind, 'connected');
-		assert.strictEqual(connected.textContent, '');
-		assert.strictEqual(connected.getAttribute('aria-label'), 'MCP 연결됨');
+		assert.strictEqual(connectionStatus.hidden, false);
+		assert.strictEqual(connectionStatus.dataset.kind, 'connected');
+		assert.strictEqual(
+			requireElement(
+				connectionStatus,
+				'agent-mcp-connection-label',
+			).textContent,
+			'connected',
+		);
+		assert.strictEqual(connectionStatus.getAttribute('aria-label'), 'MCP 연결됨');
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		assert.strictEqual(failureDetail.hidden, true);
 		assert.strictEqual(restart.hidden, true);
 
@@ -1346,10 +1446,15 @@ suite('Agent Panel UI', () => {
 			reason: 'provider_config_rejected',
 			retryable: false,
 		});
+		assert.strictEqual(connectionStatus.dataset.kind, 'failed');
 		assert.strictEqual(
-			requireElement(fixture.tabStrip, 'agent-tab-mcp-indicator').dataset.kind,
+			requireElement(
+				connectionStatus,
+				'agent-mcp-connection-label',
+			).textContent,
 			'failed',
 		);
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		assert.strictEqual(failureDetail.hidden, false);
 		assert.strictEqual(failureDetail.dataset.kind, 'failed');
 		assert.strictEqual(failureDetail.getAttribute('role'), 'alert');
@@ -1413,6 +1518,13 @@ suite('Agent Panel UI', () => {
 		});
 		assert.strictEqual(
 			requireElement(fixture.topBar, 'agent-mcp-status').hidden,
+			true,
+		);
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-mcp-connection-status',
+			).hidden,
 			true,
 		);
 		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
@@ -1490,7 +1602,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(restart.disabled, false);
 	});
 
-	test('여러 탭의 우측 점을 동시에 표시하고 old clear는 fresh session status를 바꾸지 않는다', () => {
+	test('하단 bar는 활성 탭의 MCP 상태만 표시하고 old clear는 fresh session status를 바꾸지 않는다', () => {
 		const fixture = createFixture();
 		selectProvider(fixture.providerPicker, 'codex');
 		const first = fixture.controller.getSnapshot().tabs[0].id;
@@ -1514,16 +1626,27 @@ suite('Agent Panel UI', () => {
 			type: 'mcp.statusChanged',
 			tabId: second,
 			sessionId: 'session-second',
-			status: 'connected',
+			status: 'failed',
+			reason: 'provider_config_rejected',
+			retryable: false,
 		});
-		assert.deepStrictEqual(
-			fixture.tabStrip.findAll('agent-tab-mcp-indicator').map(
-				(indicator) => indicator.parent?.dataset.tabId,
-			),
-			[first, second],
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-mcp-connection-label',
+			).textContent,
+			'failed',
 		);
-		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, true);
+		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, false);
 		fixture.tabStrip.findAll('agent-tab-select')[0].click();
+		assert.strictEqual(
+			requireElement(
+				fixture.workspaceStatusBar,
+				'agent-mcp-connection-label',
+			).textContent,
+			'connected',
+		);
 		assert.strictEqual(requireElement(fixture.topBar, 'agent-mcp-status').hidden, true);
 
 		fixture.controller.handleHostMessage({
@@ -1538,7 +1661,11 @@ suite('Agent Panel UI', () => {
 		fixture.controller.handleHostMessage({
 			type: 'mcp.statusCleared', tabId: first, sessionId: 'session-first',
 		});
-		assert.strictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator').length, 2);
+		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs.find((tab) => tab.id === first)?.mcpStatus.kind,
+			'connected',
+		);
 	});
 
 	test('비활성 탭 우클릭은 활성 탭을 바꾸지 않고 접근 가능한 메뉴를 연다', () => {

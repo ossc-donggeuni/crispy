@@ -13,7 +13,10 @@ import {
  */
 function createModel(): AgentTabModel {
 	let counter = 0;
-	return createAgentTabModel(() => `tab-${++counter}`);
+	return createAgentTabModel(
+		() => `tab-${++counter}`,
+		(sessionId) => `color:${sessionId}`,
+	);
 }
 
 suite('Agent Tab Model', () => {
@@ -36,6 +39,7 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(snapshot.tabs[0].autoTitleAttempted, false);
 		assert.strictEqual(snapshot.tabs[0].hasStartedSession, false);
 		assert.strictEqual(snapshot.tabs[0].isPinned, false);
+		assert.strictEqual(snapshot.tabs[0].sessionColor, undefined);
 		assert.deepStrictEqual(snapshot.tabs[0].mcpStatus, { kind: 'none' });
 		assert.strictEqual(snapshot.tabs[0].mcpRestartPending, false);
 	});
@@ -100,10 +104,19 @@ suite('Agent Tab Model', () => {
 		model.setSession(tabId, 'session-new');
 		model.clearSession(tabId, 'session-old');
 		assert.strictEqual(model.getSnapshot().tabs[0].sessionId, 'session-new');
+		assert.strictEqual(
+			model.getSnapshot().tabs[0].sessionColor,
+			'color:session-new',
+		);
 		assert.deepStrictEqual(model.getSnapshot().tabs[0].mcpStatus, { kind: 'none' });
 
 		model.clearSession(tabId, 'session-new');
 		assert.strictEqual(model.getSnapshot().tabs[0].sessionId, undefined);
+		assert.strictEqual(
+			model.getSnapshot().tabs[0].sessionColor,
+			'color:session-new',
+			'종료된 세션 탭도 다른 탭과 구분할 수 있게 마지막 색을 유지한다.',
+		);
 	});
 
 	test('provider를 배정하면 라벨이 Provider #번호 형식이 된다', () => {
@@ -176,7 +189,7 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(tab.autoTitleAttempted, false);
 	});
 
-	test('자동 제목은 current Codex/Claude session에서 한 번만 시도하고 Antigravity에는 적용하지 않는다', () => {
+	test('자동 제목은 current Codex/Claude session에서 한 번만 시도한다', () => {
 		const model = createModel();
 		const codex = model.createTab();
 		model.assignProvider(codex, 'codex');
@@ -197,19 +210,6 @@ suite('Agent Tab Model', () => {
 			codex,
 			'session-codex',
 			['later-title'],
-		), false);
-
-		const antigravity = model.createTab();
-		model.assignProvider(antigravity, 'antigravity');
-		model.setSession(antigravity, 'session-antigravity');
-		assert.strictEqual(
-			model.canAttemptAutomaticTitle(antigravity, 'session-antigravity'),
-			false,
-		);
-		assert.strictEqual(model.applyAutomaticTitleCandidates(
-			antigravity,
-			'session-antigravity',
-			['ignored-title'],
 		), false);
 	});
 
@@ -316,6 +316,7 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(tab.displayName, UNSELECTED_TAB_LABEL);
 		assert.strictEqual(tab.hasStartedSession, false);
 		assert.strictEqual(tab.isPinned, true);
+		assert.strictEqual(tab.sessionColor, undefined);
 		model.assignProvider(tabId, 'codex');
 		tab = model.getSnapshot().tabs[0];
 		assert.strictEqual(tab.baseLabel, 'Codex #2');
@@ -329,11 +330,11 @@ suite('Agent Tab Model', () => {
 		const third = model.createTab();
 
 		model.assignProvider(first, 'codex');
-		model.assignProvider(second, 'antigravity');
+		model.assignProvider(second, 'claude');
 		model.assignProvider(third, 'codex');
 
 		const labels = model.getSnapshot().tabs.map((tab) => tab.label);
-		assert.deepStrictEqual(labels, ['Codex #1', 'Antigravity #1', 'Codex #2']);
+		assert.deepStrictEqual(labels, ['Codex #1', 'Claude Code #1', 'Codex #2']);
 	});
 
 	test('같은 provider를 다시 배정해도 번호를 다시 매기지 않는다', () => {

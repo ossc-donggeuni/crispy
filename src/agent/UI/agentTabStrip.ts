@@ -3,10 +3,7 @@ import type {
 	AgentTabModelSnapshot,
 	AgentTabSnapshot,
 } from './agentTabModel';
-import {
-	AGENT_PROVIDER_LABELS,
-	AGENT_PROVIDER_TAB_COLORS,
-} from './agentProviders';
+import { AGENT_PROVIDER_LABELS } from './agentProviders';
 import { createAgentTabContextMenu } from './agentTabContextMenu';
 import {
 	defaultAgentUiDependencies,
@@ -14,7 +11,6 @@ import {
 } from './agentUiDom';
 
 export const AGENT_TAB_CLOSE_LABEL = '×';
-export const MCP_CONNECTED_ACCESSIBLE_LABEL = 'MCP 연결됨';
 
 export function formatTabCloseTitle(tabLabel: string): string {
 	return `Close ${tabLabel}`;
@@ -101,12 +97,8 @@ export function initializeAgentTabStrip(
 				const tabElement = dependencies.createElement('div');
 				tabElement.className = 'agent-tab';
 				tabElement.dataset.tabId = tab.id;
-				if (tab.providerId !== undefined) {
-					tabElement.dataset.provider = tab.providerId;
-					const providerColor = AGENT_PROVIDER_TAB_COLORS[tab.providerId];
-					if (providerColor !== undefined) {
-						tabElement.style.setProperty('--agent-tab-provider-color', providerColor);
-					}
+				if (tab.sessionColor !== undefined) {
+					tabElement.style.setProperty('--agent-tab-session-color', tab.sessionColor);
 				}
 				if (tab.isPinned) {
 					tabElement.dataset.pinned = 'true';
@@ -164,20 +156,6 @@ export function initializeAgentTabStrip(
 					callbacks.onRequestCloseTab(tab.id);
 				});
 
-				let tabStatus: HTMLElement | undefined;
-				if (tab.mcpStatus.kind !== 'none') {
-					tabStatus = dependencies.createElement('span');
-					tabStatus.className = 'agent-tab-mcp-indicator';
-					tabStatus.dataset.kind = tab.mcpStatus.kind;
-					tabStatus.setAttribute('role', 'img');
-					tabStatus.setAttribute(
-						'aria-label',
-						tab.mcpStatus.kind === 'connected'
-							? MCP_CONNECTED_ACCESSIBLE_LABEL
-							: tab.mcpStatus.message,
-					);
-				}
-
 				tabElement.addEventListener('contextmenu', (event) => {
 					const mouseEvent = event as MouseEvent;
 					mouseEvent.preventDefault();
@@ -188,7 +166,6 @@ export function initializeAgentTabStrip(
 				});
 				tabElement.append(
 					selectButton,
-					...(tabStatus === undefined ? [] : [tabStatus]),
 					closeButton,
 				);
 				nextTabButtons.set(tab.id, selectButton);

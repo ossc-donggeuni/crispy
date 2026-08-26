@@ -6,7 +6,7 @@
  * 정의가 없는 provider 요청은 `provider_not_allowed`로 거부한다.
  * 표시 문구는 protocol의 관심사가 아니므로 Webview UI가 따로 소유한다.
  */
-export const PROVIDER_IDS = ['codex', 'claude', 'antigravity'] as const;
+export const PROVIDER_IDS = ['codex', 'claude'] as const;
 
 /** Webview가 선택할 수 있는 Host provider registry의 key다. */
 export type ProviderId = typeof PROVIDER_IDS[number];

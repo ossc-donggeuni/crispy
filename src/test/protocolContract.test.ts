@@ -427,6 +427,16 @@ suite('Host↔Webview protocol completion contract', () => {
 			}), 'invalid_field', 'providerId');
 		});
 
+		test('제거된 provider 요청을 provider_not_allowed로 거부한다', () => {
+			assertFailure(parseWebviewToHostMessage({
+				type: 'agent.switch',
+				tabId: TAB_ID,
+				providerId: 'antigravity',
+				workspaceRootId: WORKSPACE_ROOT_ID,
+				switchAttemptId: SWITCH_ATTEMPT_ID,
+			}), 'provider_not_allowed', 'providerId');
+		});
+
 		test('WorkspaceRootId prefix-only 값과 일반 문자열을 양방향에서 거부한다', () => {
 			for (const workspaceRootId of [
 				'workspace-root:',
@@ -707,10 +717,6 @@ suite('Host↔Webview protocol completion contract', () => {
 					timeoutMs: 30_000,
 				},
 				claude: {
-					executable: 'host-owned-executable',
-					timeoutMs: 30_000,
-				},
-				antigravity: {
 					executable: 'host-owned-executable',
 					timeoutMs: 30_000,
 				},

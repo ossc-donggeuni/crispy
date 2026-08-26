@@ -1,9 +1,14 @@
 import type { SessionId, TabId } from '../protocol';
+import {
+	resolveAgentSessionColor,
+	type AgentSessionColorResolver,
+} from '../agentSessionColor';
 
 /** 노드 Binding에 표시할 세션 상태다. PTY 전체 이력은 보관하지 않는다. */
 export interface AgentSessionPresentationSnapshot {
 	readonly tabId: TabId;
 	readonly sessionId: SessionId;
+	readonly color: string;
 	readonly title: string;
 	readonly currentMessage: string;
 	readonly state: 'starting' | 'running';
@@ -53,7 +58,9 @@ export const AGENT_SESSION_WAITING_MESSAGE = 'Waiting for output…';
 export const AGENT_SESSION_UNTITLED_TITLE = 'Agent session';
 
 /** 제목과 현재 출력만 보관하는 비영속 세션 표시 Store를 만든다. */
-export function createAgentSessionPresentationStore(): AgentSessionPresentationStore {
+export function createAgentSessionPresentationStore(
+	resolveSessionColor: AgentSessionColorResolver = resolveAgentSessionColor,
+): AgentSessionPresentationStore {
 	const sessionsById = new Map<SessionId, AgentSessionPresentationSnapshot>();
 	const sessionIdsByTab = new Map<TabId, SessionId>();
 	const subscribers = new Set<AgentSessionPresentationSubscriber>();
@@ -127,6 +134,7 @@ export function createAgentSessionPresentationStore(): AgentSessionPresentationS
 		sessionsById.set(sessionId, Object.freeze({
 			tabId,
 			sessionId,
+			color: resolveSessionColor(sessionId),
 			title: normalizedTitle,
 			currentMessage: '',
 			state,

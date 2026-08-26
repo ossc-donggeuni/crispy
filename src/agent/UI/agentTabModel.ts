@@ -5,6 +5,10 @@ import {
 } from '../protocol';
 import type { McpFailureReason } from '../../mcp/failureReason';
 import {
+	resolveAgentSessionColor,
+	type AgentSessionColorResolver,
+} from '../agentSessionColor';
+import {
 	UNSELECTED_TAB_LABEL,
 	formatAgentTabLabel,
 } from './agentProviders';
@@ -62,6 +66,8 @@ export interface AgentTabSnapshot {
 	readonly hasStartedSession: boolean;
 	readonly isPinned: boolean;
 	readonly sessionId?: SessionId;
+	/** 현재 또는 가장 최근 세션에 배정된 탭/Graph 공통 표시 색상이다. */
+	readonly sessionColor?: string;
 	readonly mcpStatus: VisibleMcpStatus;
 	readonly mcpRestartPending: boolean;
 }
@@ -143,6 +149,7 @@ interface MutableAgentTab {
 	hasStartedSession: boolean;
 	isPinned: boolean;
 	sessionId?: SessionId;
+	sessionColor?: string;
 	readonly seenSessionIds: Set<SessionId>;
 	mcpStatus: VisibleMcpStatus;
 	mcpRestartPending: boolean;
@@ -174,6 +181,7 @@ function toTabSnapshot(tab: MutableAgentTab): AgentTabSnapshot {
 		hasStartedSession: tab.hasStartedSession,
 		isPinned: tab.isPinned,
 		...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
+		...(tab.sessionColor === undefined ? {} : { sessionColor: tab.sessionColor }),
 		mcpStatus: tab.mcpStatus,
 		mcpRestartPending: tab.mcpRestartPending,
 	});
@@ -194,6 +202,7 @@ function isValidAutomaticCandidate(candidate: string): boolean {
  */
 export function createAgentTabModel(
 	createTabId: () => AgentTabId = createDefaultTabId,
+	resolveSessionColor: AgentSessionColorResolver = resolveAgentSessionColor,
 ): AgentTabModel {
 	const tabs: MutableAgentTab[] = [];
 	const sequenceCounters = new Map<ProviderId, number>();
@@ -308,6 +317,7 @@ export function createAgentTabModel(
 					tab.workspaceDescription = workspace.description;
 					tab.assignmentRevision = workspace.assignmentRevision;
 					delete tab.sessionId;
+					delete tab.sessionColor;
 					tab.hasStartedSession = false;
 					tab.autoTitleAttempted = false;
 					if (tab.titleSource !== 'manual') {
@@ -343,6 +353,7 @@ export function createAgentTabModel(
 				tab.titleSource = 'default';
 			}
 			delete tab.sessionId;
+			delete tab.sessionColor;
 			tab.seenSessionIds.clear();
 			tab.hasStartedSession = false;
 			tab.autoTitleAttempted = false;
@@ -380,6 +391,7 @@ export function createAgentTabModel(
 			delete tab.sequence;
 			delete tab.baseLabel;
 			delete tab.sessionId;
+			delete tab.sessionColor;
 			tab.displayName = UNSELECTED_TAB_LABEL;
 			tab.titleSource = 'default';
 			tab.autoTitleAttempted = false;
@@ -411,6 +423,7 @@ export function createAgentTabModel(
 			}
 
 			tab.sessionId = sessionId;
+			tab.sessionColor = resolveSessionColor(sessionId);
 			tab.seenSessionIds.add(sessionId);
 			tab.hasStartedSession = true;
 			tab.mcpStatus = NO_VISIBLE_MCP_STATUS;

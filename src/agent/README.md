@@ -64,18 +64,17 @@ pnpm run lint
 pnpm run compile
 ```
 
-### 3. Codex, Claude와 Antigravity CLI 준비
+### 3. Codex와 Claude CLI 준비
 
-세 provider는 Crispy가 새 Terminal을 만든 뒤 같은 Shell PTY 경로에서 각각의 CLI를 자동
-실행한다. macOS/Linux에서는 `codex`, `claude` 또는 `agy`를 기본으로 사용한다. Windows에서는
-실제 PowerShell에서 `--version`을 실행해 Codex는 `codex`, `codex.cmd`, `codex.exe`, Claude는
-`claude`, `claude.cmd`, `claude.exe`, Antigravity는 `agy`, `agy.cmd`, `agy.exe` 순으로 첫 성공
-후보를 선택한다. 사용할 CLI가 팀원의 머신에 설치되어 있고 VS Code Extension Host가 상속한
-`PATH`에서도 resolve되어야 한다.
+두 provider는 Crispy가 새 Terminal을 만든 뒤 각각의 CLI를 실행한다. macOS/Linux에서는
+`codex` 또는 `claude`를 기본으로 사용한다. Windows에서는 실제 PowerShell에서 `--version`을
+실행해 Codex는 `codex`, `codex.cmd`, `codex.exe`, Claude는 `claude`, `claude.cmd`,
+`claude.exe` 순으로 첫 성공 후보를 선택한다. 사용할 CLI가 팀원의 머신에 설치되어 있고
+VS Code Extension Host가 상속한 `PATH`에서도 resolve되어야 한다.
 
 자동 탐색으로 찾을 수 없는 설치는 VS Code Settings의 `crispy.codexCliPath` 또는
-`crispy.claudeCliPath`, `crispy.antigravityCliPath`에 executable 전체 경로를 지정한다. 설정한
-경로를 가장 먼저 검증하며, 검증에 실패하면 같은 provider의 기본 후보를 계속 탐색한다.
+`crispy.claudeCliPath`에 executable 전체 경로를 지정한다. 설정한 경로를 가장 먼저 검증하며,
+검증에 실패하면 같은 provider의 기본 후보를 계속 탐색한다.
 
 #### Codex
 
@@ -146,50 +145,14 @@ Git for Windows는 권장 사항이지만 필수 prerequisite로 강제하지 �
 [Claude Code 설정 문서](https://code.claude.com/docs/en/setup)와
 [Claude Code 설치 문제 해결 문서](https://code.claude.com/docs/en/troubleshoot-install)를 따른다.
 
-#### Antigravity
-
-macOS/Linux에서는 공식 installer를 사용한다. 기본 설치 위치는 `~/.local/bin/agy`다.
-
-```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash
-agy --version
-command -v agy
-```
-
-Windows PowerShell에서는 다음 installer를 사용한다.
-
-```powershell
-irm https://antigravity.google/cli/install.ps1 | iex
-```
-
-Windows CMD에서는 installer를 내려받아 실행한 뒤 삭제한다.
-
-```batch
-curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd
-```
-
-Windows 기본 설치 디렉터리는 `%LOCALAPPDATA%\agy\bin`이며 일반적으로
-`C:\Users\<Username>\AppData\Local\agy\bin`에 해당한다. 설치 후 PowerShell에서 실제 해석
-순서와 버전을 확인한다.
-
-```powershell
-Get-Command agy -All
-Get-Command agy.exe -All
-agy --version
-```
-
-원하는 실행 파일을 자동 탐색하지 못하면 `crispy.antigravityCliPath`에 전체 executable 경로를
-지정한다. 최신 설치 방법은 [Antigravity CLI 설치 문서](https://antigravity.google/docs/cli/install)와
-[공식 저장소](https://github.com/google-antigravity/antigravity-cli)를 따른다.
-
 #### 설치 및 인증 오류
 
 Crispy는 Windows 후보 선택에 필요한 `--version` 성공 여부만 검사하며 CLI를 설치하거나
 인증 상태를 판별하지 않는다. 모든 후보가 실패하면 문서 기준 기본 이름을 Shell에 입력해
-`command not found` 또는 `not recognized` 출력을 그대로 표시한다. Claude Code나 Antigravity가
-Google 로그인, workspace trust 또는 초기 설정을 요구하면 기존 PTY/xterm.js 화면에서 사용자가
-직접 진행한다. Crispy는 CLI의 설치 여부, version 또는 인증 상태를 사전에 보장하지 않으며
-OAuth, API key, Google 계정 또는 provider credential을 저장하거나 처리하지 않는다.
+`command not found` 또는 `not recognized` 출력을 그대로 표시한다. CLI가 로그인, workspace
+trust 또는 초기 설정을 요구하면 기존 PTY/xterm.js 화면에서 사용자가 직접 진행한다. Crispy는
+CLI의 설치 여부, version 또는 인증 상태를 사전에 보장하지 않으며 OAuth, API key 또는 provider
+credential을 저장하거나 처리하지 않는다.
 
 ### 4. Extension Development Host 실행
 
@@ -200,7 +163,7 @@ OAuth, API key, Google 계정 또는 provider credential을 저장하거나 처�
    확인하려면 `File: Add Folder to Workspace...`로 두 번째 로컬 폴더를 추가한다.
 5. Workspace Trust 요청이 나오면 신뢰할 수 있는 테스트 폴더에 한해 승인한다.
 6. Command Palette에서 `Crispy: Open Canvas`를 실행한다.
-7. Agent 영역에서 Workspace와 `Codex`, `Claude` 또는 `Antigravity`를 선택한다. 각 탭은
+7. Agent 영역에서 Workspace와 `Codex` 또는 `Claude`를 선택한다. 각 탭은
    Workspace root 하나를 독립적으로 선택할 수 있다.
 
 현재 Terminal 시작 정책은 trusted local `file:` root를 허용한다. multi-root Workspace에서는
@@ -242,7 +205,7 @@ Agent 관련 test는 `src/test/agent/`에 있으며 다음 범위를 포함한�
 - workspace와 Shell policy
 - multi-root exact lookup, 탭별 selected-root `cwd`, POSIX/Windows path
 - 탭별 Terminal routing
-- provider 선택과 Codex/Claude/Antigravity 자동 실행 입력
+- provider 선택과 Codex/Claude 자동 실행 입력
 - PTY input/output, resize, restart와 cleanup
 - Workspace Trust revoke의 input/output gate, monitor, Agent/MCP cleanup과 복구
 - process tree cleanup
@@ -348,8 +311,6 @@ pnpm run verify:linux-abi
 | Windows에서 `codex.ps1` 또는 `claude.ps1` 실행 정책 오류 | 최신 코드를 받은 뒤 다시 실행한다. Crispy가 `.cmd`와 `.exe` 후보를 차례로 검사한다 |
 | `claude: command not found` 또는 Windows의 `not recognized` | VS Code Extension Host의 `PATH`에서 native Claude Code를 찾는지 확인한다 |
 | Windows에서 잘못된 Claude가 실행됨 | `Get-Command claude -All`로 해석 순서를 확인하고 `crispy.claudeCliPath`에 원하는 executable 전체 경로를 지정한다 |
-| `agy: command not found` 또는 Windows의 `not recognized` | VS Code Extension Host의 `PATH`에서 `agy`가 resolve되는지 `command -v agy` 또는 `Get-Command agy -All`로 확인한다 |
-| Windows에서 잘못된 Antigravity가 실행됨 | `Get-Command agy -All`로 해석 순서를 확인하고 `crispy.antigravityCliPath`에 원하는 executable 전체 경로를 지정한다 |
 | `node-pty` load 실패 | 수동 rebuild/chmod 대신 Node 24에서 `pnpm install --frozen-lockfile`을 다시 실행한다 |
 | 테스트용 VS Code 다운로드 실패 | npm registry와 VS Code update server에 접근 가능한지 확인한다 |
 
@@ -448,13 +409,11 @@ Codex와 Claude 탭의 MCP indicator는 탭별 current `tabId`와 Host 소유 `s
 
 Codex와 Claude는 Host가 executable과 version compatibility를 확인한 뒤 provider CLI 자체를
 PTY root process로 실행한다. Windows npm-style `.cmd`만 `ComSpec` one-shot wrapper를 사용한다.
-Antigravity는 현재 MCP 범위 밖이므로 기존 기본 Shell을 시작한 뒤 `agy` 입력을 전달한다.
 
 | provider | PTY root | 현재 MCP 동작 |
 | --- | --- | --- |
 | Codex | `codex` 또는 Windows one-shot wrapper | session MCP 자동 준비·연결, 공통 상태/retry UI |
 | Claude | `claude` 또는 Windows one-shot wrapper | `>=2.1.121`에서 session MCP 자동 준비·연결, 공통 상태/retry UI |
-| Antigravity | 기존 interactive Shell | `agy` 자동 입력, MCP config/token 주입 없음 |
 
 Codex와 Claude는 공통 `AgentLaunchPlan`, final environment sanitizer, session별 MCP supervisor,
 generation gate, direct PTY spawn과 process-tree cleanup을 공유한다. Claude version probe가 실패,
@@ -564,8 +523,6 @@ smoke로 분리한다. 상세 명령, 실기 결과와 OS별 `not_run` 기록은
 
 이 L3/L4 기록 시점에는 Graph report tool/state를 연결하지 않았다. 이후 2026-08-26 Phase 5에서
 아래 VS Code Host capability gate를 통해 Codex/Claude Agent Activity와 Graph/Store 연결을 추가했다.
-Antigravity는 계속 기존 bare `agy` 동작만 유지하고 사용자-visible
-`provider_update_required` 정책도 별도 제품 결정 전에는 연결하지 않는다.
 
 ## Codex/Claude Agent Activity production 연결 — 2026-08-26
 

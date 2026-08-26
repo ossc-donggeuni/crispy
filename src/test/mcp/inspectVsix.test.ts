@@ -42,7 +42,6 @@ suite('MCP VSIX bundle dependency inspection', () => {
 				restrictedConfigurations: [
 					'crispy.codexCliPath',
 					'crispy.claudeCliPath',
-					'crispy.antigravityCliPath',
 				],
 			},
 			virtualWorkspaces: {
@@ -89,7 +88,6 @@ suite('MCP VSIX bundle dependency inspection', () => {
 					restrictedConfigurations: [
 						'crispy.codexCliPath',
 						'crispy.claudeCliPath',
-						'crispy.antigravityCliPath',
 					],
 				},
 				virtualWorkspaces: { supported: 'limited' },
