@@ -183,7 +183,7 @@ async function main(): Promise<void> {
 	}
 
 	console.log(
-		`[claude-config-compat-smoke] version=${formatVersion(result.version)} minimum=${formatVersion(CLAUDE_MCP_MINIMUM_COMPATIBLE_VERSION)} session config/instruction CLI surface available.`,
+		`[claude-config-compat-smoke] version=${formatVersion(result.version)} minimum=${formatVersion(CLAUDE_MCP_MINIMUM_COMPATIBLE_VERSION)} session MCP config CLI surface available.`,
 	);
 }
 

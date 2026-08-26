@@ -6,6 +6,7 @@ import type {
 	AgentActivityStore,
 	AgentActivityStoreSnapshot,
 } from '../../agent/webview/agentActivityStore';
+import type { AgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import type { GraphNodeEffectOwner } from './graphNodeEffects';
 import { getAgentActivityEffects } from './agentActivityPresentation';
 import {
@@ -28,8 +29,10 @@ interface AppliedRepresentativeActivity {
 export function createAgentActivityEffectReconciler(
 	store: AgentActivityStore,
 	effectOwner: GraphNodeEffectOwner,
+	presentationStore?: AgentSessionPresentationStore,
 ): AgentActivityEffectReconciler {
 	const appliedByTarget = new Map<string, AppliedRepresentativeActivity>();
+	let currentSnapshot = store.getSnapshot();
 	let disposed = false;
 
 	const reconcile = (snapshot: AgentActivityStoreSnapshot): void => {
@@ -37,15 +40,21 @@ export function createAgentActivityEffectReconciler(
 			return;
 		}
 
+		currentSnapshot = snapshot;
 		const currentTargetKeys = new Set<string>();
 		const activitiesByTarget = indexAgentActivitiesByTarget(snapshot);
 
 		for (const targetSnapshot of snapshot) {
 			const target = targetSnapshot.target;
-			const representative = getEffectiveAgentActivities(
+			const effectiveActivities = getEffectiveAgentActivities(
 				target,
 				activitiesByTarget,
-			)[0];
+			);
+			const representative = presentationStore === undefined
+				? effectiveActivities[0]
+				: effectiveActivities.find(({ sessionId }) => (
+					presentationStore.isRunningSession(sessionId)
+				));
 
 			if (!representative) {
 				continue;
@@ -84,6 +93,11 @@ export function createAgentActivityEffectReconciler(
 
 	reconcile(store.getSnapshot());
 	const unsubscribe = store.subscribe(reconcile);
+	const unsubscribePresentation = presentationStore?.subscribe((change) => {
+		if (change.kind === 'lifecycle') {
+			reconcile(currentSnapshot);
+		}
+	});
 
 	return {
 		dispose(): void {
@@ -93,6 +107,7 @@ export function createAgentActivityEffectReconciler(
 
 			disposed = true;
 			unsubscribe();
+			unsubscribePresentation?.();
 			effectOwner.dispose();
 			appliedByTarget.clear();
 		},

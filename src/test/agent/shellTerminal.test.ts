@@ -1,7 +1,12 @@
 import * as assert from 'assert';
 import type { FitAddon } from '@xterm/addon-fit';
 import {
+	captureTerminalBufferSnapshot,
 	initializeShellTerminal,
+	normalizeTerminalPreviewText,
+	readChangedTerminalMessage,
+	readCurrentTerminalMessage,
+	readTerminalOutputPreviewMessage,
 	readVsCodeAnsiTheme,
 	TERMINAL_INITIAL_FALLBACK_DIMENSIONS,
 	TERMINAL_INITIAL_FIT_MAX_FRAMES,
@@ -19,6 +24,367 @@ const TAB_ID = 'tab-webview-terminal';
 const SESSION_ID = 'session-current';
 
 suite('Shell Terminal Webview', () => {
+	test('xterm cursor의 wrapped 논리 행과 ANSI delta fallback을 한 줄 메시지로 만든다', () => {
+		const lines = [
+			new FakeBufferLine('older output', false),
+			new FakeBufferLine('현재 세션이 ', false),
+			new FakeBufferLine('작업 중', true),
+			new FakeBufferLine('', false),
+		];
+		const terminal = {
+			buffer: {
+				active: {
+					baseY: 0,
+					cursorY: 3,
+					length: lines.length,
+					getLine: (index: number) => lines[index],
+				},
+			},
+		};
+
+		assert.strictEqual(
+			readCurrentTerminalMessage(terminal),
+			'현재 세션이 작업 중',
+		);
+		assert.strictEqual(
+			readCurrentTerminalMessage(
+				{},
+				'\u001b[31mred\u001b[0m\rspinner 42%',
+			),
+			'spinner 42%',
+		);
+		assert.strictEqual(
+			normalizeTerminalPreviewText('  한\n글\u0000  preview  '),
+			'한 글 preview',
+		);
+	});
+
+	test('cursor가 prompt에 남아 있어도 PTY delta로 변경된 상태 행을 찾는다', () => {
+		const terminal = new FakeTerminal();
+		terminal.setBuffer([
+			'Called tool',
+			'Working (39s · esc to interrupt)',
+			'Ask Codex to do anything',
+			'gpt-5.6-sol xhigh',
+		], 2);
+		const before = captureTerminalBufferSnapshot(terminal);
+
+		terminal.setBuffer([
+			'Called tool',
+			'Working (40s · esc to interrupt)',
+			'Ask Codex to do anything',
+			'gpt-5.6-sol xhigh',
+		], 2);
+
+		assert.strictEqual(
+			readChangedTerminalMessage(terminal, before),
+			'Working (40s · esc to interrupt)',
+		);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				before,
+				'codex',
+			),
+			'Called tool',
+		);
+		assert.strictEqual(
+			readCurrentTerminalMessage(terminal),
+			'Ask Codex to do anything',
+		);
+	});
+
+	test('Codex Working 경계 직전의 마지막 정적 논리 행을 preview한다', () => {
+		const terminal = new FakeTerminal();
+		terminal.setBuffer([
+			'Ran sleep 4',
+			'(no output)',
+			'Working (39s)',
+			'Ask Codex to do anything',
+			'gpt-5.6-sol xhigh',
+		], 3);
+		terminal.deferWriteCallbacks = true;
+		const animationFrames = new FakeAnimationFrames();
+		const previews: unknown[] = [];
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			{
+				...createDependencies(
+					terminal,
+					createFitAddon(),
+					[],
+					animationFrames,
+				),
+				onOutputPreview: (event) => previews.push(event),
+			},
+		);
+		animationFrames.flushNext();
+		controller.handleHostMessage({
+			type: 'agent.switchAccepted',
+			tabId: TAB_ID,
+			providerId: 'codex',
+			workspaceRootId: 'workspace-root:file:///workspace',
+			switchAttemptId: 1,
+			assignmentRevision: 1,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		animationFrames.flushNext();
+
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: '\u001b[1A\rWorking (40s)\u001b[1B',
+		});
+		terminal.setBuffer([
+			'Ran sleep 4',
+			'(no output)',
+			'Working (40s)',
+			'Ask Codex to do anything',
+			'gpt-5.6-sol xhigh',
+		], 3);
+		terminal.flushWriteCallbacks();
+		animationFrames.flushNext();
+
+		assert.deepStrictEqual(previews, [{
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			message: '(no output)',
+		}]);
+	});
+
+	test('Claude spinner 경계와 idle prompt 앞의 마지막 정적 논리 행을 읽는다', () => {
+		const terminal = new FakeTerminal();
+		terminal.setBuffer([
+			'● Running 1 shell command…',
+			'  └ $ sleep 4',
+			'✱ Roosting… (12s · ↓ 88 tokens)',
+			'  └ Tip: Use Plan Mode before making changes.',
+			'────────────────────────────────',
+			'›',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle) · esc to interrupt ·…',
+		], 5);
+		const running = captureTerminalBufferSnapshot(terminal);
+		terminal.setBuffer([
+			'● Running 1 shell command…',
+			'  └ $ sleep 4',
+			'✱ Roosting… (13s · ↓ 91 tokens)',
+			'  └ Tip: Use Plan Mode before making changes.',
+			'────────────────────────────────',
+			'›',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle) · esc to interrupt ·…',
+		], 5);
+
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				running,
+				'claude',
+			),
+			'└ $ sleep 4',
+		);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				running,
+				undefined,
+			),
+			'└ $ sleep 4',
+		);
+
+		terminal.setBuffer([
+			'Claude 작업을 완료했습니다.',
+			'────────────────────────────────',
+			'›',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle) · esc to interrupt ·…',
+		], 2);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'claude',
+			),
+			'Claude 작업을 완료했습니다.',
+		);
+	});
+
+	test('고배율 Claude composer가 여러 행이어도 입력 prompt와 장식을 반환하지 않는다', () => {
+		const terminal = new FakeTerminal();
+		terminal.setBuffer([
+			'● Running 1 shell command · 3s…',
+			'  └ $ sleep 4 (3s)',
+			'    (ctrl+b to run in background)',
+			'Leavening… (40s · ↓ 1.4k tokens)',
+			'  └ Tip: Use /btw to ask a quick side',
+			'    question without interrupting Claude’s',
+			'    current work',
+			'    continued tip row 1',
+			'    continued tip row 2',
+			'    continued tip row 3',
+			'    continued tip row 4',
+			'    continued tip row 5',
+			'────────────────────────────────',
+			'❯',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle)',
+			'   · esc to interrupt · ← for agents',
+		], 13);
+
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'claude',
+				'❯',
+			),
+			'└ $ sleep 4 (3s)',
+		);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				undefined,
+				'❯',
+			),
+			'└ $ sleep 4 (3s)',
+		);
+
+		terminal.setBuffer([
+			'────────────────────────────────',
+			'❯',
+			'────────────────────────────────',
+			'▶▶ auto mode on · esc to interrupt',
+		], 1);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'claude',
+				'❯',
+			),
+			'',
+		);
+	});
+
+	test('동적 상태 경계 앞의 wrapped physical 행을 하나의 정적 논리 행으로 읽는다', () => {
+		const lines = [
+			new FakeBufferLine('Ran a very ', false),
+			new FakeBufferLine('long command', true),
+			new FakeBufferLine('', false),
+			new FakeBufferLine('Working (2s · esc to interrupt)', false),
+			new FakeBufferLine('Ask Codex to do anything', false),
+		];
+		const terminal = {
+			buffer: {
+				active: {
+					baseY: 0,
+					cursorY: 4,
+					length: lines.length,
+					getLine: (index: number) => lines[index],
+				},
+			},
+		};
+
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'codex',
+			),
+			'Ran a very long command',
+		);
+	});
+
+	test('동적 상태 경계 앞에 정적 행이 없으면 상태 문구를 fallback하지 않는다', () => {
+		const terminal = new FakeTerminal();
+		terminal.setBuffer([
+			'Working (1s · esc to interrupt)',
+			'Ask Codex to do anything',
+		], 1);
+
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'codex',
+				'Working (1s · esc to interrupt)',
+			),
+			'',
+		);
+	});
+
+	test('PTY preview를 frame 단위로 합치고 종료 뒤 늦은 write callback은 무시한다', () => {
+		const terminal = new FakeTerminal();
+		const animationFrames = new FakeAnimationFrames();
+		const previews: unknown[] = [];
+		const dependencies: ShellTerminalDependencies = {
+			...createDependencies(
+				terminal,
+				createFitAddon(),
+				[],
+				animationFrames,
+			),
+			onOutputPreview: (event) => previews.push(event),
+		};
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			() => undefined,
+			dependencies,
+		);
+		animationFrames.flushNext();
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		animationFrames.flushNext();
+
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: '\u001b[32mworking 1\u001b[0m',
+		});
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: '\rworking 2',
+		});
+		assert.strictEqual(animationFrames.pendingCount, 1);
+		animationFrames.flushNext();
+		assert.deepStrictEqual(previews, [{
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			message: 'working 2',
+		}]);
+
+		terminal.deferWriteCallbacks = true;
+		controller.handleHostMessage({
+			type: 'terminal.output',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			data: 'late parsed output',
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 0,
+		});
+		terminal.flushWriteCallbacks();
+		assert.strictEqual(animationFrames.pendingCount, 0);
+		assert.strictEqual(previews.length, 1);
+	});
+
 	test('VS Code Terminal CSS 색상을 xterm theme에 매핑한다', () => {
 		const cssValues: Readonly<Record<string, string>> = {
 			'--vscode-terminal-background': ' #010101 ',
@@ -1157,10 +1523,20 @@ suite('Shell Terminal Webview', () => {
 
 class FakeTerminal {
 	readonly writes: string[] = [];
+	buffer: {
+		readonly active: {
+			readonly baseY: number;
+			readonly cursorY: number;
+			readonly length: number;
+			getLine(index: number): FakeBufferLine | undefined;
+		};
+	} | undefined;
 	openedContainer: HTMLElement | undefined;
 	disposeCalls = 0;
 	focusCalls = 0;
 	resetCalls = 0;
+	deferWriteCallbacks = false;
+	private readonly writeCallbacks: Array<() => void> = [];
 	private keyListener: ((event: { readonly key: string }) => void) | undefined;
 	private dataListener: ((data: string) => void) | undefined;
 
@@ -1179,8 +1555,34 @@ class FakeTerminal {
 		this.focusCalls += 1;
 	}
 
-	write(data: string): void {
+	write(data: string, callback?: () => void): void {
 		this.writes.push(data);
+		if (callback === undefined) {
+			return;
+		}
+		if (this.deferWriteCallbacks) {
+			this.writeCallbacks.push(callback);
+		} else {
+			callback();
+		}
+	}
+
+	flushWriteCallbacks(): void {
+		for (const callback of this.writeCallbacks.splice(0)) {
+			callback();
+		}
+	}
+
+	setBuffer(values: readonly string[], cursorY: number): void {
+		const lines = values.map((value) => new FakeBufferLine(value, false));
+		this.buffer = {
+			active: {
+				baseY: 0,
+				cursorY,
+				length: lines.length,
+				getLine: (index: number) => lines[index],
+			},
+		};
 	}
 
 	reset(): void {
@@ -1210,6 +1612,17 @@ class FakeTerminal {
 	emitKeyData(data: string): void {
 		this.keyListener?.({ key: data });
 		this.dataListener?.(data);
+	}
+}
+
+class FakeBufferLine {
+	constructor(
+		private readonly value: string,
+		readonly isWrapped: boolean,
+	) {}
+
+	translateToString(trimRight = false): string {
+		return trimRight ? this.value.trimEnd() : this.value;
 	}
 }
 

@@ -4,6 +4,7 @@ import {
 	initializeShellTerminal,
 	type PostTerminalMessage,
 	type ShellTerminalController,
+	type TerminalOutputPreviewEvent,
 } from './shellTerminal';
 import type { TerminalTitleCandidateEvent } from './terminalInputCollector';
 
@@ -61,6 +62,11 @@ export interface AgentTerminalPool {
 export interface AgentTerminalAutoTitleOptions {
 	isEligible(tabId: TabId, sessionId: SessionId): boolean;
 	onCandidate(event: TerminalTitleCandidateEvent): void;
+}
+
+/** 기본 pool의 각 xterm이 만든 현재 메시지를 세션 표시 Store로 전달한다. */
+export interface AgentTerminalOutputPreviewOptions {
+	onOutputPreview(event: TerminalOutputPreviewEvent): void;
 }
 
 /**
@@ -242,6 +248,7 @@ export function createDefaultAgentTerminalPool(
 	container: HTMLElement,
 	postMessage: PostTerminalMessage,
 	autoTitle?: AgentTerminalAutoTitleOptions,
+	outputPreview?: AgentTerminalOutputPreviewOptions,
 ): AgentTerminalPool {
 	return createAgentTerminalPool(container, {
 		createElement: (tagName) => document.createElement(tagName),
@@ -254,6 +261,9 @@ export function createDefaultAgentTerminalPool(
 				...defaultShellTerminalDependencies,
 				createTabId: () => tabId,
 				...(autoTitle === undefined ? {} : { autoTitle }),
+				...(outputPreview === undefined
+					? {}
+					: { onOutputPreview: outputPreview.onOutputPreview }),
 			}),
 	});
 }

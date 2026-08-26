@@ -2,11 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { MCP_LOOPBACK_HOST } from './httpPolicy';
 import { isValidMcpRouteId, type McpRandomBytes } from './sessionCredentials';
 import type { McpConnectionDescriptor } from './sessionRuntime';
+import { createCrispyMcpInstructions } from './agentActivityInstructions';
 import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-} from './toolServer';
+} from './toolNames';
 
 export const CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
 export const CODEX_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
@@ -46,9 +47,10 @@ export function createCodexMcpServerName(
 /**
  * Token을 포함하지 않는 Codex session-only MCP config argv를 직렬화한다.
  *
- * `developer_instructions`는 의도적으로 설정하지 않는다. CLI `--config` override는
- * Codex의 Project/Profile/User config보다 우선하므로 Crispy가 이 key를 설정하면
- * 사용자의 effective repository instructions를 대체하게 된다.
+ * Activity-compatible session에는 Host-authorized visual instrumentation을
+ * `developer_instructions`로도 전달한다. MCP initialize instructions만으로는
+ * provider가 server-owned text를 workspace prompt injection으로 오인할 수 있다.
+ * 이 key는 built-in/AGENTS.md를 교체하는 `model_instructions_file`과 다르다.
  */
 export function createCodexMcpConfig(
 	connection: McpConnectionDescriptor,
@@ -67,6 +69,11 @@ export function createCodexMcpConfig(
 		]
 		: [CRISPY_PING_TOOL_NAME];
 	const assignments = [
+		...(agentActivityCompatible
+			? [`developer_instructions=${serializeCodexTomlString(
+				createCrispyMcpInstructions(true),
+			)}`]
+			: []),
 		`${serverKey}.url=${serializeCodexTomlString(connection.url)}`,
 		`${serverKey}.bearer_token_env_var=${serializeCodexTomlString(CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE)}`,
 		`${serverKey}.required=false`,

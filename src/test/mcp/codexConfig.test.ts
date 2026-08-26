@@ -12,6 +12,7 @@ import {
 } from '../../mcp/codexConfig';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import { serializeCodexTomlString } from '../../mcp/codexConfig';
+import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
 
 const routeId = Buffer.alloc(24, 0x23).toString('base64url');
 const bearerToken = Buffer.alloc(32, 0x45).toString('base64url');
@@ -58,7 +59,7 @@ suite('Codex MCP session config serializer', () => {
 		assert.strictEqual(hasDeveloperInstructionsOverride(config.args), false);
 	});
 
-	test('qualified gate serializes exactly three tools without replacing developer instructions', () => {
+	test('qualified gate serializes three tools and trusted graph instructions', () => {
 		const config = createCodexMcpConfig(
 			createConnection(),
 			(size) => Buffer.alloc(size, 0xef),
@@ -67,9 +68,17 @@ suite('Codex MCP session config serializer', () => {
 		);
 
 		assert.strictEqual(config.args.includes(
-			`mcp_servers.${config.serverName}.enabled_tools=["crispy_ping","crispy_set_agent_activity","crispy_clear_agent_activity"]`,
+			`mcp_servers.${config.serverName}.enabled_tools=["crispy_ping","crispy_saa","crispy_caa"]`,
 		), true);
-		assert.strictEqual(hasDeveloperInstructionsOverride(config.args), false);
+		assert.strictEqual(hasDeveloperInstructionsOverride(config.args), true);
+		assert.strictEqual(config.args.includes(
+			`developer_instructions=${serializeCodexTomlString(
+				CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+			)}`,
+		), true);
+		assert.strictEqual(config.args.filter(
+			(argument) => argument.startsWith('developer_instructions='),
+		).length, 1);
 		assert.strictEqual(config.args.some((argument) => argument.includes(
 			bearerToken,
 		)), false);

@@ -7359,8 +7359,14 @@ suite('Graph View', () => {
 		const containerRule = graphViewCss.match(
 			/\.graph-agent-activity-bindings\s*\{[^}]*\}/,
 		);
+		const bindingRule = graphViewCss.match(
+			/\.graph-agent-activity-binding\s*\{[^}]*\}/,
+		);
 		const sessionRule = graphViewCss.match(
-			/\.graph-agent-activity-session-id\s*\{[^}]*\}/,
+			/\.graph-agent-activity-session-title\s*\{[^}]*\}/,
+		);
+		const messageRule = graphViewCss.match(
+			/\.graph-agent-activity-current-message\s*\{[^}]*\}/,
 		);
 
 		assert.ok(containerRule);
@@ -7372,9 +7378,18 @@ suite('Graph View', () => {
 		assert.match(containerRule[0], /pointer-events:\s*none;/);
 		assert.match(containerRule[0], /left:\s*0;/);
 		assert.match(containerRule[0], /width:\s*100%;/);
+		assert.ok(bindingRule);
+		assert.match(bindingRule[0], /display:\s*flex;/);
+		assert.match(bindingRule[0], /column-gap:\s*8px;/);
 		assert.ok(sessionRule);
+		assert.match(sessionRule[0], /flex:\s*0\s+1\s+auto;/);
+		assert.match(sessionRule[0], /max-width:\s*50%;/);
 		assert.match(sessionRule[0], /overflow:\s*hidden;/);
 		assert.match(sessionRule[0], /text-overflow:\s*ellipsis;/);
+		assert.ok(messageRule);
+		assert.match(messageRule[0], /flex:\s*1\s+1\s+0;/);
+		assert.match(messageRule[0], /overflow:\s*hidden;/);
+		assert.match(messageRule[0], /text-overflow:\s*ellipsis;/);
 		assert.match(
 			graphViewCss,
 			/\.graph-agent-activity-binding\.graph-node-effect-host\s*\{/,

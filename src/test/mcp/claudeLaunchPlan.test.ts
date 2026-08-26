@@ -5,6 +5,7 @@ import {
 	buildClaudeMcpLaunchPlan,
 } from '../../mcp/claudeLaunchPlan';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
+import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
 
 const token = Buffer.alloc(32, 0x42).toString('base64url');
 const route = Buffer.alloc(24, 0x24).toString('base64url');
@@ -30,7 +31,7 @@ suite('Claude AgentLaunchPlan builder', () => {
 		assert.deepStrictEqual(environment, { KEEP: 'yes' });
 	});
 
-	test('registered connection만 placeholder config와 canonical token env를 만든다', () => {
+	test('registered connection만 공통 Activity prompt와 placeholder token env를 만든다', () => {
 		const plan = buildClaudeMcpLaunchPlan({
 			executable: {
 				executable: 'C:\\npm\\claude.cmd',
@@ -40,6 +41,7 @@ suite('Claude AgentLaunchPlan builder', () => {
 			connection: createConnection(),
 			createArgs: (serverName) => ['-p', `call mcp__${serverName}__crispy_ping`],
 			randomBytes: (size) => Buffer.alloc(size, 0xab),
+			agentActivityCompatible: true,
 		});
 		const environment = createAgentProcessEnvironment(plan, {
 			crispy_mcp_token: 'stale',
@@ -50,9 +52,14 @@ suite('Claude AgentLaunchPlan builder', () => {
 		assert.strictEqual(plan.providerId, 'claude');
 		assert.strictEqual(plan.expectsMcp, true);
 		assert.match(plan.mcpServerName ?? '', /^crispy_canvas_[a-f0-9]{32}$/u);
+		assert.strictEqual(plan.args.includes('--append-system-prompt'), true);
 		assert.deepStrictEqual(plan.args.slice(0, 2), [
 			'-p',
 			`call mcp__${plan.mcpServerName}__crispy_ping`,
+		]);
+		assert.deepStrictEqual(plan.args.slice(2, 4), [
+			'--append-system-prompt',
+			CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
 		]);
 		assert.strictEqual(configIndex, plan.args.length - 2);
 		assert.strictEqual(plan.args.some((argument) => argument.includes(token)), false);

@@ -10,6 +10,7 @@ import type { ProcessTreeController } from '../../agent/host/terminal/processTre
 import type { SupervisorRuntimeEvent } from '../../mcp/adapterSupervisor';
 import { buildClaudeMcpLaunchPlan } from '../../mcp/claudeLaunchPlan';
 import { CLAUDE_MANAGED_MCP_DYNAMIC_CONFIG_REJECTION } from '../../mcp/claudeDiagnostic';
+import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type {
 	McpPrepareResult,
@@ -194,6 +195,7 @@ function createFixture(options: {
 		'buildClaudeMcpLaunchPlan'
 	];
 	readonly processTreeController?: ProcessTreeController;
+	readonly agentActivityCompatible?: boolean;
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -244,6 +246,7 @@ function createFixture(options: {
 			}
 			: {}),
 		mcpSupervisor: supervisor,
+		agentActivityCompatible: options.agentActivityCompatible,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
 		sessionIdNonce: 'claude-lifecycle-panel',
@@ -284,7 +287,7 @@ suite('Claude direct PTY and MCP transaction', () => {
 	});
 
 	test('auth 등록과 final sanitizer 뒤 Claude를 PTY root로 한 번 시작한다', async () => {
-		const fixture = createFixture();
+		const fixture = createFixture({ agentActivityCompatible: true });
 
 		await beginClaude(fixture.host, 'tab-authenticated');
 
@@ -297,14 +300,12 @@ suite('Claude direct PTY and MCP transaction', () => {
 		assert.strictEqual(typeof spawn.env.CRISPY_MCP_TOKEN, 'string');
 		assert.strictEqual(Array.isArray(spawn.args), true);
 		const args = spawn.args as readonly string[];
-		const instructionIndex = args.indexOf('--append-system-prompt');
 		const configIndex = args.indexOf('--mcp-config');
-		assert.strictEqual(instructionIndex, 0);
-		assert.strictEqual(args[instructionIndex + 1].includes('crispy_ping'), true);
-		assert.strictEqual(
-			args[instructionIndex + 1].includes('crispy_set_agent_activity'),
-			false,
-		);
+		assert.deepStrictEqual(args.slice(0, 2), [
+			'--append-system-prompt',
+			CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+		]);
+		assert.strictEqual(configIndex, 2);
 		assert.strictEqual(configIndex, args.length - 2);
 		assert.strictEqual(
 			args[configIndex + 1].includes('${CRISPY_MCP_TOKEN}'),

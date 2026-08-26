@@ -56,7 +56,7 @@ export function buildClaudeMcpLaunchPlan(
 	return freezeClaudePlan({
 		executable: options.executable,
 		cwd: options.cwd,
-		/** Keep the variadic --mcp-config value last so it cannot consume the prompt. */
+		/** Keep MCP-generated additive instructions and config after user args. */
 		args: [...args, ...config.args],
 		createEnvOverlay: () => options.connection.withBearerToken((token) =>
 			Object.freeze({

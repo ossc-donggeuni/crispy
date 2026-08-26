@@ -8,6 +8,10 @@ import {
 	type ClaudeSmokeStatus,
 } from '../../mcp/claudeSmoke';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
+import {
+	AGENT_ACTIVITY_SMOKE_ANCHOR,
+	AGENT_ACTIVITY_SMOKE_CHILDREN,
+} from '../../mcp/agentActivitySmokeContract';
 import { FakePtyProcessHandle } from '../agent/support/fakePtyAdapter';
 
 const generation = 'generation-claude-smoke';
@@ -16,18 +20,17 @@ const routeId = Buffer.alloc(24, 0x31).toString('base64url');
 const bearerToken = Buffer.alloc(32, 0x52).toString('base64url');
 
 suite('Claude MCP L1 dev smoke transaction', () => {
-	test('version gate와 auth 등록 뒤 node-pty request에서 ping을 관찰한다', async () => {
+	test('자연어 파일 읽기에서 autonomous activity를 관찰한다', async () => {
 		const fixture = createFixture('registered');
 		let spawnRequest: AgentProcessSpawnRequest | undefined;
 		const succeeded = await runClaudeMcpSmoke({
 			...fixture.options,
 			spawnProvider: (request) => {
 				spawnRequest = request;
-				setImmediate(() => fixture.events.handle({
-					type: 'session.crispyPingObserved',
-					generation,
-					sessionId,
-				}));
+				setImmediate(() => {
+					emitStrictLifecycle(fixture.events);
+					fixture.provider.emitExit({ exitCode: 0 });
+				});
 				return fixture.provider;
 			},
 		});
@@ -37,7 +40,7 @@ suite('Claude MCP L1 dev smoke transaction', () => {
 			'version_compatible',
 			'adapter_ready',
 			'awaiting_activity',
-			'activity_observed',
+			'lifecycle_observed',
 		]);
 		assert.strictEqual(fixture.prepareCount(), 1);
 		assert.strictEqual(fixture.markProviderStartedCount(), 1);
@@ -53,8 +56,29 @@ suite('Claude MCP L1 dev smoke transaction', () => {
 			spawnRequest.args[3],
 			createClaudeMcpSmokePrompt(serverName),
 		);
-		assert.strictEqual(spawnRequest.args[1], `mcp__${serverName}__crispy_ping`);
+		assert.strictEqual(spawnRequest.args[1], [
+			'Read',
+			`mcp__${serverName}__crispy_saa`,
+			`mcp__${serverName}__crispy_caa`,
+		].join(','));
+		for (const toolName of spawnRequest.args[1].split(',').slice(1)) {
+			assert.ok(toolName.length <= 64);
+		}
 		assert.strictEqual(spawnRequest.args[1].includes('*'), false);
+		assert.strictEqual(createClaudeMcpSmokePrompt(serverName).includes('crispy_'), false);
+		assert.strictEqual(createClaudeMcpSmokePrompt(serverName).includes('MCP'), false);
+		assert.strictEqual(spawnRequest.args[4], '--append-system-prompt');
+		assert.strictEqual(
+			spawnRequest.args[5].includes('[REQUIRED FOR USER-VISIBLE GRAPH]'),
+			true,
+		);
+		assert.strictEqual(spawnRequest.args[5].includes('call crispy_saa'), true);
+		assert.strictEqual(spawnRequest.args[5].includes('with planned'), true);
+		assert.strictEqual(spawnRequest.args[5].includes('completion anchor'), true);
+		assert.strictEqual(
+			spawnRequest.args[5].includes('call crispy_caa for every non-anchor target'),
+			true,
+		);
 		assert.strictEqual(spawnRequest.args.at(-2), '--mcp-config');
 		assert.strictEqual(spawnRequest.args.some(
 			(argument) => argument.includes(bearerToken),
@@ -66,6 +90,31 @@ suite('Claude MCP L1 dev smoke transaction', () => {
 		assert.strictEqual(spawnRequest.environment.crispy_mcp_token, undefined);
 		assert.strictEqual(spawnRequest.environment.ELECTRON_RUN_AS_NODE, undefined);
 		assert.strictEqual(spawnRequest.environment.KEEP_ME, 'yes');
+	});
+
+	test('첫 activity만 호출하고 종료하면 전체 lifecycle 검증에 실패한다', async () => {
+		const fixture = createFixture('registered');
+		const succeeded = await runClaudeMcpSmoke({
+			...fixture.options,
+			spawnProvider: () => {
+				setImmediate(() => {
+					fixture.events.handle({
+						type: 'session.agentActivityRequested',
+						generation,
+						sessionId,
+						operation: 'set',
+						path: AGENT_ACTIVITY_SMOKE_ANCHOR,
+						targetKind: 'folder',
+						activity: 'planned',
+					});
+					fixture.provider.emitExit({ exitCode: 0 });
+				});
+				return fixture.provider;
+			},
+		});
+
+		assert.strictEqual(succeeded, false);
+		assert.strictEqual(fixture.statuses.at(-1), 'failed:smoke_failed');
 	});
 
 	test('negative control은 token env 없이 자연 종료까지 authenticated activity가 없어야 통과한다', async () => {
@@ -168,6 +217,48 @@ suite('Claude MCP L1 dev smoke transaction', () => {
 		}
 	});
 });
+
+function emitStrictLifecycle(events: ClaudeSmokeEventObserver): void {
+	events.handle({
+		type: 'session.agentActivityRequested',
+		generation,
+		sessionId,
+		operation: 'set',
+		path: AGENT_ACTIVITY_SMOKE_ANCHOR,
+		targetKind: 'folder',
+		activity: 'planned',
+	});
+	for (const path of AGENT_ACTIVITY_SMOKE_CHILDREN) {
+		events.handle({
+			type: 'session.agentActivityRequested',
+			generation,
+			sessionId,
+			operation: 'set',
+			path,
+			targetKind: 'file',
+			activity: 'active',
+		});
+	}
+	for (const path of [...AGENT_ACTIVITY_SMOKE_CHILDREN].reverse()) {
+		events.handle({
+			type: 'session.agentActivityRequested',
+			generation,
+			sessionId,
+			operation: 'clear',
+			path,
+			targetKind: 'file',
+		});
+	}
+	events.handle({
+		type: 'session.agentActivityRequested',
+		generation,
+		sessionId,
+		operation: 'set',
+		path: AGENT_ACTIVITY_SMOKE_ANCHOR,
+		targetKind: 'folder',
+		activity: 'completed',
+	});
+}
 
 function createFixture(
 	credentialMode: 'registered' | 'missing-negative-control',

@@ -382,8 +382,7 @@ body.vscode-high-contrast-light .graph-viewport {
 	min-width: 0;
 	box-sizing: border-box;
 	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
+	column-gap: 8px;
 	padding: 4px 8px;
 	color: var(--vscode-foreground);
 	background: var(
@@ -423,19 +422,25 @@ body.vscode-high-contrast-light .graph-viewport {
 	height: calc(100% + 4px);
 }
 
-.graph-agent-activity-session-id {
+.graph-agent-activity-session-title {
 	position: relative;
 	z-index: 3;
+	flex: 0 1 auto;
+	max-width: 50%;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	font-weight: 600;
 }
 
-.graph-agent-activity-kind {
+.graph-agent-activity-current-message {
 	position: relative;
 	z-index: 3;
-	flex: none;
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	color: var(--vscode-descriptionForeground);
 	white-space: nowrap;
 }

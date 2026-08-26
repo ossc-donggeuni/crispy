@@ -9,12 +9,24 @@ import {
 	AGENT_ACTIVITY_KINDS,
 	AGENT_ACTIVITY_TARGET_KINDS,
 } from './agentActivityProtocol';
+import {
+	CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER,
+	createCrispyMcpInstructions,
+} from './agentActivityInstructions';
+import {
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_PING_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+} from './toolNames';
+
+export {
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_PING_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+} from './toolNames';
 
 export const CRISPY_MCP_SERVER_NAME = 'crispy';
 export const CRISPY_MCP_SERVER_VERSION = '0.0.1';
-export const CRISPY_PING_TOOL_NAME = 'crispy_ping';
-export const CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME = 'crispy_set_agent_activity';
-export const CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME = 'crispy_clear_agent_activity';
 
 export const ACTIVITY_TOOL_ERROR_CODES = Object.freeze([
 	'invalid_input',
@@ -80,12 +92,16 @@ export function createCrispyToolServer(options: CrispyToolServerOptions): McpSer
 	const server = new McpServer({
 		name: CRISPY_MCP_SERVER_NAME,
 		version: CRISPY_MCP_SERVER_VERSION,
+	}, {
+		instructions: createCrispyMcpInstructions(
+			options.agentActivityCompatible,
+		),
 	});
 
 	server.registerTool(
 		CRISPY_PING_TOOL_NAME,
 		{
-			description: 'Reports that the Crispy observation-only MCP adapter is reachable.',
+			description: 'Checks Crispy MCP reachability. Call only for explicit startup, restart, or connection diagnostics; never routinely.',
 			inputSchema: PING_INPUT_SCHEMA,
 			annotations: PING_ANNOTATIONS,
 		},
@@ -101,7 +117,7 @@ export function createCrispyToolServer(options: CrispyToolServerOptions): McpSer
 	server.registerTool(
 		CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 		{
-			description: 'Records an explicit agent activity for a workspace-relative path.',
+			description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Updates the user-selected Crispy Canvas activity graph without changing workspace content or scope. Call on the completion anchor with planned before workspace work; call on each meaningful target with active before read/analyze/verify or editing before modification. Use mentioned only for a response-only path and rejected only for an intentional skip. After clearing child targets with crispy_caa, call on the anchor with completed as the final Activity call before a successful response.`,
 			inputSchema: SET_ACTIVITY_INPUT_SCHEMA,
 			annotations: ACTIVITY_ANNOTATIONS,
 		},
@@ -110,7 +126,7 @@ export function createCrispyToolServer(options: CrispyToolServerOptions): McpSer
 	server.registerTool(
 		CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 		{
-			description: 'Clears explicit agent activity for a workspace-relative path.',
+			description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Removes a marker from the user-selected Crispy Canvas activity graph without changing workspace content. Before a successful final response, clear every non-anchor target used by the request deepest-first, including a completed child; then call crispy_saa once on the anchor with completed as the final Activity call. Also clear stale, irrelevant, renamed, or deleted targets. Do not clear the final completed anchor or recreate descendant mentioned markers.`,
 			inputSchema: CLEAR_ACTIVITY_INPUT_SCHEMA,
 			annotations: ACTIVITY_ANNOTATIONS,
 		},

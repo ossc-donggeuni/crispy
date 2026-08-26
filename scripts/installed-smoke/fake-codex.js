@@ -13,8 +13,8 @@ const ACTIVITY_SEQUENCE = Object.freeze([
 ]);
 const EXPECTED_TOOLS = Object.freeze([
 	'crispy_ping',
-	'crispy_set_agent_activity',
-	'crispy_clear_agent_activity',
+	'crispy_saa',
+	'crispy_caa',
 ]);
 const TOKEN_ENVIRONMENT_NAME = 'CRISPY_MCP_TOKEN';
 const CONTROL_DIRECTORY_ENVIRONMENT_NAME =
@@ -198,7 +198,7 @@ async function runActivitySequence() {
 			requestId,
 			'tools/call',
 			{
-				name: 'crispy_set_agent_activity',
+				name: 'crispy_saa',
 				arguments: { path: '.', targetKind: 'folder', activity },
 			},
 		));
@@ -222,7 +222,7 @@ async function runActivitySequence() {
 		requestId,
 		'tools/call',
 		{
-			name: 'crispy_clear_agent_activity',
+			name: 'crispy_caa',
 			arguments: { path: '.', targetKind: 'folder' },
 		},
 	));
