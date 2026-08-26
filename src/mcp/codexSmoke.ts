@@ -5,6 +5,11 @@ import {
 	type SpawnOptions,
 } from 'node:child_process';
 import path from 'node:path';
+import type { AgentActivityRequested } from './agentActivityProtocol';
+import {
+	AGENT_ACTIVITY_LIFECYCLE_SMOKE_PROMPT,
+	isStrictAgentActivitySmokeLifecycle,
+} from './agentActivitySmokeContract';
 import { McpAdapterSupervisor } from './adapterSupervisor';
 import {
 	resolveCodexConfigStyle,
@@ -31,10 +36,7 @@ import type {
 	McpSessionRuntimeEvent,
 } from './sessionRuntime';
 
-export const CODEX_MCP_SMOKE_PROMPT = [
-	'Call the crispy_ping MCP tool once.',
-	'Do not run shell commands and do not modify files.',
-].join(' ');
+export const CODEX_MCP_SMOKE_PROMPT = AGENT_ACTIVITY_LIFECYCLE_SMOKE_PROMPT;
 
 const CODEX_SMOKE_ARGS_BEFORE_CONFIG = Object.freeze([
 	'--ask-for-approval',
@@ -60,7 +62,7 @@ export type CodexSmokeFailureReason = typeof CODEX_SMOKE_FAILURE_REASONS[number]
 export type CodexSmokeStatus =
 	| 'adapter_ready'
 	| 'awaiting_activity'
-	| 'activity_observed'
+	| 'lifecycle_observed'
 	| `failed:${CodexSmokeFailureReason}`;
 
 export type CodexProviderSpawnRequest = AgentProcessSpawnRequest;
@@ -96,12 +98,17 @@ export interface RunCodexMcpSmokeOptions {
 }
 
 type CodexSmokeOutcome =
-	| { readonly type: 'activity' }
+	| {
+		readonly type: 'provider_exit';
+		readonly exitCode: number;
+		readonly signal?: NodeJS.Signals;
+	}
 	| { readonly type: 'failure'; readonly reason: CodexSmokeFailureReason };
 
 /** Supervisor event를 current smoke session/generation에만 연결한다. */
 export class CodexSmokeEventObserver {
 	private expectedGeneration: string | undefined;
+	private readonly activityEvents: AgentActivityRequested[] = [];
 	private settled = false;
 	private readonly outcomePromise: Promise<CodexSmokeOutcome>;
 	private resolveOutcome: ((outcome: CodexSmokeOutcome) => void) | undefined;
@@ -125,14 +132,14 @@ export class CodexSmokeEventObserver {
 		) {
 			return;
 		}
-		if (event.type === 'session.crispyPingObserved') {
-			this.settle({ type: 'activity' });
+		if (
+			event.type === 'session.crispyPingObserved'
+			|| event.type === 'session.mcpActivityObserved'
+		) {
 			return;
 		}
-		if (
-			event.type === 'session.mcpActivityObserved'
-			|| event.type === 'session.agentActivityRequested'
-		) {
+		if (event.type === 'session.agentActivityRequested') {
+			this.activityEvents.push(event);
 			return;
 		}
 		this.settle({ type: 'failure', reason: event.failure.reason });
@@ -140,6 +147,10 @@ export class CodexSmokeEventObserver {
 
 	wait(): Promise<CodexSmokeOutcome> {
 		return this.outcomePromise;
+	}
+
+	hasValidLifecycle(): boolean {
+		return isStrictAgentActivitySmokeLifecycle(this.activityEvents);
 	}
 
 	private settle(outcome: CodexSmokeOutcome): void {
@@ -209,6 +220,7 @@ export async function runCodexMcpSmoke(
 				argsAfterConfig: [CODEX_MCP_SMOKE_PROMPT],
 				randomBytes: options.randomBytes,
 				shellEnvironmentPolicyStyle,
+				agentActivityCompatible: true,
 			});
 			providerRequest = createAgentProcessSpawnRequest(plan, {
 				platform,
@@ -248,9 +260,19 @@ export async function runCodexMcpSmoke(
 			providerEnd,
 			waitForAbort(options.signal),
 		]);
-		if (outcome.type === 'activity') {
-			report('activity_observed');
-			return true;
+		if (outcome.type === 'provider_exit') {
+			if (
+				outcome.exitCode === 0
+				&& outcome.signal === undefined
+				&& options.events.hasValidLifecycle()
+			) {
+				report('lifecycle_observed');
+				return true;
+			}
+			report(outcome.exitCode === 0
+				? 'failed:smoke_failed'
+				: 'failed:provider_exited');
+			return false;
 		}
 		report(`failed:${outcome.reason}`);
 		return false;
@@ -346,16 +368,30 @@ function waitForProviderSpawn(
 
 function waitForProviderEnd(provider: ChildProcess): Promise<CodexSmokeOutcome> {
 	if (provider.exitCode !== null || provider.signalCode !== null) {
-		return Promise.resolve({ type: 'failure', reason: 'provider_exited' });
+		return Promise.resolve({
+			type: 'provider_exit',
+			exitCode: provider.exitCode ?? 1,
+			...(provider.signalCode === null ? {} : { signal: provider.signalCode }),
+		});
 	}
 	return new Promise((resolve) => {
-		const finish = (): void => {
-			provider.removeListener('exit', finish);
-			provider.removeListener('error', finish);
+		const onExit = (
+			code: number | null,
+			signal: NodeJS.Signals | null,
+		): void => {
+			provider.removeListener('error', onError);
+			resolve({
+				type: 'provider_exit',
+				exitCode: code ?? 1,
+				...(signal === null ? {} : { signal }),
+			});
+		};
+		const onError = (): void => {
+			provider.removeListener('exit', onExit);
 			resolve({ type: 'failure', reason: 'provider_exited' });
 		};
-		provider.once('exit', finish);
-		provider.once('error', finish);
+		provider.once('exit', onExit);
+		provider.once('error', onError);
 	});
 }
 
@@ -403,6 +439,7 @@ async function main(): Promise<void> {
 	const supervisor = new McpAdapterSupervisor({
 		extensionUri: { fsPath: repositoryRoot },
 		parentEnvironment: process.env,
+		agentActivityCompatible: true,
 		onEvent: ({ event }) => observer.handle(event),
 	});
 	const abort = (): void => controller.abort();

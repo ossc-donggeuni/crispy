@@ -51,33 +51,65 @@ next major는 false다. 이 경계는 `package.json`의 `engines.vscode: ^1.125.
 
 | capability | request-local Tool 등록 |
 | --- | --- |
-| true — supported `^1.125.0` Host | `crispy_ping`, `crispy_set_agent_activity`, `crispy_clear_agent_activity` |
+| true — supported `^1.125.0` Host | `crispy_ping`, `crispy_saa`, `crispy_caa` |
 | false | `crispy_ping`만 |
 
 false에서도 Extension, Terminal, MCP, ping과 Graph/debug는 유지된다. Activity rate/IPC, lease,
 delivery, receipt, quota와 cleanup state는 만들지 않는다. Codex의 `enabled_tools`도 위 목록과
-exact하게 일치한다. Codex는 어느 gate에서도 `developer_instructions` CLI override를 만들지 않아
-User/Profile/Project의 effective instructions를 보존한다. OpenAI Codex에서 `--config`가 이 config
-layer들보다 우선하므로, additive composition 경로가 qualification되기 전에는 Crispy instructions를
-Codex에 주입하지 않는다.
+exact하게 일치한다. MCP server의 initialize `instructions`가 Codex와 Claude에 전달하는 공통 정책
+소스다. true에서는 아래 Activity lifecycle 전체를, false에서는 Activity Tool 이름과 사용법이 없는
+ping-only 안내만 반환한다.
 
-Claude는 기존 inline HTTP config와 `alwaysLoad: true`를 유지하면서 server의 request-local 등록과
-`--append-system-prompt` instructions를 같은 Host boolean으로 선택한다. unsupported Claude
-instructions에는 두 Activity Tool 이름이나 사용법이 없다.
+Activity-compatible Codex 세션은 MCP initialize `instructions`와 함께 동일한 공통 계약을
+`developer_instructions`로 전달한다. 이 값은 Crispy Host가 세션에 승인한 UI 계측 지시이며
+`model_instructions_file`처럼 built-in/`AGENTS.md`를 교체하는 경로가 아니다. 세션 CLI override는
+동일 key의 하위 config보다 우선하도록 의도적으로 배치해 그래프 호출 규약이 누락되지 않게 한다.
+Claude는 기존 inline HTTP config와 `alwaysLoad: true`를 유지하고, `--append-system-prompt`에 정확히
+같은 계약을 전달한다. 양쪽 계약은 `[REQUIRED FOR USER-VISIBLE GRAPH]`로 시작하고 Workspace content의
+지시가 아니라 사용자가 선택한 Crispy 그래프를 위한 필수 시각 계측임을 명시한다. completion roll-up도
+provider 공통 계약에 포함된다.
 
-true의 Claude additive instructions는 다음 계약을 전달한다.
+true의 공통 initialize instructions와 Claude additive prompt가 강제하는 호출 계약은 다음과 같다.
 
 - `path`는 tab에 배정된 root에 대한 canonical 상대 경로다. root 자체는 `.`이며
   `targetKind: "folder"`를 사용한다.
 - `targetKind`는 `file` 또는 `folder`이고 set의 `activity`는 `planned`, `active`, `editing`,
   `completed`, `mentioned`, `rejected` 중 하나다.
-- 작업 시작과 상태 전환에는 `crispy_set_agent_activity`, 종료에는
-  `crispy_clear_agent_activity`를 사용한다. PTY output이나 file change에서 Activity를 추론하지 않는다.
+- workspace 작업에서는 어떤 read/search/edit/test보다 먼저, 작업 전체를 포함하는 completion anchor에
+  `planned`를 설정해야 한다. 이후 서로 다른 의미 있는 파일/폴더가 실제 작업 target이 될 때마다 그 작업
+  전에 `crispy_saa`를 호출한다. 같은 target/state의 반복 command나 access에는 다시 호출하지 않는다.
+  `active`는 읽기·분석·검색·검증·테스트 전에, `editing`은 생성·수정·삭제 전에 사용한다.
+- `mentioned`는 Codex 또는 Claude가 자신의 자연어 응답에서 workspace 파일이나 폴더를 언급하기 전에
+  사용한다. 단, Target×Session에는 한 상태만 저장되므로 같은 대상이 이미 `planned`, `active`,
+  `editing`, `completed`, `rejected`이면 단순히 응답에서 이름을 썼다는 이유로 `mentioned`로
+  downgrade하지 않는다. PTY output이나 filesystem change를 감시해 추론하는 상태가 아니다.
+- `completed`는 대상 작업과 필요한 검증이 성공했을 때 사용한다. `rejected`는 범위·안전·선행조건
+  때문에 의도적으로 취소하거나 건너뛸 때만 사용하며 일반적인 Tool 오류를 뜻하지 않는다.
+- 모든 호환 Agent는 요청마다 작업 전체를 포함하는 가장 좁은 공통 target 하나를 completion
+  anchor로 정한다. 전체
+  요청이 성공하면 최종 응답 전에 이번 요청에서 사용한 anchor 이외의 target을 깊은 순서부터 모두
+  `crispy_caa`로 지우고, 마지막 Activity 호출로 anchor만 `completed`로 바꾼다. 다른 요청이나 범위의
+  target은 정리하지 않는다. 최종 완료 응답에서 하위 경로를 언급해도 `mentioned` marker를 다시 만들지
+  않는다. 이 roll-up 전에 최종 자연어 응답을 시작하거나 anchor `completed` 이후 Activity를 호출하면
+  규약 위반이다.
+- 필수 initial/transition/cleanup/completion 호출 중 하나라도 빠지면 workspace 작업이 성공했더라도
+  Crispy lifecycle 검증에는 실패한다.
+- `mentioned`, `completed`, `rejected`는 현재 응답 동안 유지하고 곧바로 clear하지 않는다. 다음
+  사용자 요청, 범위 변경, 대상이 더 이상 관련 없게 된 때 또는 rename/delete로 marker가 무효가 된 때
+  `crispy_caa`를 호출한다. session 종료 cleanup도 stale state를 best-effort로 지운다.
+- 모든 command나 file access마다 호출하지 않는다. 의미 있는 주 작업 대상과 상태 전환만 보고하고,
+  가능하면 구체적인 파일/폴더를 사용한다. 넓은 작업에만 folder 또는 root를 사용한다.
+- Activity와 자연어 언급 보고는 agent에 전달되는 필수 정책이다. Host는 PTY prose나 filesystem change를
+  파싱해 상태를 추론하지 않으며 실제 provider smoke가 자연어 작업의 자율 호출을 검증한다.
+- `crispy_ping`은 startup/restart 또는 명시적인 연결 진단에만 한 번 사용하며 정상 작업 중 반복 호출하지
+  않는다.
 - Tool은 root, session, runtime, URI, token 또는 internal identity를 선택할 수 없다. Host가 현재
   Terminal assignment와 exact lease에서 모두 결정한다.
 - Tool success는 child가 handoff 대상으로 수락했다는 뜻이며 Host, Webview, Store 또는 화면의 ACK가
   아니다. `postMessage: true`도 Store delivery proof가 아니다. tracked clear receipt는 Host의
   occupancy/quota 정산 전용 internal signal이며 provider-visible ACK가 아니다.
+
+`crispy_saa`와 `crispy_caa`는 Claude의 `mcp__<server>__<tool>` 완전한 이름을 64자 이하로 유지한다.
 
 credential boundary는 기존 provider 계약을 유지한다. Codex argv에는
 `bearer_token_env_var="CRISPY_MCP_TOKEN"` 이름만 들어가고 Claude inline header에는 literal
@@ -91,10 +123,12 @@ cleanup clear는 best-effort이고, 끝나지 않는 validation/post work는 고
 낙관적으로 반환하지 않는다. 지원 범위 밖에서는 이 Activity 경로 전체를 inactive로 유지한다.
 
 minimum, current Stable과 current Insiders Host에서 strict parser와 true/false provider config,
-Codex Project/User instruction 보존, Claude additive instructions, placeholder와 ping 회귀,
+Codex Project/User instruction 보존, 공통 initialize instructions와 Claude의 동일 공통 prompt,
+placeholder와 ping 회귀,
 HTTP부터 Store receipt/quota까지의 full-chain FIFO,
 multi-root 및 Trust/root/restart lifecycle, unsupported zero-state, 실제 provider와 해당 native VSIX
-smoke를 검증한다. minimum 또는 major boundary를 바꿀 때에는 manifest와
+smoke를 검증한다. provider smoke의 prompt는 Tool 이름을 직접 지정하지 않고 `package.json` 읽기를 요청하며
+`session.agentActivityRequested`가 실제 발생해야 통과한다. minimum 또는 major boundary를 바꿀 때에는 manifest와
 `AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION`을 함께 qualification한다. 상세 순서와 문제 해결은
 repository `README.md`와 `TROUBLESHOOTING.md`를 따른다.
 
@@ -177,8 +211,12 @@ Host가 발급한 session URL/token으로 ping, 여섯 Activity set과 clear를 
 ```text
 adapter_ready
 awaiting_activity
-activity_observed
+lifecycle_observed
 ```
+
+실제 provider smoke는 `src/mcp/toolNames.ts`와 `src/mcp/agentActivityInstructions.ts`를 읽는 자연어
+요청을 사용한다. 성공하려면 `src/mcp` planned anchor, 두 파일의 active, 두 파일 clear, 마지막
+`src/mcp` completed가 모두 관찰되어야 하며 이후 Activity 호출이 없어야 한다.
 
 설치된 Codex의 config parsing, node-pty 실행 경계와 effective developer instruction 보존을 확인하려면
 다음을 실행한다.
@@ -191,7 +229,7 @@ pnpm run smoke:codex-config-compat
 
 ```text
 [codex-config-compat-smoke] keyed-filters config parsed through node-pty.
-[codex-config-compat-smoke] Project/User developer instructions preserved for both Activity gates.
+[codex-config-compat-smoke] Host graph authority and Workspace AGENTS.md precedence passed for both Activity gates.
 ```
 
 Windows에서는 설치된 실제 `codex.cmd`의 config parsing과, 특수문자 경로에 둔
@@ -199,7 +237,7 @@ Windows에서는 설치된 실제 `codex.cmd`의 config parsing과, 특수문자
 
 ```text
 [codex-config-compat-smoke] keyed-filters config parsed through node-pty.
-[codex-config-compat-smoke] Project/User developer instructions preserved for both Activity gates.
+[codex-config-compat-smoke] Host graph authority and Workspace AGENTS.md precedence passed for both Activity gates.
 [codex-config-compat-smoke] Windows cmd-one-shot special-path launch passed.
 ```
 
@@ -331,8 +369,8 @@ preparation을 추가한다. L3 전에는 Claude status/retry UI를 연결하지
 
 1. 공통 supervisor가 준비한 current random URL/token으로 token-free inline JSON을 만든다.
 2. `claude`를 node-pty의 direct root process로 실행하고 token은 environment에만 넣는다.
-3. `crispy_ping` 한 번을 요청해 config 인식, HTTP header expansion, tool list/call과
-   `activity_observed`를 확인한다.
+3. Tool 이름을 직접 지시하지 않는 두 파일 읽기 요청으로 config 인식, HTTP header expansion과
+   `planned → active children → clear children → completed anchor` 전체 lifecycle을 확인한다.
 4. argv/diagnostic/snapshot 전체에 token 값이 없고 inline JSON에는 literal placeholder만 있는지
    검사한다.
 5. 같은 config에서 token env만 제거한 negative control이 자연 종료까지 authenticated activity를

@@ -283,14 +283,17 @@ pnpm run prepare:codex-mcp-smoke
 pnpm run smoke:codex-mcp
 ```
 
-Codex CLI가 로그인되어 있어야 한다. 정상 실행은 아래 세 상태만 출력하며 authenticated MCP
-activity를 관찰한 뒤 Codex와 adapter를 정리한다.
+Codex CLI가 로그인되어 있어야 한다. 정상 실행은 아래 세 상태만 출력하며 authenticated MCP의 전체
+lifecycle을 관찰하고 provider가 정상 종료한 뒤 Codex와 adapter를 정리한다.
 
 ```text
 adapter_ready
 awaiting_activity
-activity_observed
+lifecycle_observed
 ```
+
+smoke는 Tool 이름을 직접 지시하지 않고 두 파일을 읽게 한다. `src/mcp` planned anchor, 두 파일의
+active, 두 clear와 마지막 `src/mcp` completed가 모두 있고 이후 Activity가 없어야 통과한다.
 
 실패 시에는 raw provider output 대신 `failed:<safe-reason>`만 출력한다. 요청이 늦다는 이유로
 연결 실패를 추론하지 않으므로, activity를 기다리는 동안에는 임의 silence timeout을 두지 않는다.
@@ -518,7 +521,9 @@ pnpm run smoke:claude-mcp -- --claude-executable /path/to/isolated/claude
 ```
 
 정상 실행은 각 positive/negative transaction에서 `version_compatible`, `adapter_ready`,
-`awaiting_activity` 뒤 각각 `activity_observed`, `negative_control_no_authenticated_activity`를 출력한다.
+`awaiting_activity` 뒤 각각 `lifecycle_observed`, `negative_control_no_authenticated_activity`를 출력한다.
+positive는 planned anchor, 두 active child, 두 clear와 마지막 completed anchor를 모두 확인하고 provider가
+정상 종료한 뒤에만 통과한다.
 후자는 token env가 없는 Claude의 자연 종료까지 authenticated activity가 없었다는 뜻이며 exit code,
 config rejection 또는 HTTP `401` 관찰을 뜻하지 않는다. signal 종료는
 `failed:negative_control_inconclusive`다. token, URL, route와 inline config는 출력하지 않는다.
@@ -576,25 +581,56 @@ true이면 Codex의 session-only `enabled_tools`와 request-local MCP 등록에 
 
 ```text
 crispy_ping
-crispy_set_agent_activity
-crispy_clear_agent_activity
+crispy_saa
+crispy_caa
 ```
 
-Codex에는 capability true/false 어느 쪽에서도 `developer_instructions` CLI override를 주입하지
-않는다. Codex의 `--config`가 Project/Profile/User config보다 우선하므로 해당 key를 설정하면
-repository별 workflow/safety instruction을 대체하기 때문이다. additive composition 경로를 별도로
-qualification하기 전까지 Codex에는 Tool allowlist와 MCP Tool 자체의 schema/description만 제공한다.
+Codex capability true에서는 MCP initialize `instructions`와 동일한 공통 계약을
+`developer_instructions` CLI override로도 주입한다. 이는 MCP server text만 보았을 때 provider가
+Workspace prompt injection으로 오인하는 경로를 피하고, Crispy Host가 승인한 세션 UI 계측임을
+명확히 하기 위한 것이다. `model_instructions_file`은 설정하지 않으므로 built-in/`AGENTS.md` 경로는
+교체하지 않는다. capability false에서는 Activity 지시를 주입하지 않는다.
 
 Claude는 기존 inline `type: "http"`, URL/header placeholder와 `alwaysLoad: true` shape를 유지하고
-같은 세 Tool을 server에서 노출한다. false이면 두 provider 모두 `crispy_ping`만 노출하며 Claude의
-additive runtime instructions에도 Activity Tool 이름이나 사용법을 넣지 않는다. `crispy_ping`의
-legacy `mode: "observation-only"`는 ping 응답 전용이며 server 전체 capability 설명이 아니다.
+같은 세 Tool을 server에서 노출한다. Codex와 Claude는 server의 initialize `instructions`를 공통
+도구 workflow로 사용하고, 각각 `developer_instructions`와 `--append-system-prompt`에서 정확히 같은
+Host 승인 계약을 받는다. 계약 첫 표식은 `[REQUIRED FOR USER-VISIBLE GRAPH]`이며 호출이 사용자 선택
+그래프의 필수 시각 계측이고 파일·범위·권한을 변경하지 않는다고 밝힌다. completion roll-up은 provider
+공통 규약이다. false이면 두 provider 모두 `crispy_ping`만 노출하고 initialize instructions에도 Activity Tool
+이름이나 사용법을 넣지 않는다. `crispy_ping`의 legacy `mode: "observation-only"`는 ping 응답 전용이며
+server 전체 capability 설명이 아니다.
 
-true의 Claude `--append-system-prompt` instructions는 assigned root 상대 path만 사용하게 한다. root는 `.`과
+true의 initialize instructions는 assigned root 상대 path만 사용하게 한다. root는 `.`과
 `targetKind: "folder"`로 나타내고 target kind는 `file`/`folder`, activity는 `planned`, `active`,
-`editing`, `completed`, `mentioned`, `rejected` 중 하나다. 시작/전환에는 set, 종료에는 clear를
-사용하며 PTY output이나 file change로 추론하지 않는다. Tool이 root/session/runtime/URI/token/internal
-identity를 제공하거나 선택하는 필드는 없다.
+`editing`, `completed`, `mentioned`, `rejected` 중 하나다. Agent가 반드시 보고하는 lifecycle은 다음과 같다.
+
+- `planned`: workspace operation 전에 작업 전체를 포함하는 completion anchor에 가장 먼저 설정하는 상태
+- `active`: 읽기·분석·검색·검증·테스트를 시작하기 전에 보고하는 상태
+- `editing`: 파일이나 폴더를 실제로 생성·수정·삭제하기 전에 보고하는 상태
+- `mentioned`: Codex 또는 Claude가 자신의 자연어 응답에서 workspace 파일이나 폴더를 언급하기 전에 보고하는 상태.
+  단, Target×Session에는 한 상태만 저장되므로 기존 `planned`/`active`/`editing`/`completed`/`rejected`를
+  단순 언급 때문에 `mentioned`로 downgrade하지 않는다.
+- `completed`: 대상 작업과 필요한 검증이 성공한 상태
+- `rejected`: 범위·안전·선행조건 때문에 의도적으로 취소하거나 건너뛴 상태. 일반 Tool 오류에는
+  사용하지 않는다.
+
+모든 호환 Agent는 요청 시작 시 작업 전체를 포함하는 가장 좁은 공통 target을 completion anchor로
+정한다. 작업 중에는 서로 다른 의미 있는 하위 target을 작업 전에 반드시 표시하지만, 같은 target/state의
+반복 command나 access에는 다시 호출하지 않는다. 전체 요청이 성공하면 최종 응답 전에 anchor가 아닌 이번 요청의
+target을 깊은 순서부터 `crispy_caa`로 지우고 마지막 Activity 호출로 anchor만 `completed`로 바꾼다.
+최종 완료 응답에서 하위 경로를 언급해도 `mentioned` marker를 다시 만들지 않으며, 다른 요청이나 범위의
+target은 이 roll-up에 포함하지 않는다. roll-up 전에 최종 응답을 시작하거나 anchor `completed` 뒤에
+Activity를 더 호출하면 lifecycle 검증이 실패한다. 필수 lifecycle 호출 하나라도 빠지면 작업 결과와
+무관하게 smoke는 실패한다.
+
+`mentioned`, `completed`, `rejected`는 현재 응답 동안 유지하고 즉시 clear하지 않는다. 다음 사용자
+요청이나 범위 변경, 대상의 관련성 상실, rename/delete로 marker가 무효가 된 때 clear한다. 모든
+command/file access를 보고하지 않고 의미 있는 주 작업 대상과 상태 전환만 호출하며, 넓은 작업에만
+folder/root를 사용한다. `crispy_ping`은 startup/restart 또는 명시적인 연결 진단에만 사용한다.
+Activity는 agent가 필수 정책에 따라 명시적으로 보고하며 PTY output이나 filesystem change에서 추론하지
+않는다. Host는 PTY prose를 파싱하지 않고 실제 provider smoke가 자연어 파일 읽기에서 자율 `saa` 호출을
+검증한다. Tool이 root/session/runtime/URI/token/internal identity를 제공하거나 선택하는 필드는
+없다. 축약된 `crispy_saa`/`crispy_caa`는 Claude의 완전한 MCP Tool 이름을 64자 이하로 유지한다.
 
 Tool success는 MCP child의 handoff 수락까지만 의미한다. exact lease, selected-root validation,
 Host quota, Webview delivery, Store 적용과 화면 표시의 ACK가 아니다. `postMessage: true`도 같은
@@ -614,7 +650,7 @@ Graph 연결의 현재 제약은 다음과 같다.
 - 끝나지 않는 validation/post work는 고정 cap 안에서 detach하고 quota를 낙관적으로 반환하지 않는다.
 
 minimum, current Stable과 current Insiders Host에서 parser와 gate true/false config, Codex
-Project/User instruction 보존, Claude additive instructions,
+Project/User instruction 보존, 공통 initialize instructions와 Claude의 동일 공통 prompt,
 ping과 credential placeholder 회귀, HTTP→SDK→IPC→Supervisor→Terminal lease→selected-root
 Graph→Webview Store→receipt/quota full chain, settlement 역전/FIFO, multi-root 및
 Trust/root/restart lifecycle, unsupported zero-state를 검증한다. 이어서 실제 Codex/Claude smoke와

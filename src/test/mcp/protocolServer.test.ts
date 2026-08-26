@@ -13,6 +13,7 @@ import {
 	MCP_REQUEST_BODY_MAX_BYTES,
 } from '../../mcp/httpPolicy';
 import { createMcpSessionCredentials } from '../../mcp/sessionCredentials';
+import { CRISPY_PING_ONLY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
 import { CRISPY_PING_TOOL_NAME } from '../../mcp/toolServer';
 
 interface StartedFixture {
@@ -447,6 +448,10 @@ suite('Crispy MCP protocol server', () => {
 
 		try {
 			await client.connect(transport);
+			assert.strictEqual(
+				client.getInstructions(),
+				CRISPY_PING_ONLY_INSTRUCTIONS,
+			);
 			const listed = await client.listTools();
 			assert.deepStrictEqual(listed.tools.map((tool) => tool.name), [
 				CRISPY_PING_TOOL_NAME,

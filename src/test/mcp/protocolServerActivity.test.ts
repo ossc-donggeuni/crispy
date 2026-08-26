@@ -15,6 +15,7 @@ import {
 	PATH_MAX_UTF8_BYTES,
 	type AgentActivityRequested,
 } from '../../mcp/agentActivityProtocol';
+import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
 import {
 	MCP_AUTHENTICATED_IN_FLIGHT_PER_REGISTRATION,
 	MCP_HTTP_MAX_CONNECTIONS,
@@ -134,6 +135,35 @@ suite('Crispy MCP Agent Activity protocol boundary', () => {
 		assert.deepStrictEqual(Object.keys(fixture.transport.events[1]), [
 			'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind',
 		]);
+	});
+
+	test('official v2 client receives the qualified server-wide instructions', async () => {
+		const fixture = await startFixture(true);
+		const client = new Client(
+			{ name: 'crispy-activity-instructions-test', version: '1.0.0' },
+			{ versionNegotiation: { mode: 'auto' } },
+		);
+		const transport = new StreamableHTTPClientTransport(new URL(fixture.url), {
+			requestInit: {
+				headers: { Authorization: `Bearer ${fixture.token}` },
+			},
+		});
+
+		try {
+			await client.connect(transport);
+			assert.strictEqual(
+				client.getInstructions(),
+				CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+			);
+			const listed = await client.listTools();
+			assert.deepStrictEqual(listed.tools.map((tool) => tool.name), [
+				CRISPY_PING_TOOL_NAME,
+				CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+				CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+			]);
+		} finally {
+			await client.close();
+		}
 	});
 
 	test('incompatible registration is ping-only and preserves fixed SDK error boundaries', async () => {

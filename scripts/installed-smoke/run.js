@@ -51,8 +51,8 @@ const ACTIVITY_PRESENTATIONS = Object.freeze([
 ]);
 const EXPECTED_ACTIVITY_TOOL_NAMES = Object.freeze([
 	'crispy_ping',
-	'crispy_set_agent_activity',
-	'crispy_clear_agent_activity',
+	'crispy_saa',
+	'crispy_caa',
 ]);
 const CDP_COMMAND_TIMEOUT_MS = 5_000;
 const CDP_DISCOVERY_TIMEOUT_MS = 15_000;

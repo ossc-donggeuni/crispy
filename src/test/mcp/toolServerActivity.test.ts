@@ -6,6 +6,7 @@ import {
 	type StandardSchemaWithJSON,
 } from '@modelcontextprotocol/server';
 import { AGENT_ACTIVITY_KINDS } from '../../mcp/agentActivityProtocol';
+import { createCrispyMcpInstructions } from '../../mcp/agentActivityInstructions';
 import {
 	ACTIVITY_TOOL_ERROR_CODES,
 	createActivityToolErrorResult,
@@ -59,6 +60,13 @@ suite('Crispy MCP Tool / SDK activity boundary', () => {
 			const calls: SinkCall[] = [];
 			const handler = toolHandler(compatible, calls);
 			try {
+				const initialized = await dispatch(handler, initializeRequest('init'));
+				assert.strictEqual(initialized.response.status, 200);
+				assert.strictEqual(
+					asRecord(asRecord(onlyMessage(initialized)).result).instructions,
+					createCrispyMcpInstructions(compatible),
+				);
+
 				const exchange = await dispatch(handler, listRequest(1));
 				assert.strictEqual(exchange.response.status, 200);
 				assert.strictEqual(
@@ -79,6 +87,10 @@ suite('Crispy MCP Tool / SDK activity boundary', () => {
 					PING_ANNOTATIONS,
 					CRISPY_PING_INPUT_SCHEMA,
 				);
+				assert.match(
+					String(findTool(tools, CRISPY_PING_TOOL_NAME).description),
+					/startup, restart, or connection diagnostics/u,
+				);
 				if (compatible) {
 					assertTool(
 						tools,
@@ -92,6 +104,44 @@ suite('Crispy MCP Tool / SDK activity boundary', () => {
 						ACTIVITY_ANNOTATIONS,
 						CRISPY_CLEAR_AGENT_ACTIVITY_INPUT_SCHEMA,
 					);
+					const setDescription = String(findTool(
+						tools,
+						CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+					).description);
+					for (const required of [
+						'[REQUIRED FOR USER-VISIBLE GRAPH]',
+						'user-selected Crispy Canvas activity graph',
+						'without changing workspace content or scope',
+						'completion anchor with planned before workspace work',
+						'each meaningful target with active',
+						'clearing child targets with crispy_caa',
+						'anchor with completed as the final Activity call',
+					]) {
+						assert.strictEqual(setDescription.includes(required), true, required);
+					}
+					const clearDescription = String(findTool(
+						tools,
+						CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+					).description);
+					for (const required of [
+						'[REQUIRED FOR USER-VISIBLE GRAPH]',
+						'user-selected Crispy Canvas activity graph',
+						'without changing workspace content',
+						'Before a successful final response',
+						'every non-anchor target',
+						'deepest-first',
+						'crispy_saa once',
+						'final Activity call',
+						'Do not clear the final completed anchor',
+					]) {
+						assert.strictEqual(clearDescription.includes(required), true, required);
+					}
+					assert.doesNotMatch(
+						`${setDescription} ${clearDescription}`,
+						/NON-NEGOTIABLE|protocol violation/iu,
+					);
+					assert.ok(setDescription.length <= 600);
+					assert.ok(clearDescription.length <= 600);
 				}
 				assert.doesNotMatch(
 					JSON.stringify(tools),
@@ -452,6 +502,19 @@ function listRequest(id: string | number): Record<string, unknown> {
 	return { jsonrpc: '2.0', id, method: 'tools/list', params: {} };
 }
 
+function initializeRequest(id: string | number): Record<string, unknown> {
+	return {
+		jsonrpc: '2.0',
+		id,
+		method: 'initialize',
+		params: {
+			protocolVersion: '2025-11-25',
+			capabilities: {},
+			clientInfo: { name: 'crispy-tool-test', version: '1.0.0' },
+		},
+	};
+}
+
 function callRequest(
 	id: string | number,
 	name: string,
@@ -489,6 +552,15 @@ function assertTool(
 		tool.inputSchema,
 		schema['~standard'].jsonSchema.input({ target: 'draft-2020-12' }),
 	);
+}
+
+function findTool(
+	tools: ReadonlyArray<Record<string, unknown>>,
+	name: string,
+): Record<string, unknown> {
+	const tool = tools.find((candidate) => candidate.name === name);
+	assert.ok(tool !== undefined);
+	return tool;
 }
 
 function responseResult(value: unknown): unknown {

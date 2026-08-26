@@ -105,14 +105,14 @@ suite('MCP VSIX bundle dependency inspection', () => {
 	test('production MCP bundle에는 세 Crispy Tool 이름이 모두 있어야 한다', () => {
 		assert.deepStrictEqual(findMissingCrispyMcpToolNames([
 			'crispy_ping',
-			'crispy_set_agent_activity',
-			'crispy_clear_agent_activity',
+			'crispy_saa',
+			'crispy_caa',
 		].join('\n')), []);
 		assert.deepStrictEqual(findMissingCrispyMcpToolNames(
 			'const ping = "crispy_ping";',
 		), [
-			'crispy_set_agent_activity',
-			'crispy_clear_agent_activity',
+			'crispy_saa',
+			'crispy_caa',
 		]);
 	});
 

@@ -65,7 +65,7 @@ suite('Standalone MCP child transaction', () => {
 						id: 0,
 						method: 'tools/call',
 						params: {
-							name: 'crispy_set_agent_activity',
+							name: 'crispy_saa',
 							arguments: {
 								path: 'src//child.ts',
 								targetKind: 'file',

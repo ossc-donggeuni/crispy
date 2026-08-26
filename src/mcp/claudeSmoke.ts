@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import type { AgentActivityRequested } from './agentActivityProtocol';
+import {
+	AGENT_ACTIVITY_LIFECYCLE_SMOKE_PROMPT,
+	isStrictAgentActivitySmokeLifecycle,
+} from './agentActivitySmokeContract';
 import type {
 	PtyExitEvent,
 	PtyListenerDisposable,
@@ -31,30 +36,38 @@ import type {
 	McpSessionRuntime,
 	McpSessionRuntimeEvent,
 } from './sessionRuntime';
+import {
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+} from './toolNames';
 
 export function createClaudeMcpSmokePrompt(serverName: string): string {
-	const toolName = createClaudeMcpSmokeToolName(serverName);
-	return [
-		`Call the MCP tool ${toolName} exactly once.`,
-		'Do not run shell commands and do not modify files.',
-	].join(' ');
+	createClaudeMcpSmokeToolNames(serverName);
+	return AGENT_ACTIVITY_LIFECYCLE_SMOKE_PROMPT;
 }
 
 export function createClaudeMcpSmokeArgs(serverName: string): readonly string[] {
-	const toolName = createClaudeMcpSmokeToolName(serverName);
+	const toolNames = createClaudeMcpSmokeToolNames(serverName);
 	return Object.freeze([
 		'--allowedTools',
-		toolName,
+		['Read', ...toolNames].join(','),
 		'-p',
 		createClaudeMcpSmokePrompt(serverName),
 	]);
 }
 
-function createClaudeMcpSmokeToolName(serverName: string): string {
+function createClaudeMcpSmokeToolNames(serverName: string): readonly string[] {
 	if (!/^crispy_canvas_[a-f0-9]{32}$/u.test(serverName)) {
 		throw new Error('Claude smoke server name is invalid.');
 	}
-	return `mcp__${serverName}__crispy_ping`;
+	const toolNames = [
+		CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+		CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	].map((toolName) => `mcp__${serverName}__${toolName}`);
+	if (toolNames.some((toolName) => toolName.length > 64)) {
+		throw new Error('Claude smoke Tool name exceeds the provider limit.');
+	}
+	return Object.freeze(toolNames);
 }
 
 export const CLAUDE_SMOKE_FAILURE_REASONS = Object.freeze([
@@ -75,7 +88,7 @@ export type ClaudeSmokeStatus =
 	| 'version_compatible'
 	| 'adapter_ready'
 	| 'awaiting_activity'
-	| 'activity_observed'
+	| 'lifecycle_observed'
 	| 'negative_control_no_authenticated_activity'
 	| `failed:${ClaudeSmokeFailureReason}`;
 export type ClaudeSmokeCredentialMode = 'registered' | 'missing-negative-control';
@@ -120,6 +133,7 @@ type ClaudeSmokeOutcome =
 /** Filters child events to one current session and optionally observes any authenticated request. */
 export class ClaudeSmokeEventObserver {
 	private expectedGeneration: string | undefined;
+	private readonly activityEvents: AgentActivityRequested[] = [];
 	private settled = false;
 	private readonly outcomePromise: Promise<ClaudeSmokeOutcome>;
 	private resolveOutcome: ((outcome: ClaudeSmokeOutcome) => void) | undefined;
@@ -147,7 +161,9 @@ export class ClaudeSmokeEventObserver {
 			return;
 		}
 		if (event.type === 'session.crispyPingObserved') {
-			this.settle({ type: 'ping' });
+			if (this.observeAnyActivity) {
+				this.settle({ type: 'ping' });
+			}
 			return;
 		}
 		if (event.type === 'session.mcpActivityObserved') {
@@ -157,6 +173,11 @@ export class ClaudeSmokeEventObserver {
 			return;
 		}
 		if (event.type === 'session.agentActivityRequested') {
+			if (this.observeAnyActivity) {
+				this.settle({ type: 'activity' });
+			} else {
+				this.activityEvents.push(event);
+			}
 			return;
 		}
 		this.settle({ type: 'failure', reason: event.failure.reason });
@@ -164,6 +185,10 @@ export class ClaudeSmokeEventObserver {
 
 	wait(): Promise<ClaudeSmokeOutcome> {
 		return this.outcomePromise;
+	}
+
+	hasValidLifecycle(): boolean {
+		return isStrictAgentActivitySmokeLifecycle(this.activityEvents);
 	}
 
 	private settle(outcome: ClaudeSmokeOutcome): void {
@@ -239,6 +264,7 @@ export async function runClaudeMcpSmoke(
 				connection: prepared.connection,
 				createArgs: createClaudeMcpSmokeArgs,
 				randomBytes: options.randomBytes,
+				agentActivityCompatible: true,
 			});
 			providerRequest = createAgentProcessSpawnRequest(plan, {
 				platform,
@@ -300,15 +326,25 @@ export async function runClaudeMcpSmoke(
 			return false;
 		}
 
-		if (outcome.type === 'ping') {
-			report('activity_observed');
-			return true;
-		}
 		if (outcome.type === 'provider_exit') {
-			report('failed:provider_exited');
+			if (
+				outcome.exitCode === 0
+				&& (outcome.signal === undefined || outcome.signal === 0)
+				&& options.events.hasValidLifecycle()
+			) {
+				report('lifecycle_observed');
+				return true;
+			}
+			report(outcome.exitCode === 0
+				? 'failed:smoke_failed'
+				: 'failed:provider_exited');
 			return false;
 		}
 		if (outcome.type === 'activity') {
+			report('failed:smoke_failed');
+			return false;
+		}
+		if (outcome.type === 'ping') {
 			report('failed:smoke_failed');
 			return false;
 		}
@@ -457,6 +493,7 @@ async function runMainSmoke(
 	const supervisor = new McpAdapterSupervisor({
 		extensionUri: { fsPath: repositoryRoot },
 		parentEnvironment: process.env,
+		agentActivityCompatible: true,
 		onEvent: ({ event }) => observer.handle(event),
 	});
 	const abort = (): void => controller.abort();

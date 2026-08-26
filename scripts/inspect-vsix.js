@@ -213,8 +213,8 @@ const requiredRestrictedWorkspaceConfigurations = Object.freeze([
 ]);
 const requiredCrispyMcpToolNames = Object.freeze([
 	'crispy_ping',
-	'crispy_set_agent_activity',
-	'crispy_clear_agent_activity',
+	'crispy_saa',
+	'crispy_caa',
 ]);
 
 function findExtensionManifestCapabilityProblems(manifest) {

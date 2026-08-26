@@ -7,6 +7,8 @@ import {
 	buildCodexMcpLaunchPlan,
 } from '../../mcp/codexLaunchPlan';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
+import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
+import { serializeCodexTomlString } from '../../mcp/codexConfig';
 
 const token = Buffer.alloc(32, 0x42).toString('base64url');
 const route = Buffer.alloc(24, 0x24).toString('base64url');
@@ -67,7 +69,7 @@ suite('Codex AgentLaunchPlan builder', () => {
 		assert.strictEqual(environment.ELECTRON_RUN_AS_NODE, undefined);
 	});
 
-	test('caller developer instructions를 Crispy config 뒤에서도 보존한다', () => {
+	test('caller assignment 뒤에 Host-authorized graph instructions를 둔다', () => {
 		const projectInstructions = 'developer_instructions="PROJECT_MARKER"';
 		const plan = buildCodexMcpLaunchPlan({
 			executable: { executable: '/opt/codex', launcherKind: 'direct' },
@@ -81,7 +83,16 @@ suite('Codex AgentLaunchPlan builder', () => {
 			(argument) => argument.startsWith('developer_instructions='),
 		);
 
-		assert.deepStrictEqual(developerInstructionAssignments, [projectInstructions]);
+		assert.deepStrictEqual(developerInstructionAssignments, [
+			projectInstructions,
+			`developer_instructions=${serializeCodexTomlString(
+				CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+			)}`,
+		]);
+		assert.match(
+			developerInstructionAssignments.at(-1) ?? '',
+			/REQUIRED FOR USER-VISIBLE GRAPH/u,
+		);
 	});
 
 	test('revoked connection으로 MCP plan을 만들 수 없다', () => {

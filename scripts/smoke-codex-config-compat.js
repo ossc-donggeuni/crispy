@@ -24,17 +24,18 @@ const {
 const {
 	McpConnectionDescriptor,
 } = require('../out/mcp/sessionRuntime.js');
+const {
+	CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER,
+} = require('../out/mcp/agentActivityInstructions.js');
 
 const smokeTimeoutMs = 15_000;
 const maximumOutputLength = 1024 * 1024;
 const windowsArgvMarker = 'CRISPY_WINDOWS_ARGV:';
 const projectInstructionsMarker = 'CRISPY_PROJECT_INSTRUCTIONS_PRESERVED';
 const userInstructionsMarker = 'CRISPY_USER_INSTRUCTIONS_PRESERVED';
+const projectAgentsMarker = 'CRISPY_PROJECT_AGENTS_PRESERVED';
+const userAgentsMarker = 'CRISPY_USER_AGENTS_PRESERVED';
 const promptInputMarker = 'CRISPY_PROMPT_INPUT_PROBE';
-const crispyInstructionNeedles = Object.freeze([
-	'The Crispy MCP server exposes only crispy_ping for this Host.',
-	'Use crispy_set_agent_activity when work starts on a target or changes state.',
-]);
 const windowsTransientCleanupErrorCodes = new Set([
 	'EBUSY',
 	'ENOTEMPTY',
@@ -98,6 +99,16 @@ function createInstructionPreservationFixture(temporaryRoot) {
 		`developer_instructions=${serializeCodexTomlString(projectInstructionsMarker)}\n`,
 		'utf8',
 	);
+	fs.writeFileSync(
+		path.join(projectWorkspace, 'AGENTS.md'),
+		`${projectAgentsMarker}\n`,
+		'utf8',
+	);
+	fs.writeFileSync(
+		path.join(userWorkspace, 'AGENTS.md'),
+		`${userAgentsMarker}\n`,
+		'utf8',
+	);
 
 	return Object.freeze({
 		codexHome,
@@ -118,17 +129,21 @@ function assertInstructionPreservationOutput(output, options) {
 	if (!output.includes(promptInputMarker)) {
 		throw smokeError('Codex prompt-input probe did not reach the user prompt.');
 	}
-	if (!output.includes(options.expectedMarker)) {
+	if (options.expectedMarker !== undefined
+		&& !output.includes(options.expectedMarker)) {
 		throw smokeError(`${options.layer} developer instructions were not preserved.`);
 	}
-	if (options.unexpectedMarker !== undefined
-		&& output.includes(options.unexpectedMarker)) {
-		throw smokeError(`${options.layer} config did not have the expected precedence.`);
+	if (!output.includes(options.expectedAgentsMarker)) {
+		throw smokeError(`${options.layer} AGENTS.md instructions were not preserved.`);
 	}
-	for (const needle of crispyInstructionNeedles) {
-		if (output.includes(needle)) {
-			throw smokeError('Crispy replaced the effective Codex developer instructions.');
+	for (const unexpectedMarker of options.unexpectedMarkers ?? []) {
+		if (output.includes(unexpectedMarker)) {
+			throw smokeError(`${options.layer} config did not have the expected precedence.`);
 		}
+	}
+	if (options.expectsGraphInstructions
+		!== output.includes(CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER)) {
+		throw smokeError(`${options.layer} graph instruction authority is incorrect.`);
 	}
 	if (output.includes(options.token)) {
 		throw smokeError('Codex exposed the MCP credential in prompt-input output.');
@@ -147,23 +162,33 @@ async function runInstructionPreservationSmoke(options) {
 			cwd: fixture.projectWorkspace,
 			agentActivityCompatible: false,
 			expectedMarker: projectInstructionsMarker,
-			unexpectedMarker: userInstructionsMarker,
+			expectedAgentsMarker: projectAgentsMarker,
+			unexpectedMarkers: [userInstructionsMarker],
+			expectsGraphInstructions: false,
 			randomByte: 0x71,
 		},
 		{
 			layer: 'project Activity-enabled',
 			cwd: fixture.projectWorkspace,
 			agentActivityCompatible: true,
-			expectedMarker: projectInstructionsMarker,
-			unexpectedMarker: userInstructionsMarker,
+			expectedAgentsMarker: projectAgentsMarker,
+			unexpectedMarkers: [
+				projectInstructionsMarker,
+				userInstructionsMarker,
+			],
+			expectsGraphInstructions: true,
 			randomByte: 0x72,
 		},
 		{
 			layer: 'user Activity-enabled',
 			cwd: fixture.userWorkspace,
 			agentActivityCompatible: true,
-			expectedMarker: userInstructionsMarker,
-			unexpectedMarker: projectInstructionsMarker,
+			expectedAgentsMarker: userAgentsMarker,
+			unexpectedMarkers: [
+				userInstructionsMarker,
+				projectInstructionsMarker,
+			],
+			expectsGraphInstructions: true,
 			randomByte: 0x73,
 		},
 	]);
@@ -433,7 +458,7 @@ async function main() {
 			token,
 		});
 		console.log(
-			'[codex-config-compat-smoke] Project/User developer instructions preserved for both Activity gates.',
+			'[codex-config-compat-smoke] Host graph authority and Workspace AGENTS.md precedence passed for both Activity gates.',
 		);
 
 		if (process.platform === 'win32') {

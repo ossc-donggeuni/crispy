@@ -15,6 +15,10 @@ import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type { McpPrepareResult } from '../../mcp/sessionRuntime';
 import type { AgentExecutableResolver } from '../../mcp/agentExecutableResolver';
 import type { CodexConfigStyleResolver } from '../../mcp/codexCompatibility';
+import {
+	AGENT_ACTIVITY_SMOKE_ANCHOR,
+	AGENT_ACTIVITY_SMOKE_CHILDREN,
+} from '../../mcp/agentActivitySmokeContract';
 
 const generation = 'generation-codex-smoke';
 const sessionId = 'session-codex-smoke';
@@ -22,18 +26,17 @@ const routeId = Buffer.alloc(24, 0x31).toString('base64url');
 const bearerToken = Buffer.alloc(32, 0x52).toString('base64url');
 
 suite('Codex MCP dev smoke transaction', () => {
-	test('auth 등록 뒤 structured config로 provider를 시작하고 activity 후 모두 정리한다', async () => {
+	test('자연어 파일 읽기에서 autonomous activity를 관찰하고 모두 정리한다', async () => {
 		const fixture = createSmokeFixture();
 		let spawnRequest: CodexProviderSpawnRequest | undefined;
 		const succeeded = await runCodexMcpSmoke({
 			...fixture.options,
 			spawnProvider: (request) => {
 				spawnRequest = request;
-				setImmediate(() => fixture.events.handle({
-					type: 'session.crispyPingObserved',
-					generation,
-					sessionId,
-				}));
+				setImmediate(() => {
+					emitStrictLifecycle(fixture.events);
+					fixture.exitProvider(0);
+				});
 				return fixture.provider;
 			},
 		});
@@ -42,7 +45,7 @@ suite('Codex MCP dev smoke transaction', () => {
 		assert.deepStrictEqual(fixture.statuses, [
 			'adapter_ready',
 			'awaiting_activity',
-			'activity_observed',
+			'lifecycle_observed',
 		]);
 		assert.strictEqual(fixture.prepareCount, 1);
 		assert.strictEqual(fixture.markProviderStartedCount, 1);
@@ -54,6 +57,20 @@ suite('Codex MCP dev smoke transaction', () => {
 		assert.strictEqual(spawnRequest.args[0], '--ask-for-approval');
 		assert.strictEqual(spawnRequest.args[2], 'exec');
 		assert.strictEqual(spawnRequest.args.at(-1), CODEX_MCP_SMOKE_PROMPT);
+		assert.strictEqual(CODEX_MCP_SMOKE_PROMPT.includes('crispy_'), false);
+		assert.strictEqual(CODEX_MCP_SMOKE_PROMPT.includes('MCP'), false);
+		assert.strictEqual(spawnRequest.args.some(
+			(argument) => argument.includes('enabled_tools=["crispy_ping","crispy_saa","crispy_caa"]'),
+		), true);
+		const developerInstructions = spawnRequest.args.filter(
+			(argument) => argument.startsWith('developer_instructions='),
+		);
+		assert.strictEqual(developerInstructions.length, 1);
+		assert.match(
+			developerInstructions[0],
+			/\[REQUIRED FOR USER-VISIBLE GRAPH\]/u,
+		);
+		assert.doesNotMatch(developerInstructions[0], /NON-NEGOTIABLE/iu);
 		assert.strictEqual(spawnRequest.args.some(
 			(argument) => argument.includes(bearerToken),
 		), false);
@@ -61,6 +78,31 @@ suite('Codex MCP dev smoke transaction', () => {
 		assert.strictEqual(spawnRequest.environment.crispy_mcp_token, undefined);
 		assert.strictEqual(spawnRequest.environment.ELECTRON_RUN_AS_NODE, undefined);
 		assert.strictEqual(spawnRequest.environment.KEEP_ME, 'yes');
+	});
+
+	test('첫 activity만 호출하고 종료하면 전체 lifecycle 검증에 실패한다', async () => {
+		const fixture = createSmokeFixture();
+		const succeeded = await runCodexMcpSmoke({
+			...fixture.options,
+			spawnProvider: () => {
+				setImmediate(() => {
+					fixture.events.handle({
+						type: 'session.agentActivityRequested',
+						generation,
+						sessionId,
+						operation: 'set',
+						path: AGENT_ACTIVITY_SMOKE_ANCHOR,
+						targetKind: 'folder',
+						activity: 'planned',
+					});
+					fixture.exitProvider(0);
+				});
+				return fixture.provider;
+			},
+		});
+
+		assert.strictEqual(succeeded, false);
+		assert.strictEqual(fixture.statuses.at(-1), 'failed:smoke_failed');
 	});
 
 	test('prepare failure는 provider와 credential config를 만들지 않고 안전하게 종료한다', async () => {
@@ -154,11 +196,10 @@ suite('Codex MCP dev smoke transaction', () => {
 			},
 			spawnProvider: (request) => {
 				spawnRequest = request;
-				setImmediate(() => fixture.events.handle({
-					type: 'session.crispyPingObserved',
-					generation,
-					sessionId,
-				}));
+				setImmediate(() => {
+					emitStrictLifecycle(fixture.events);
+					fixture.exitProvider(0);
+				});
 				return fixture.provider;
 			},
 		});
@@ -236,11 +277,8 @@ suite('Codex MCP dev smoke transaction', () => {
 						generation,
 						sessionId,
 					});
-					fixture.events.handle({
-						type: 'session.crispyPingObserved',
-						generation,
-						sessionId,
-					});
+					emitStrictLifecycle(fixture.events);
+					fixture.exitProvider(0);
 				});
 				return fixture.provider;
 			},
@@ -248,7 +286,7 @@ suite('Codex MCP dev smoke transaction', () => {
 
 		assert.strictEqual(succeeded, true);
 		assert.strictEqual(
-			fixture.statuses.filter((status) => status === 'activity_observed').length,
+			fixture.statuses.filter((status) => status === 'lifecycle_observed').length,
 			1,
 		);
 	});
@@ -313,6 +351,48 @@ suite('Codex MCP dev smoke launch contract', () => {
 		assert.strictEqual(options.windowsVerbatimArguments, false);
 	});
 });
+
+function emitStrictLifecycle(events: CodexSmokeEventObserver): void {
+	events.handle({
+		type: 'session.agentActivityRequested',
+		generation,
+		sessionId,
+		operation: 'set',
+		path: AGENT_ACTIVITY_SMOKE_ANCHOR,
+		targetKind: 'folder',
+		activity: 'planned',
+	});
+	for (const path of AGENT_ACTIVITY_SMOKE_CHILDREN) {
+		events.handle({
+			type: 'session.agentActivityRequested',
+			generation,
+			sessionId,
+			operation: 'set',
+			path,
+			targetKind: 'file',
+			activity: 'active',
+		});
+	}
+	for (const path of [...AGENT_ACTIVITY_SMOKE_CHILDREN].reverse()) {
+		events.handle({
+			type: 'session.agentActivityRequested',
+			generation,
+			sessionId,
+			operation: 'clear',
+			path,
+			targetKind: 'file',
+		});
+	}
+	events.handle({
+		type: 'session.agentActivityRequested',
+		generation,
+		sessionId,
+		operation: 'set',
+		path: AGENT_ACTIVITY_SMOKE_ANCHOR,
+		targetKind: 'folder',
+		activity: 'completed',
+	});
+}
 
 function createSmokeFixture(overrides: {
 	readonly prepareResult?: McpPrepareResult;

@@ -42,7 +42,7 @@ its core version is newer than the minimum stable release.
 
 | Host capability | Tools exposed by the Crispy MCP server |
 | --- | --- |
-| VS Code `>=1.125.0 <2.0.0`, including a newer-core canonical prerelease | `crispy_ping`, `crispy_set_agent_activity`, `crispy_clear_agent_activity` |
+| VS Code `>=1.125.0 <2.0.0`, including a newer-core canonical prerelease | `crispy_ping`, `crispy_saa`, `crispy_caa` |
 | Older, next-major, malformed, or minimum-version prerelease Host | `crispy_ping` only |
 
 The manifest range `engines.vscode: ^1.125.0` controls whether VS Code may install
@@ -60,11 +60,45 @@ of the whole MCP server.
 
 ### Tool contract
 
-- `crispy_set_agent_activity` records an explicit state when work begins or
-  transitions. Its `activity` is exactly one of `planned`, `active`, `editing`,
-  `completed`, `mentioned`, or `rejected`.
-- `crispy_clear_agent_activity` clears the explicit state when work on that target
-  ends.
+The MCP initialization `instructions` field carries the shared tool workflow. The
+supported gate receives the Activity lifecycle below; the unsupported gate receives
+ping-only guidance with no Activity Tool names. For an Activity-compatible session,
+the exact same purpose-bound contract is also delivered through Codex
+`developer_instructions` and Claude `--append-system-prompt`. It starts with
+`[REQUIRED FOR USER-VISIBLE GRAPH]` so both providers understand that these calls are
+mandatory instrumentation for the user-selected Crispy graph, not instructions from
+Workspace content. Completion roll-up is cross-agent behavior.
+
+- For every Workspace task, the Agent's first Activity call must set the narrowest
+  common completion anchor to `planned` before any read, search, edit, or test.
+  Each distinct meaningful child target must then be reported before work on it,
+  but repeated commands or accesses with no target/state change need no extra call.
+  Its `activity` is exactly one of `planned`, `active`,
+  `editing`, `completed`, `mentioned`, or `rejected`.
+- Call `planned` after committing to a target but before work starts; `active` before
+  non-editing reads, analysis, search, verification, or tests; and `editing` while
+  creating, modifying, or deleting it.
+- Call `mentioned` before Codex or Claude names a Workspace file or folder in its own
+  natural-language response. Because one session stores one state per target, keep
+  an existing `planned`, `active`, `editing`, `completed`, or `rejected` state
+  instead of downgrading the same target to `mentioned`.
+- Call `completed` only after the work and required verification succeed. Call
+  `rejected` only for intentional cancellation or omission due to scope, safety,
+  or a precondition, not for a generic Tool error.
+- Every compatible agent chooses the narrowest common target containing the
+  request as its outer completion anchor. Before its final response it clears every narrower target
+  used by that request, deepest first, then leaves `completed` only on the anchor.
+  This must be the final Activity call; the Agent must not answer first or emit a
+  later descendant marker. Final-response path mentions do not recreate descendant
+  markers. Unrelated scopes are not rolled up.
+- Missing a required initial, transition, cleanup, or completion call fails the
+  Crispy lifecycle validation even when the Workspace work itself succeeds.
+- Keep `mentioned`, `completed`, and `rejected` through the current response.
+  `crispy_caa` removes stale state at the next request or scope
+  change, when the target is no longer relevant, or after a rename/delete makes
+  its marker invalid. Session cleanup is best-effort.
+- Use `crispy_ping` only for an explicit startup, restart, or connection diagnostic,
+  never as a routine preflight.
 - Both Activity Tools accept `targetKind` as exactly `file` or `folder`. Their
   `path` is a canonical `/`-separated path relative to the root already assigned
   to the Agent tab. The assigned root itself is `.` and requires
@@ -72,7 +106,11 @@ of the whole MCP server.
 - The Tools cannot choose a Workspace root, session, runtime, URI, token, or any
   internal identity. Those values come only from the Host-owned terminal
   assignment and exact runtime lease. Providers must not infer Activity from PTY
-  output or filesystem changes.
+  output or filesystem changes. Lifecycle and natural-language mention reporting
+  are mandatory Agent instructions; the Host does not infer them by parsing PTY prose.
+
+The shortened `crispy_saa` and `crispy_caa` names keep Claude's fully-qualified
+`mcp__<server>__<tool>` identifiers within its 64-character Tool-name limit.
 
 A successful Activity Tool result means only that the MCP child accepted the call
 for handoff. It is not evidence that the Host delivered it, that the Webview or

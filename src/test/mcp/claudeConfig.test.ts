@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import {
-	CLAUDE_MCP_CONFIG_ARGUMENT,
 	CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
+	CLAUDE_MCP_CONFIG_ARGUMENT,
 	CLAUDE_MCP_SERVER_NAME_PREFIX,
 	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
 	CLAUDE_MCP_TOKEN_PLACEHOLDER,
@@ -12,6 +12,10 @@ import {
 	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
 	CRISPY_PING_ONLY_INSTRUCTIONS,
 } from '../../mcp/agentActivityInstructions';
+import {
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+} from '../../mcp/toolNames';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 
 const routeId = Buffer.alloc(24, 0x23).toString('base64url');
@@ -59,23 +63,26 @@ suite('Claude MCP session config serializer', () => {
 		assert.strictEqual(config.serverName === 'crispy', false);
 	});
 
-	test('qualified gate keeps inline config and appends all Tool instructions', () => {
+	test('qualified gate appends the shared cross-agent contract once', () => {
 		const config = createClaudeMcpConfig(
 			createConnection(),
 			(size) => Buffer.alloc(size, 0xcd),
 			true,
 		);
 
-		assert.deepStrictEqual(config.args.slice(0, 2), [
+		assert.deepStrictEqual(config.args, [
 			CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
 			CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
-		]);
-		assert.deepStrictEqual(config.args.slice(-2), [
 			CLAUDE_MCP_CONFIG_ARGUMENT,
 			config.inlineConfig,
 		]);
 		assert.strictEqual(config.inlineConfig.includes('alwaysLoad'), true);
 		assert.strictEqual(config.inlineConfig.includes(bearerToken), false);
+		assert.strictEqual(config.args.includes('--append-system-prompt'), true);
+		assert.strictEqual(config.args.filter(
+			(argument) => argument === CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+		).length, 1);
+		assert.strictEqual(config.args[1].includes('completion anchor'), true);
 	});
 
 	test('strict, cache, global tool restriction을 config나 argv에 주입하지 않는다', () => {
@@ -91,6 +98,19 @@ suite('Claude MCP session config serializer', () => {
 			'MCP_CONNECTION_NONBLOCKING',
 		]) {
 			assert.strictEqual(serialized.includes(forbidden), false);
+		}
+	});
+
+	test('fully-qualified activity Tool names stay within Claude 64-char limit', () => {
+		const serverName = createClaudeMcpServerName(
+			(size) => Buffer.alloc(size, 0xee),
+		);
+		for (const toolName of [
+			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+			CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+		]) {
+			const qualified = `mcp__${serverName}__${toolName}`;
+			assert.ok(qualified.length <= 64, qualified);
 		}
 	});
 
