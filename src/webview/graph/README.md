@@ -10,6 +10,7 @@ Graph는 `GraphRoot[]`와 Project/Folder/File을 허용하는 Root Node Map을 �
 src/webview/graph/
 ├── assets/
 ├── agentActivityFocus.ts
+├── agentActivityFloatingNotifications.ts
 ├── agentActivityNotificationCenter.ts
 ├── agentActivityNotifications.ts
 ├── fileIconResolver.ts
@@ -47,7 +48,7 @@ src/webview/graph/
 
 > 알림 Target을 Graph에 드러내고 현재 occurrence의 World Focus 지점을 계산합니다.
 
-- Target과 조상의 Filter 숨김 상타만 제거하고 Target이 표시될 때까지 Project/Folder ancestor만 최소 범위로 Open
+- Target과 조상의 Filter 숨김 상태만 제거하고 Target이 표시될 때까지 Project/Folder ancestor만 최소 범위로 Open
 - Grouped File이 현재 page 밖이면 해당 File을 포함하는 page까지만 확장
 - 명시적인 `rootId`와 detached occurrence를 source occurrence보다 우선
 - 최신 Layout과 저장 위치, 앞선 File Row의 Agent Binding footprint를 반영해 Card/Row 중심 계산
@@ -72,6 +73,17 @@ src/webview/graph/
 - Escape, 외부 Pointer와 Focus 복원 및 Camera 입력 차단 attribute 처리
 - Agent Panel dock을 제외한 실제 Graph 가시 영역의 우측 상단에 위치
 - Store/Session 구독, 행별 Effect host와 Listener를 `dispose()`에서 정리
+
+### `agentActivityFloatingNotifications.ts`
+
+> 새 Activity event를 Bell 왼쪽에 transient floating stack으로 표시합니다.
+
+- 초기 마운트의 기존 알림은 재생하지 않고 새 Store sequence만 수신순으로 쌓음
+- Bell과 같은 40px 높이에 Session 제목과 Activity 상태만 표시하고 현재 Session 메시지와 Target 경로는 숨김
+- Graph와 같은 Activity Effect recipe와 Animation timeline을 재사용
+- 새 박스는 기존 stack의 왼쪽으로 slide-in하고 5초 후 exit Animation 뒤 제거되며 남은 박스가 오른쪽으로 재배치
+- Click은 자신의 퇴장을 시작하고 기존 알림과 같은 Graph reveal/Focus callback만 호출
+- Scheduler, Listener와 local Effect host를 자신의 dispose 경계에서 정리
 
 ### `fileIconResolver.ts`
 

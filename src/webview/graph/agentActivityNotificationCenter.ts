@@ -16,6 +16,10 @@ import {
 	createFullGraphVisibleArea,
 	type GraphVisibleAreaProvider,
 } from './graphVisibleArea';
+import {
+	initializeAgentActivityFloatingNotificationStack,
+	type AgentActivityNotificationScheduler,
+} from './agentActivityFloatingNotifications';
 
 export const AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE =
 	'data-agent-activity-notification-center';
@@ -77,9 +81,11 @@ export function initializeAgentActivityNotificationCenter(
 			height: viewport.clientHeight,
 		})
 	),
+	scheduler?: AgentActivityNotificationScheduler,
 ): AgentActivityNotificationCenter {
 	const ownerDocument = overlayLayer.ownerDocument;
 	const center = ownerDocument.createElement('div');
+	const controlRow = ownerDocument.createElement('div');
 	const trigger = ownerDocument.createElement('button');
 	const triggerIcon = ownerDocument.createElement('span');
 	const badge = ownerDocument.createElement('span');
@@ -95,10 +101,13 @@ export function initializeAgentActivityNotificationCenter(
 	);
 	let open = false;
 	let disposed = false;
+	let hasReconciled = false;
+	const observedSequencesByKey = new Map<string, number>();
 
 	center.className = 'graph-agent-activity-notification-center';
 	center.setAttribute(AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE, '');
 	center.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
+	controlRow.className = 'graph-agent-activity-notification-control-row';
 	trigger.className = 'graph-agent-activity-notification-trigger';
 	trigger.type = 'button';
 	trigger.setAttribute('aria-controls', CENTER_PANEL_ID);
@@ -124,7 +133,8 @@ export function initializeAgentActivityNotificationCenter(
 	empty.className = 'graph-agent-activity-notification-empty';
 	empty.textContent = '새 알림이 없습니다.';
 	panel.append(header, list, empty);
-	center.append(trigger, panel);
+	controlRow.append(trigger);
+	center.append(controlRow, panel);
 	overlayLayer.append(center);
 
 	const setOpen = (nextOpen: boolean, restoreTriggerFocus = false): void => {
@@ -168,6 +178,15 @@ export function initializeAgentActivityNotificationCenter(
 	trigger.addEventListener('click', handleTriggerClick);
 	ownerDocument.addEventListener('pointerdown', handleDocumentPointerDown);
 	ownerDocument.addEventListener('keydown', handleDocumentKeyDown);
+	const floatingNotifications = initializeAgentActivityFloatingNotificationStack(
+		controlRow,
+		createLocalEffectHost,
+		(entry) => {
+			setOpen(false);
+			interactions.onFocus?.(entry);
+		},
+		scheduler,
+	);
 
 	const reconcile = (): void => {
 		if (disposed) {
@@ -181,8 +200,16 @@ export function initializeAgentActivityNotificationCenter(
 		);
 		const currentKeys = new Set(entries.map(({ key }) => key));
 		const orderedElements: HTMLLIElement[] = [];
+		const newEntries: AgentActivityNotificationEntry[] = [];
 
 		for (const entry of entries) {
+			const observedSequence = observedSequencesByKey.get(entry.key);
+
+			if (hasReconciled && observedSequence !== entry.sequence) {
+				newEntries.push(entry);
+			}
+			observedSequencesByKey.set(entry.key, entry.sequence);
+			floatingNotifications.update(entry);
 			let registration = registrations.get(entry.key);
 
 			if (!registration) {
@@ -206,7 +233,12 @@ export function initializeAgentActivityNotificationCenter(
 			disposeNotificationRegistration(registration);
 			registration.element.remove();
 			registrations.delete(key);
+			floatingNotifications.clearNotificationKey(key);
 		}
+		newEntries
+			.sort((left, right) => left.sequence - right.sequence)
+			.forEach((entry) => floatingNotifications.push(entry));
+		hasReconciled = true;
 
 		if (
 			list.children.length !== orderedElements.length
@@ -260,6 +292,7 @@ export function initializeAgentActivityNotificationCenter(
 				return;
 			}
 			disposed = true;
+			floatingNotifications.dispose();
 			unsubscribeStore();
 			unsubscribePresentation();
 			trigger.removeEventListener('click', handleTriggerClick);

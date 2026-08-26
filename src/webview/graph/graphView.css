@@ -1306,6 +1306,11 @@ body.vscode-high-contrast-light .graph-viewport {
 		animation-duration: 1ms;
 	}
 
+	.graph-agent-activity-floating-notification,
+	.graph-agent-activity-floating-notification.is-exiting {
+		animation-duration: 1ms;
+	}
+
 	.graph-node-effect-marching-dash-rect,
 	.graph-node-effect-pulse,
 	.graph-node-effect-shimmer::before,
@@ -1631,6 +1636,143 @@ body.vscode-high-contrast-light .graph-viewport {
 	flex-direction: column;
 	align-items: flex-end;
 	pointer-events: auto;
+}
+
+.graph-agent-activity-notification-control-row {
+	position: relative;
+	display: flex;
+	width: 40px;
+	height: 40px;
+	flex: none;
+	align-items: stretch;
+}
+
+.graph-agent-activity-floating-notification-stack {
+	position: absolute;
+	top: 0;
+	right: calc(100% + 8px);
+	display: flex;
+	height: 40px;
+	flex-direction: row-reverse;
+	gap: 8px;
+	pointer-events: none;
+}
+
+.graph-agent-activity-floating-notification {
+	--graph-node-effect-ring-inset: 0;
+	--graph-node-effect-ring-radius: 8px;
+	--graph-node-effect-surface-inset: 1px;
+	--graph-node-effect-surface-radius: 7px;
+	--graph-node-effect-dash-width: 1.5px;
+	--graph-node-effect-outline-width: 1px;
+	--graph-node-effect-outline-strong-width: 2px;
+	--graph-node-effect-pulse-width: 1.5px;
+	--graph-node-effect-badge-size: 15px;
+	--graph-node-effect-badge-top: 4px;
+	--graph-node-effect-badge-left: 4px;
+
+	position: relative;
+	display: flex;
+	width: 220px;
+	height: 40px;
+	box-sizing: border-box;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	padding: 0 11px;
+	overflow: hidden;
+	color: var(--vscode-foreground);
+	text-align: left;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 8px;
+	box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgb(0 0 0 / 24%));
+	font: inherit;
+	cursor: pointer;
+	pointer-events: auto;
+	animation: graph-agent-activity-floating-notification-enter 180ms ease-out both;
+}
+
+.graph-agent-activity-floating-notification:hover {
+	background: var(--vscode-list-hoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.graph-agent-activity-floating-notification:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+}
+
+.graph-agent-activity-floating-notification:disabled {
+	cursor: default;
+	opacity: 0.72;
+}
+
+.graph-agent-activity-floating-notification.is-exiting {
+	pointer-events: none;
+	animation: graph-agent-activity-floating-notification-exit 180ms ease-in both;
+}
+
+.graph-agent-activity-floating-notification.graph-node-effect-host
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
+	width: 100%;
+	height: 100%;
+}
+
+.graph-agent-activity-floating-notification-session-title,
+.graph-agent-activity-floating-notification-status {
+	position: relative;
+	z-index: 3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-agent-activity-floating-notification-session-title {
+	min-width: 0;
+	flex: 1 1 auto;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.graph-agent-activity-floating-notification-status {
+	flex: none;
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+}
+
+.graph-agent-activity-floating-notification[data-activity='completed']
+	.graph-agent-activity-floating-notification-status {
+	color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.graph-agent-activity-floating-notification[data-activity='rejected']
+	.graph-agent-activity-floating-notification-status {
+	color: var(--vscode-errorForeground);
+}
+
+@keyframes graph-agent-activity-floating-notification-enter {
+	from {
+		opacity: 0;
+		transform: translateX(16px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes graph-agent-activity-floating-notification-exit {
+	from {
+		opacity: 1;
+		transform: translateX(0);
+	}
+
+	to {
+		opacity: 0;
+		transform: translateX(-12px);
+	}
 }
 
 .graph-agent-activity-notification-trigger {

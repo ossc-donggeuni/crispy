@@ -81,6 +81,14 @@ import {
 	AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
 } from '../../webview/graph/agentActivityNotificationCenter';
 import {
+	AGENT_ACTIVITY_FLOATING_NOTIFICATION_ATTRIBUTE,
+	AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_ANIMATION,
+	AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_MS,
+	AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS,
+	AGENT_ACTIVITY_FLOATING_NOTIFICATION_SEQUENCE_ATTRIBUTE,
+	type AgentActivityNotificationScheduler,
+} from '../../webview/graph/agentActivityFloatingNotifications';
+import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
 } from '../../webview/graph/graphVisibleArea';
@@ -8642,6 +8650,13 @@ suite('Graph View', () => {
 
 		assert.ok(latestItem);
 		assert.ok(olderItem);
+		assert.strictEqual(
+			getDescendantsByClass(
+				root,
+				'graph-agent-activity-floating-notification',
+			).length,
+			0,
+		);
 		assert.strictEqual(center.style.right, `${1000 - visibleArea.right + 16}px`);
 		assert.strictEqual(center.style.top, `${visibleArea.top + 16}px`);
 		assert.strictEqual(trigger.getAttribute('aria-label'), '알림 2개');
@@ -8769,6 +8784,277 @@ suite('Graph View', () => {
 		), undefined);
 		store.setAgentActivity('session-file', fileTarget, 'active');
 		assert.strictEqual(root.children.length, 0);
+		presentations.dispose();
+	});
+
+	test('새 Activity만 Bell 왼쪽에 쌓고 5초 후 퇴장하며 남은 알림을 당긴다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const scheduler = new FakeTimeoutScheduler();
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const firstTarget = { nodeId: 'folder:app' };
+		const secondTarget = { nodeId: 'file:app/package.json' };
+
+		presentations.activateSession('tab-first', 'session-first', '첫 번째 Agent');
+		presentations.activateSession('tab-second', 'session-second', '두 번째 Agent');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+				agentActivityNotificationScheduler: scheduler,
+			},
+		);
+
+		store.setAgentActivity('session-first', firstTarget, 'active');
+		let floating = getDescendantsByClass(
+			root,
+			'graph-agent-activity-floating-notification',
+		);
+		const first = floating[0];
+
+		assert.ok(first);
+		assert.strictEqual(
+			first.getAttribute(AGENT_ACTIVITY_FLOATING_NOTIFICATION_ATTRIBUTE),
+			'',
+		);
+		assert.strictEqual(
+			first.getAttribute(
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_SEQUENCE_ATTRIBUTE,
+			),
+			'1',
+		);
+		assert.strictEqual(
+			getDescendantByClass(
+				first,
+				'graph-agent-activity-floating-notification-session-title',
+			).textContent,
+			'첫 번째 Agent',
+		);
+		assert.strictEqual(
+			getDescendantByClass(
+				first,
+				'graph-agent-activity-floating-notification-status',
+			).textContent,
+			'진행 중',
+		);
+		assert.deepStrictEqual(
+			getDirectNodeEffects(first).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['shimmer'],
+		);
+		assert.strictEqual(
+			findDescendantByClass(
+				first,
+				'graph-agent-activity-notification-message',
+			),
+			undefined,
+		);
+
+		presentations.updateCurrentMessage(
+			'tab-first',
+			'session-first',
+			'표시하지 않을 세션 내용',
+		);
+		store.setAgentActivity('session-first', firstTarget, 'active');
+		assert.strictEqual(
+			getDescendantsByClass(
+				root,
+				'graph-agent-activity-floating-notification',
+			).length,
+			1,
+		);
+
+		store.setAgentActivity('session-second', secondTarget, 'editing');
+		store.setAgentActivity('session-first', firstTarget, 'planned');
+		floating = getDescendantsByClass(
+			root,
+			'graph-agent-activity-floating-notification',
+		);
+		const second = floating[1];
+		const third = floating[2];
+
+		assert.ok(second);
+		assert.ok(third);
+		assert.deepStrictEqual(floating.map((element) => (
+			element.getAttribute(
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_SEQUENCE_ATTRIBUTE,
+			)
+		)), ['1', '2', '3']);
+		assert.deepStrictEqual(
+			getDirectNodeEffects(second).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['pulse'],
+		);
+		assert.deepStrictEqual(
+			scheduler.pendingDelays,
+			[
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS,
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS,
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS,
+			],
+		);
+
+		scheduler.runNext(AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS);
+		assert.strictEqual(first.hasClass('is-exiting'), true);
+		assert.strictEqual(
+			getDescendantsByClass(
+				root,
+				'graph-agent-activity-floating-notification',
+			).length,
+			3,
+		);
+		first.dispatch(
+			'animationend',
+			createAnimationEvent(
+				first,
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_ANIMATION,
+			),
+		);
+		floating = getDescendantsByClass(
+			root,
+			'graph-agent-activity-floating-notification',
+		);
+		assert.deepStrictEqual(floating.map((element) => (
+			element.getAttribute(
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_SEQUENCE_ATTRIBUTE,
+			)
+		)), ['2', '3']);
+
+		scheduler.runNext(AGENT_ACTIVITY_FLOATING_NOTIFICATION_LIFETIME_MS);
+		assert.strictEqual(second.hasClass('is-exiting'), true);
+		scheduler.runNext(AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_MS);
+		floating = getDescendantsByClass(
+			root,
+			'graph-agent-activity-floating-notification',
+		);
+		assert.deepStrictEqual(floating.map((element) => (
+			element.getAttribute(
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_SEQUENCE_ATTRIBUTE,
+			)
+		)), ['3']);
+		const graphViewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/graph/graphView.css',
+		), 'utf8');
+		const floatingRule = graphViewCss.match(
+			/\.graph-agent-activity-floating-notification\s*\{[^}]*\}/s,
+		);
+		const triggerRule = graphViewCss.match(
+			/\.graph-agent-activity-notification-trigger\s*\{[^}]*\}/s,
+		);
+
+		assert.ok(floatingRule);
+		assert.ok(triggerRule);
+		assert.match(floatingRule[0], /height:\s*40px;/);
+		assert.match(triggerRule[0], /height:\s*40px;/);
+		assert.match(
+			graphViewCss,
+			/\.graph-agent-activity-floating-notification-stack\s*\{[^}]*flex-direction:\s*row-reverse;/s,
+		);
+		assert.match(
+			graphViewCss,
+			/@keyframes graph-agent-activity-floating-notification-enter/,
+		);
+		assert.match(
+			graphViewCss,
+			/@keyframes graph-agent-activity-floating-notification-exit/,
+		);
+
+		graphView.dispose();
+		assert.strictEqual(scheduler.pendingCount, 0);
+		presentations.dispose();
+	});
+
+	test('Floating 알림 Click은 Target이 보일 때까지만 열고 Focus한 뒤 자신을 제거한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const scheduler = new FakeTimeoutScheduler();
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const target = {
+			nodeId: 'file:pagination-samples/seventeen-files/sample-12.ts',
+		};
+		const fileOpenRequests: string[] = [];
+
+		presentations.activateSession('tab-toast', 'session-toast', 'Toast Agent');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				hiddenNodeIds: {
+					'folder:pagination-samples': true,
+					'folder:pagination-samples/seventeen-files': true,
+					[target.nodeId]: true,
+				},
+			},
+			GRAPH_MOCK,
+			{
+				onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
+			},
+			[],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+				agentActivityNotificationScheduler: scheduler,
+			},
+		);
+		let focusPoint: { readonly x: number; readonly y: number } | undefined;
+
+		graphView.camera.focusOn = (point) => {
+			focusPoint = point;
+		};
+		store.setAgentActivity('session-toast', target, 'editing');
+		const floating = getDescendantByClass(
+			root,
+			'graph-agent-activity-floating-notification',
+		);
+
+		floating.dispatch('click', createClickEvent(floating));
+		const snapshot = graphView.state.getState();
+
+		assert.ok(focusPoint);
+		assert.deepStrictEqual(fileOpenRequests, []);
+		assert.strictEqual(snapshot.openedFolders[GRAPH_MOCK_PROJECT.id], true);
+		assert.strictEqual(
+			snapshot.openedFolders['folder:pagination-samples'],
+			true,
+		);
+		assert.strictEqual(
+			snapshot.openedFolders[
+				'folder:pagination-samples/seventeen-files'
+			],
+			true,
+		);
+		assert.strictEqual(snapshot.openedFolders[target.nodeId], undefined);
+		assert.strictEqual(floating.hasClass('is-exiting'), true);
+		floating.dispatch(
+			'animationend',
+			createAnimationEvent(
+				floating,
+				AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_ANIMATION,
+			),
+		);
+		assert.strictEqual(
+			getDescendantsByClass(
+				root,
+				'graph-agent-activity-floating-notification',
+			).length,
+			0,
+		);
+		assert.strictEqual(store.getActivities(target).length, 1);
+		assert.strictEqual(scheduler.pendingCount, 0);
+
+		graphView.dispose();
 		presentations.dispose();
 	});
 
@@ -15607,6 +15893,48 @@ class FakeAnimationFrameScheduler implements GraphAnimationFrameScheduler {
 
 		this.callbacks.delete(requestId);
 		callback(timestamp);
+	}
+}
+
+class FakeTimeoutScheduler implements AgentActivityNotificationScheduler {
+	private readonly callbacks = new Map<
+		number,
+		{ readonly callback: () => void; readonly delay: number }
+	>();
+	private nextHandle = 1;
+
+	get pendingCount(): number {
+		return this.callbacks.size;
+	}
+
+	get pendingDelays(): number[] {
+		return [...this.callbacks.values()].map(({ delay }) => delay);
+	}
+
+	setTimeout(callback: () => void, delay: number): number {
+		const handle = this.nextHandle;
+
+		this.nextHandle += 1;
+		this.callbacks.set(handle, { callback, delay });
+		return handle;
+	}
+
+	clearTimeout(handle: unknown): void {
+		if (typeof handle === 'number') {
+			this.callbacks.delete(handle);
+		}
+	}
+
+	runNext(delay: number): void {
+		const entry = [...this.callbacks].find(([, scheduled]) => (
+			scheduled.delay === delay
+		));
+
+		assert.ok(entry, `${delay}ms Timer가 있어야 한다.`);
+		const [handle, scheduled] = entry;
+
+		this.callbacks.delete(handle);
+		scheduled.callback();
 	}
 }
 

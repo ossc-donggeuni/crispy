@@ -127,7 +127,10 @@ snapshot remains pending and completes the reveal/focus after the next Graph ref
 only targets outside every current Workspace URI use the unavailable state. Dismissing
 an entry clears that exact target/session pair through the same Webview Activity Store,
 so its notification, graph binding, and representative effect disappear together
-without introducing another Host or MCP protocol path.
+without introducing another Host or MCP protocol path. Each newly received Activity
+also creates a compact, animated card to the left of the bell. Cards contain only the
+session title and Activity status, stack outward in receive order, expire with an exit
+animation after five seconds, and reuse the same graph reveal/focus action when clicked.
 
 Provider credentials keep the existing placeholder boundary. Codex argv contains
 only the environment variable name `CRISPY_MCP_TOKEN` through

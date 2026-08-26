@@ -83,6 +83,9 @@ import {
 	initializeAgentActivityNotificationCenter,
 	type AgentActivityNotificationCenter,
 } from './agentActivityNotificationCenter';
+import type {
+	AgentActivityNotificationScheduler,
+} from './agentActivityFloatingNotifications';
 import type { AgentActivityNotificationEntry } from './agentActivityNotifications';
 import {
 	TASK_DEFAULT_END_POSITION,
@@ -176,6 +179,7 @@ export interface GraphViewWorkspaceSnapshot {
 export interface GraphViewRuntimeOptions {
 	readonly agentActivityStore?: AgentActivityStore;
 	readonly agentSessionPresentationStore?: AgentSessionPresentationStore;
+	readonly agentActivityNotificationScheduler?: AgentActivityNotificationScheduler;
 }
 
 /** Task Scope bounds에서 Card와 Agent Binding의 전체 표시 높이를 반환한다. */
@@ -3595,6 +3599,7 @@ export function initializeGraphView(
 				},
 			},
 			getVisibleGraphArea,
+			runtimeOptions.agentActivityNotificationScheduler,
 		);
 	}
 	let renderedTaskScopeFileGroupPages = state.getState().fileGroupPages;

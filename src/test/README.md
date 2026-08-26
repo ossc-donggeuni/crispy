@@ -201,6 +201,9 @@
 - 더보기와 접기가 File Group size, sibling 위치와 Edge를 함께 Reflow한다
 - Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛰며 Renderer/Navigator에 같은 Layout을 전달한다
 - 알림 Center를 실제 가시 Graph 우측 상단에 배치하고 최신 Activity 정보와 동일 Effect를 표시한다
+- 초기 알림은 Floating으로 재생하지 않고 새 Activity sequence만 Bell 왼쪽에 slide stack으로 쌓으며 Session 내용은 숨긴다
+- Floating 알림은 5초 후 Animation/fallback으로 제거하고 남은 항목을 오른쪽으로 당기며 dispose에서 Timer를 정리한다
+- Floating 알림 Click은 File Editor를 열지 않고 Target 표시에 필요한 Graph 조상만 열어 Focus한 뒤 자신을 제거한다
 - 알림 Click으로 Target 자신의 하위는 열지 않고 Target 표시에 필요한 조상과 File page만 복원해 Camera Focus하며 File Editor도 열지 않는다
 - Workspace 범위 안 pending Target은 Graph 갱신 뒤 조상/Filter를 열어 Focus하고 같은 알림 DOM을 present 상태로 전환한다
 - Graph View dispose에서 알림 Store 구독, Effect와 Overlay DOM을 함께 정리한다
