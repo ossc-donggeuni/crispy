@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { stripVTControlCharacters } = require('node:util');
 const nodePty = require('node-pty');
 const {
 	resolveAgentExecutable,
@@ -30,6 +31,7 @@ const {
 
 const smokeTimeoutMs = 15_000;
 const maximumOutputLength = 1024 * 1024;
+const promptInputPtyColumns = 4_096;
 const windowsArgvMarker = 'CRISPY_WINDOWS_ARGV:';
 const projectInstructionsMarker = 'CRISPY_PROJECT_INSTRUCTIONS_PRESERVED';
 const userInstructionsMarker = 'CRISPY_USER_INSTRUCTIONS_PRESERVED';
@@ -125,28 +127,79 @@ function createIsolatedCodexEnvironment(environment, codexHome) {
 	return isolated;
 }
 
+/** Restores JSON bytes that ConPTY may decorate or physically wrap for the terminal viewport. */
+function normalizeCodexPromptInputOutput(output) {
+	return stripVTControlCharacters(output).replace(/[\r\n]/gu, '');
+}
+
+function parseCodexPromptInputOutput(output) {
+	const normalized = normalizeCodexPromptInputOutput(output);
+	const startMatch = /\[\s*\{/u.exec(normalized);
+	const end = normalized.lastIndexOf(']');
+	if (startMatch === null || end < startMatch.index) {
+		throw smokeError('Codex prompt-input output did not contain a JSON input list.');
+	}
+
+	let parsed;
+	try {
+		parsed = JSON.parse(normalized.slice(startMatch.index, end + 1));
+	} catch {
+		throw smokeError('Codex prompt-input output was not valid JSON.');
+	}
+	if (!Array.isArray(parsed)) {
+		throw smokeError('Codex prompt-input output was not a JSON input list.');
+	}
+	return parsed;
+}
+
+function collectPromptInputStrings(value, strings = []) {
+	if (typeof value === 'string') {
+		strings.push(value);
+		return strings;
+	}
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			collectPromptInputStrings(entry, strings);
+		}
+		return strings;
+	}
+	if (value !== null && typeof value === 'object') {
+		for (const entry of Object.values(value)) {
+			collectPromptInputStrings(entry, strings);
+		}
+	}
+	return strings;
+}
+
 function assertInstructionPreservationOutput(output, options) {
-	if (!output.includes(promptInputMarker)) {
+	const normalizedOutput = normalizeCodexPromptInputOutput(output);
+	if (normalizedOutput.includes(options.token)) {
+		throw smokeError('Codex exposed the MCP credential in prompt-input output.');
+	}
+	const promptStrings = collectPromptInputStrings(
+		parseCodexPromptInputOutput(output),
+	);
+	const includes = (marker) => promptStrings.some((value) =>
+		value.includes(marker)
+	);
+	if (!includes(promptInputMarker)) {
 		throw smokeError('Codex prompt-input probe did not reach the user prompt.');
 	}
 	if (options.expectedMarker !== undefined
-		&& !output.includes(options.expectedMarker)) {
+		&& !includes(options.expectedMarker)) {
 		throw smokeError(`${options.layer} developer instructions were not preserved.`);
 	}
-	if (!output.includes(options.expectedAgentsMarker)) {
+	if (!includes(options.expectedAgentsMarker)) {
 		throw smokeError(`${options.layer} AGENTS.md instructions were not preserved.`);
 	}
 	for (const unexpectedMarker of options.unexpectedMarkers ?? []) {
-		if (output.includes(unexpectedMarker)) {
+		if (includes(unexpectedMarker)) {
 			throw smokeError(`${options.layer} config did not have the expected precedence.`);
 		}
 	}
 	if (options.expectsGraphInstructions
-		!== output.includes(CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER)) {
+		!== includes(CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER)) {
 		throw smokeError(`${options.layer} graph instruction authority is incorrect.`);
-	}
-	if (output.includes(options.token)) {
-		throw smokeError('Codex exposed the MCP credential in prompt-input output.');
 	}
 }
 
@@ -208,7 +261,7 @@ async function runInstructionPreservationSmoke(options) {
 			platform: process.platform,
 			environment,
 		});
-		const output = await runPty(request);
+		const output = await runPty(request, { cols: promptInputPtyColumns });
 		assertInstructionPreservationOutput(output, {
 			...testCase,
 			token: options.token,
@@ -282,7 +335,7 @@ function createWindowsBatchFixtureSource(nodeExecutable, probeScript) {
 	].join('\r\n');
 }
 
-function runPty(request) {
+function runPty(request, options = {}) {
 	return new Promise((resolve, reject) => {
 		let terminal;
 		try {
@@ -293,7 +346,7 @@ function runPty(request) {
 					: request.args,
 				{
 					name: 'xterm-256color',
-					cols: 100,
+					cols: options.cols ?? 100,
 					rows: 30,
 					cwd: request.cwd,
 					env: { ...request.environment },
@@ -487,6 +540,8 @@ module.exports = Object.freeze({
 	createInstructionPreservationFixture,
 	createWindowsBatchFixtureSource,
 	createWindowsLauncherFixture,
+	normalizeCodexPromptInputOutput,
+	parseCodexPromptInputOutput,
 	shouldDeferTemporaryCleanup,
 	runPty,
 	runWindowsCmdOneShotSmoke,
