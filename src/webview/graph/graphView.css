@@ -1027,7 +1027,7 @@ body.vscode-high-contrast-light .graph-viewport {
 	position: absolute;
 	top: 100%;
 	right: 0;
-	z-index: 3;
+	z-index: 5;
 	display: flex;
 	width: 100%;
 	box-sizing: border-box;

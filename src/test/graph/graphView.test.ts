@@ -7603,6 +7603,7 @@ suite('Graph View', () => {
 		);
 
 		assert.ok(taskNodeActionsRule);
+		assert.match(taskNodeActionsRule[0], /z-index:\s*5;/);
 		assert.match(
 			taskNodeActionsRule[0],
 			/top:\s*100%;[^}]*width:\s*100%;[^}]*padding-top:\s*12px;[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/s,
@@ -7688,6 +7689,7 @@ suite('Graph View', () => {
 		assert.ok(hiddenRule);
 		assert.match(hiddenRule[0], /position:\s*absolute;/);
 		assert.match(hiddenRule[0], /top:\s*100%;/);
+		assert.match(hiddenRule[0], /z-index:\s*5;/);
 		assert.match(hiddenRule[0], /padding-top:\s*12px;/);
 		assert.match(hiddenRule[0], /pointer-events:\s*none;/);
 		assert.ok(hoverRule);
@@ -7739,6 +7741,7 @@ suite('Graph View', () => {
 		);
 		assert.match(containerRule[0], /pointer-events:\s*none;/);
 		assert.match(containerRule[0], /left:\s*0;/);
+		assert.match(containerRule[0], /z-index:\s*4;/);
 		assert.match(containerRule[0], /width:\s*100%;/);
 		assert.ok(bindingRule);
 		assert.match(bindingRule[0], /display:\s*flex;/);
