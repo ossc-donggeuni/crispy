@@ -26,7 +26,7 @@ export const DEFAULT_PANEL_LAYOUT_STATE: Readonly<PanelLayoutState> = {
 	preferredDock: 'right',
 	sideSize: INITIAL_SIDE_SIZE,
 	verticalSize: INITIAL_VERTICAL_SIZE,
-	collapsed: false,
+	collapsed: true,
 };
 
 /**

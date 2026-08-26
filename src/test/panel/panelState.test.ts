@@ -16,12 +16,12 @@ suite('Panel Layout State', () => {
 		assert.strictEqual(INITIAL_VERTICAL_SIZE, 400);
 	});
 
-	test('기본 Panel Layout 상태를 정의하며 접힘 기본값은 false다', () => {
+	test('기본 Panel Layout 상태를 정의하며 처음에는 접혀 있다', () => {
 		assert.deepStrictEqual(DEFAULT_PANEL_LAYOUT_STATE, {
 			preferredDock: 'right',
 			sideSize: INITIAL_SIDE_SIZE,
 			verticalSize: INITIAL_VERTICAL_SIZE,
-			collapsed: false,
+			collapsed: true,
 		});
 	});
 

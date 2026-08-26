@@ -1096,7 +1096,16 @@ suite('Crispy Extension Host', () => {
 			/script-src [^;]*'(?:unsafe-inline|unsafe-eval)'/,
 		);
 		assert.doesNotMatch(panel.webview.html, /'unsafe-eval'/);
-		assert.ok(panel.webview.html.includes('<section id="agent-chat-area">'));
+		assert.ok(panel.webview.html.includes(
+			'<section id="agent-chat-area" data-collapse-state="collapsed" inert>',
+		));
+		assert.ok(panel.webview.html.includes(
+			'<div id="panel-resize-handle" data-collapse-state="collapsed"></div>',
+		));
+		assert.match(
+			panel.webview.html,
+			/<button id="chat-panel-toggle"[^>]*aria-label="Show Agent Chat"[^>]*aria-expanded="false"[^>]*data-collapse-state="collapsed"[^>]*data-panel-icon="panel-left\.svg"/,
+		);
 		/* 탭별 Terminal 표면은 Webview가 탭마다 만들어 이 컨테이너 안에 넣는다. */
 		assert.ok(panel.webview.html.includes('<div id="agent-terminal-area">'));
 		assert.ok(

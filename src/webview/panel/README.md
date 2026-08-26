@@ -20,7 +20,7 @@ src/webview/panel/
 
 > 사용자가 배치한 Dock 위치 ( 상하좌우 ), 너비-높이와 접힘 여부 Runtime State를 정의합니다.
 
-- Panel Layout 상태 타입 및 기본값 정의 ( Side `460px`, Vertical `400px`, 접힘 `false` )
+- Panel Layout 상태 타입 및 기본값 정의 ( Side `460px`, Vertical `400px`, 접힘 `true` )
 - Floating Panel의 외곽 여백과 Dock 방향별 최소 크기 정의
 - 저장된 크기를 현재 가용 영역 기준으로 제한하는 공통 clamp 계산
 - 복원 후보의 Panel 상태 검증 및 독립 객체 복사

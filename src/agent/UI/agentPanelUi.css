@@ -17,7 +17,7 @@
 	grid-area: header;
 	gap: 6px;
 	min-width: 0;
-	padding: 6px 8px;
+	padding: 6px 8px 0;
 }
 
 #agent-top-bar {
@@ -545,6 +545,7 @@
 	display: flex;
 	/* 탭 줄만 남는 폭을 쓰고, 넘치면 이 안에서만 가로로 스크롤한다. */
 	flex: 1 1 auto;
+	align-self: flex-end;
 	min-width: 0;
 	overflow-x: auto;
 	/* macOS overlay scrollbar가 탭 라벨 위를 덮지 않게 표시만 숨긴다. */
@@ -598,6 +599,7 @@
 
 .agent-tab[data-active='true'] {
 	border-color: var(--vscode-panel-border, transparent);
+	border-bottom: 0;
 	background-color: var(--vscode-tab-activeBackground, #232323);
 }
 
