@@ -71,6 +71,16 @@ suite('Agent Session Presentation Store', () => {
 		assert.strictEqual(store.getSession('session-old'), undefined);
 		assert.strictEqual(store.getSessionForTab('tab-A')?.sessionId, 'session-new');
 	});
+
+	test('외부 표시 세션은 생성 시 실제 Agent 세션 색상을 그대로 이어받는다', () => {
+		const store = createAgentSessionPresentationStore(() => '#fallback');
+
+		store.activateSession('task-tab', 'task-session', 'Task Work', '#12ab34');
+
+		assert.strictEqual(store.getSession('task-session')?.color, '#12ab34');
+		store.activateSession('task-tab', 'task-session', 'Renamed', '#ffffff');
+		assert.strictEqual(store.getSession('task-session')?.color, '#12ab34');
+	});
 });
 
 suite('Agent Session Presentation Coordinator', () => {

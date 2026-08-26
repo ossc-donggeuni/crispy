@@ -34,8 +34,18 @@ export interface AgentSessionPresentationStore {
 	getSnapshot(): AgentSessionPresentationStoreSnapshot;
 	isKnownSession(sessionId: SessionId): boolean;
 	isRunningSession(sessionId: SessionId): boolean;
-	startSession(tabId: TabId, sessionId: SessionId, title: string): void;
-	activateSession(tabId: TabId, sessionId: SessionId, title: string): void;
+	startSession(
+		tabId: TabId,
+		sessionId: SessionId,
+		title: string,
+		initialColor?: string,
+	): void;
+	activateSession(
+		tabId: TabId,
+		sessionId: SessionId,
+		title: string,
+		initialColor?: string,
+	): void;
 	updateTitle(sessionId: SessionId, title: string): void;
 	updateCurrentMessage(
 		tabId: TabId,
@@ -96,6 +106,7 @@ export function createAgentSessionPresentationStore(
 		sessionId: SessionId,
 		title: string,
 		state: AgentSessionPresentationSnapshot['state'],
+		initialColor?: string,
 	): void => {
 		if (disposed) {
 			return;
@@ -134,7 +145,7 @@ export function createAgentSessionPresentationStore(
 		sessionsById.set(sessionId, Object.freeze({
 			tabId,
 			sessionId,
-			color: resolveSessionColor(sessionId),
+			color: initialColor ?? resolveSessionColor(sessionId),
 			title: normalizedTitle,
 			currentMessage: '',
 			state,
@@ -154,17 +165,18 @@ export function createAgentSessionPresentationStore(
 		isRunningSession: (sessionId) => (
 			sessionsById.get(sessionId)?.state === 'running'
 		),
-		startSession(tabId, sessionId, title): void {
+		startSession(tabId, sessionId, title, initialColor): void {
 			const current = sessionsById.get(sessionId);
 			setSession(
 				tabId,
 				sessionId,
 				title,
 				current?.state === 'running' ? 'running' : 'starting',
+				initialColor,
 			);
 		},
-		activateSession(tabId, sessionId, title): void {
-			setSession(tabId, sessionId, title, 'running');
+		activateSession(tabId, sessionId, title, initialColor): void {
+			setSession(tabId, sessionId, title, 'running', initialColor);
 		},
 		updateTitle(sessionId, title): void {
 			if (disposed) {

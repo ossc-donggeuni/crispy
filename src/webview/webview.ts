@@ -224,6 +224,10 @@ const graphView = initializeGraphView(
 		gitDecorations: gitDecorationStore,
 	},
 );
+const taskWorkByTabId = new Map<string, Readonly<{
+	executionId: string;
+	workNodeId: string;
+}>>();
 const workspaceNodeInspectorFallback: WorkspaceNodeInspector = {
 	handleDetailsResult: () => undefined,
 	handleMutationResult: () => undefined,
@@ -639,6 +643,10 @@ function handleHostMessage(message: unknown): void {
 				tabId,
 				switchAttemptId: lastIssuedSwitchAttemptId,
 			})) {
+				taskWorkByTabId.set(tabId, Object.freeze({
+					executionId: taskExecutionMessage.executionId,
+					workNodeId: taskExecutionMessage.workNodeId,
+				}));
 				terminalPool.ensureTab(tabId);
 			}
 		} else if (taskExecutionMessage.type === 'task.execution.updated') {
@@ -853,11 +861,31 @@ function handleHostMessage(message: unknown): void {
 			console.log('[Crispy] Extension ready');
 			break;
 		default: {
+			const agentMessage = parseResult.value;
 			const shouldForwardToTerminal =
-				agentPanelUi?.handleHostMessage(parseResult.value) ?? true;
+				agentPanelUi?.handleHostMessage(agentMessage) ?? true;
 			if (shouldForwardToTerminal) {
-				agentSessionPresentationCoordinator?.handleHostMessage(parseResult.value);
-				terminalPool.handleHostMessage(parseResult.value);
+				agentSessionPresentationCoordinator?.handleHostMessage(agentMessage);
+				terminalPool.handleHostMessage(agentMessage);
+			}
+			if (
+				agentMessage.type === 'terminal.starting'
+				|| agentMessage.type === 'terminal.started'
+			) {
+				const taskWork = taskWorkByTabId.get(agentMessage.tabId);
+
+				if (taskWork) {
+					graphView.assignTaskWorkAgentSession?.(
+						taskWork.executionId,
+						taskWork.workNodeId,
+						agentMessage.sessionId,
+					);
+				}
+			} else if (
+				agentMessage.type === 'terminal.exited'
+				|| agentMessage.type === 'terminal.error'
+			) {
+				taskWorkByTabId.delete(agentMessage.tabId);
 			}
 			break;
 		}

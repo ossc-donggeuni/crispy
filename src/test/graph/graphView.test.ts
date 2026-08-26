@@ -7449,13 +7449,19 @@ suite('Graph View', () => {
 		const root = ownerDocument.createElement('section');
 		const task = createRenderingTask({ x: 100, y: 50 });
 		const store = createAgentActivityStore();
-		const presentations = createAgentSessionPresentationStore();
+		const presentations = createAgentSessionPresentationStore((sessionId) => (
+			sessionId === 'agent-session' ? '#2468ac' : '#13579b'
+		));
 		const startRequests: Array<{ taskId: string; storageRevision: number }> = [];
+		const openedSessionIds: string[] = [];
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
 			INITIAL_GRAPH_STATE,
 			GRAPH_MOCK,
 			{
+				onAgentSessionOpenRequest: (sessionId) => {
+					openedSessionIds.push(sessionId);
+				},
 				onTaskExecutionStart: (taskId, storageRevision) => {
 					startRequests.push({ taskId, storageRevision });
 				},
@@ -7466,6 +7472,11 @@ suite('Graph View', () => {
 				agentActivityStore: store,
 				agentSessionPresentationStore: presentations,
 			},
+		);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+			presentations,
 		);
 		const startNode = task.nodes.find((node) => node.kind === 'start');
 		const workNode = task.nodes.find((node) => node.kind === 'work');
@@ -7507,6 +7518,16 @@ suite('Graph View', () => {
 			endNodeId: endNode.id,
 			works: [{ nodeId: workNode.id, state: 'running' }],
 		});
+		presentations.activateSession(
+			'agent-tab',
+			'agent-session',
+			'Assigned Agent',
+		);
+		graphView.assignTaskWorkAgentSession?.(
+			'execution-ui',
+			workNode.id,
+			'agent-session',
+		);
 
 		startElement = getTaskElement(
 			root, 'data-task-node-id', startNode.id, task.id,
@@ -7530,6 +7551,26 @@ suite('Graph View', () => {
 		assert.ok(findDescendantByAttribute(
 			workElement, 'data-graph-node-effect', 'shimmer',
 		));
+		assert.strictEqual(
+			getDescendantByAttribute(
+				workElement,
+				'data-graph-node-effect',
+				'shimmer',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'#2468ac',
+		);
+		assert.deepStrictEqual(getAgentBindingState(workElement), [[
+			`task:execution-ui:${workNode.id}`,
+			'active',
+		]]);
+		const runningWorkBinding = getAgentBindingElements(workElement)[0];
+
+		assert.ok(runningWorkBinding);
+		runningWorkBinding.dispatch(
+			'dblclick',
+			createClickEvent(runningWorkBinding),
+		);
+		assert.deepStrictEqual(openedSessionIds, ['agent-session']);
 		assert.strictEqual(findTaskInspector(root), undefined);
 		assert.strictEqual(
 			getDescendantByAttribute(
@@ -7546,6 +7587,23 @@ suite('Graph View', () => {
 		assert.strictEqual(
 			presentations.getSession(`task:execution-ui:${workNode.id}`)?.currentMessage,
 			'Work를 수행하고 있습니다.',
+		);
+		assert.strictEqual(
+			presentations.getSession(`task:execution-ui:${workNode.id}`)?.color,
+			'#2468ac',
+		);
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-ui',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'running',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'waiting-approval' }],
+		});
+		assert.strictEqual(
+			presentations.getSession(`task:execution-ui:${workNode.id}`)?.currentMessage,
+			'추가 영역 접근에 대한 사용자 결정을 기다립니다.',
 		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui',
@@ -7578,7 +7636,7 @@ suite('Graph View', () => {
 			getDescendantByAttribute(
 				startElement, 'data-graph-node-effect', 'icon',
 			).style.getPropertyValue('--graph-node-effect-color'),
-			'var(--vscode-testing-iconFailed, #f14c4c)',
+			'#13579b',
 		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui',
@@ -7610,6 +7668,14 @@ suite('Graph View', () => {
 		));
 		assert.strictEqual(
 			getDescendantByAttribute(
+				startElement,
+				'data-graph-node-effect',
+				'outline',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'#13579b',
+		);
+		assert.strictEqual(
+			getDescendantByAttribute(
 				startElement, 'data-graph-node-effect', 'icon',
 			).getAttribute('data-graph-node-effect-icon'),
 			'check',
@@ -7619,8 +7685,90 @@ suite('Graph View', () => {
 			({ activity }) => activity,
 		), ['completed']);
 		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
-			({ activity }) => activity,
-		), ['completed']);
+			({ sessionId, activity }) => ({ sessionId, activity }),
+		), [
+			{
+				sessionId: `task:execution-ui:${workNode.id}`,
+				activity: 'completed',
+			},
+			{
+				sessionId: `task:execution-ui:${startNode.id}`,
+				activity: 'completed',
+			},
+		]);
+		assert.deepStrictEqual(store.getActivities({ nodeId: endNode.id }).map(
+			({ sessionId, activity }) => ({ sessionId, activity }),
+		), [{
+			sessionId: `task:execution-ui:${startNode.id}`,
+			activity: 'completed',
+		}]);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				endElement,
+				'data-graph-node-effect',
+				'outline',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'#13579b',
+		);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				workElement,
+				'data-graph-node-effect',
+				'outline',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'#2468ac',
+		);
+		presentations.endSession('agent-session');
+		assert.strictEqual(
+			getDescendantByAttribute(
+				workElement,
+				'data-graph-node-effect',
+				'outline',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'#2468ac',
+		);
+		assert.deepStrictEqual(getAgentBindingState(workElement), [
+			[`task:execution-ui:${workNode.id}`, 'completed'],
+			[`task:execution-ui:${startNode.id}`, 'completed'],
+		]);
+		const taskCompletionSessionId = `task:execution-ui:${startNode.id}`;
+		const endNotification = getDescendantByAttribute(
+			getDescendantByAttribute(
+				root,
+				AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+				'',
+			),
+			AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
+			JSON.stringify([taskCompletionSessionId, endNode.id, null]),
+		);
+
+		getDescendantByClass(
+			endNotification,
+			'graph-agent-activity-notification-dismiss',
+		).dispatch('click', createClickEvent(endNotification));
+		assert.deepStrictEqual(store.getActivities({ nodeId: endNode.id }), []);
+		assert.strictEqual(
+			findDescendantByAttribute(
+				endElement,
+				'data-graph-node-effect',
+				'outline',
+			),
+			undefined,
+		);
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-ui',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'completed',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'completed', summary: 'Done' }],
+		});
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: endNode.id }),
+			[],
+			'삭제한 완료 이벤트는 동일 snapshot 재수신으로 되살아나지 않아야 한다.',
+		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui-next',
 			taskId: task.id,
@@ -7639,6 +7787,7 @@ suite('Graph View', () => {
 			false,
 		);
 
+		activityEffects.dispose();
 		graphView.dispose();
 		assert.deepStrictEqual(store.getSnapshot(), []);
 		presentations.dispose();

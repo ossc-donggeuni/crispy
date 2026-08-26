@@ -1,13 +1,10 @@
 import { AGENT_PROVIDER_LABELS } from '../../agent/UI/agentProviders';
 import {
-	createTaskExecutionActivitySessionId,
 	isTaskExecutionActive,
 	type TaskExecutionSnapshot,
 	type TaskNodePosition,
 	type TaskOrigin,
 } from '../../task';
-import type { GraphNodeLocalEffectHost } from '../graph/graphNodeEffects';
-import { getAgentActivityEffects } from '../graph/agentActivityPresentation';
 import {
 	createTaskEdgeGeometry,
 	getTaskPortCenter,
@@ -102,10 +99,13 @@ export interface TaskRendererInteractions {
 	onNodeSelectionChange?: (node: TaskLayoutNode | undefined) => void;
 	/** Start Action으로 연결 전 Work 하나를 추가한다. */
 	onWorkAdd?: (taskId: string) => void;
-	/** Ready Start의 floating 실행 버튼을 Host start 요청으로 전달한다. */
+	/** Ready Start의 아이콘 실행 버튼을 Host start 요청으로 전달한다. */
 	onTaskStart?: (taskId: string) => void;
-	/** Task Node에서도 공용 AgentActivity effect recipe를 쓰는 local host factory다. */
-	createNodeEffectHost?: (element: HTMLElement) => GraphNodeLocalEffectHost;
+	/** Task Node DOM을 공용 AgentActivity effect와 Binding lifecycle에 등록한다. */
+	registerNodeActivity?: (
+		nodeId: string,
+		element: HTMLElement,
+	) => () => void;
 	/** Start Action으로 현재 Task를 전송 JSON으로 내보낸다. */
 	onTaskExport?: (taskId: string) => void;
 	/** Start Action으로 현재 Task를 교체할 JSON 입력을 요청한다. */
@@ -221,7 +221,7 @@ export function initializeTaskRenderer(
 ): TaskRenderer {
 	const ownerDocument = nodeLayer.ownerDocument;
 	const nodeElements = new Map<string, HTMLElement>();
-	const nodeEffectHosts = new Map<string, GraphNodeLocalEffectHost>();
+	const nodeActivityDisposers = new Map<string, () => void>();
 	const executionByTaskId = new Map<string, TaskExecutionSnapshot>();
 	const isExecutionLocked = (taskId: string): boolean => {
 		const snapshot = executionByTaskId.get(taskId);
@@ -1130,8 +1130,8 @@ export function initializeTaskRenderer(
 
 		for (const [renderKey, element] of nodeElements) {
 			if (!nextNodeKeys.has(renderKey)) {
-				nodeEffectHosts.get(renderKey)?.dispose();
-				nodeEffectHosts.delete(renderKey);
+				nodeActivityDisposers.get(renderKey)?.();
+				nodeActivityDisposers.delete(renderKey);
 				element.remove();
 				nodeElements.delete(renderKey);
 			}
@@ -1215,17 +1215,17 @@ export function initializeTaskRenderer(
 				element = ownerDocument.createElement('div');
 				nodeLayer.append(element);
 				nodeElements.set(renderKey, element);
-				const effectHost = interactions.createNodeEffectHost?.(element);
-				if (effectHost) {
-					nodeEffectHosts.set(renderKey, effectHost);
+				const disposeActivity = interactions.registerNodeActivity?.(
+					node.id,
+					element,
+				);
+				if (disposeActivity) {
+					nodeActivityDisposers.set(renderKey, disposeActivity);
 				}
 			}
 
 			const execution = executionByTaskId.get(node.taskId);
 			syncTaskNodeElement(element, node, ownerDocument, execution);
-			nodeEffectHosts.get(renderKey)?.setEffects(
-				createTaskExecutionNodeEffects(node, execution),
-			);
 			if (selectedNodeKey === renderKey) {
 				element.classList.add('is-selected');
 			} else {
@@ -1304,10 +1304,10 @@ export function initializeTaskRenderer(
 			}
 
 			disposed = true;
-			for (const host of nodeEffectHosts.values()) {
-				host.dispose();
+			for (const disposeActivity of nodeActivityDisposers.values()) {
+				disposeActivity();
 			}
-			nodeEffectHosts.clear();
+			nodeActivityDisposers.clear();
 			executionByTaskId.clear();
 			nodeLayer.removeEventListener('animationend', handleTaskScopeSlideFinished);
 			nodeLayer.removeEventListener('pointerdown', handlePointerDown);
@@ -1518,6 +1518,9 @@ function syncTaskNodeElement(
 	const effectLayer = [...element.children].find(
 		(child) => child.hasAttribute('data-graph-node-effects'),
 	);
+	const activityBindings = [...element.children].find(
+		(child) => child.classList.contains('graph-agent-activity-bindings'),
+	);
 
 	// GraphNodeLocalEffectHost가 같은 element에 둔 effect/pulse class를 보존한다.
 	// className 전체 대입은 CSS custom property를 잃게 해 icon 크기를 viewport만큼 키운다.
@@ -1548,6 +1551,7 @@ function syncTaskNodeElement(
 	element.replaceChildren(
 		...createTaskNodeContents(node, ownerDocument, execution),
 		...(effectLayer ? [effectLayer] : []),
+		...(activityBindings ? [activityBindings] : []),
 	);
 }
 
@@ -1782,42 +1786,6 @@ function getTaskNodeExecutionState(
 		return execution.state === 'completed' ? 'completed' : undefined;
 	}
 	return execution.works.find(({ nodeId }) => nodeId === node.id)?.state;
-}
-
-function createTaskExecutionNodeEffects(
-	node: TaskLayoutNode,
-	execution: TaskExecutionSnapshot | undefined,
-) {
-	const state = getTaskNodeExecutionState(node, execution);
-	const activity = node.kind === 'start'
-		? state === 'running'
-			? 'editing'
-			: state === 'completed'
-				? 'completed'
-				: state === 'rejected' || state === 'failed'
-					? 'rejected'
-					: undefined
-		: state === 'running' || state === 'waiting-approval'
-			? 'active'
-			: state === 'starting'
-				? 'planned'
-				: state === 'completed'
-					? 'completed'
-					: state === 'rejected' || state === 'failed' || state === 'blocked'
-						? 'rejected'
-						: undefined;
-	const color = activity === 'rejected'
-		? 'var(--vscode-testing-iconFailed, #f14c4c)'
-		: activity === 'planned'
-			? 'var(--vscode-editorWarning-foreground, #cca700)'
-			: 'var(--vscode-testing-iconPassed, #73c991)';
-	return activity === undefined || execution === undefined
-		? []
-		: getAgentActivityEffects(
-			createTaskExecutionActivitySessionId(execution.executionId, node.id),
-			activity,
-			color,
-		);
 }
 
 function resolveTaskGraphTargetToggleArea(

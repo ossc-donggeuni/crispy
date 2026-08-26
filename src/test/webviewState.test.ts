@@ -16,7 +16,10 @@ import {
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
 import type { GraphViewWorkspaceSnapshot } from '../webview/graph/graphView';
-import { createDefaultTaskBlueprint } from '../task';
+import {
+	createDefaultTaskBlueprint,
+	type TaskExecutionSnapshot,
+} from '../task';
 import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
 import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
@@ -576,6 +579,12 @@ suite('Webview State Wiring', () => {
 			readonly target: GraphNodeEffectTarget;
 			readonly kind?: GraphNodeEffectKind;
 		}> = [];
+		const taskExecutionSnapshots: TaskExecutionSnapshot[] = [];
+		const taskWorkAgentSessionAssignments: Array<{
+			readonly executionId: string;
+			readonly workNodeId: string;
+			readonly sessionId: string;
+		}> = [];
 		const agentEffectSets: Array<{
 			readonly target: GraphNodeEffectTarget;
 			readonly effect: GraphNodeEffect;
@@ -817,6 +826,16 @@ suite('Webview State Wiring', () => {
 					graphUpdates.push(nextGraph);
 				},
 				updateTasks: () => undefined,
+				applyTaskExecutionSnapshot: (snapshot) => {
+					taskExecutionSnapshots.push(snapshot);
+				},
+				assignTaskWorkAgentSession: (executionId, workNodeId, sessionId) => {
+					taskWorkAgentSessionAssignments.push({
+						executionId,
+						workNodeId,
+						sessionId,
+					});
+				},
 				updateWorkspace: (nextGraph, snapshot) => {
 					workspaceUpdates.push({ graph: nextGraph, snapshot });
 					currentGraphState = {
@@ -1007,6 +1026,7 @@ suite('Webview State Wiring', () => {
 				model,
 				getSnapshot: () => model.getSnapshot(),
 				getAssignmentState: () => undefined,
+				createTaskTab: () => model.createTab({ activate: false }),
 				updateWorkspaceRootCatalog: (catalog) => {
 					agentWorkspaceCatalogUpdates.push(catalog);
 				},
@@ -1507,6 +1527,66 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(
 				agentActivitySessionClears.at(-1),
 				'session-activity-a',
+			);
+			terminalHostMessages.length = 0;
+
+			const taskExecutionSnapshot: TaskExecutionSnapshot = {
+				executionId: 'execution-webview',
+				taskId: refreshedTask.id,
+				storageRevision: 4,
+				state: 'running',
+				startNodeId: 'task-start-webview',
+				endNodeId: 'task-end-webview',
+				works: [{ nodeId: 'task-work-webview', state: 'starting' }],
+			};
+
+			hostMessageHandler({
+				data: {
+					type: 'task.execution.updated',
+					snapshot: taskExecutionSnapshot,
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'task.session.createRequested',
+					executionId: taskExecutionSnapshot.executionId,
+					taskId: taskExecutionSnapshot.taskId,
+					workNodeId: 'task-work-webview',
+					providerId: 'codex',
+					workspaceRootId: 'workspace-root:project:refreshed',
+				},
+			} as MessageEvent);
+			const taskTabId = `${agentTabId}-2`;
+
+			assert.deepStrictEqual(taskExecutionSnapshots, [taskExecutionSnapshot]);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'task.session.create'),
+				[{
+					type: 'task.session.create',
+					executionId: taskExecutionSnapshot.executionId,
+					workNodeId: 'task-work-webview',
+					tabId: taskTabId,
+					switchAttemptId: 3,
+				}],
+			);
+			assert.strictEqual(ensuredTabs.at(-1), taskTabId);
+
+			const taskTerminalStartingMessage = {
+				type: 'terminal.starting',
+				tabId: taskTabId,
+				sessionId: 'session-task-work',
+			} as const;
+
+			hostMessageHandler({ data: taskTerminalStartingMessage } as MessageEvent);
+			assert.deepStrictEqual(taskWorkAgentSessionAssignments, [{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+			}]);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.getSession('session-task-work')
+					?.tabId,
+				taskTabId,
 			);
 			terminalHostMessages.length = 0;
 
