@@ -1,6 +1,6 @@
 import type { DockPosition, PanelLayoutState } from './panelState';
 
-/** Chat 접기와 Sticker 열기가 함께 다루는 요소 모음이다. */
+/** Chat 접기와 열기가 함께 다루는 요소 모음이다. */
 export interface PanelCollapseElements {
 	/** 접기 상태에 따라 숨기는 Floating Chat Panel 요소다. */
 	readonly chatPanel: HTMLElement;
@@ -8,11 +8,8 @@ export interface PanelCollapseElements {
 	/** Chat Panel과 함께 숨기는 Resize Handle 요소다. */
 	readonly resizeHandle: HTMLElement;
 
-	/** Chat Header에서 Panel을 접는 버튼이다. */
-	readonly collapseButton: HTMLElement;
-
-	/** 접힘 상태에서 현재 Dock 가장자리에 표시하는 Sticker 열기 버튼이다. */
-	readonly stickerOpener: HTMLElement;
+	/** Panel 경계와 Dock 가장자리 사이를 이동하는 단일 접기/열기 버튼이다. */
+	readonly toggleButton: HTMLElement;
 }
 
 /** Chat slide 동안 Graph overlay 위치를 같은 frame에 갱신하는 Scheduler다. */
@@ -31,7 +28,7 @@ export interface PanelCollapseController {
 /** transitionend 누락이나 숨겨진 Webview에서도 추적을 끝내는 상한이다. */
 export const PANEL_COLLAPSE_TRACKING_MAX_MS = 320;
 
-/** Dock 방향별 접기 버튼 SVG이며 Panel이 접히는 방향을 가리킨다. */
+/** Dock 방향별 접기 SVG이며 Panel이 접히는 방향을 가리킨다. */
 const COLLAPSE_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
 	left: 'panel-left.svg',
 	right: 'panel-right.svg',
@@ -39,7 +36,7 @@ const COLLAPSE_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
 	bottom: 'panel-down.svg',
 };
 
-/** Dock 방향별 Sticker SVG이며 Panel이 다시 열리는 방향을 가리킨다. */
+/** Dock 방향별 열기 SVG이며 Panel이 다시 열리는 방향을 가리킨다. */
 const OPENER_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
 	left: 'panel-right.svg',
 	right: 'panel-left.svg',
@@ -48,7 +45,7 @@ const OPENER_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
 };
 
 /**
- * Chat Header의 접기 버튼과 Dock 가장자리의 Sticker 열기 버튼을 초기화한다.
+ * Panel 경계와 Dock 가장자리 사이를 이동하는 단일 접기/열기 버튼을 초기화한다.
  *
  * 접어도 저장된 Panel 크기는 그대로 두므로 다시 열면 접기 전 크기를 사용하며,
  * Graph는 접힘 여부와 무관하게 전체 Webview 영역을 계속 사용한다.
@@ -107,10 +104,11 @@ export function initializePanelCollapse(
 	const enableSlideMotion = () => {
 		elements.chatPanel.dataset.collapseMotion = 'slide';
 		elements.resizeHandle.dataset.collapseMotion = 'slide';
+		elements.toggleButton.dataset.collapseMotion = 'slide';
 	};
 
 	/**
-	 * 현재 접힘 여부와 Dock 방향을 Chat Panel, Resize Handle과 두 버튼에 반영한다.
+	 * 현재 접힘 여부와 Dock 방향을 Chat Panel, Resize Handle과 Toggle에 반영한다.
 	 */
 	const refreshCollapse = () => {
 		const dock = state.preferredDock;
@@ -125,14 +123,25 @@ export function initializePanelCollapse(
 		elements.chatPanel.inert = state.collapsed;
 		elements.chatPanel.dataset.collapseState = collapseState;
 		elements.resizeHandle.dataset.collapseState = collapseState;
-		elements.stickerOpener.hidden = !state.collapsed;
-		elements.stickerOpener.dataset.dock = dock;
-		elements.stickerOpener.dataset.panelIcon = OPENER_ICON_ASSETS[dock];
-		elements.collapseButton.dataset.panelIcon = COLLAPSE_ICON_ASSETS[dock];
+		elements.toggleButton.hidden = false;
+		elements.toggleButton.dataset.collapseState = collapseState;
+		elements.toggleButton.dataset.dock = dock;
+		elements.toggleButton.dataset.panelIcon = state.collapsed
+			? OPENER_ICON_ASSETS[dock]
+			: COLLAPSE_ICON_ASSETS[dock];
+		elements.toggleButton.setAttribute(
+			'aria-label',
+			state.collapsed ? 'Show Agent Chat' : 'Hide Agent Chat',
+		);
+		elements.toggleButton.setAttribute(
+			'title',
+			state.collapsed ? 'Show Agent Chat' : 'Hide Agent Chat',
+		);
+		elements.toggleButton.setAttribute('aria-expanded', String(!state.collapsed));
 	};
 
 	/**
-	 * Chat Panel과 Resize Handle을 숨기고 현재 Dock의 Sticker만 남긴다.
+	 * Chat Panel과 Resize Handle을 숨기고 Toggle을 현재 Dock 가장자리로 이동한다.
 	 */
 	const handleCollapse = () => {
 		if (state.collapsed) {
@@ -161,6 +170,13 @@ export function initializePanelCollapse(
 		startTransitionTracking();
 		onExpand();
 	};
+	const handleToggle = () => {
+		if (state.collapsed) {
+			handleExpand();
+			return;
+		}
+		handleCollapse();
+	};
 	const handleTransitionSettled = (event: TransitionEvent) => {
 		if (
 			event.target !== elements.chatPanel
@@ -173,8 +189,7 @@ export function initializePanelCollapse(
 		onTransitionFrame();
 	};
 
-	elements.collapseButton.addEventListener('click', handleCollapse);
-	elements.stickerOpener.addEventListener('click', handleExpand);
+	elements.toggleButton.addEventListener('click', handleToggle);
 	elements.chatPanel.addEventListener('transitionend', handleTransitionSettled);
 	refreshCollapse();
 

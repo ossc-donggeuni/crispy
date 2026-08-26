@@ -51,14 +51,14 @@ src/webview/panel/
 
 ### `panelCollapse.ts`
 
-> Agent Chat 영역의 접기와 Sticker 열기 동작을 관리합니다.
+> Agent Chat 영역의 단일 접기/열기 Toggle 동작을 관리합니다.
 
-- Chat Header 접기 버튼으로 Chat Panel 전체와 Resize Handle을 현재 Dock 바깥까지 Slide
+- Panel 안쪽 경계의 단일 Toggle로 Chat Panel 전체와 Resize Handle을 현재 Dock 바깥까지 Slide
 - 좌·우 Dock은 가로, 상·하 Dock은 세로 방향으로 접고 같은 경로로 다시 펼침
 - 초기 복원 상태는 즉시 반영하고 사용자 접기·열기 동작에만 Transition 적용
 - OS의 모션 감소 설정에서는 Transition 생략
-- 접힘 상태에서 현재 Dock 가장자리에 Sticker 열기 버튼 표시
-- Dock 방향에 맞는 Sticker 위치와 열림 방향 아이콘 적용
+- 펼침 시 Panel의 Graph 방향 경계, 접힘 시 현재 Dock 가장자리에 같은 Toggle 표시
+- Dock과 접힘 상태에 맞는 Toggle 위치와 접기/열기 방향 아이콘 적용
 - 접어도 저장된 Side / Vertical 크기를 그대로 두어 같은 크기로 복원
 - 접힘 여부가 바뀐 경우에만 상위 저장 callback 호출
 - Activity 등 외부 UI가 같은 Transition·저장·layout callback 경로로 Panel을 펼칠 수 있는 제어 경계 제공

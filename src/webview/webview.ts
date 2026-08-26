@@ -158,8 +158,7 @@ const layout = getRequiredElement<HTMLElement>('.crispy-layout');
 const graphArea = getRequiredElement<HTMLElement>('#graph-area');
 const chatPanel = getRequiredElement<HTMLElement>('#agent-chat-area');
 const dragHandle = getRequiredElement<HTMLButtonElement>('#chat-drag-handle');
-const collapseButton = getRequiredElement<HTMLButtonElement>('#chat-collapse-toggle');
-const stickerOpener = getRequiredElement<HTMLButtonElement>('#chat-sticker-opener');
+const panelToggleButton = getRequiredElement<HTMLButtonElement>('#chat-panel-toggle');
 const resizeHandle = getRequiredElement<HTMLElement>('#panel-resize-handle');
 const dockPreview = getRequiredElement<HTMLElement>('#dock-preview');
 const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
@@ -446,8 +445,7 @@ const refreshCollapse = initializePanelCollapse(
 	{
 		chatPanel,
 		resizeHandle,
-		collapseButton,
-		stickerOpener,
+		toggleButton: panelToggleButton,
 	},
 	panelState,
 	() => {
@@ -496,7 +494,7 @@ const refreshDock = initializePanelDock(
 	panelState,
 	persistWebviewSessionState,
 	() => {
-		/** Dock이 바뀌면 새 방향 기준으로 표시 크기와 Sticker 위치를 다시 맞춘다. */
+		/** Dock이 바뀌면 새 방향 기준으로 표시 크기와 Toggle 위치를 다시 맞춘다. */
 		applyPanelSize(layout, panelState);
 		refreshCollapse();
 		graphView.refreshVisibleGraphArea();

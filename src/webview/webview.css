@@ -572,8 +572,7 @@ button:focus-visible {
 }
 
 /* Agent 영역 헤더 줄의 마지막 항목이며 탭 개수와 무관하게 오른쪽 끝에 남는다. */
-#chat-drag-handle,
-#chat-collapse-toggle {
+#chat-drag-handle {
 	display: grid;
 	flex: 0 0 var(--agent-toolbar-control-size);
 	width: var(--agent-toolbar-control-size);
@@ -593,13 +592,8 @@ button:focus-visible {
 	touch-action: none;
 }
 
-#chat-collapse-toggle {
-	cursor: pointer;
-}
-
 #chat-drag-handle::before,
-#chat-collapse-toggle::before,
-#chat-sticker-opener::before {
+#chat-panel-toggle::before {
 	content: '';
 	display: block;
 	background-color: currentColor;
@@ -619,47 +613,36 @@ button:focus-visible {
 	-webkit-mask-image: url('./graph/assets/ui-icons/drag-handle.svg');
 }
 
-#chat-collapse-toggle::before {
-	width: var(--agent-toolbar-icon-size);
-	height: var(--agent-toolbar-icon-size);
-}
-
-#chat-sticker-opener::before {
+#chat-panel-toggle::before {
 	width: 12px;
 	height: 12px;
 }
 
-#chat-collapse-toggle[data-panel-icon='panel-up.svg']::before,
-#chat-sticker-opener[data-panel-icon='panel-up.svg']::before {
+#chat-panel-toggle[data-panel-icon='panel-up.svg']::before {
 	mask-image: url('./graph/assets/ui-icons/panel-up.svg');
 	-webkit-mask-image: url('./graph/assets/ui-icons/panel-up.svg');
 }
 
-#chat-collapse-toggle[data-panel-icon='panel-down.svg']::before,
-#chat-sticker-opener[data-panel-icon='panel-down.svg']::before {
+#chat-panel-toggle[data-panel-icon='panel-down.svg']::before {
 	mask-image: url('./graph/assets/ui-icons/panel-down.svg');
 	-webkit-mask-image: url('./graph/assets/ui-icons/panel-down.svg');
 }
 
-#chat-collapse-toggle[data-panel-icon='panel-left.svg']::before,
-#chat-sticker-opener[data-panel-icon='panel-left.svg']::before {
+#chat-panel-toggle[data-panel-icon='panel-left.svg']::before {
 	mask-image: url('./graph/assets/ui-icons/panel-left.svg');
 	-webkit-mask-image: url('./graph/assets/ui-icons/panel-left.svg');
 }
 
-#chat-collapse-toggle[data-panel-icon='panel-right.svg']::before,
-#chat-sticker-opener[data-panel-icon='panel-right.svg']::before {
+#chat-panel-toggle[data-panel-icon='panel-right.svg']::before {
 	mask-image: url('./graph/assets/ui-icons/panel-right.svg');
 	-webkit-mask-image: url('./graph/assets/ui-icons/panel-right.svg');
 }
 
-#chat-drag-handle:hover,
-#chat-collapse-toggle:hover {
+#chat-drag-handle:hover {
 	background-color: var(--vscode-toolbar-hoverBackground);
 }
 
-#chat-drag-handle:focus-visible,
-#chat-collapse-toggle:focus-visible {
+#chat-drag-handle:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: 1px;
 }
@@ -779,10 +762,10 @@ button:focus-visible {
 	user-select: none;
 }
 
-/* 접힘 상태에서 Graph를 거의 가리지 않는 크기로 현재 Dock 가장자리에만 남는 열기 버튼이다. */
-#chat-sticker-opener {
+/* 펼침 시 Panel 안쪽 경계, 접힘 시 Dock 가장자리에 남는 단일 접기/열기 버튼이다. */
+#chat-panel-toggle {
 	position: absolute;
-	z-index: 2;
+	z-index: 3;
 	display: grid;
 	padding: 0;
 	place-items: center;
@@ -796,57 +779,82 @@ button:focus-visible {
 	cursor: pointer;
 }
 
-#chat-sticker-opener[hidden] {
+#chat-panel-toggle[hidden] {
 	display: none;
 }
 
-#chat-sticker-opener:hover {
+/* display 크기의 100%를 버튼이 아닌 Layout 기준으로 계산하도록 inset을 전환한다. */
+#chat-panel-toggle[data-collapse-motion='slide'] {
+	transition:
+		left var(--chat-collapse-duration) var(--chat-collapse-easing),
+		right var(--chat-collapse-duration) var(--chat-collapse-easing),
+		top var(--chat-collapse-duration) var(--chat-collapse-easing),
+		bottom var(--chat-collapse-duration) var(--chat-collapse-easing);
+}
+
+#chat-panel-toggle:hover {
 	background-color: var(--vscode-toolbar-hoverBackground);
 }
 
-#chat-sticker-opener:focus-visible {
+#chat-panel-toggle:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: -1px;
 }
 
-#chat-sticker-opener[data-dock='left'],
-#chat-sticker-opener[data-dock='right'] {
+#chat-panel-toggle[data-dock='left'],
+#chat-panel-toggle[data-dock='right'] {
 	top: 50%;
 	width: 18px;
 	height: 48px;
 	transform: translateY(-50%);
 }
 
-#chat-sticker-opener[data-dock='left'] {
-	left: 0;
+#chat-panel-toggle[data-dock='left'] {
+	left: calc(var(--chat-floating-margin) + var(--chat-side-display));
 	border-left: 0;
 	border-radius: 0 var(--chat-floating-radius) var(--chat-floating-radius) 0;
 }
 
-#chat-sticker-opener[data-dock='right'] {
-	right: 0;
+#chat-panel-toggle[data-dock='left'][data-collapse-state='collapsed'] {
+	left: 0;
+}
+
+#chat-panel-toggle[data-dock='right'] {
+	right: calc(var(--chat-floating-margin) + var(--chat-side-display));
 	border-right: 0;
 	border-radius: var(--chat-floating-radius) 0 0 var(--chat-floating-radius);
 }
 
-#chat-sticker-opener[data-dock='top'],
-#chat-sticker-opener[data-dock='bottom'] {
+#chat-panel-toggle[data-dock='right'][data-collapse-state='collapsed'] {
+	right: 0;
+}
+
+#chat-panel-toggle[data-dock='top'],
+#chat-panel-toggle[data-dock='bottom'] {
 	left: 50%;
 	width: 48px;
 	height: 18px;
 	transform: translateX(-50%);
 }
 
-#chat-sticker-opener[data-dock='top'] {
-	top: 0;
+#chat-panel-toggle[data-dock='top'] {
+	top: calc(var(--chat-floating-margin) + var(--chat-vertical-display));
 	border-top: 0;
 	border-radius: 0 0 var(--chat-floating-radius) var(--chat-floating-radius);
 }
 
-#chat-sticker-opener[data-dock='bottom'] {
-	bottom: 0;
+#chat-panel-toggle[data-dock='top'][data-collapse-state='collapsed'] {
+	top: 0;
+}
+
+#chat-panel-toggle[data-dock='bottom'] {
+	bottom: calc(var(--chat-floating-margin) + var(--chat-vertical-display));
 	border-bottom: 0;
 	border-radius: var(--chat-floating-radius) var(--chat-floating-radius) 0 0;
+}
+
+#chat-panel-toggle[data-dock='bottom'][data-collapse-state='collapsed'] {
+	bottom: 0;
 }
 
 /* Preview는 해당 방향의 Graph를 잘라내는 것이 아니라 Floating Panel이 놓일 자리를 나타낸다. */
