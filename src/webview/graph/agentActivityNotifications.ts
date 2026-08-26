@@ -34,6 +34,8 @@ export interface AgentActivityNotificationEntry {
 	readonly target: Readonly<GraphNodeEffectTarget>;
 	readonly activity: AgentActivityKind;
 	readonly sequence: number;
+	/** 탭·Graph 이벤트와 같은 Webview 세션 할당 색상이다. */
+	readonly sessionColor: string;
 	readonly sessionTitle: string;
 	readonly currentMessage: string;
 	readonly targetName: string;
@@ -129,6 +131,7 @@ export function createAgentActivityNotificationEntriesFromIndex(
 			entries.push(createNotificationEntry(
 				targetSnapshot.target,
 				activity,
+				session.color,
 				session.title || AGENT_SESSION_UNTITLED_TITLE,
 				session.currentMessage || AGENT_SESSION_WAITING_MESSAGE,
 				targetPresentation,
@@ -143,6 +146,7 @@ export function createAgentActivityNotificationEntriesFromIndex(
 function createNotificationEntry(
 	target: Readonly<GraphNodeEffectTarget>,
 	activity: AgentSessionActivitySnapshot,
+	sessionColor: string,
 	sessionTitle: string,
 	currentMessage: string,
 	presentation: AgentActivityTargetPresentation | undefined,
@@ -153,6 +157,7 @@ function createNotificationEntry(
 		target: Object.freeze({ ...target }),
 		activity: activity.activity,
 		sequence: activity.sequence,
+		sessionColor,
 		sessionTitle,
 		currentMessage,
 		targetName: presentation?.name ?? UNAVAILABLE_TARGET_NAME,

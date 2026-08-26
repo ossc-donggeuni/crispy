@@ -8928,7 +8928,9 @@ suite('Graph View', () => {
 		const root = ownerDocument.createElement('section');
 		const fileOpenRequests: string[] = [];
 		const store = createAgentActivityStore();
-		const presentations = createAgentSessionPresentationStore();
+		const presentations = createAgentSessionPresentationStore((sessionId) => (
+			sessionId === 'session-folder' ? '#13579b' : '#2468ac'
+		));
 		const folderTarget = { nodeId: 'folder:app' };
 		const fileTarget = {
 			nodeId: 'file:pagination-samples/seventeen-files/sample-12.ts',
@@ -9052,6 +9054,12 @@ suite('Graph View', () => {
 			)),
 			['pulse'],
 		);
+		assert.strictEqual(
+			getDirectNodeEffects(latestFocus)[0]?.style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#2468ac',
+		);
 		assert.strictEqual(panel.hidden, true);
 		trigger.dispatch('click', createClickEvent(trigger));
 		assert.strictEqual(panel.hidden, false);
@@ -9157,7 +9165,9 @@ suite('Graph View', () => {
 		const root = ownerDocument.createElement('section');
 		const scheduler = new FakeTimeoutScheduler();
 		const store = createAgentActivityStore();
-		const presentations = createAgentSessionPresentationStore();
+		const presentations = createAgentSessionPresentationStore((sessionId) => (
+			sessionId === 'session-first' ? '#3579bd' : '#468ace'
+		));
 		const firstTarget = { nodeId: 'folder:app' };
 		const secondTarget = { nodeId: 'file:app/package.json' };
 
@@ -9216,6 +9226,12 @@ suite('Graph View', () => {
 			['shimmer'],
 		);
 		assert.strictEqual(
+			getDirectNodeEffects(first)[0]?.style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#3579bd',
+		);
+		assert.strictEqual(
 			findDescendantByClass(
 				first,
 				'graph-agent-activity-notification-message',
@@ -9258,6 +9274,18 @@ suite('Graph View', () => {
 				effect.getAttribute('data-graph-node-effect')
 			)),
 			['pulse'],
+		);
+		assert.strictEqual(
+			getDirectNodeEffects(second)[0]?.style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#468ace',
+		);
+		assert.strictEqual(
+			getDirectNodeEffects(third)[0]?.style.getPropertyValue(
+				'--graph-node-effect-color',
+			),
+			'#3579bd',
 		);
 		assert.deepStrictEqual(
 			scheduler.pendingDelays,
