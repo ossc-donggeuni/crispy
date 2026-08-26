@@ -1,5 +1,4 @@
 import * as assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
 import type { HostToWebviewMessage } from '../../agent/protocol/messages';
 import type { ShellLaunchPolicy } from '../../agent/host/shell/types';
 import type { PrepareTerminalLaunch } from '../../agent/host/terminal/prepareTerminalLaunch';
@@ -371,10 +370,28 @@ function createDeferredCodexPreparationCleanup(): {
 }
 
 suite('Codex direct PTY and MCP transaction', () => {
-	test('Task Work는 ordinary tab transaction에 scope policy·prompt·MCP lease를 고정하고 완료 시 exact session을 정리한다', async () => {
+	test('Task Work는 소유 workspace cwd의 ordinary tab transaction에 scope policy·prompt·MCP lease를 고정한다', async () => {
 		const events: TaskTerminalSessionEvent[] = [];
+		const ownerRootId = 'workspace-root:file:///trusted/owner-workspace' as const;
+		const ownerWorkspaceRoot = {
+			id: ownerRootId,
+			scheme: 'file',
+			fsPath: '/trusted/owner-workspace',
+			workspaceFolder: {
+				name: 'owner-workspace',
+				index: 1,
+				uri: { toString: () => 'file:///trusted/owner-workspace' },
+			},
+		} as unknown as import('../../agent/host/workspace/types').ValidatedWorkspaceRoot;
+		const resolvedRootIds: string[] = [];
 		const fixture = createFixture({
 			onTaskSessionEvent: (event) => events.push(event),
+			workspaceResolver: (workspaceRootId) => {
+				resolvedRootIds.push(workspaceRootId);
+				return workspaceRootId === ownerRootId
+					? { ok: true, root: ownerWorkspaceRoot }
+					: { ok: false, code: 'workspace_root_unavailable' };
+			},
 		});
 		const descriptor = {
 			executionId: 'execution-terminal-task',
@@ -395,7 +412,7 @@ suite('Codex direct PTY and MCP transaction', () => {
 		await fixture.host.createTaskSession(
 			'tab-task-work',
 			'codex',
-			WORKSPACE_ROOT_ID,
+			ownerRootId,
 			1,
 			descriptor,
 		);
@@ -409,21 +426,20 @@ suite('Codex direct PTY and MCP transaction', () => {
 		}]);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
 		const spawn = fixture.adapter.spawnCalls[0];
-		assert.notStrictEqual(spawn.cwd, workspaceRoot.fsPath);
-		assert.strictEqual(existsSync(spawn.cwd), true);
-		assert.deepStrictEqual((spawn.args as string[]).slice(0, 6), [
+		assert.strictEqual(spawn.cwd, ownerWorkspaceRoot.fsPath);
+		assert.ok(resolvedRootIds.length >= 2);
+		assert.ok(resolvedRootIds.every((rootId) => rootId === ownerRootId));
+		assert.deepStrictEqual((spawn.args as string[]).slice(0, 7), [
+			'--strict-config',
 			'--ask-for-approval',
 			'on-request',
 			'--config',
 			'default_permissions="crispy-task"',
 			'--config',
-			'permissions.crispy-task.filesystem.":minimal"="read"',
+			'permissions.crispy-task.filesystem={":minimal"="read","/trusted/workspace/docs"="read","/trusted/workspace/src"="write","/resolved/codex"="read"}',
 		]);
-		assert.ok((spawn.args as string[]).includes(
-			'permissions.crispy-task.filesystem."/trusted/workspace/docs"="read"',
-		));
-		assert.ok((spawn.args as string[]).includes(
-			'permissions.crispy-task.filesystem."/trusted/workspace/src"="write"',
+		assert.ok((spawn.args as string[]).some((argument) =>
+			/^mcp_servers\.crispy_canvas_[a-f0-9]{32}\.enabled_tools=\["crispy_ping","crispy_task_complete","crispy_task_scope_request","crispy_task_scope_result"\]$/u.test(argument)
 		));
 		assert.strictEqual((spawn.args as string[]).at(-2), '--');
 		assert.match((spawn.args as string[]).at(-1) ?? '', /CRISPY TASK EXECUTION CONTRACT:/u);
@@ -433,7 +449,7 @@ suite('Codex direct PTY and MCP transaction', () => {
 		// Task 소유 중 일반 reset/provider switch는 기존 session을 바꾸지 않는다.
 		fixture.host.resetAgent('tab-task-work');
 		await fixture.host.switchAgent(
-			'tab-task-work', 'claude', WORKSPACE_ROOT_ID, 2,
+			'tab-task-work', 'claude', ownerRootId, 2,
 		);
 		assert.strictEqual(fixture.host.getActiveSession('tab-task-work'), session);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
@@ -455,13 +471,11 @@ suite('Codex direct PTY and MCP transaction', () => {
 		});
 		assert.deepStrictEqual(events.map(({ type }) => type), ['started', 'tool']);
 
-		const taskCwd = spawn.cwd;
 		assert.strictEqual(await fixture.host.stopTaskSession(
 			descriptor.executionId,
 			descriptor.workNodeId,
 		), true);
 		assert.strictEqual(fixture.host.getActiveSession('tab-task-work'), undefined);
-		assert.strictEqual(existsSync(taskCwd), false);
 		assert.strictEqual(await fixture.host.stopTaskSession(
 			descriptor.executionId,
 			descriptor.workNodeId,

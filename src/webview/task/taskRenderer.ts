@@ -1518,7 +1518,15 @@ function syncTaskNodeElement(
 		(child) => child.hasAttribute('data-graph-node-effects'),
 	);
 
-	element.className = `graph-node task-node task-${node.kind}-node`;
+	// GraphNodeLocalEffectHost가 같은 element에 둔 effect/pulse class를 보존한다.
+	// className 전체 대입은 CSS custom property를 잃게 해 icon 크기를 viewport만큼 키운다.
+	element.classList.add('graph-node', 'task-node');
+	element.classList.remove(
+		'task-start-node',
+		'task-work-node',
+		'task-end-node',
+	);
+	element.classList.add(`task-${node.kind}-node`);
 	element.setAttribute(TASK_ID_ATTRIBUTE, node.taskId);
 	element.setAttribute(TASK_NODE_ID_ATTRIBUTE, node.id);
 	element.setAttribute(TASK_NODE_KIND_ATTRIBUTE, node.kind);
@@ -1788,12 +1796,17 @@ function createTaskExecutionNodeEffects(
 					: state === 'rejected' || state === 'failed' || state === 'blocked'
 						? 'rejected'
 						: undefined;
+	const color = activity === 'rejected'
+		? 'var(--vscode-testing-iconFailed, #f14c4c)'
+		: activity === 'planned'
+			? 'var(--vscode-editorWarning-foreground, #cca700)'
+			: 'var(--vscode-testing-iconPassed, #73c991)';
 	return activity === undefined || execution === undefined
 		? []
 		: getAgentActivityEffects(
 			`task:${execution.executionId}:${node.id}`,
 			activity,
-			'var(--vscode-testing-iconPassed, #73c991)',
+			color,
 		);
 }
 

@@ -1,4 +1,5 @@
 import * as nodePath from 'node:path';
+import { serializeCodexTomlString } from '../mcp/codexConfig';
 
 export interface TaskAgentScopePath {
 	readonly path: string;
@@ -16,44 +17,55 @@ const CLAUDE_TASK_MCP_TOOL_NAMES = Object.freeze([
 /** Codex permission profile을 session-only CLI config로 고정한다. */
 export function createCodexTaskPermissionArgs(
 	scope: readonly TaskAgentScopePath[],
+	runtimeExecutablePath?: string,
 ): readonly string[] {
 	assertValidTaskAgentScope(scope);
-	const args = [
+	if (
+		runtimeExecutablePath !== undefined
+		&& (
+			!nodePath.isAbsolute(runtimeExecutablePath)
+			|| runtimeExecutablePath.includes('\0')
+		)
+	) {
+		throw new Error('Task Agent runtime executable is invalid.');
+	}
+	const runtimeFilesystem = runtimeExecutablePath !== undefined
+		&& !scope.some(({ path }) => path === runtimeExecutablePath)
+		? [
+			`${serializeCodexTomlString(runtimeExecutablePath)}=${serializeCodexTomlString('read')}`,
+		]
+		: [];
+	const filesystem = [
+		`${serializeCodexTomlString(':minimal')}=${serializeCodexTomlString('read')}`,
+		...scope.map((target) =>
+			`${serializeCodexTomlString(target.path)}=${serializeCodexTomlString(
+				target.access === 'read-write' ? 'write' : 'read',
+			)}`
+		),
+		...runtimeFilesystem,
+	].join(',');
+	return Object.freeze([
+		'--strict-config',
 		'--ask-for-approval',
 		'on-request',
 		'--config',
-		`default_permissions=${JSON.stringify(CODEX_TASK_PERMISSION_PROFILE)}`,
+		`default_permissions=${serializeCodexTomlString(CODEX_TASK_PERMISSION_PROFILE)}`,
 		'--config',
-		`permissions.${CODEX_TASK_PERMISSION_PROFILE}.filesystem.":minimal"="read"`,
-	];
-	for (const target of scope) {
-		args.push(
-			'--config',
-			`permissions.${CODEX_TASK_PERMISSION_PROFILE}.filesystem.${
-				JSON.stringify(target.path)
-			}=${JSON.stringify(target.access === 'read-write' ? 'write' : 'read')}`,
-		);
-	}
-	return Object.freeze(args);
+		`permissions.${CODEX_TASK_PERMISSION_PROFILE}.filesystem={${filesystem}}`,
+	]);
 }
 
 /**
  * Claude Code는 기존 interactive CLI를 그대로 사용한다. Filesystem setting source는
  * session inline 설정만 선택하고, assigned path는 permission allow/add-dir 및 Bash
- * sandbox read/write allowlist로 제공한다. 그 밖의 접근은 default permission UI로 간다.
+ * sandbox read/write allowlist로 제공한다. Task 소유 Workspace는 실행 cwd일 뿐 명시적
+ * allowRead가 아니므로, 그 밖의 접근은 default permission UI와 sandbox 경계를 거친다.
  */
 export function createClaudeTaskPermissionArgs(
 	scope: readonly TaskAgentScopePath[],
-	workingDirectory?: string,
 	mcpServerName?: string,
 ): readonly string[] {
 	assertValidTaskAgentScope(scope);
-	if (
-		workingDirectory !== undefined
-		&& (!nodePath.isAbsolute(workingDirectory) || workingDirectory.includes('\0'))
-	) {
-		throw new Error('Task Agent working directory is invalid.');
-	}
 	if (
 		mcpServerName !== undefined
 		&& !/^crispy_canvas_[a-f0-9]{32}$/u.test(mcpServerName)
@@ -64,9 +76,6 @@ export function createClaudeTaskPermissionArgs(
 	const additionalDirectories = new Set<string>();
 	const allowRead = new Set<string>();
 	const allowWrite = new Set<string>();
-	if (workingDirectory !== undefined) {
-		allowRead.add(workingDirectory);
-	}
 	if (mcpServerName !== undefined) {
 		for (const toolName of CLAUDE_TASK_MCP_TOOL_NAMES) {
 			allow.add(`mcp__${mcpServerName}__${toolName}`);

@@ -19,6 +19,8 @@ import type {
 	TaskSessionCreateMessage,
 } from './taskExecutionProtocol';
 
+export const TASK_SESSION_CREATE_TIMEOUT_MS = 15_000;
+
 export interface TaskExecutionTerminalDescriptor {
 	readonly executionId: string;
 	readonly workNodeId: string;
@@ -76,6 +78,10 @@ export interface TaskExecutionControllerOptions {
 		target: TaskExecutionScopeTarget,
 	) => string | undefined;
 	readonly createExecutionId?: () => string;
+	/** Webview tab allocation 응답 유실을 fail-closed하는 Host timer 주입점이다. */
+	readonly scheduleSessionCreateTimeout?: (
+		callback: () => void,
+	) => () => void;
 }
 
 export interface TaskExecutionController {
@@ -91,7 +97,13 @@ interface ActiveExecution {
 	readonly descriptors: ReadonlyMap<string, TaskExecutionTerminalDescriptor>;
 	readonly tabByWorkNodeId: Map<string, string>;
 	readonly pendingScopeRequestByWorkNodeId: Map<string, string>;
+	readonly sessionCreateTimeoutByWorkNodeId: Map<string, SessionCreateTimeout>;
 	disposed: boolean;
+}
+
+interface SessionCreateTimeout {
+	readonly token: symbol;
+	readonly cancel: () => void;
 }
 
 /**
@@ -104,6 +116,24 @@ export function createTaskExecutionController(
 	const executions = new Map<string, ActiveExecution>();
 	const executionIdByTaskId = new Map<string, string>();
 	let disposed = false;
+	const scheduleSessionCreateTimeout = options.scheduleSessionCreateTimeout
+		?? ((callback: () => void): (() => void) => {
+			const timer = setTimeout(callback, TASK_SESSION_CREATE_TIMEOUT_MS);
+			timer.unref();
+			return () => clearTimeout(timer);
+		});
+
+	const clearSessionCreateTimeout = (
+		active: ActiveExecution,
+		workNodeId: string,
+	): void => {
+		const timeout = active.sessionCreateTimeoutByWorkNodeId.get(workNodeId);
+		if (!timeout) {
+			return;
+		}
+		active.sessionCreateTimeoutByWorkNodeId.delete(workNodeId);
+		timeout.cancel();
+	};
 
 	const post = (message: TaskExecutionToWebviewMessage): void => {
 		if (disposed) {
@@ -136,6 +166,21 @@ export function createTaskExecutionController(
 			if (!plan || !active.scheduler.markWorkStarting(workNodeId)) {
 				continue;
 			}
+			const token = Symbol(workNodeId);
+			const cancel = scheduleSessionCreateTimeout(() => {
+				const current = active.sessionCreateTimeoutByWorkNodeId.get(workNodeId);
+				if (current?.token !== token) {
+					return;
+				}
+				active.sessionCreateTimeoutByWorkNodeId.delete(workNodeId);
+				void finishWork(
+					executionId,
+					workNodeId,
+					'failed',
+					'Agent tab creation timed out.',
+				);
+			});
+			active.sessionCreateTimeoutByWorkNodeId.set(workNodeId, { token, cancel });
 			post({
 				type: 'task.session.createRequested',
 				executionId,
@@ -170,6 +215,7 @@ export function createTaskExecutionController(
 		if (!active || active.disposed) {
 			return;
 		}
+		clearSessionCreateTimeout(active, workNodeId);
 		active.pendingScopeRequestByWorkNodeId.delete(workNodeId);
 		const changed = status === 'completed'
 			? active.scheduler.completeWork(workNodeId, summary)
@@ -182,6 +228,9 @@ export function createTaskExecutionController(
 		const stopWorkNodeIds = [workNodeId];
 		if (status !== 'completed') {
 			for (const work of active.scheduler.getSnapshot().works) {
+				if (work.state === 'blocked') {
+					clearSessionCreateTimeout(active, work.nodeId);
+				}
 				if (
 					work.state === 'blocked'
 					&& active.tabByWorkNodeId.has(work.nodeId)
@@ -287,6 +336,7 @@ export function createTaskExecutionController(
 				descriptors,
 				tabByWorkNodeId: new Map(),
 				pendingScopeRequestByWorkNodeId: new Map(),
+				sessionCreateTimeoutByWorkNodeId: new Map(),
 				disposed: false,
 			};
 			executions.set(executionId, active);
@@ -317,6 +367,7 @@ export function createTaskExecutionController(
 			) {
 				return;
 			}
+			clearSessionCreateTimeout(active, message.workNodeId);
 			active.tabByWorkNodeId.set(message.workNodeId, message.tabId);
 			void options.terminalHost.createTaskSession(
 				message.tabId,
@@ -410,6 +461,10 @@ export function createTaskExecutionController(
 		dispose(): void {
 			disposed = true;
 			for (const active of executions.values()) {
+				for (const timeout of active.sessionCreateTimeoutByWorkNodeId.values()) {
+					timeout.cancel();
+				}
+				active.sessionCreateTimeoutByWorkNodeId.clear();
 				active.disposed = true;
 			}
 			executions.clear();

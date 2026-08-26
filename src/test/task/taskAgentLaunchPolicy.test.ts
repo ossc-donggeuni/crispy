@@ -12,18 +12,42 @@ suite('Task Agent launch permission policy', () => {
 		]);
 
 		assert.deepStrictEqual(args, [
+			'--strict-config',
 			'--ask-for-approval',
 			'on-request',
 			'--config',
 			'default_permissions="crispy-task"',
 			'--config',
-			'permissions.crispy-task.filesystem.":minimal"="read"',
-			'--config',
-			'permissions.crispy-task.filesystem."/workspace/docs"="read"',
-			'--config',
-			'permissions.crispy-task.filesystem."/workspace/src/app.ts"="write"',
+			'permissions.crispy-task.filesystem={":minimal"="read","/workspace/docs"="read","/workspace/src/app.ts"="write"}',
 		]);
 		assert.ok(Object.isFrozen(args));
+	});
+
+	test('Codex filesystem inline table은 특수 문자가 있는 exact path도 TOML로 escape한다', () => {
+		const args = createCodexTaskPermissionArgs([
+			{ path: '/workspace/quote"\\한글', kind: 'file', access: 'read-write' },
+		]);
+
+		assert.strictEqual(
+			args.at(-1),
+			'permissions.crispy-task.filesystem={":minimal"="read","/workspace/quote\\"\\\\한글"="write"}',
+		);
+	});
+
+	test('Codex Task runtime은 canonical CLI 파일만 내부 read로 추가한다', () => {
+		const args = createCodexTaskPermissionArgs(
+			[{ path: '/workspace/src', kind: 'folder', access: 'read-write' }],
+			'/opt/codex/releases/1.0/bin/codex',
+		);
+
+		assert.strictEqual(
+			args.at(-1),
+			'permissions.crispy-task.filesystem={":minimal"="read","/workspace/src"="write","/opt/codex/releases/1.0/bin/codex"="read"}',
+		);
+		assert.throws(
+			() => createCodexTaskPermissionArgs([], 'relative/codex'),
+			/runtime executable is invalid/u,
+		);
 	});
 
 	test('Claude는 외부 setting source를 비우고 assigned path만 allow/add-dir에 넣는다', () => {
@@ -31,7 +55,7 @@ suite('Task Agent launch permission policy', () => {
 			{ path: '/workspace/docs', kind: 'folder', access: 'read' },
 			{ path: '/workspace/src', kind: 'folder', access: 'read-write' },
 			{ path: '/workspace/config.json', kind: 'file', access: 'read-write' },
-		], '/private/task-cwd', 'crispy_canvas_0123456789abcdef0123456789abcdef');
+		], 'crispy_canvas_0123456789abcdef0123456789abcdef');
 
 		assert.deepStrictEqual(args.slice(0, 5), [
 			'--setting-sources', '', '--permission-mode', 'default', '--settings',
@@ -73,7 +97,6 @@ suite('Task Agent launch permission policy', () => {
 			filesystem: {
 				denyRead: ['/'],
 				allowRead: [
-					'/private/task-cwd',
 					'/workspace/docs',
 					'/workspace/src',
 					'/workspace/config.json',
@@ -91,7 +114,6 @@ suite('Task Agent launch permission policy', () => {
 		);
 		assert.throws(() => createClaudeTaskPermissionArgs(
 			[],
-			'/private/task-cwd',
 			'bad server',
 		), /server name is invalid/);
 	});

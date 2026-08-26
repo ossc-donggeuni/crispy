@@ -1,5 +1,9 @@
 import * as assert from 'node:assert/strict';
-import type { TabId } from '../../agent/protocol/messages';
+import type {
+	SwitchAttemptId,
+	TabId,
+	WorkspaceRootId,
+} from '../../agent/protocol/messages';
 import type { TaskToolRequested } from '../../mcp/taskToolProtocol';
 import {
 	createTaskExecutionController,
@@ -14,6 +18,8 @@ import { createDefaultWorkspacePersistentState } from '../../workspace/workspace
 interface CreateCall {
 	readonly tabId: string;
 	readonly providerId: 'codex' | 'claude';
+	readonly workspaceRootId: WorkspaceRootId;
+	readonly switchAttemptId: SwitchAttemptId;
 	readonly descriptor: TaskExecutionTerminalDescriptor;
 }
 
@@ -29,11 +35,17 @@ class FakeTaskTerminalHost implements TaskExecutionTerminalHost {
 	async createTaskSession(
 		tabId: TabId,
 		providerId: 'codex' | 'claude',
-		_workspaceRootId: `workspace-root:${string}`,
-		_switchAttemptId: number,
+		workspaceRootId: WorkspaceRootId,
+		switchAttemptId: SwitchAttemptId,
 		descriptor: TaskExecutionTerminalDescriptor,
 	): Promise<void> {
-		this.createCalls.push({ tabId, providerId, descriptor });
+		this.createCalls.push({
+			tabId,
+			providerId,
+			workspaceRootId,
+			switchAttemptId,
+			descriptor,
+		});
 	}
 
 	async stopTaskSession(executionId: string, workNodeId: string): Promise<boolean> {
@@ -44,12 +56,13 @@ class FakeTaskTerminalHost implements TaskExecutionTerminalHost {
 
 suite('Task execution Host controller', () => {
 	test('persisted revision을 고정하고 직렬 dependency마다 기존 Agent 탭 생성을 요청한다', async () => {
+		const taskOwnerRootId = 'workspace-root:file:///workspace-b' as const;
 		const record = createRecord(['A', 'B'], [
 			['start', 'A'], ['A', 'B'], ['B', 'end'],
 		], {
 			defaultReference: 'folder:file:///workspace/docs',
 			workTarget: 'file:file:///workspace/src/app.ts',
-		});
+		}, taskOwnerRootId);
 		const terminal = new FakeTaskTerminalHost();
 		const messages: TaskExecutionToWebviewMessage[] = [];
 		const controller = createTaskExecutionController({
@@ -71,6 +84,7 @@ suite('Task execution Host controller', () => {
 			storageRevision: record.storageRevision,
 		});
 		assert.deepStrictEqual(createRequests(messages).map(({ workNodeId }) => workNodeId), ['A']);
+		assert.strictEqual(createRequests(messages)[0].workspaceRootId, taskOwnerRootId);
 		assert.strictEqual(latestSnapshot(messages)?.state, 'running');
 		assert.strictEqual(workState(messages, 'A'), 'starting');
 
@@ -83,6 +97,8 @@ suite('Task execution Host controller', () => {
 		});
 		await flush();
 		assert.strictEqual(terminal.createCalls.length, 1);
+		assert.strictEqual(terminal.createCalls[0].workspaceRootId, taskOwnerRootId);
+		assert.strictEqual(terminal.createCalls[0].switchAttemptId, 1);
 		assert.deepStrictEqual(terminal.createCalls[0].descriptor.scope, [
 			{ path: '/workspace/docs', kind: 'folder', access: 'read' },
 			{ path: '/workspace/src/app.ts', kind: 'file', access: 'read-write' },
@@ -286,6 +302,81 @@ suite('Task execution Host controller', () => {
 		]);
 		assert.deepStrictEqual(terminal.createCalls, []);
 	});
+
+	test('Webview가 Agent 탭을 할당하지 않으면 timeout으로 Work와 Task를 실패 처리한다', async () => {
+		const record = createRecord(['A'], [['start', 'A'], ['A', 'end']]);
+		const terminal = new FakeTaskTerminalHost();
+		const messages: TaskExecutionToWebviewMessage[] = [];
+		let expire!: () => void;
+		const controller = createTaskExecutionController({
+			getWorkspaceState: () => ({
+				...createDefaultWorkspacePersistentState(), tasks: [record],
+			}),
+			terminalHost: terminal,
+			postMessage: (message) => messages.push(message),
+			createExecutionId: () => 'execution-tab-timeout',
+			resolveScopePath: () => undefined,
+			scheduleSessionCreateTimeout: (callback) => {
+				expire = callback;
+				return () => undefined;
+			},
+		});
+
+		controller.start({
+			type: 'task.execution.start', taskId: record.task.id, storageRevision: 5,
+		});
+		assert.strictEqual(workState(messages, 'A'), 'starting');
+		expire();
+		await flush();
+
+		assert.strictEqual(workState(messages, 'A'), 'failed');
+		assert.strictEqual(latestSnapshot(messages)?.state, 'failed');
+		assert.deepStrictEqual(terminal.createCalls, []);
+		assert.deepStrictEqual(terminal.stopCalls, ['execution-tab-timeout:A']);
+	});
+
+	test('정확한 Agent 탭 allocation ACK는 create timeout을 취소하고 stale callback을 무시한다', async () => {
+		const record = createRecord(['A'], [['start', 'A'], ['A', 'end']]);
+		const terminal = new FakeTaskTerminalHost();
+		const messages: TaskExecutionToWebviewMessage[] = [];
+		let expire!: () => void;
+		let canceled = false;
+		const controller = createTaskExecutionController({
+			getWorkspaceState: () => ({
+				...createDefaultWorkspacePersistentState(), tasks: [record],
+			}),
+			terminalHost: terminal,
+			postMessage: (message) => messages.push(message),
+			createExecutionId: () => 'execution-tab-ack',
+			resolveScopePath: () => undefined,
+			scheduleSessionCreateTimeout: (callback) => {
+				expire = callback;
+				return () => {
+					canceled = true;
+				};
+			},
+		});
+
+		controller.start({
+			type: 'task.execution.start', taskId: record.task.id, storageRevision: 5,
+		});
+		controller.createSession({
+			type: 'task.session.create',
+			executionId: 'execution-tab-ack',
+			workNodeId: 'A',
+			tabId: 'tab-task-ack',
+			switchAttemptId: 1,
+		});
+		await flush();
+		assert.strictEqual(canceled, true);
+		assert.strictEqual(terminal.createCalls.length, 1);
+
+		expire();
+		await flush();
+		assert.strictEqual(workState(messages, 'A'), 'starting');
+		assert.deepStrictEqual(terminal.stopCalls, []);
+		controller.dispose();
+	});
 });
 
 function started(
@@ -353,6 +444,7 @@ function createRecord(
 		readonly defaultReference?: string;
 		readonly workTarget?: string;
 	} = {},
+	ownerRootId: WorkspaceRootId = 'workspace-root:file:///workspace',
 ): WorkspaceTaskRecord {
 	const task: TaskBlueprint = {
 		version: 1,
@@ -389,7 +481,7 @@ function createRecord(
 		})),
 	};
 	return {
-		ownerRootId: 'workspace-root:file:///workspace',
+		ownerRootId,
 		storageRevision: 5,
 		task,
 		targetOrigins: [

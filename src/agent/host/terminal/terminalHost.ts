@@ -1,6 +1,3 @@
-import { mkdtempSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import type {
 	AgentAssignment,
@@ -591,8 +588,6 @@ export class TerminalHost {
 		TaskTerminalSessionDescriptor
 	>();
 	private readonly expectedTaskSessionStops = new Set<SessionId>();
-	private readonly taskWorkingDirectoryByTab = new Map<TabId, string>();
-	private readonly taskWorkingDirectoryBySession = new Map<SessionId, string>();
 
 	private readonly buildCodexMcpPlan: CodexMcpLaunchPlanBuilder;
 	private readonly buildCodexBarePlan: CodexBareLaunchPlanBuilder;
@@ -739,7 +734,8 @@ export class TerminalHost {
 	/**
 	 * Task controller가 요청한 ordinary Agent tab을 기존 switch/start transaction으로 연다.
 	 * Task descriptor는 Webview payload에서 받지 않고 Host가 고정하며, 같은 tab은 일반
-	 * reset/reselect/restart 경로로 바뀔 수 없다.
+	 * reset/reselect/restart 경로로 바뀔 수 없다. 실행 cwd는 임시 디렉터리로 분리하지
+	 * 않고 `workspaceRootId`를 fresh 검증한 Task 소유 Workspace root로 고정한다.
 	 */
 	async createTaskSession(
 		tabId: TabId,
@@ -758,10 +754,6 @@ export class TerminalHost {
 			throw new Error('Task Agent descriptor is invalid.');
 		}
 
-		const workingDirectory = mkdtempSync(nodePath.join(
-			tmpdir(),
-			'crispy-task-',
-		));
 		const frozenDescriptor = Object.freeze({
 			...descriptor,
 			scope: Object.freeze(descriptor.scope.map((entry) => Object.freeze({
@@ -770,7 +762,6 @@ export class TerminalHost {
 		});
 		this.registeredTabs.add(tabId);
 		this.taskDescriptorByTab.set(tabId, frozenDescriptor);
-		this.taskWorkingDirectoryByTab.set(tabId, workingDirectory);
 		await this.switchAgentForRequest(
 			tabId,
 			providerId,
@@ -796,14 +787,12 @@ export class TerminalHost {
 		const session = this.getActiveSession(tabId);
 		if (session === undefined) {
 			this.taskDescriptorByTab.delete(tabId);
-			await this.cleanupTaskWorkingDirectory(tabId);
 			return true;
 		}
 		this.expectedTaskSessionStops.add(session.sessionId);
 		await this.cleanupSessionProcessTree(session);
 		this.removeSession(session.sessionId);
 		this.taskDescriptorByTab.delete(tabId);
-		await this.cleanupTaskWorkingDirectory(tabId);
 		return true;
 	}
 
@@ -868,7 +857,6 @@ export class TerminalHost {
 		this.lastDimensionsByTab.delete(tabId);
 		this.activeSessionByTab.delete(tabId);
 		this.taskDescriptorByTab.delete(tabId);
-		void this.cleanupTaskWorkingDirectory(tabId);
 		if (this.activeTabId === tabId) {
 			this.activeTabId = undefined;
 		}
@@ -1497,6 +1485,7 @@ export class TerminalHost {
 				cwd: preparation.cwd,
 				connection,
 				agentActivityCompatible: this.agentActivityCompatible,
+				taskToolCompatible: taskDescriptor !== undefined,
 				shellEnvironmentPolicyStyle:
 					preparation.shellEnvironmentPolicyStyle!,
 				...(taskDescriptor === undefined
@@ -1504,6 +1493,7 @@ export class TerminalHost {
 					: {
 						argsBeforeConfig: createCodexTaskPermissionArgs(
 							taskDescriptor.scope,
+							preparation.executable.executable,
 						),
 						argsAfterConfig: ['--', createTaskAgentPrompt(taskDescriptor)],
 					}),
@@ -1541,7 +1531,6 @@ export class TerminalHost {
 						createArgs: (serverName) => (
 							createClaudeTaskPermissionArgs(
 								taskDescriptor.scope,
-								preparation.cwd,
 								serverName,
 							)
 						),
@@ -2044,10 +2033,11 @@ export class TerminalHost {
 			return;
 		}
 		this.observeWorkspaceTrustGranted();
+		// 준비 단계의 cwd나 Task 전용 임시 경로가 아니라, spawn 직전 다시 검증한
+		// assignment root를 사용해야 multi-root에서도 Task 소유 Workspace가 유지된다.
 		const finalRequest = Object.freeze({
 			...request,
-			cwd: this.taskWorkingDirectoryBySession.get(session.sessionId)
-				?? launchIdentity.fsPath,
+			cwd: launchIdentity.fsPath,
 		});
 		const authenticatedRuntime = generation === undefined
 			? undefined
@@ -2807,13 +2797,6 @@ export class TerminalHost {
 		const taskDescriptor = this.taskDescriptorByTab.get(tabId);
 		if (taskDescriptor !== undefined) {
 			this.taskDescriptorBySession.set(generatedSessionId, taskDescriptor);
-			const taskWorkingDirectory = this.taskWorkingDirectoryByTab.get(tabId);
-			if (taskWorkingDirectory !== undefined) {
-				this.taskWorkingDirectoryBySession.set(
-					generatedSessionId,
-					taskWorkingDirectory,
-				);
-			}
 		}
 		return session;
 	}
@@ -2886,13 +2869,9 @@ export class TerminalHost {
 		this.claudeStartupBySession.clear();
 		this.mcpStatusBySession.clear();
 		this.mcpRestartByTab.clear();
-		for (const tabId of this.taskWorkingDirectoryByTab.keys()) {
-			void this.cleanupTaskWorkingDirectory(tabId);
-		}
 		this.taskDescriptorByTab.clear();
 		this.taskDescriptorBySession.clear();
 		this.expectedTaskSessionStops.clear();
-		this.taskWorkingDirectoryBySession.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.assignmentByTab.clear();
@@ -3080,13 +3059,9 @@ export class TerminalHost {
 		this.claudeStartupBySession.clear();
 		this.mcpStatusBySession.clear();
 		this.mcpRestartByTab.clear();
-		for (const tabId of this.taskWorkingDirectoryByTab.keys()) {
-			void this.cleanupTaskWorkingDirectory(tabId);
-		}
 		this.taskDescriptorByTab.clear();
 		this.taskDescriptorBySession.clear();
 		this.expectedTaskSessionStops.clear();
-		this.taskWorkingDirectoryBySession.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.assignmentByTab.clear();
@@ -4037,7 +4012,6 @@ export class TerminalHost {
 		this.sessionsById.delete(sessionId);
 		this.assignmentBySession.delete(sessionId);
 		this.taskDescriptorBySession.delete(sessionId);
-		this.taskWorkingDirectoryBySession.delete(sessionId);
 		this.expectedTaskSessionStops.delete(sessionId);
 		this.workspaceTrustFailedSessions.delete(sessionId);
 		void this.cancelSessionPreparation(sessionId);
@@ -4465,19 +4439,6 @@ export class TerminalHost {
 			this.onTaskSessionEvent?.(Object.freeze(event));
 		} catch {
 			/** Task controller 실패는 TerminalHost resource lifecycle을 변경하지 않는다. */
-		}
-	}
-
-	private async cleanupTaskWorkingDirectory(tabId: TabId): Promise<void> {
-		const directory = this.taskWorkingDirectoryByTab.get(tabId);
-		if (directory === undefined) {
-			return;
-		}
-		this.taskWorkingDirectoryByTab.delete(tabId);
-		try {
-			await rm(directory, { recursive: true, force: true, maxRetries: 2 });
-		} catch {
-			/** Session temp 정리 실패는 다른 Task/Terminal cleanup을 막지 않는다. */
 		}
 	}
 

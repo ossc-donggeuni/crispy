@@ -305,7 +305,9 @@ suite('Claude direct PTY and MCP transaction', () => {
 			workNodeId: descriptor.workNodeId,
 		}]);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
-		const args = fixture.adapter.spawnCalls[0].args as readonly string[];
+		const spawn = fixture.adapter.spawnCalls[0];
+		assert.strictEqual(spawn.cwd, workspaceRoot.fsPath);
+		const args = spawn.args as readonly string[];
 		assert.deepStrictEqual(args.slice(0, 5), [
 			'--setting-sources', '', '--permission-mode', 'default', '--settings',
 		]);
@@ -338,6 +340,10 @@ suite('Claude direct PTY and MCP transaction', () => {
 		assert.ok(settings.sandbox.filesystem.allowRead.includes(
 			'/trusted/workspace/docs',
 		));
+		assert.strictEqual(
+			settings.sandbox.filesystem.allowRead.includes(workspaceRoot.fsPath),
+			false,
+		);
 		assert.deepStrictEqual(args.filter((arg) => arg === '--add-dir').length, 2);
 		const configIndex = args.indexOf('--mcp-config');
 		assert.ok(configIndex > 5);

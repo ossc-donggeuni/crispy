@@ -7563,6 +7563,13 @@ suite('Graph View', () => {
 		const startEffectLayer = getDescendantByAttribute(
 			startElement, 'data-graph-node-effects', '',
 		);
+		assert.strictEqual(startElement.hasClass('graph-node-effect-host'), true);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				startElement, 'data-graph-node-effect', 'icon',
+			).style.getPropertyValue('--graph-node-effect-color'),
+			'var(--vscode-testing-iconFailed, #f14c4c)',
+		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui',
 			taskId: task.id,
@@ -7581,6 +7588,7 @@ suite('Graph View', () => {
 			getDescendantByAttribute(startElement, 'data-graph-node-effects', ''),
 			startEffectLayer,
 		);
+		assert.strictEqual(startElement.hasClass('graph-node-effect-host'), true);
 		assert.strictEqual(startElement.getAttribute('data-task-execution-state'), 'completed');
 		assert.strictEqual(
 			getTaskElement(root, 'data-task-node-id', endNode.id, task.id)
@@ -16704,7 +16712,16 @@ class FakeElement {
 			return enabled;
 		},
 	};
-	className = '';
+	get className(): string {
+		return [...this.classNames].join(' ');
+	}
+
+	set className(value: string) {
+		this.classNames.clear();
+		for (const token of value.split(/\s+/).filter(Boolean)) {
+			this.classNames.add(token);
+		}
+	}
 	checked = false;
 	disabled = false;
 	hidden = false;
@@ -16820,7 +16837,6 @@ class FakeElement {
 
 	hasClass(className: string): boolean {
 		return this.classNames.has(className)
-			|| this.className.split(/\s+/).includes(className)
 			|| (this.getAttribute('class') ?? '').split(/\s+/).includes(className);
 	}
 

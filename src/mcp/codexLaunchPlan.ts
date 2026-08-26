@@ -22,6 +22,8 @@ export interface BuildCodexMcpLaunchPlanOptions
 	readonly connection: McpConnectionDescriptor;
 	/** Host-owned immutable VS Code capability; omission is fail-closed. */
 	readonly agentActivityCompatible?: boolean;
+	/** Task lease가 있는 ordinary tab에서만 Task completion/scope tools를 노출한다. */
+	readonly taskToolCompatible?: boolean;
 	readonly argsBeforeConfig?: readonly string[];
 	readonly argsAfterConfig?: readonly string[];
 	readonly randomBytes?: McpRandomBytes;
@@ -50,6 +52,7 @@ export function buildCodexMcpLaunchPlan(
 		options.randomBytes,
 		options.shellEnvironmentPolicyStyle,
 		options.agentActivityCompatible === true,
+		options.taskToolCompatible === true,
 	);
 	/** Building and final environment materialization both require an active descriptor. */
 	options.connection.withBearerToken(() => undefined);

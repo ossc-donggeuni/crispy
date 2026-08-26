@@ -81,6 +81,46 @@ suite('Codex terminal launch preparation', () => {
 		);
 	});
 
+	test('PATH symlink는 config probe와 최종 spawn 전에 canonical executable로 고정한다', async () => {
+		const prepare = createPrepareCodexTerminalLaunch({
+			workspaceResolver: () => ({ ok: true, root }),
+			resolveExecutable: async () => ({
+				ok: true,
+				executable: {
+					executable: '/Users/test/.local/bin/codex',
+					launcherKind: 'direct',
+				},
+			}),
+			readPlatform: () => 'darwin',
+			readEnvironment: () => ({ PATH: '/Users/test/.local/bin' }),
+			canonicalizeExecutable: async (executable) => {
+				assert.strictEqual(executable, '/Users/test/.local/bin/codex');
+				return '/Users/test/.codex/releases/1.0/bin/codex';
+			},
+			resolveConfigStyle: async ({ executable }) => {
+				assert.strictEqual(
+					executable.executable,
+					'/Users/test/.codex/releases/1.0/bin/codex',
+				);
+				return 'keyed-filters';
+			},
+		});
+
+		const result = await prepare(
+			'tab-canonical',
+			'session-canonical',
+			WORKSPACE_ROOT_ID,
+		);
+
+		assert.strictEqual(result.ok, true);
+		if (result.ok) {
+			assert.deepStrictEqual(result.preparation.executable, {
+				executable: '/Users/test/.codex/releases/1.0/bin/codex',
+				launcherKind: 'direct',
+			});
+		}
+	});
+
 	test('workspace failure는 executable probe 전에 기존 안전 오류로 반환한다', async () => {
 		let executableCalls = 0;
 		const prepare = createPrepareCodexTerminalLaunch({

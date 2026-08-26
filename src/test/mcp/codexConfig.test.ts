@@ -84,6 +84,20 @@ suite('Codex MCP session config serializer', () => {
 		)), false);
 	});
 
+	test('Task lease gate는 completion/scope tool 세 개를 같은 session server에만 노출한다', () => {
+		const config = createCodexMcpConfig(
+			createConnection(),
+			(size) => Buffer.alloc(size, 0xee),
+			'keyed-filters',
+			true,
+			true,
+		);
+
+		assert.strictEqual(config.args.includes(
+			`mcp_servers.${config.serverName}.enabled_tools=["crispy_ping","crispy_saa","crispy_caa","crispy_task_complete","crispy_task_scope_request","crispy_task_scope_result"]`,
+		), true);
+	});
+
 	test('서로 다른 random source는 충돌하지 않는 TOML bare key를 만든다', () => {
 		const first = createCodexMcpServerName(
 			(size) => Buffer.alloc(size, 0x11),

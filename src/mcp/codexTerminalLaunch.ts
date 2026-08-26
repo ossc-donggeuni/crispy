@@ -1,3 +1,5 @@
+import { realpath } from 'node:fs/promises';
+import * as nodePath from 'node:path';
 import type {
 	SessionId,
 	TabId,
@@ -43,6 +45,8 @@ export interface PrepareCodexTerminalLaunchDependencies {
 	readonly readEnvironment: () => NodeJS.ProcessEnv;
 	readonly getCliPath?: () => string | undefined;
 	readonly resolveConfigStyle?: CodexConfigStyleResolver;
+	/** PATH symlink를 Task sandbox 안에서도 재실행 가능한 실제 파일로 고정한다. */
+	readonly canonicalizeExecutable?: (executable: string) => Promise<string>;
 }
 
 const PROVIDER_START_ERROR = Object.freeze({
@@ -64,6 +68,8 @@ export function createPrepareCodexTerminalLaunch(
 	>();
 	const resolveConfigStyle = dependencies.resolveConfigStyle
 		?? resolveCodexConfigStyle;
+	const canonicalizeExecutable = dependencies.canonicalizeExecutable
+		?? realpath;
 
 	return async (tabId, sessionId, workspaceRootId, signal) => {
 		if (signal?.aborted) {
@@ -127,6 +133,11 @@ export function createPrepareCodexTerminalLaunch(
 		if (signal?.aborted) {
 			return providerStartFailure(tabId, sessionId);
 		}
+		const executable = await canonicalizeResolvedExecutable(
+			resolution.executable,
+			platform,
+			canonicalizeExecutable,
+		);
 
 		let shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle | undefined;
 		let probeWorkspaceFailure: WorkspaceValidationFailure | undefined;
@@ -134,7 +145,7 @@ export function createPrepareCodexTerminalLaunch(
 		let probeWorkspaceCwd = workspace.root.fsPath;
 		try {
 			shellEnvironmentPolicyStyle = await resolveConfigStyle({
-				executable: resolution.executable,
+				executable,
 				cwd: workspace.root.fsPath,
 				platform,
 				environment,
@@ -177,7 +188,7 @@ export function createPrepareCodexTerminalLaunch(
 		return {
 			ok: true,
 			preparation: Object.freeze({
-				executable: resolution.executable,
+				executable,
 				cwd: probeWorkspaceCwd,
 				environment: Object.freeze({ ...environment }),
 				platform,
@@ -187,6 +198,35 @@ export function createPrepareCodexTerminalLaunch(
 			}),
 		};
 	};
+}
+
+/**
+ * Codex app-server는 초기 thread 생성 중 현재 CLI를 sandbox 안에서 다시 실행한다.
+ * macOS의 restricted filesystem profile은 PATH symlink의 exec를 거부할 수 있으므로,
+ * spawn과 Task runtime read grant가 같은 canonical executable을 사용하게 한다.
+ */
+async function canonicalizeResolvedExecutable(
+	executable: ResolvedAgentExecutable,
+	platform: NodeJS.Platform,
+	canonicalize: (path: string) => Promise<string>,
+): Promise<ResolvedAgentExecutable> {
+	try {
+		const canonicalPath = await canonicalize(executable.executable);
+		const pathApi = platform === 'win32' ? nodePath.win32 : nodePath.posix;
+		if (
+			!pathApi.isAbsolute(canonicalPath)
+			|| canonicalPath.includes('\0')
+		) {
+			return executable;
+		}
+		return Object.freeze({
+			...executable,
+			executable: canonicalPath,
+		});
+	} catch {
+		/** 실행 파일 교체 race는 기존 검증된 후보로 귀결되어 상위 start 오류로 처리된다. */
+		return executable;
+	}
 }
 
 function providerStartFailure(
