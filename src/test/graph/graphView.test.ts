@@ -70,11 +70,16 @@ import {
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
+import { createAgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import { createAgentActivityEffectReconciler } from '../../webview/graph/agentActivityEffects';
 import {
 	AGENT_ACTIVITY_BINDING_TOP_GAP,
 	getAgentActivityBindingBlockHeight,
 } from '../../webview/graph/agentActivityBindings';
+import {
+	AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+	AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
+} from '../../webview/graph/agentActivityNotificationCenter';
 import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
@@ -8559,6 +8564,195 @@ suite('Graph View', () => {
 		assert.strictEqual(bindingContainer.style.left, '');
 		assert.strictEqual(bindingContainer.style.width, '');
 		graphView.dispose();
+	});
+
+	test('알림 Center는 최신 Activity를 표시하고 Focus와 exact dismiss를 Graph에 동기화한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const folderTarget = { nodeId: 'folder:app' };
+		const fileTarget = {
+			nodeId: 'file:pagination-samples/seventeen-files/sample-12.ts',
+		};
+		const visibleArea = calculateGraphVisibleArea(
+			{ width: 1000, height: 800 },
+			{ left: 0, top: 0, width: 1000, height: 800 },
+			{ left: 720, top: 24, right: 980, bottom: 780, width: 260, height: 756 },
+			'right',
+			false,
+		);
+
+		presentations.activateSession('tab-folder', 'session-folder', '폴더 Agent');
+		presentations.activateSession('tab-file', 'session-file', '파일 Agent');
+		presentations.updateCurrentMessage(
+			'tab-file',
+			'session-file',
+			'페이지 밖 파일을 편집합니다',
+		);
+		store.setAgentActivity('session-folder', folderTarget, 'planned');
+		store.setAgentActivity('session-file', fileTarget, 'editing');
+
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				hiddenNodeIds: {
+					'folder:pagination-samples': true,
+					'folder:pagination-samples/seventeen-files': true,
+					[fileTarget.nodeId]: true,
+				},
+			},
+			GRAPH_MOCK,
+			{ resolveVisibleGraphArea: () => visibleArea },
+			[],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const activityEffects = createAgentActivityEffectReconciler(
+			store,
+			graphView.createNodeEffectOwner(),
+			presentations,
+		);
+		const center = getDescendantByAttribute(
+			root,
+			AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+			'',
+		);
+		const trigger = getDescendantByClass(
+			center,
+			'graph-agent-activity-notification-trigger',
+		);
+		const panel = getDescendantByClass(
+			center,
+			'graph-agent-activity-notification-panel',
+		);
+		const list = getDescendantByClass(
+			center,
+			'graph-agent-activity-notification-list',
+		);
+		const [latestItem, olderItem] = list.children;
+
+		assert.ok(latestItem);
+		assert.ok(olderItem);
+		assert.strictEqual(center.style.right, `${1000 - visibleArea.right + 16}px`);
+		assert.strictEqual(center.style.top, `${visibleArea.top + 16}px`);
+		assert.strictEqual(trigger.getAttribute('aria-label'), '알림 2개');
+		assert.strictEqual(latestItem.getAttribute('data-activity'), 'editing');
+		assert.ok(latestItem.hasAttribute(AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE));
+		assert.strictEqual(
+			getDescendantByClass(
+				latestItem,
+				'graph-agent-activity-notification-session-title',
+			).textContent,
+			'파일 Agent',
+		);
+		assert.strictEqual(
+			getDescendantByClass(
+				latestItem,
+				'graph-agent-activity-notification-message',
+			).textContent,
+			'페이지 밖 파일을 편집합니다',
+		);
+		const latestFocus = getDescendantByClass(
+			latestItem,
+			'graph-agent-activity-notification-focus',
+		);
+
+		assert.deepStrictEqual(
+			getDirectNodeEffects(latestFocus).map((effect) => (
+				effect.getAttribute('data-graph-node-effect')
+			)),
+			['pulse'],
+		);
+		assert.strictEqual(panel.hidden, true);
+		trigger.dispatch('click', createClickEvent(trigger));
+		assert.strictEqual(panel.hidden, false);
+		assert.strictEqual(ownerDocument.activeElement, latestFocus);
+
+		let focusPoint: { readonly x: number; readonly y: number } | undefined;
+
+		graphView.camera.focusOn = (point) => {
+			focusPoint = point;
+		};
+		latestFocus.dispatch('click', createClickEvent(latestFocus));
+		const focusedState = graphView.state.getState();
+
+		assert.ok(focusPoint);
+		assert.strictEqual(panel.hidden, true);
+		assert.strictEqual(focusedState.openedFolders[GRAPH_MOCK_PROJECT.id], true);
+		assert.strictEqual(
+			focusedState.openedFolders['folder:pagination-samples'],
+			true,
+		);
+		assert.strictEqual(
+			focusedState.openedFolders[
+				'folder:pagination-samples/seventeen-files'
+			],
+			true,
+		);
+		assert.strictEqual(
+			focusedState.fileGroupPages[
+				createFileGroupId('folder:pagination-samples/seventeen-files')
+			],
+			3,
+		);
+		assert.strictEqual(focusedState.hiddenNodeIds[fileTarget.nodeId], undefined);
+		const fileRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			fileTarget.nodeId,
+		);
+
+		assert.ok(findAgentBindingContainer(fileRow));
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(root, fileRow, fileTarget.nodeId),
+			['pulse'],
+		);
+
+		const dismiss = getDescendantByClass(
+			latestItem,
+			'graph-agent-activity-notification-dismiss',
+		);
+
+		dismiss.dispatch('click', createClickEvent(dismiss));
+		assert.deepStrictEqual(store.getActivities(fileTarget), []);
+		assert.deepStrictEqual(
+			store.getActivities(folderTarget).map(({ sessionId }) => sessionId),
+			['session-folder'],
+		);
+		assert.strictEqual(list.children.length, 1);
+		assert.strictEqual(list.children[0], olderItem);
+		assert.strictEqual(trigger.getAttribute('aria-label'), '알림 1개');
+		const refreshedFileRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			fileTarget.nodeId,
+		);
+
+		assert.strictEqual(findAgentBindingContainer(refreshedFileRow), undefined);
+		assert.deepStrictEqual(
+			getRepresentativeEffectKinds(
+				root,
+				refreshedFileRow,
+				fileTarget.nodeId,
+			),
+			[],
+		);
+
+		activityEffects.dispose();
+		graphView.dispose();
+		assert.strictEqual(findDescendantByAttribute(
+			root,
+			AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+			'',
+		), undefined);
+		store.setAgentActivity('session-file', fileTarget, 'active');
+		assert.strictEqual(root.children.length, 0);
+		presentations.dispose();
 	});
 
 	test('Debug Session의 대표 Target Effect와 자신의 Binding Effect는 같은 색을 쓴다', () => {

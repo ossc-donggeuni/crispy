@@ -1,0 +1,392 @@
+import type { AgentActivityStore } from '../../agent/webview/agentActivityStore';
+import type { AgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
+import {
+	GRAPH_CAMERA_IGNORE_ATTRIBUTE,
+} from './graphCamera';
+import type { Graph } from './graphModel';
+import type { GraphNodeLocalEffectHost } from './graphNodeEffects';
+import { getAgentActivityEffects } from './agentActivityPresentation';
+import {
+	createAgentActivityNotificationEntriesFromIndex,
+	createAgentActivityTargetPresentationIndex,
+	getAgentActivityNotificationStatusLabel,
+	type AgentActivityNotificationEntry,
+} from './agentActivityNotifications';
+import {
+	createFullGraphVisibleArea,
+	type GraphVisibleAreaProvider,
+} from './graphVisibleArea';
+
+export const AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE =
+	'data-agent-activity-notification-center';
+export const AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE =
+	'data-agent-activity-notification-key';
+
+/** 알림 Focus와 사용자 dismiss를 Graph runtime 동작으로 전달한다. */
+export interface AgentActivityNotificationCenterInteractions {
+	onFocus?: (entry: AgentActivityNotificationEntry) => void;
+	onDismiss?: (entry: AgentActivityNotificationEntry) => void;
+}
+
+/** 알림 Center의 Graph 표시 정보, 위치와 DOM lifecycle이다. */
+export interface AgentActivityNotificationCenter {
+	refreshVisibleGraphArea(): void;
+	setGraph(graph: Graph): void;
+	dispose(): void;
+}
+
+interface NotificationRegistration {
+	entry: AgentActivityNotificationEntry;
+	readonly element: HTMLLIElement;
+	readonly focusButton: HTMLButtonElement;
+	readonly sessionTitle: HTMLSpanElement;
+	readonly status: HTMLSpanElement;
+	readonly targetName: HTMLSpanElement;
+	readonly targetPath: HTMLSpanElement;
+	readonly currentMessage: HTMLSpanElement;
+	readonly dismissButton: HTMLButtonElement;
+	readonly effectHost: GraphNodeLocalEffectHost;
+	handleFocus: (event: MouseEvent) => void;
+	handleDismiss: (event: MouseEvent) => void;
+}
+
+type GraphNodeLocalEffectHostFactory = (
+	element: HTMLElement,
+) => GraphNodeLocalEffectHost;
+
+const CENTER_TITLE = '알림';
+const CENTER_PANEL_ID = 'graph-agent-activity-notification-panel';
+const CENTER_TITLE_ID = 'graph-agent-activity-notification-title';
+const CENTER_VIEWPORT_MARGIN = 16;
+
+/**
+ * Graph Overlay 우측 상단에 현재 MCP Activity 전체를 표시하는 알림 Center를 만든다.
+ * 목록은 Store state를 소유하지 않고 exact Target×Session dismiss만 상위에 요청한다.
+ */
+export function initializeAgentActivityNotificationCenter(
+	overlayLayer: HTMLElement,
+	viewport: HTMLElement,
+	store: AgentActivityStore,
+	presentationStore: AgentSessionPresentationStore,
+	initialGraph: Graph,
+	createLocalEffectHost: GraphNodeLocalEffectHostFactory,
+	interactions: AgentActivityNotificationCenterInteractions = {},
+	getVisibleGraphArea: GraphVisibleAreaProvider = () => (
+		createFullGraphVisibleArea({
+			width: viewport.clientWidth,
+			height: viewport.clientHeight,
+		})
+	),
+): AgentActivityNotificationCenter {
+	const ownerDocument = overlayLayer.ownerDocument;
+	const center = ownerDocument.createElement('div');
+	const trigger = ownerDocument.createElement('button');
+	const triggerIcon = ownerDocument.createElement('span');
+	const badge = ownerDocument.createElement('span');
+	const panel = ownerDocument.createElement('section');
+	const header = ownerDocument.createElement('header');
+	const title = ownerDocument.createElement('h2');
+	const list = ownerDocument.createElement('ul');
+	const empty = ownerDocument.createElement('p');
+	const registrations = new Map<string, NotificationRegistration>();
+	let currentGraph = initialGraph;
+	let targetPresentations = createAgentActivityTargetPresentationIndex(
+		currentGraph,
+	);
+	let open = false;
+	let disposed = false;
+
+	center.className = 'graph-agent-activity-notification-center';
+	center.setAttribute(AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE, '');
+	center.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
+	trigger.className = 'graph-agent-activity-notification-trigger';
+	trigger.type = 'button';
+	trigger.setAttribute('aria-controls', CENTER_PANEL_ID);
+	trigger.setAttribute('aria-expanded', 'false');
+	triggerIcon.className = 'graph-agent-activity-notification-trigger-icon';
+	triggerIcon.setAttribute('aria-hidden', 'true');
+	badge.className = 'graph-agent-activity-notification-badge';
+	badge.hidden = true;
+	badge.setAttribute('aria-hidden', 'true');
+	trigger.append(triggerIcon, badge);
+	panel.className = 'graph-agent-activity-notification-panel';
+	panel.id = CENTER_PANEL_ID;
+	panel.hidden = true;
+	panel.tabIndex = -1;
+	panel.setAttribute('aria-labelledby', CENTER_TITLE_ID);
+	header.className = 'graph-agent-activity-notification-header';
+	title.className = 'graph-agent-activity-notification-title';
+	title.id = CENTER_TITLE_ID;
+	title.textContent = CENTER_TITLE;
+	header.append(title);
+	list.className = 'graph-agent-activity-notification-list';
+	list.setAttribute('role', 'list');
+	empty.className = 'graph-agent-activity-notification-empty';
+	empty.textContent = '새 알림이 없습니다.';
+	panel.append(header, list, empty);
+	center.append(trigger, panel);
+	overlayLayer.append(center);
+
+	const setOpen = (nextOpen: boolean, restoreTriggerFocus = false): void => {
+		if (disposed || open === nextOpen) {
+			return;
+		}
+
+		open = nextOpen;
+		panel.hidden = !open;
+		trigger.setAttribute('aria-expanded', String(open));
+		trigger.classList.toggle('is-active', open);
+		if (open) {
+			const firstFocusButton = registrations.values().next().value
+				?.focusButton;
+
+			(firstFocusButton ?? panel).focus();
+		} else if (restoreTriggerFocus) {
+			trigger.focus();
+		}
+	};
+
+	const handleTriggerClick = (event: MouseEvent): void => {
+		event.stopPropagation();
+		setOpen(!open, open);
+	};
+	const handleDocumentPointerDown = (event: PointerEvent): void => {
+		if (!open || isNotificationCenterEventTarget(event.target)) {
+			return;
+		}
+		setOpen(false);
+	};
+	const handleDocumentKeyDown = (event: KeyboardEvent): void => {
+		if (!open || event.key !== 'Escape') {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		setOpen(false, true);
+	};
+
+	trigger.addEventListener('click', handleTriggerClick);
+	ownerDocument.addEventListener('pointerdown', handleDocumentPointerDown);
+	ownerDocument.addEventListener('keydown', handleDocumentKeyDown);
+
+	const reconcile = (): void => {
+		if (disposed) {
+			return;
+		}
+
+		const entries = createAgentActivityNotificationEntriesFromIndex(
+			store.getSnapshot(),
+			presentationStore,
+			targetPresentations,
+		);
+		const currentKeys = new Set(entries.map(({ key }) => key));
+		const orderedElements: HTMLLIElement[] = [];
+
+		for (const entry of entries) {
+			let registration = registrations.get(entry.key);
+
+			if (!registration) {
+				registration = createNotificationRegistration(
+					ownerDocument,
+					entry,
+					createLocalEffectHost,
+					interactions,
+					() => setOpen(false),
+				);
+				registrations.set(entry.key, registration);
+			}
+			updateNotificationRegistration(registration, entry);
+			orderedElements.push(registration.element);
+		}
+
+		for (const [key, registration] of registrations) {
+			if (currentKeys.has(key)) {
+				continue;
+			}
+			disposeNotificationRegistration(registration);
+			registration.element.remove();
+			registrations.delete(key);
+		}
+
+		if (
+			list.children.length !== orderedElements.length
+			|| orderedElements.some((element, index) => list.children[index] !== element)
+		) {
+			list.replaceChildren(...orderedElements);
+		}
+
+		const count = entries.length;
+		badge.hidden = count === 0;
+		badge.textContent = count > 99 ? '99+' : String(count);
+		empty.hidden = count !== 0;
+		list.hidden = count === 0;
+		trigger.setAttribute('aria-label', `${CENTER_TITLE} ${count}개`);
+		trigger.title = `${CENTER_TITLE} ${count}개`;
+	};
+
+	const unsubscribeStore = store.subscribe(() => reconcile());
+	const unsubscribePresentation = presentationStore.subscribe(() => reconcile());
+
+	reconcile();
+
+	const refreshVisibleGraphArea = (): void => {
+		if (disposed) {
+			return;
+		}
+		const visibleArea = getVisibleGraphArea();
+		const rightInset = Math.max(0, viewport.clientWidth - visibleArea.right);
+		const topInset = Math.max(0, visibleArea.top);
+
+		center.style.right = `${rightInset + CENTER_VIEWPORT_MARGIN}px`;
+		center.style.top = `${topInset + CENTER_VIEWPORT_MARGIN}px`;
+	};
+
+	refreshVisibleGraphArea();
+
+	return {
+		refreshVisibleGraphArea,
+		setGraph(graph): void {
+			if (disposed) {
+				return;
+			}
+			currentGraph = graph;
+			targetPresentations = createAgentActivityTargetPresentationIndex(
+				currentGraph,
+			);
+			reconcile();
+		},
+		dispose(): void {
+			if (disposed) {
+				return;
+			}
+			disposed = true;
+			unsubscribeStore();
+			unsubscribePresentation();
+			trigger.removeEventListener('click', handleTriggerClick);
+			ownerDocument.removeEventListener('pointerdown', handleDocumentPointerDown);
+			ownerDocument.removeEventListener('keydown', handleDocumentKeyDown);
+			for (const registration of registrations.values()) {
+				disposeNotificationRegistration(registration);
+			}
+			registrations.clear();
+			center.remove();
+		},
+	};
+}
+
+function createNotificationRegistration(
+	ownerDocument: Document,
+	entry: AgentActivityNotificationEntry,
+	createLocalEffectHost: GraphNodeLocalEffectHostFactory,
+	interactions: AgentActivityNotificationCenterInteractions,
+	closePanel: () => void,
+): NotificationRegistration {
+	const element = ownerDocument.createElement('li');
+	const focusButton = ownerDocument.createElement('button');
+	const summary = ownerDocument.createElement('span');
+	const sessionTitle = ownerDocument.createElement('span');
+	const status = ownerDocument.createElement('span');
+	const target = ownerDocument.createElement('span');
+	const targetName = ownerDocument.createElement('span');
+	const targetPath = ownerDocument.createElement('span');
+	const currentMessage = ownerDocument.createElement('span');
+	const dismissButton = ownerDocument.createElement('button');
+	const dismissIcon = ownerDocument.createElement('span');
+	const registration: NotificationRegistration = {
+		entry,
+		element,
+		focusButton,
+		sessionTitle,
+		status,
+		targetName,
+		targetPath,
+		currentMessage,
+		dismissButton,
+		effectHost: createLocalEffectHost(focusButton),
+		handleFocus: (_event: MouseEvent) => undefined,
+		handleDismiss: (_event: MouseEvent) => undefined,
+	};
+
+	element.className = 'graph-agent-activity-notification-item';
+	element.setAttribute(AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE, entry.key);
+	focusButton.className = 'graph-agent-activity-notification-focus';
+	focusButton.type = 'button';
+	summary.className = 'graph-agent-activity-notification-summary';
+	sessionTitle.className = 'graph-agent-activity-notification-session-title';
+	status.className = 'graph-agent-activity-notification-status';
+	target.className = 'graph-agent-activity-notification-target';
+	targetName.className = 'graph-agent-activity-notification-target-name';
+	targetPath.className = 'graph-agent-activity-notification-target-path';
+	currentMessage.className = 'graph-agent-activity-notification-message';
+	summary.append(sessionTitle, status);
+	target.append(targetName, targetPath);
+	focusButton.append(summary, target, currentMessage);
+	dismissButton.className = 'graph-agent-activity-notification-dismiss';
+	dismissButton.type = 'button';
+	dismissButton.setAttribute('aria-label', '알림 삭제');
+	dismissButton.title = '알림 삭제';
+	dismissIcon.className = 'graph-agent-activity-notification-dismiss-icon';
+	dismissIcon.setAttribute('aria-hidden', 'true');
+	dismissButton.append(dismissIcon);
+	element.append(focusButton, dismissButton);
+
+	registration.handleFocus = (event: MouseEvent): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		closePanel();
+		interactions.onFocus?.(registration.entry);
+	};
+	registration.handleDismiss = (event: MouseEvent): void => {
+		event.preventDefault();
+		event.stopPropagation();
+		interactions.onDismiss?.(registration.entry);
+	};
+	focusButton.addEventListener('click', registration.handleFocus);
+	dismissButton.addEventListener('click', registration.handleDismiss);
+	return registration;
+}
+
+function updateNotificationRegistration(
+	registration: NotificationRegistration,
+	entry: AgentActivityNotificationEntry,
+): void {
+	registration.entry = entry;
+	registration.element.setAttribute('data-activity', entry.activity);
+	registration.focusButton.setAttribute(
+		'aria-label',
+		`${entry.sessionTitle}, ${entry.targetPath}, ${getAgentActivityNotificationStatusLabel(
+			entry.activity,
+		)}`,
+	);
+	registration.focusButton.title = entry.targetPath;
+	registration.sessionTitle.textContent = entry.sessionTitle;
+	registration.status.textContent = getAgentActivityNotificationStatusLabel(
+		entry.activity,
+	);
+	registration.targetName.textContent = entry.targetName;
+	registration.targetPath.textContent = entry.targetPath;
+	registration.currentMessage.textContent = entry.currentMessage;
+	registration.effectHost.setEffects(getAgentActivityEffects(
+		entry.sessionId,
+		entry.activity,
+	));
+}
+
+function disposeNotificationRegistration(
+	registration: NotificationRegistration,
+): void {
+	registration.focusButton.removeEventListener('click', registration.handleFocus);
+	registration.dismissButton.removeEventListener(
+		'click',
+		registration.handleDismiss,
+	);
+	registration.effectHost.dispose();
+}
+
+function isNotificationCenterEventTarget(target: EventTarget | null): boolean {
+	const candidate = target as { closest?: (selector: string) => unknown } | null;
+
+	return typeof candidate?.closest === 'function'
+		&& candidate.closest(`[${AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE}]`)
+			!== null;
+}

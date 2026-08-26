@@ -1622,6 +1622,307 @@ body.vscode-high-contrast-light .graph-viewport {
 	pointer-events: none;
 }
 
+.graph-agent-activity-notification-center {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	z-index: 6;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	pointer-events: auto;
+}
+
+.graph-agent-activity-notification-trigger {
+	position: relative;
+	display: grid;
+	width: 40px;
+	height: 40px;
+	box-sizing: border-box;
+	padding: 0;
+	place-items: center;
+	color: var(--vscode-foreground);
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 8px;
+	box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgb(0 0 0 / 24%));
+	font: inherit;
+	cursor: pointer;
+}
+
+.graph-agent-activity-notification-trigger:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+.graph-agent-activity-notification-trigger:active,
+.graph-agent-activity-notification-trigger.is-active {
+	background: var(--vscode-toolbar-activeBackground, var(--vscode-list-hoverBackground));
+}
+
+.graph-agent-activity-notification-trigger:focus-visible,
+.graph-agent-activity-notification-focus:focus-visible,
+.graph-agent-activity-notification-dismiss:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+}
+
+.graph-agent-activity-notification-trigger-icon {
+	display: block;
+	width: 22px;
+	height: 22px;
+	background: currentcolor;
+	mask-image: url('./assets/ui-icons/notification-bell.svg');
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	pointer-events: none;
+	-webkit-mask-image: url('./assets/ui-icons/notification-bell.svg');
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-agent-activity-notification-badge {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	display: grid;
+	min-width: 18px;
+	height: 18px;
+	box-sizing: border-box;
+	padding: 0 4px;
+	place-items: center;
+	color: var(--vscode-badge-foreground, #fff);
+	background: var(--vscode-badge-background, var(--vscode-errorForeground));
+	border: 2px solid var(--vscode-editor-background);
+	border-radius: 999px;
+	font-family: var(--vscode-font-family);
+	font-size: 9px;
+	font-weight: 700;
+	line-height: 14px;
+	pointer-events: none;
+}
+
+.graph-agent-activity-notification-badge[hidden],
+.graph-agent-activity-notification-panel[hidden],
+.graph-agent-activity-notification-list[hidden],
+.graph-agent-activity-notification-empty[hidden] {
+	display: none;
+}
+
+.graph-agent-activity-notification-panel {
+	display: grid;
+	width: min(380px, calc(100vw - 32px));
+	max-height: min(560px, calc(100vh - 80px));
+	box-sizing: border-box;
+	margin-top: 8px;
+	overflow: hidden;
+	color: var(--vscode-foreground);
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 8px;
+	box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgb(0 0 0 / 36%));
+	font-family: var(--vscode-font-family);
+}
+
+.graph-agent-activity-notification-header {
+	display: flex;
+	min-height: 42px;
+	box-sizing: border-box;
+	align-items: center;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.graph-agent-activity-notification-title {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 20px;
+}
+
+.graph-agent-activity-notification-list {
+	display: flex;
+	min-height: 0;
+	margin: 0;
+	padding: 6px;
+	flex-direction: column;
+	gap: 4px;
+	overflow: auto;
+	list-style: none;
+}
+
+.graph-agent-activity-notification-item {
+	display: flex;
+	min-width: 0;
+	align-items: stretch;
+	border-radius: 6px;
+}
+
+.graph-agent-activity-notification-focus {
+	--graph-node-effect-ring-inset: 0;
+	--graph-node-effect-ring-radius: 6px;
+	--graph-node-effect-surface-inset: 1px;
+	--graph-node-effect-surface-radius: 5px;
+	--graph-node-effect-dash-width: 1.5px;
+	--graph-node-effect-outline-width: 1px;
+	--graph-node-effect-outline-strong-width: 2px;
+	--graph-node-effect-pulse-width: 1.5px;
+	--graph-node-effect-badge-size: 16px;
+	--graph-node-effect-badge-top: 5px;
+	--graph-node-effect-badge-left: 5px;
+
+	position: relative;
+	display: grid;
+	min-width: 0;
+	min-height: 76px;
+	box-sizing: border-box;
+	flex: 1 1 auto;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 3px;
+	padding: 9px 10px;
+	color: inherit;
+	text-align: left;
+	background: transparent;
+	border: 0;
+	border-radius: 6px 0 0 6px;
+	font: inherit;
+	cursor: pointer;
+}
+
+.graph-agent-activity-notification-focus:hover,
+.graph-agent-activity-notification-item:has(
+	.graph-agent-activity-notification-dismiss:hover
+) .graph-agent-activity-notification-focus {
+	background: var(--vscode-list-hoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.graph-agent-activity-notification-focus.graph-node-effect-host
+	> .graph-node-effect-layer
+	> .graph-node-effect-marching-dash {
+	width: 100%;
+	height: 100%;
+}
+
+.graph-agent-activity-notification-summary,
+.graph-agent-activity-notification-target,
+.graph-agent-activity-notification-message {
+	position: relative;
+	z-index: 3;
+	min-width: 0;
+}
+
+.graph-agent-activity-notification-summary {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.graph-agent-activity-notification-session-title,
+.graph-agent-activity-notification-status,
+.graph-agent-activity-notification-target-name,
+.graph-agent-activity-notification-target-path,
+.graph-agent-activity-notification-message {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-agent-activity-notification-session-title {
+	flex: 1 1 auto;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.graph-agent-activity-notification-status {
+	flex: none;
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+}
+
+.graph-agent-activity-notification-item[data-activity='completed']
+	.graph-agent-activity-notification-status {
+	color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.graph-agent-activity-notification-item[data-activity='rejected']
+	.graph-agent-activity-notification-status {
+	color: var(--vscode-errorForeground);
+}
+
+.graph-agent-activity-notification-target {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+}
+
+.graph-agent-activity-notification-target-name {
+	max-width: 42%;
+	flex: none;
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.graph-agent-activity-notification-target-path,
+.graph-agent-activity-notification-message {
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+}
+
+.graph-agent-activity-notification-target-path {
+	flex: 1 1 auto;
+}
+
+.graph-agent-activity-notification-dismiss {
+	display: grid;
+	width: 34px;
+	flex: none;
+	padding: 0;
+	place-items: center;
+	color: var(--vscode-descriptionForeground);
+	background: transparent;
+	border: 0;
+	border-radius: 0 6px 6px 0;
+	font: inherit;
+	cursor: pointer;
+}
+
+.graph-agent-activity-notification-dismiss:hover {
+	color: var(--vscode-errorForeground);
+	background: var(--vscode-list-hoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.graph-agent-activity-notification-dismiss-icon {
+	display: block;
+	width: 15px;
+	height: 15px;
+	background: currentcolor;
+	mask-image: url('./assets/ui-icons/delete.svg');
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	pointer-events: none;
+	-webkit-mask-image: url('./assets/ui-icons/delete.svg');
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-agent-activity-notification-empty {
+	margin: 0;
+	padding: 24px 16px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	text-align: center;
+}
+
+body.vscode-high-contrast .graph-agent-activity-notification-trigger,
+body.vscode-high-contrast-light .graph-agent-activity-notification-trigger,
+body.vscode-high-contrast .graph-agent-activity-notification-panel,
+body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
+	border-color: var(--vscode-contrastBorder, var(--vscode-foreground));
+}
+
 .graph-reattach-confirm-overlay,
 .graph-arrange-all-confirm-overlay {
 	position: absolute;

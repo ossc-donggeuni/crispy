@@ -76,6 +76,15 @@ import {
 	getAgentActivityBindingBlockHeight,
 } from './agentActivityBindings';
 import {
+	createAgentActivityTargetRevealState,
+	resolveAgentActivityTargetFocusPoint,
+} from './agentActivityFocus';
+import {
+	initializeAgentActivityNotificationCenter,
+	type AgentActivityNotificationCenter,
+} from './agentActivityNotificationCenter';
+import type { AgentActivityNotificationEntry } from './agentActivityNotifications';
+import {
 	TASK_DEFAULT_END_POSITION,
 	type TaskBlueprint,
 	type TaskNodePosition,
@@ -1530,6 +1539,7 @@ export function initializeGraphView(
 		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
+	let agentActivityNotificationCenter: AgentActivityNotificationCenter | undefined;
 	let taskRenderer: ReturnType<typeof initializeTaskRenderer>;
 	const taskScopeOccurrencesByBinding = new Map<string, Set<string>>();
 	let applyingTaskState = false;
@@ -1851,6 +1861,32 @@ export function initializeGraphView(
 			camera,
 			rootId,
 		);
+	};
+	const handleAgentActivityNotificationFocus = (
+		entry: AgentActivityNotificationEntry,
+	): void => {
+		const snapshot = state.getState();
+		const reveal = createAgentActivityTargetRevealState(
+			currentGraph,
+			taskGraphTargetIndex,
+			entry.target,
+			snapshot,
+		);
+
+		if (reveal) {
+			state.setState(reveal.state);
+		}
+		const currentSnapshot = state.getState();
+		const focusPoint = resolveAgentActivityTargetFocusPoint(
+			currentLayout,
+			currentSnapshot.nodePositions,
+			entry.target,
+			reveal?.preferredRootId,
+		);
+
+		if (focusPoint) {
+			camera.focusOn(focusPoint);
+		}
 	};
 	const performArrangeAll = (): void => {
 		const snapshot = state.getState();
@@ -3496,6 +3532,29 @@ export function initializeGraphView(
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
+	if (
+		runtimeOptions.agentActivityStore
+		&& runtimeOptions.agentSessionPresentationStore
+	) {
+		agentActivityNotificationCenter = initializeAgentActivityNotificationCenter(
+			overlayLayer,
+			viewport,
+			runtimeOptions.agentActivityStore,
+			runtimeOptions.agentSessionPresentationStore,
+			workspaceGraph,
+			nodeEffects.createLocalEffectHost,
+			{
+				onFocus: handleAgentActivityNotificationFocus,
+				onDismiss: ({ sessionId, target }) => {
+					runtimeOptions.agentActivityStore?.clearAgentActivity(
+						sessionId,
+						target,
+					);
+				},
+			},
+			getVisibleGraphArea,
+		);
+	}
 	let renderedTaskScopeFileGroupPages = state.getState().fileGroupPages;
 	let renderedTaskScopeOpenedFolders = state.getState().openedFolders;
 	let renderedTaskScopeHiddenNodeIds = state.getState().hiddenNodeIds;
@@ -3630,6 +3689,7 @@ export function initializeGraphView(
 		refreshVisibleGraphArea(): void {
 			if (!disposed) {
 				navigator.refreshVisibleGraphArea();
+				agentActivityNotificationCenter?.refreshVisibleGraphArea();
 				taskInspector?.refreshPosition();
 			}
 		},
@@ -3778,6 +3838,7 @@ export function initializeGraphView(
 			}, { baseNodePositions: nodePositions });
 			syncNavigatorRoots();
 			navigator.setWorkspaceGraph(workspaceGraph);
+			agentActivityNotificationCenter?.setGraph(workspaceGraph);
 			applyTaskState();
 		},
 		updateTasks(tasks): void {
@@ -3881,6 +3942,8 @@ export function initializeGraphView(
 			unsubscribeWorkspaceTasks();
 			workspaceSubscribers.clear();
 			navigator.dispose();
+			agentActivityNotificationCenter?.dispose();
+			agentActivityNotificationCenter = undefined;
 			taskInspector?.dispose();
 			taskInspector = undefined;
 			focusedTaskNode = undefined;
