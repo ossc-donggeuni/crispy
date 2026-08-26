@@ -56,8 +56,8 @@ export interface AgentActivityBindings {
 
 /** Binding Container가 Target 표시 범위 아래에 두는 고정 간격이다. */
 export const AGENT_ACTIVITY_BINDING_TOP_GAP = 6;
-/** 제목과 현재 메시지 두 줄을 담는 Agent Binding Box의 고정 border-box 높이다. */
-export const AGENT_ACTIVITY_BINDING_ROW_HEIGHT = 42;
+/** 제목과 현재 메시지를 한 줄에 담는 Agent Binding Box의 고정 border-box 높이다. */
+export const AGENT_ACTIVITY_BINDING_ROW_HEIGHT = 26;
 /** 같은 Target의 Agent Binding Box 사이 고정 간격이다. */
 export const AGENT_ACTIVITY_BINDING_ROW_GAP = 4;
 

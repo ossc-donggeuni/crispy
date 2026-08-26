@@ -381,10 +381,10 @@ body.vscode-high-contrast-light .graph-viewport {
 	width: 100%;
 	min-width: 0;
 	box-sizing: border-box;
-	grid-template-columns: minmax(0, 1fr);
-	grid-template-rows: repeat(2, minmax(0, 1fr));
+	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+	grid-template-rows: minmax(0, 1fr);
 	align-items: center;
-	gap: 0;
+	column-gap: 8px;
 	padding: 4px 8px;
 	color: var(--vscode-foreground);
 	background: var(

@@ -7359,6 +7359,9 @@ suite('Graph View', () => {
 		const containerRule = graphViewCss.match(
 			/\.graph-agent-activity-bindings\s*\{[^}]*\}/,
 		);
+		const bindingRule = graphViewCss.match(
+			/\.graph-agent-activity-binding\s*\{[^}]*\}/,
+		);
 		const sessionRule = graphViewCss.match(
 			/\.graph-agent-activity-session-title\s*\{[^}]*\}/,
 		);
@@ -7375,6 +7378,16 @@ suite('Graph View', () => {
 		assert.match(containerRule[0], /pointer-events:\s*none;/);
 		assert.match(containerRule[0], /left:\s*0;/);
 		assert.match(containerRule[0], /width:\s*100%;/);
+		assert.ok(bindingRule);
+		assert.match(
+			bindingRule[0],
+			/grid-template-columns:\s*minmax\(0,\s*2fr\)\s+minmax\(0,\s*3fr\);/,
+		);
+		assert.match(
+			bindingRule[0],
+			/grid-template-rows:\s*minmax\(0,\s*1fr\);/,
+		);
+		assert.match(bindingRule[0], /column-gap:\s*8px;/);
 		assert.ok(sessionRule);
 		assert.match(sessionRule[0], /overflow:\s*hidden;/);
 		assert.match(sessionRule[0], /text-overflow:\s*ellipsis;/);

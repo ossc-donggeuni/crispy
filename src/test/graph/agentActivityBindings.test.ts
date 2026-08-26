@@ -333,9 +333,9 @@ suite('Agent Activity Bindings', () => {
 
 	test('Binding CSS와 Layout이 공유하는 고정 Row footprint 규약을 노출한다', () => {
 		assert.strictEqual(AGENT_ACTIVITY_BINDING_TOP_GAP, 6);
-		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_HEIGHT, 42);
+		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_HEIGHT, 26);
 		assert.strictEqual(AGENT_ACTIVITY_BINDING_ROW_GAP, 4);
-		assert.strictEqual(getAgentActivityBindingBlockHeight(2), 94);
+		assert.strictEqual(getAgentActivityBindingBlockHeight(2), 62);
 	});
 
 	test('각 Binding은 6개 Activity별 G-11 Effect 조합을 독립적으로 렌더링한다', () => {
