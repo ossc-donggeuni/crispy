@@ -62,6 +62,7 @@ const CENTER_TITLE = '알림';
 const CENTER_PANEL_ID = 'graph-agent-activity-notification-panel';
 const CENTER_TITLE_ID = 'graph-agent-activity-notification-title';
 const CENTER_VIEWPORT_MARGIN = 16;
+const CENTER_CONTROL_SIZE = 40;
 
 /**
  * Graph Overlay 우측 상단에 현재 MCP Activity 전체를 표시하는 알림 Center를 만든다.
@@ -261,15 +262,27 @@ export function initializeAgentActivityNotificationCenter(
 	reconcile();
 
 	const refreshVisibleGraphArea = (): void => {
-		if (disposed) {
+		if (
+			disposed
+			|| viewport.clientWidth <= 0
+			|| viewport.clientHeight <= 0
+		) {
 			return;
 		}
 		const visibleArea = getVisibleGraphArea();
 		const rightInset = Math.max(0, viewport.clientWidth - visibleArea.right);
 		const topInset = Math.max(0, visibleArea.top);
+		const maximumRight = Math.max(0, viewport.clientWidth - CENTER_CONTROL_SIZE);
+		const maximumTop = Math.max(0, viewport.clientHeight - CENTER_CONTROL_SIZE);
 
-		center.style.right = `${rightInset + CENTER_VIEWPORT_MARGIN}px`;
-		center.style.top = `${topInset + CENTER_VIEWPORT_MARGIN}px`;
+		center.style.right = `${Math.min(
+			rightInset + CENTER_VIEWPORT_MARGIN,
+			maximumRight,
+		)}px`;
+		center.style.top = `${Math.min(
+			topInset + CENTER_VIEWPORT_MARGIN,
+			maximumTop,
+		)}px`;
 	};
 
 	refreshVisibleGraphArea();

@@ -1860,11 +1860,7 @@ body.vscode-high-contrast-light .graph-viewport {
 	margin-top: 8px;
 	overflow: hidden;
 	color: var(--vscode-foreground);
-	background: color-mix(
-		in srgb,
-		var(--vscode-editorWidget-background, var(--vscode-editor-background)) 76%,
-		transparent
-	);
+	background-color: rgb(128 128 128 / 4%);
 	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
 	border-radius: 8px;
 	box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgb(0 0 0 / 36%));

@@ -3734,7 +3734,11 @@ export function initializeGraphView(
 			};
 		},
 		refreshVisibleGraphArea(): void {
-			if (!disposed) {
+			if (
+				!disposed
+				&& viewport.clientWidth > 0
+				&& viewport.clientHeight > 0
+			) {
 				navigator.refreshVisibleGraphArea();
 				agentActivityNotificationCenter?.refreshVisibleGraphArea();
 				taskInspector?.refreshPosition();

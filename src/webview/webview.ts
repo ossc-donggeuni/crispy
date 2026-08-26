@@ -175,7 +175,6 @@ const graphView = initializeGraphView(
 			viewport,
 			chatPanel,
 			panelState.preferredDock,
-			panelState.collapsed,
 		),
 	},
 	initialWorkspaceState.tasks.map((record) => record.task),
@@ -382,9 +381,12 @@ const refreshCollapse = initializePanelCollapse(
 	panelState,
 	() => {
 		persistWebviewSessionState();
-		graphView.refreshVisibleGraphArea();
 	},
 	() => terminalPool.scheduleActiveTerminalFit(),
+	() => {
+		/** Chat의 실제 transform 경계를 따라 Overlay를 같은 frame에 이동시킨다. */
+		graphView.refreshVisibleGraphArea();
+	},
 );
 /** Dock 초기화 */
 const refreshDock = initializePanelDock(
@@ -416,6 +418,21 @@ initializePanelResize(
 
 /** 초기 Dock/크기/접힘 상태가 DOM에 모두 반영된 뒤 Overlay 기준을 한 번 확정한다. */
 graphView.refreshVisibleGraphArea();
+
+/** 숨겨졌던 Webview가 돌아오면 transient 0 bounds를 버리고 현재 Layout으로 재측정한다. */
+const handleWebviewVisibilityChange = () => {
+	if (document.visibilityState !== 'visible') {
+		return;
+	}
+
+	applyPanelSize(layout, panelState);
+	refreshDock();
+	refreshCollapse();
+	graphView.refreshVisibleGraphArea();
+	terminalPool.scheduleActiveTerminalFit();
+};
+
+document.addEventListener('visibilitychange', handleWebviewVisibilityChange);
 
 let previousGraphState = graphView.state.getState();
 const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
@@ -460,6 +477,7 @@ if (
 }
 
 window.addEventListener('unload', () => {
+	document.removeEventListener('visibilitychange', handleWebviewVisibilityChange);
 	unsubscribeGraphState();
 	unsubscribeWorkspaceSnapshot();
 	agentActivityEffects.dispose();

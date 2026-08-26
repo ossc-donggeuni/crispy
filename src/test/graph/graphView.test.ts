@@ -8584,7 +8584,7 @@ suite('Graph View', () => {
 		const fileTarget = {
 			nodeId: 'file:pagination-samples/seventeen-files/sample-12.ts',
 		};
-		const visibleArea = calculateGraphVisibleArea(
+		let visibleArea = calculateGraphVisibleArea(
 			{ width: 1000, height: 800 },
 			{ left: 0, top: 0, width: 1000, height: 800 },
 			{ left: 720, top: 24, right: 980, bottom: 780, width: 260, height: 756 },
@@ -8659,6 +8659,22 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(center.style.right, `${1000 - visibleArea.right + 16}px`);
 		assert.strictEqual(center.style.top, `${visibleArea.top + 16}px`);
+		const resolvedVisibleArea = visibleArea;
+
+		visibleArea = {
+			left: 0,
+			top: 799,
+			right: 1,
+			bottom: 800,
+			width: 1,
+			height: 1,
+			center: { x: 0.5, y: 799.5 },
+		};
+		graphView.refreshVisibleGraphArea();
+		assert.strictEqual(center.style.right, '960px');
+		assert.strictEqual(center.style.top, '760px');
+		visibleArea = resolvedVisibleArea;
+		graphView.refreshVisibleGraphArea();
 		assert.strictEqual(trigger.getAttribute('aria-label'), '알림 2개');
 		assert.strictEqual(latestItem.getAttribute('data-activity'), 'editing');
 		assert.ok(latestItem.hasAttribute(AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE));
@@ -8974,7 +8990,7 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			webviewCss,
-			/#graph-area\s*\{[^}]*z-index:\s*auto;/s,
+			/#graph-area\s*\{[^}]*z-index:\s*0;/s,
 		);
 		assert.match(
 			webviewCss,
@@ -8986,7 +9002,11 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			graphViewCss,
-			/\.graph-agent-activity-notification-panel\s*\{[^}]*background:\s*color-mix\([^}]*transparent[^}]*backdrop-filter:\s*blur\(12px\);/s,
+			/\.graph-agent-activity-notification-panel\s*\{[^}]*background-color:\s*rgb\(128 128 128 \/ 4%\);[^}]*backdrop-filter:\s*blur\(12px\);/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.graph-navigator-minimap\s*\{[^}]*background-color:\s*rgb\(128 128 128 \/ 8%\);/s,
 		);
 
 		graphView.dispose();

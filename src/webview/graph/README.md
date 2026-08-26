@@ -72,7 +72,7 @@ src/webview/graph/
 - 알림 본문 Click은 Panel을 유지한 채 Focus callback, 별도 삭제 Button은 exact Target×Session dismiss callback으로 분리
 - Escape, 외부 Pointer와 Focus 복원 및 Camera 입력 차단 attribute 처리
 - Agent Panel dock을 제외한 실제 Graph 가시 영역의 우측 상단에 위치
-- 반투명 blur 표면을 사용하고 Graph overlay stacking을 Chat Panel 위에 유지
+- Minimap보다 투명한 4% blur 표면을 사용하고 Chat의 실제 transform 경계를 frame마다 따라 이동
 - Store/Session 구독, 행별 Effect host와 Listener를 `dispose()`에서 정리
 
 ### `agentActivityFloatingNotifications.ts`

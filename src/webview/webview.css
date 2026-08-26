@@ -111,8 +111,7 @@ button:focus-visible {
 #graph-area {
 	position: absolute;
 	inset: 0;
-	/* Graph overlay가 sibling Chat Panel보다 높은 자체 z-index를 사용할 수 있게 한다. */
-	z-index: auto;
+	z-index: 0;
 }
 
 /* Chat Panel 바깥 여백에서는 Graph가 그대로 보이고 기존 Pointer interaction도 유지된다. */
