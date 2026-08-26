@@ -230,7 +230,6 @@ if (typeof graphArea.querySelector === 'function' && monacoWorkerUri) {
 					viewport,
 					chatPanel,
 					panelState.preferredDock,
-					panelState.collapsed,
 				),
 			},
 		);
