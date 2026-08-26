@@ -15,14 +15,6 @@ export const AGENT_PROVIDER_LABELS: Readonly<Record<ProviderId, string>> =
 /** provider가 정해지기 전 탭 strip에 표시하는 고정 라벨이다. */
 export const UNSELECTED_TAB_LABEL = 'New tab';
 
-/** 로고나 브랜드 색상 대신 탭 식별에만 사용하는 자체 CLI 팔레트다. */
-export const AGENT_PROVIDER_TAB_COLORS: Readonly<
-	Partial<Record<ProviderId, string>>
-> = Object.freeze({
-	codex: '#7aa2e3',
-	claude: '#e0a96d',
-});
-
 /**
  * 탭 라벨을 `{Provider} #{번호}` 형식으로 만든다.
  *

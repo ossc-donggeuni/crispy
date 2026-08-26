@@ -4,6 +4,7 @@ import {
 } from '../agent/UI/agentPanelUi';
 import { parseHostToWebviewMessage } from '../agent/protocol';
 import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
+import { createAgentSessionColorRegistry } from '../agent/agentSessionColor';
 import { createAgentSessionPresentationCoordinator } from '../agent/webview/agentSessionPresentationCoordinator';
 import {
 	createAgentSessionPresentationStore,
@@ -146,8 +147,12 @@ const terminalArea = getRequiredElement<HTMLElement>('#agent-terminal-area');
 
 /** Agent Activity는 Webview runtime에만 존재하며 Graph/Session 영속 상태에 포함하지 않는다. */
 const agentActivityStore = createAgentActivityStore();
+/** 탭과 Graph가 같은 세션을 같은 색으로 표시하도록 Webview 단위 할당을 공유한다. */
+const agentSessionColors = createAgentSessionColorRegistry();
 /** 세션 제목과 현재 PTY 메시지도 민감한 runtime 표시 상태로만 유지한다. */
-const agentSessionPresentationStore = createAgentSessionPresentationStore();
+const agentSessionPresentationStore = createAgentSessionPresentationStore(
+	agentSessionColors.resolve,
+);
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
@@ -357,7 +362,10 @@ try {
 			onLayoutChange: () => terminalPool.scheduleActiveTerminalFit(),
 		},
 		undefined,
-		{ initialWorkspaceRootCatalog: workspacePresentation.rootCatalog },
+		{
+			initialWorkspaceRootCatalog: workspacePresentation.rootCatalog,
+			resolveSessionColor: agentSessionColors.resolve,
+		},
 	);
 } catch {
 	agentPanelUi = undefined;

@@ -65,6 +65,7 @@ export function createAgentActivityEffectReconciler(
 			const effects = getAgentActivityEffects(
 				representative.sessionId,
 				representative.activity,
+				presentationStore?.getSession(representative.sessionId)?.color,
 			);
 
 			currentTargetKeys.add(key);

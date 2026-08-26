@@ -35,6 +35,7 @@ import {
 	defaultAgentUiDependencies,
 	type AgentUiDependencies,
 } from './agentUiDom';
+import type { AgentSessionColorResolver } from '../agentSessionColor';
 
 /** Agent UI를 구성하는 각 bar와 확인 다이얼로그가 사용하는 컨테이너들이다. */
 export interface AgentPanelUiElements {
@@ -146,6 +147,7 @@ export type AgentTabAssignmentState =
 
 export interface AgentPanelUiOptions {
 	readonly initialWorkspaceRootCatalog?: readonly WorkspaceRootCatalogEntry[];
+	readonly resolveSessionColor?: AgentSessionColorResolver;
 }
 
 /** 확인 다이얼로그 생성을 테스트에서 대체하기 위한 의존성 경계다. */
@@ -181,7 +183,7 @@ export function initializeAgentPanelUi(
 	dependencies: AgentPanelUiDependencies = defaultPanelDependencies,
 	options: AgentPanelUiOptions = {},
 ): AgentPanelUiController {
-	const model = createAgentTabModel();
+	const model = createAgentTabModel(undefined, options.resolveSessionColor);
 	const confirmDialog = dependencies.createConfirmDialog(
 		elements.dialogHost,
 		dependencies,

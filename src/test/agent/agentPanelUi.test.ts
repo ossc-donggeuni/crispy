@@ -98,7 +98,10 @@ function createFixture(
 		},
 		callbacks,
 		dependencies,
-		{ initialWorkspaceRootCatalog: workspaceRootCatalog },
+		{
+			initialWorkspaceRootCatalog: workspaceRootCatalog,
+			resolveSessionColor: (sessionId) => `color:${sessionId}`,
+		},
 	);
 
 	return {
@@ -952,6 +955,53 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(tab.providerId, 'claude');
 		assert.strictEqual(tab.label, 'Claude Code #1');
 		assert.deepStrictEqual(selections, [{ tabId: tab.id, providerId: 'claude' }]);
+	});
+
+	test('탭 색은 provider가 아니라 현재 또는 가장 최근 Session을 따른다', () => {
+		const fixture = createFixture();
+		selectProvider(fixture.providerPicker, 'codex');
+		const tabId = fixture.controller.getSnapshot().tabs[0].id;
+		let tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'',
+			'provider 배정만으로는 Agent 고정색을 만들지 않는다.',
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId,
+			sessionId: 'session-first',
+		});
+		tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'color:session-first',
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId,
+			sessionId: 'session-first',
+			exitCode: 0,
+		});
+		tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'color:session-first',
+		);
+
+		fixture.controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId,
+			sessionId: 'session-second',
+		});
+		tabElement = requireElement(fixture.tabStrip, 'agent-tab');
+		assert.strictEqual(
+			tabElement.style.getPropertyValue('--agent-tab-session-color'),
+			'color:session-second',
+		);
 	});
 
 	test('provider 요청 거부 또는 실패 시 미선택 상태와 picker를 유지한다', () => {
