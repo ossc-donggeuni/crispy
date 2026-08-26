@@ -438,13 +438,12 @@ const refreshCollapse = initializePanelCollapse(
 	panelState,
 	() => {
 		persistWebviewSessionState();
-		graphView.refreshVisibleGraphArea();
-		workspaceNodeInspector.refreshPosition();
 	},
 	() => terminalPool.scheduleActiveTerminalFit(),
 	() => {
 		/** Chat의 실제 transform 경계를 따라 Overlay를 같은 frame에 이동시킨다. */
 		graphView.refreshVisibleGraphArea();
+		workspaceNodeInspector.refreshPosition();
 	},
 );
 /** Dock 초기화 */
