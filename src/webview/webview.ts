@@ -16,6 +16,7 @@ import {
 	getWorkspaceGraphRootIds,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
+	parseWorkspaceGitStatusUpdatedMessage,
 	parseWorkspaceNodeDetailsResultMessage,
 	parseWorkspaceNodeMutationResultMessage,
 	parseWorkspaceRootIds,
@@ -37,6 +38,7 @@ import {
 	type GraphViewWorkspaceSnapshot,
 } from './graph/graphView';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
+import { createGitDecorationStore } from './graph/gitDecorationStore';
 import {
 	haveSameWorkspaceRoots,
 	mergeWorkspaceStateForRootTransition,
@@ -145,6 +147,10 @@ let currentWorkspaceContextGeneration = parseWorkspaceContextGeneration(
 let currentWorkspaceRevision = parseWorkspaceContextGeneration(
 	serializedWorkspaceRevision,
 );
+const gitDecorationStore = createGitDecorationStore(
+	currentWorkspaceContextGeneration,
+	currentWorkspaceRootIds,
+);
 let lastIssuedSwitchAttemptId = 0;
 const panelState = initialState.panel;
 
@@ -197,7 +203,11 @@ const graphView = initializeGraphView(
 	},
 	initialWorkspaceState.tasks.map((record) => record.task),
 	initialWorkspaceState.tasks,
-	{ agentActivityStore, agentSessionPresentationStore },
+	{
+		agentActivityStore,
+		agentSessionPresentationStore,
+		gitDecorations: gitDecorationStore,
+	},
 );
 const workspaceNodeInspectorFallback: WorkspaceNodeInspector = {
 	handleDetailsResult: () => undefined,
@@ -547,6 +557,7 @@ window.addEventListener('unload', () => {
 	agentActivityEffects.dispose();
 	workspaceNodeInspector.dispose();
 	graphView.dispose();
+	gitDecorationStore.dispose();
 	if (agentSessionPresentationCoordinator === undefined) {
 		agentSessionPresentationStore.dispose();
 	} else {
@@ -563,6 +574,13 @@ window.addEventListener('unload', () => {
  * @param message Extension Host에서 수신한 검증 전 메시지
  */
 function handleHostMessage(message: unknown): void {
+	const gitStatusMessage = parseWorkspaceGitStatusUpdatedMessage(message);
+
+	if (gitStatusMessage) {
+		gitDecorationStore.applySnapshot(gitStatusMessage);
+		return;
+	}
+
 	const graphEffectMessage = parseGraphNodeEffectToWebviewMessage(message);
 
 	if (graphEffectMessage) {
@@ -711,6 +729,12 @@ function handleHostMessage(message: unknown): void {
 			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
 			currentWorkspaceContextGeneration = workspaceMessage.contextGeneration;
 			currentWorkspaceRevision = incomingWorkspaceRevision;
+			if (rootContextChanged) {
+				gitDecorationStore.resetContext(
+					currentWorkspaceContextGeneration,
+					currentWorkspaceRootIds,
+				);
+			}
 			workspacePresentation = workspaceMessage.presentation;
 			graphView.updateWorkspace(
 				workspaceMessage.presentation.graph,

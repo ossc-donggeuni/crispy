@@ -50,8 +50,11 @@ export function initializeWorkspaceNodeInspector(
 	let focused: FocusedWorkspaceNode | undefined;
 	let inspector: HTMLElement | undefined;
 	let details: WorkspaceNodeDetails | undefined;
-	let editor: Monaco.editor.IStandaloneCodeEditor | undefined;
-	let model: Monaco.editor.ITextModel | undefined;
+	let editor:
+		| Monaco.editor.IStandaloneCodeEditor
+		| Monaco.editor.IStandaloneDiffEditor
+		| undefined;
+	let models: Monaco.editor.ITextModel[] = [];
 	let monacoApi: typeof Monaco | undefined;
 	let previewGeneration = 0;
 	let requestId = 0;
@@ -83,9 +86,11 @@ export function initializeWorkspaceNodeInspector(
 	const clearEditor = (): void => {
 		previewGeneration += 1;
 		editor?.dispose();
-		model?.dispose();
+		for (const model of models) {
+			model.dispose();
+		}
 		editor = undefined;
-		model = undefined;
+		models = [];
 	};
 	const clearFocusedStyle = (): void => {
 		focused?.element.classList.remove('is-workspace-node-focused');
@@ -358,21 +363,61 @@ export function initializeWorkspaceNodeInspector(
 			container.textContent = '';
 			monacoApi = monaco;
 			monaco.editor.setTheme(resolveMonacoTheme(ownerDocument.body));
-			model = monaco.editor.createModel(preview.text, preview.languageId);
-			editor = monaco.editor.create(container, {
-				model,
-				readOnly: true,
-				domReadOnly: true,
-				automaticLayout: true,
-				ariaLabel: `${nodeDetails.name} 읽기 전용 코드 미리 보기`,
-				minimap: { enabled: false },
-				lineNumbersMinChars: 3,
-				scrollBeyondLastLine: false,
-				renderValidationDecorations: 'off',
-				contextmenu: true,
-				wordWrap: 'off',
-				theme: resolveMonacoTheme(ownerDocument.body),
-			});
+			if (preview.originalText !== undefined) {
+				const originalModel = monaco.editor.createModel(
+					preview.originalText,
+					preview.languageId,
+				);
+				const modifiedModel = monaco.editor.createModel(
+					preview.text,
+					preview.languageId,
+				);
+				const diffEditor = monaco.editor.createDiffEditor(container, {
+					readOnly: true,
+					originalEditable: false,
+					automaticLayout: true,
+					renderSideBySide: false,
+					useInlineViewWhenSpaceIsLimited: true,
+					originalAriaLabel: `${nodeDetails.name} Git HEAD 원본`,
+					modifiedAriaLabel: `${nodeDetails.name} 현재 파일 변경 내용`,
+					minimap: { enabled: false },
+					lineNumbersMinChars: 3,
+					scrollBeyondLastLine: false,
+					renderValidationDecorations: 'off',
+					contextmenu: true,
+					wordWrap: 'off',
+					theme: resolveMonacoTheme(ownerDocument.body),
+				});
+
+				diffEditor.setModel({
+					original: originalModel,
+					modified: modifiedModel,
+				});
+				models = [originalModel, modifiedModel];
+				editor = diffEditor;
+				container.classList.add('is-git-diff');
+			} else {
+				const codeModel = monaco.editor.createModel(
+					preview.text,
+					preview.languageId,
+				);
+
+				models = [codeModel];
+				editor = monaco.editor.create(container, {
+					model: codeModel,
+					readOnly: true,
+					domReadOnly: true,
+					automaticLayout: true,
+					ariaLabel: `${nodeDetails.name} 읽기 전용 코드 미리 보기`,
+					minimap: { enabled: false },
+					lineNumbersMinChars: 3,
+					scrollBeyondLastLine: false,
+					renderValidationDecorations: 'off',
+					contextmenu: true,
+					wordWrap: 'off',
+					theme: resolveMonacoTheme(ownerDocument.body),
+				});
+			}
 		}).catch(() => {
 			if (generation === previewGeneration && container.isConnected) {
 				container.classList.remove('is-loading');

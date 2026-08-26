@@ -44,6 +44,63 @@ import {
 	type GraphState,
 } from '../../webview/graph/graphState';
 
+suite('Graph Renderer / Git Decorations', () => {
+	test('Project/Folder는 container, 실제 File occurrence는 file binding으로 등록·정리한다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:file:///workspace/src/index.ts',
+			name: 'index.ts',
+		};
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:file:///workspace/src',
+			name: 'src',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'workspace-root:file:///workspace',
+			name: 'workspace',
+			status: 'loaded',
+			children: [folder],
+		};
+		const registrations: Array<{ kind: 'file' | 'container'; nodeId: string }> = [];
+		let cleanupCount = 0;
+		const fixture = createRendererFixture(
+			1,
+			undefined,
+			{},
+			project,
+			undefined,
+			{
+				gitDecorations: {
+					registerFile: (nodeId) => {
+						registrations.push({ kind: 'file', nodeId });
+						return () => {
+							cleanupCount += 1;
+						};
+					},
+					registerContainer: (nodeId) => {
+						registrations.push({ kind: 'container', nodeId });
+						return () => {
+							cleanupCount += 1;
+						};
+					},
+				},
+			},
+		);
+
+		assert.deepStrictEqual(registrations, [
+			{ kind: 'container', nodeId: project.id },
+			{ kind: 'container', nodeId: folder.id },
+			{ kind: 'file', nodeId: file.id },
+		]);
+		fixture.renderer.dispose();
+		assert.strictEqual(cleanupCount, registrations.length);
+	});
+});
+
 suite('Graph Renderer / Node Drag', () => {
 	test('unreadable Project와 Folder에만 상태 Class를 적용한다', () => {
 		const loadedFolder = {

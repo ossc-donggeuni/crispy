@@ -80,6 +80,7 @@ import {
 	createAgentActivityTargetRevealState,
 	resolveAgentActivityTargetFocusPoint,
 } from './agentActivityFocus';
+import type { GitDecorationBindings } from './gitDecorationStore';
 import {
 	initializeAgentActivityNotificationCenter,
 	type AgentActivityNotificationCenter,
@@ -185,6 +186,7 @@ export interface GraphViewRuntimeOptions {
 	readonly agentActivityStore?: AgentActivityStore;
 	readonly agentSessionPresentationStore?: AgentSessionPresentationStore;
 	readonly agentActivityNotificationScheduler?: AgentActivityNotificationScheduler;
+	readonly gitDecorations?: GitDecorationBindings;
 }
 
 /** Task Scope bounds에서 Card와 Agent Binding의 전체 표시 높이를 반환한다. */
@@ -2362,7 +2364,11 @@ export function initializeGraphView(
 			onSourceDrop: (request) => handleGraphSourceDrop(request),
 			onSourceDragCancel: () => handleGraphSourceDragCancel(),
 		},
-		{ nodeEffects, agentActivityBindings },
+		{
+			nodeEffects,
+			agentActivityBindings,
+			gitDecorations: runtimeOptions.gitDecorations,
+		},
 	);
 	const resolveTaskGraphTargetAreaCollapsed = (
 		taskId: string,

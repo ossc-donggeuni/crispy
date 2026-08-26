@@ -112,3 +112,19 @@ export {
 	type WorkspaceNodeRequestController,
 	type WorkspaceNodeRequestControllerDependencies,
 } from './workspaceNodeRequestController';
+export {
+	createWorkspaceGitProjection,
+	normalizeWorkspaceGitStatus,
+	VSCODE_GIT_STATUS,
+	type WorkspaceGitChange,
+	type WorkspaceGitFileState,
+	type WorkspaceGitProjection,
+	type WorkspaceGitRepositorySnapshot,
+	type WorkspaceGitRepositoryState,
+} from './workspaceGitStatus';
+export {
+	createWorkspaceGitStatusService,
+	getBuiltInGitExtension,
+	type WorkspaceGitStatusService,
+	type WorkspaceGitStatusServiceDependencies,
+} from './workspaceGitService';

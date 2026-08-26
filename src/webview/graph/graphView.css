@@ -1153,6 +1153,79 @@ body.vscode-high-contrast-light .graph-viewport {
 	white-space: nowrap;
 }
 
+/* Git 상태는 Graph geometry를 바꾸지 않는 runtime decoration으로만 표현한다. */
+.graph-folder-name[data-git-status],
+.graph-file-name[data-git-status],
+.graph-git-marker[data-git-status] {
+	color: var(--graph-git-decoration-color);
+}
+
+[data-git-status='untracked'] {
+	--graph-git-decoration-color: var(
+		--vscode-gitDecoration-untrackedResourceForeground,
+		#73c991
+	);
+}
+
+[data-git-status='added'] {
+	--graph-git-decoration-color: var(
+		--vscode-gitDecoration-addedResourceForeground,
+		#81b88b
+	);
+}
+
+[data-git-status='modified'] {
+	--graph-git-decoration-color: var(
+		--vscode-gitDecoration-modifiedResourceForeground,
+		#e2c08d
+	);
+}
+
+[data-git-status='renamed'] {
+	--graph-git-decoration-color: var(
+		--vscode-gitDecoration-renamedResourceForeground,
+		#73c991
+	);
+}
+
+[data-git-status='deleted'] {
+	--graph-git-decoration-color: var(
+		--vscode-gitDecoration-deletedResourceForeground,
+		#c74e39
+	);
+}
+
+[data-git-status='conflict'] {
+	--graph-git-decoration-color: var(
+		--vscode-gitDecoration-conflictingResourceForeground,
+		#e4676b
+	);
+}
+
+.graph-git-marker {
+	display: inline-flex;
+	min-width: 12px;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	margin-left: auto;
+	font-size: 12px;
+	font-weight: 650;
+	line-height: 1;
+}
+
+.graph-git-marker[hidden] {
+	display: none;
+}
+
+.graph-git-container-marker::before {
+	width: 8px;
+	height: 8px;
+	background: currentcolor;
+	border-radius: 50%;
+	content: '';
+}
+
 .graph-detach-handle {
 	display: flex;
 	width: 20px;

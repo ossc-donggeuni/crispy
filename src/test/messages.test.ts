@@ -7,6 +7,8 @@ import {
 	parseAgentActivityTrackedClearMessage,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
+	parseWorkspaceGitStatusUpdatedMessage,
+	parseWorkspaceNodeDetailsResultMessage,
 	parseWorkspaceNodeRequestMessage,
 	parseWorkspaceToWebviewMessage,
 	setAgentActivity,
@@ -147,6 +149,81 @@ suite('Extension to Webview Workspace messages', () => {
 			parseWorkspaceToWebviewMessage(extensionMessage),
 			workspaceMessage,
 		);
+	});
+
+	test('Git runtime snapshot은 direct file과 ancestor ID만 strict하게 허용한다', () => {
+		const message = {
+			type: 'workspace.gitStatusUpdated',
+			contextGeneration: 3,
+			rootIds: ['workspace-root:file:///workspace/app'],
+			gitRevision: 7,
+			entries: [
+				{
+					status: 'modified',
+					nodeId: 'file:file:///workspace/app/index.ts',
+					ancestorNodeIds: ['workspace-root:file:///workspace/app'],
+				},
+				{
+					status: 'deleted',
+					ancestorNodeIds: [
+						'folder:file:///workspace/app/src',
+						'workspace-root:file:///workspace/app',
+					],
+				},
+			],
+		} as const;
+
+		assert.deepStrictEqual(
+			parseWorkspaceGitStatusUpdatedMessage(message),
+			message,
+		);
+		assert.strictEqual(parseWorkspaceGitStatusUpdatedMessage({
+			...message,
+			entries: [{
+				status: 'staged',
+				nodeId: 'file:file:///workspace/app/index.ts',
+				ancestorNodeIds: [],
+			}],
+		}), undefined);
+		assert.strictEqual(parseWorkspaceGitStatusUpdatedMessage({
+			...message,
+			extra: true,
+		}), undefined);
+	});
+
+	test('file 상세 preview는 제한된 HEAD originalText만 허용한다', () => {
+		const message = {
+			type: 'workspace.nodeDetails.result',
+			requestId: 1,
+			workspaceRevision: 2,
+			status: 'success',
+			details: {
+				nodeId: 'file:file:///workspace/app/index.ts',
+				kind: 'file',
+				name: 'index.ts',
+				relativePath: 'index.ts',
+				readonly: false,
+				canMutate: true,
+				preview: {
+					status: 'ready',
+					text: 'const value = 2;\n',
+					languageId: 'typescript',
+					originalText: 'const value = 1;\n',
+				},
+			},
+		} as const;
+
+		assert.deepStrictEqual(parseWorkspaceNodeDetailsResultMessage(message), message);
+		assert.strictEqual(parseWorkspaceNodeDetailsResultMessage({
+			...message,
+			details: {
+				...message.details,
+				preview: {
+					...message.details.preview,
+					originalText: 42,
+				},
+			},
+		}), undefined);
 	});
 
 	test('잘못된 Workspace 메시지와 Graph를 수신 경계에서 무시한다', () => {

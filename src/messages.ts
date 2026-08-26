@@ -79,7 +79,13 @@ export type WorkspaceNodeRequestMessage =
 	| WorkspaceNodeDeleteRequestMessage;
 
 export type WorkspaceFilePreview =
-	| { readonly status: 'ready'; readonly text: string; readonly languageId: string }
+	| {
+		readonly status: 'ready';
+		readonly text: string;
+		readonly languageId: string;
+		/** Git HEAD 내용이다. 존재할 때 Webview는 inline diff로 표시한다. */
+		readonly originalText?: string;
+	}
 	| { readonly status: 'too-large' | 'binary' | 'unavailable' };
 
 export interface WorkspaceNodeDetails {
@@ -179,6 +185,32 @@ export type WorkspaceToWebviewMessage = {
 	/** Root 구성이 바뀔 때 Graph와 원자적으로 교체할 Workspace 상태다. */
 	state?: WorkspacePersistentState;
 };
+
+/** Graph에서 표현할 수 있는 정규화된 Git file 상태다. */
+export type WorkspaceGitFileStatus =
+	| 'untracked'
+	| 'added'
+	| 'modified'
+	| 'renamed'
+	| 'deleted'
+	| 'conflict';
+
+/** 한 변경 파일과 그 변경을 집계할 현재 Workspace ancestor node IDs다. */
+export interface WorkspaceGitStatusEntry {
+	readonly status: WorkspaceGitFileStatus;
+	/** 삭제 파일은 Graph node를 만들지 않으므로 direct node ID가 없다. */
+	readonly nodeId?: string;
+	readonly ancestorNodeIds: readonly string[];
+}
+
+/** 현재 Root context의 Git 변경 전체를 교체하는 runtime-only snapshot이다. */
+export interface WorkspaceGitStatusUpdatedMessage {
+	readonly type: 'workspace.gitStatusUpdated';
+	readonly contextGeneration: number;
+	readonly rootIds: readonly WorkspaceRootId[];
+	readonly gitRevision: number;
+	readonly entries: readonly WorkspaceGitStatusEntry[];
+}
 
 /** Host가 지정할 수 있는 Graph Node 시각 효과 종류다. */
 export type GraphNodeEffectKind =
@@ -308,6 +340,7 @@ export type GraphNodeEffectToWebviewMessage =
 export type ExtensionToWebviewMessage =
 	| HostToWebviewWireMessage
 	| WorkspaceToWebviewMessage
+	| WorkspaceGitStatusUpdatedMessage
 	| WorkspaceNodeDetailsResultMessage
 	| WorkspaceNodeMutationResultMessage
 	| AgentActivityToWebviewMessage
@@ -840,10 +873,15 @@ function isWorkspaceFilePreview(value: unknown): value is WorkspaceFilePreview {
 		return false;
 	}
 	if (value.status === 'ready') {
-		return hasExactKeys(value, ['status', 'text', 'languageId'])
+		return hasOnlyKeys(value, ['status', 'text', 'languageId', 'originalText'])
+			&& Object.hasOwn(value, 'text')
+			&& Object.hasOwn(value, 'languageId')
 			&& typeof value.text === 'string'
 			&& value.text.length <= 1_048_576
-			&& typeof value.languageId === 'string';
+			&& typeof value.languageId === 'string'
+			&& (value.originalText === undefined
+				|| typeof value.originalText === 'string'
+				&& value.originalText.length <= 1_048_576);
 	}
 	return (value.status === 'too-large'
 		|| value.status === 'binary'
@@ -941,6 +979,88 @@ export function parseWorkspaceToWebviewMessage(
 			...(state ? { state } : {}),
 		}
 		: undefined;
+}
+
+/** unknown Host 메시지에서 Git runtime snapshot 계약만 strict하게 검증한다. */
+export function parseWorkspaceGitStatusUpdatedMessage(
+	value: unknown,
+): WorkspaceGitStatusUpdatedMessage | undefined {
+	if (
+		!isRecord(value)
+		|| value.type !== 'workspace.gitStatusUpdated'
+		|| !hasExactOwnKeys(value, [
+			'type',
+			'contextGeneration',
+			'rootIds',
+			'gitRevision',
+			'entries',
+		])
+		|| !isSafeRevision(value.contextGeneration)
+		|| !isSafeRevision(value.gitRevision)
+		|| !Array.isArray(value.entries)
+		|| value.entries.length > 100_000
+	) {
+		return undefined;
+	}
+
+	const rootIds = parseWorkspaceRootIds(value.rootIds);
+	const entries = value.entries.map(parseWorkspaceGitStatusEntry);
+
+	return rootIds && entries.every(
+		(entry): entry is WorkspaceGitStatusEntry => entry !== undefined,
+	)
+		? {
+			type: 'workspace.gitStatusUpdated',
+			contextGeneration: value.contextGeneration,
+			rootIds,
+			gitRevision: value.gitRevision,
+			entries,
+		}
+		: undefined;
+}
+
+function parseWorkspaceGitStatusEntry(
+	value: unknown,
+): WorkspaceGitStatusEntry | undefined {
+	if (
+		!isRecord(value)
+		|| !hasOnlyKeys(value, ['status', 'nodeId', 'ancestorNodeIds'])
+		|| !Object.hasOwn(value, 'status')
+		|| !Object.hasOwn(value, 'ancestorNodeIds')
+		|| !isWorkspaceGitFileStatus(value.status)
+		|| (value.nodeId !== undefined && !isWorkspaceGraphNodeId(value.nodeId))
+		|| !Array.isArray(value.ancestorNodeIds)
+		|| value.ancestorNodeIds.length > 1_024
+		|| !value.ancestorNodeIds.every(isWorkspaceGraphNodeId)
+	) {
+		return undefined;
+	}
+
+	return {
+		status: value.status,
+		...(value.nodeId === undefined ? {} : { nodeId: value.nodeId }),
+		ancestorNodeIds: [...value.ancestorNodeIds],
+	};
+}
+
+function isWorkspaceGitFileStatus(
+	value: unknown,
+): value is WorkspaceGitFileStatus {
+	return value === 'untracked'
+		|| value === 'added'
+		|| value === 'modified'
+		|| value === 'renamed'
+		|| value === 'deleted'
+		|| value === 'conflict';
+}
+
+function isWorkspaceGraphNodeId(value: unknown): value is string {
+	return typeof value === 'string'
+		&& value.length > 0
+		&& value.length <= 8_192
+		&& (value.startsWith('file:')
+			|| value.startsWith('folder:')
+			|| value.startsWith('workspace-root:'));
 }
 
 /** `src/agent/protocol`이 공개하는 타입을 기존 import 경로에서도 재노출한다. */
