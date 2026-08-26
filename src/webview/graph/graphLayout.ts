@@ -45,7 +45,7 @@ interface GraphLayoutNodeBase {
 	readonly height: number;
 	/** Card geometry와 별개로 Renderer DOM이 확보해야 하는 높이다. */
 	readonly renderedHeight?: number;
-	/** Binding으로 이동한 마지막 실제 Graph Content까지의 세로 범위다. */
+	/** 상위 Node의 Effect Region이 이 Node의 Agent Binding까지 포함할 세로 범위다. */
 	readonly graphContentHeight?: number;
 	/** Card 좌상단 기준 Agent Binding Container의 Layout 결정 위치다. */
 	readonly agentActivityBindingTop?: number;
@@ -633,12 +633,7 @@ function createArrangedFileLayoutTrees(
 		(sum, bindingBlockHeight) => sum + bindingBlockHeight,
 		0,
 	);
-	const graphContentBindingCount = hasPaginationControls
-		? visibleBindingBlockHeights.length
-		: Math.max(0, visibleBindingBlockHeights.length - 1);
-	const graphContentHeight = height + visibleBindingBlockHeights
-		.slice(0, graphContentBindingCount)
-		.reduce((sum, bindingBlockHeight) => sum + bindingBlockHeight, 0);
+	const graphContentHeight = renderedHeight;
 
 	return [{
 		id,
@@ -914,6 +909,18 @@ function toGraphLayoutNode(
 	position: GraphLayoutPosition,
 	agentActivityBindingTop?: number,
 ): GraphLayoutNode {
+	const bindingBlockHeight = getAgentActivityBindingBlockHeight(
+		tree.agentActivityBindingCount ?? 0,
+	);
+	const bindingBottom = agentActivityBindingTop === undefined
+		? tree.height
+		: agentActivityBindingTop
+			+ bindingBlockHeight
+			- AGENT_ACTIVITY_BINDING_TOP_GAP;
+	const graphContentHeight = Math.max(
+		tree.graphContentHeight ?? tree.height,
+		bindingBottom,
+	);
 	const base = {
 		id: tree.id,
 		name: tree.name,
@@ -924,9 +931,9 @@ function toGraphLayoutNode(
 		...(tree.renderedHeight === undefined
 			? {}
 			: { renderedHeight: tree.renderedHeight }),
-		...(tree.graphContentHeight === undefined
+		...(graphContentHeight === tree.height
 			? {}
-			: { graphContentHeight: tree.graphContentHeight }),
+			: { graphContentHeight }),
 		...(tree.agentActivityBindingCount === undefined
 			? {}
 			: { agentActivityBindingCount: tree.agentActivityBindingCount }),

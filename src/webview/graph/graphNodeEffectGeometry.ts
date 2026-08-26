@@ -17,7 +17,8 @@ export interface GraphNodeEffectRegionBounds {
 
 /**
  * G-11 Parent Effect와 G-12 Binding이 공유하는 visible subtree bounds다.
- * 실제 Graph Content extent만 포함하고 Backlink/숨김 Node는 제외한다.
+ * Root 자신의 Binding은 제외하고 하위 Node의 Binding까지 포함하며,
+ * Backlink/숨김 Node는 제외한다.
  */
 export function getGraphNodeEffectRegionBounds(
 	layout: GraphLayout,
@@ -63,7 +64,11 @@ export function getGraphNodeEffectRegionBounds(
 		maxX = Math.max(maxX, position.x + node.width);
 		maxY = Math.max(
 			maxY,
-			position.y + (node.graphContentHeight ?? node.height),
+			position.y + (
+				nodeId === rootNodeId
+					? node.height
+					: (node.graphContentHeight ?? node.height)
+			),
 		);
 		pending.push(...(childrenByParent.get(nodeId) ?? []));
 	}

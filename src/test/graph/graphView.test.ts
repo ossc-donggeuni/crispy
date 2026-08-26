@@ -25,6 +25,7 @@ import {
 	createGraphLayout,
 	getGraphRootLayoutNodeId,
 	getFileGroupHeight,
+	GRAPH_FILE_GROUP_STANDALONE_HEIGHT,
 	GRAPH_FOLDER_NODE_HEIGHT,
 	GRAPH_FOLDER_NODE_WIDTH,
 	GRAPH_LAYOUT_ROOT_GAP,
@@ -68,6 +69,7 @@ import {
 	sanitizeWorkspaceTaskRecords,
 } from '../../webview/graph/graphView';
 import { createGraphNodeEffects } from '../../webview/graph/graphNodeEffects';
+import { GRAPH_NODE_EFFECT_REGION_PADDING } from '../../webview/graph/graphNodeEffectGeometry';
 import { GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE } from '../../webview/graph/graphNodeDrag';
 import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
 import { resolveAgentSessionColor } from '../../agent/agentSessionColor';
@@ -9765,7 +9767,10 @@ suite('Graph View', () => {
 		assert.strictEqual(updatedBounds.height, initialBounds.height + bindingHeight);
 		assert.strictEqual(
 			updatedBounds.y + updatedBounds.height,
-			groupPosition.y + initialGroupHeight + bindingHeight + 6,
+			groupPosition.y
+				+ initialGroupHeight
+				+ bindingHeight
+				+ GRAPH_NODE_EFFECT_REGION_PADDING,
 		);
 		assert.strictEqual(
 			fileGroup.style.height,
@@ -9777,6 +9782,80 @@ suite('Graph View', () => {
 		assert.ok(bindingContainer);
 		assert.ok(getDirectNodeEffect(getAgentBindingElements(fileRow)[0], 'pulse'));
 		activityEffects.dispose();
+		graphView.dispose();
+	});
+
+	test('Standalone File Binding 높이까지 Folder subtree Effect Region을 확장한다', () => {
+		const file = {
+			kind: 'file' as const,
+			id: 'file:standalone-effect-extent/baseball/page.tsx',
+			name: 'page.tsx',
+		};
+		const folder = {
+			kind: 'folder' as const,
+			id: 'folder:standalone-effect-extent/baseball',
+			name: 'baseball',
+			status: 'loaded' as const,
+			children: [file],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:standalone-effect-extent',
+			name: 'standalone-effect-extent',
+			status: 'loaded',
+			children: [folder],
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[project.id]: true,
+				[folder.id]: true,
+			},
+		}, createSingleRootGraph(project), {}, [], undefined, {
+			agentActivityStore: store,
+		});
+		const folderTarget = { nodeId: folder.id };
+		const fileTarget = { nodeId: file.id };
+		const fileCard = getDescendantByAttribute(
+			root,
+			'data-graph-node-id',
+			file.id,
+		);
+
+		graphView.setNodeEffect(folderTarget, { kind: 'pulse', color: '#44ccdd' });
+		const region = getEffectRegion(root, folder.id);
+		const initialBounds = readEffectRegionBounds(region);
+
+		store.setAgentActivity('session-folder', folderTarget, 'active');
+
+		assert.deepStrictEqual(
+			readEffectRegionBounds(region),
+			initialBounds,
+		);
+
+		store.setAgentActivity('session-file', fileTarget, 'editing');
+
+		const bindingHeight = getAgentActivityBindingBlockHeight(1);
+		const updatedBounds = readEffectRegionBounds(region);
+		const filePosition = readTranslate(fileCard.style.transform);
+
+		assert.strictEqual(updatedBounds.height, initialBounds.height + bindingHeight);
+		assert.strictEqual(
+			updatedBounds.y + updatedBounds.height,
+			filePosition.y
+				+ GRAPH_FILE_GROUP_STANDALONE_HEIGHT
+				+ bindingHeight
+				+ GRAPH_NODE_EFFECT_REGION_PADDING,
+		);
+		assert.strictEqual(
+			fileCard.style.height,
+			`${GRAPH_FILE_GROUP_STANDALONE_HEIGHT}px`,
+		);
+		assert.ok(findAgentBindingContainer(fileCard));
+		assert.ok(getNodeEffect(region, 'pulse'));
 		graphView.dispose();
 	});
 
