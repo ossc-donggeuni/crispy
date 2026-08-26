@@ -13,7 +13,9 @@ import {
 suite('Agent Activity Notifications', () => {
 	test('모든 Target의 현재 Activity를 전역 수신 sequence 최신순으로 펼친다', () => {
 		const store = createAgentActivityStore();
-		const presentations = createAgentSessionPresentationStore();
+		const presentations = createAgentSessionPresentationStore((sessionId) => (
+			sessionId === 'session-A' ? '#123456' : '#abcdef'
+		));
 
 		presentations.startSession('tab-A', 'session-A', '첫 번째 Agent');
 		presentations.activateSession('tab-A', 'session-A', '첫 번째 Agent');
@@ -55,10 +57,12 @@ suite('Agent Activity Notifications', () => {
 			},
 		]);
 		assert.strictEqual(entries[0]?.sessionTitle, '두 번째 Agent');
+		assert.strictEqual(entries[0]?.sessionColor, '#abcdef');
 		assert.strictEqual(entries[0]?.currentMessage, '폴더를 분석합니다');
 		assert.strictEqual(entries[0]?.targetName, 'src');
 		assert.strictEqual(entries[0]?.targetPath, 'crispy/app/src');
 		assert.strictEqual(entries[1]?.targetPath, 'crispy/app/src/graphView.ts');
+		assert.strictEqual(entries[1]?.sessionColor, '#123456');
 
 		presentations.dispose();
 	});

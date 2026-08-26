@@ -416,6 +416,7 @@ function updateNotificationRegistration(
 	registration.effectHost.setEffects(getAgentActivityEffects(
 		entry.sessionId,
 		entry.activity,
+		entry.sessionColor,
 	));
 }
 
