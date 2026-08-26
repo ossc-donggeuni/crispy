@@ -23,6 +23,7 @@ import {
 	isValidMcpOpaqueId,
 	type McpRandomBytes,
 } from './sessionCredentials';
+import type { TaskToolLease, TaskToolRequested } from './taskToolProtocol';
 
 export type McpRuntimeLifecycle =
 	| 'starting'
@@ -74,7 +75,8 @@ export type McpSessionRuntimeEvent =
 	| McpRuntimeFailureEvent
 	| McpRuntimeActivityEvent
 	| McpRuntimePingEvent
-	| AgentActivityRequested;
+	| AgentActivityRequested
+	| TaskToolRequested;
 
 export type McpPrepareResult =
 	| {
@@ -165,6 +167,7 @@ export interface McpSessionRuntimeOptions {
 	readonly createRequestId?: () => string;
 	readonly onEvent?: (event: McpSessionRuntimeEvent) => void;
 	readonly agentActivityCompatible?: boolean;
+	readonly taskLease?: TaskToolLease;
 }
 
 interface PendingOperation {
@@ -314,6 +317,7 @@ export class McpSessionRuntime {
 	private readonly createRequestId: () => string;
 	private readonly onEvent: (event: McpSessionRuntimeEvent) => void;
 	private readonly agentActivityCompatible: boolean;
+	private readonly taskLease: TaskToolLease | undefined;
 	private lifecycleValue: McpRuntimeLifecycle = 'stopped';
 	private startedOnce = false;
 	private stage: 'idle' | 'ready' | 'registering' | 'running' = 'idle';
@@ -368,6 +372,9 @@ export class McpSessionRuntime {
 			?? (() => `request-${randomUUID()}`);
 		this.onEvent = options.onEvent ?? (() => undefined);
 		this.agentActivityCompatible = options.agentActivityCompatible === true;
+		this.taskLease = options.taskLease === undefined
+			? undefined
+			: Object.freeze({ ...options.taskLease });
 	}
 
 	get lifecycle(): McpRuntimeLifecycle {
@@ -466,6 +473,7 @@ export class McpSessionRuntime {
 				routeId: credentials.routeId,
 				token: credentials.token,
 				agentActivityCompatible: this.agentActivityCompatible,
+				...(this.taskLease === undefined ? {} : { taskLease: this.taskLease }),
 			}, 'auth.registered', this.timeouts.registrationMs);
 			this.assertCurrentStarting();
 
@@ -566,6 +574,21 @@ export class McpSessionRuntime {
 				this.lifecycleValue === 'running'
 				&& this.agentActivityCompatible
 			) {
+				this.emit(message);
+			}
+			return;
+		}
+		if (message.type === 'session.taskToolRequested') {
+			if (
+				message.generation !== this.generation
+				|| message.sessionId !== this.sessionId
+				|| message.executionId !== this.taskLease?.executionId
+				|| message.workNodeId !== this.taskLease.workNodeId
+			) {
+				this.failProtocol();
+				return;
+			}
+			if (this.lifecycleValue === 'running') {
 				this.emit(message);
 			}
 			return;

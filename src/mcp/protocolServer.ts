@@ -59,7 +59,17 @@ import {
 	isCrispyToolValidationFailure,
 	normalizeCrispyToolCallArguments,
 	type AgentActivityToolOperation,
+	createTaskToolErrorResult,
+	createTaskToolSuccessResult,
+	type TaskToolOperation,
 } from './toolServer';
+import {
+	createTaskScopeRequestId,
+	isValidTaskToolLease,
+	parseTaskToolRequested,
+	type TaskToolLease,
+	type TaskToolRequested,
+} from './taskToolProtocol';
 
 export interface McpActivityObservedEvent {
 	readonly type: 'session.mcpActivityObserved';
@@ -79,12 +89,21 @@ export interface McpProtocolServerOptions {
 	readonly onPingObserved?: (event: McpPingObservedEvent) => void;
 	readonly monotonicClock?: MonotonicClock;
 	readonly agentActivityTransport?: AgentActivityIpcTransport;
+	readonly taskToolTransport?: TaskToolIpcTransport;
 }
 
 export interface AgentActivityIpcTransport {
 	isConnected(): boolean;
 	send(
 		event: AgentActivityRequested,
+		callback: (error: Error | null) => void,
+	): boolean;
+}
+
+export interface TaskToolIpcTransport {
+	isConnected(): boolean;
+	send(
+		event: TaskToolRequested,
 		callback: (error: Error | null) => void,
 	): boolean;
 }
@@ -108,6 +127,7 @@ interface AuthenticatedRequestSlot {
 
 interface ActiveRegistration extends McpSessionCredentials {
 	readonly agentActivityCompatible: boolean;
+	readonly taskLease: TaskToolLease | undefined;
 	readonly activityAdmission: RegistrationActivityAdmission | undefined;
 	readonly authenticatedRequestSlots: Set<AuthenticatedRequestSlot>;
 	authenticatedInFlight: number;
@@ -127,7 +147,27 @@ interface ClearActivityInput {
 	readonly targetKind: AgentActivityTargetKind;
 }
 
+interface CompleteTaskInput {
+	readonly status: 'completed' | 'rejected';
+	readonly summary: string;
+}
+
+interface ScopeRequestInput {
+	readonly access: 'read' | 'write';
+	readonly paths: readonly string[];
+	readonly reason: string;
+}
+
+interface ScopeResultInput {
+	readonly requestId: string;
+	readonly result: 'approved' | 'rejected';
+}
+
 const CLOSED_AGENT_ACTIVITY_TRANSPORT: AgentActivityIpcTransport = Object.freeze({
+	isConnected: () => false,
+	send: () => false,
+});
+const CLOSED_TASK_TOOL_TRANSPORT: TaskToolIpcTransport = Object.freeze({
 	isConnected: () => false,
 	send: () => false,
 });
@@ -144,6 +184,7 @@ export class CrispyMcpProtocolServer {
 	private readonly onPingObserved: (event: McpPingObservedEvent) => void;
 	private readonly monotonicClock: MonotonicClock;
 	private readonly agentActivityTransport: AgentActivityIpcTransport;
+	private readonly taskToolTransport: TaskToolIpcTransport;
 	private readonly requestRegistrations = new WeakMap<Request, ActiveRegistration>();
 	private readonly sdkHandler: McpHttpHandler;
 	private lifecycle: ServerLifecycle = 'idle';
@@ -164,6 +205,8 @@ export class CrispyMcpProtocolServer {
 		this.monotonicClock = options.monotonicClock ?? (() => performance.now());
 		this.agentActivityTransport = options.agentActivityTransport
 			?? CLOSED_AGENT_ACTIVITY_TRANSPORT;
+		this.taskToolTransport = options.taskToolTransport
+			?? CLOSED_TASK_TOOL_TRANSPORT;
 		this.sdkHandler = createMcpHandler(
 			(context) => {
 				const registration = context.requestInfo === undefined
@@ -175,6 +218,14 @@ export class CrispyMcpProtocolServer {
 					handleAgentActivity: (operation, input) => registration === undefined
 						? createActivityToolErrorResult('registration_inactive')
 						: this.handleAgentActivity(registration, operation, input),
+					...(registration?.taskLease === undefined
+						? {}
+						: {
+							taskLease: registration.taskLease,
+							handleTaskTool: (operation: TaskToolOperation, input: unknown) => (
+								this.handleTaskTool(registration, operation, input)
+							),
+						}),
 				});
 			},
 			{
@@ -259,6 +310,7 @@ export class CrispyMcpProtocolServer {
 	registerSession(
 		credentials: McpSessionCredentials,
 		agentActivityCompatible: boolean,
+		taskLease?: TaskToolLease,
 	): RegisteredMcpSession {
 		if (
 			this.lifecycle !== 'running'
@@ -266,6 +318,7 @@ export class CrispyMcpProtocolServer {
 			|| this.registrationAttempted
 			|| credentials.generation !== this.generation
 			|| typeof agentActivityCompatible !== 'boolean'
+			|| (taskLease !== undefined && !isValidTaskToolLease(taskLease))
 		) {
 			throw new Error('MCP session registration failed.');
 		}
@@ -277,6 +330,9 @@ export class CrispyMcpProtocolServer {
 			routeId: credentials.routeId,
 			token: credentials.token,
 			agentActivityCompatible,
+			taskLease: taskLease === undefined
+				? undefined
+				: Object.freeze({ ...taskLease }),
 			activityAdmission: agentActivityCompatible
 				? new RegistrationActivityAdmission(this.monotonicClock)
 				: undefined,
@@ -419,6 +475,7 @@ export class CrispyMcpProtocolServer {
 			const normalizedBody = normalizeCrispyToolCallArguments(
 				body.parsedBody,
 				registration.agentActivityCompatible,
+				registration.taskLease !== undefined,
 			);
 
 			const nodeHandler = toNodeHandler({
@@ -581,6 +638,65 @@ export class CrispyMcpProtocolServer {
 			}
 		} catch {
 			return createActivityToolErrorResult('internal_error');
+		}
+	}
+
+	/** Session-bound Task tool을 exact registration lease로 IPC에 넘긴다. */
+	private handleTaskTool(
+		registration: ActiveRegistration,
+		operation: TaskToolOperation,
+		input: unknown,
+	): CallToolResult {
+		const lease = registration.taskLease;
+		if (
+			lease === undefined
+			|| registration.revoked
+			|| this.registration !== registration
+			|| this.lifecycle !== 'running'
+			|| !this.taskToolTransport.isConnected()
+		) {
+			return createTaskToolErrorResult('registration_inactive');
+		}
+		try {
+			const base = {
+				type: 'session.taskToolRequested' as const,
+				sessionId: registration.sessionId,
+				generation: registration.generation,
+				executionId: lease.executionId,
+				workNodeId: lease.workNodeId,
+			};
+			const event = operation === 'complete'
+				? {
+					...base,
+					operation,
+					status: (input as CompleteTaskInput).status,
+					summary: (input as CompleteTaskInput).summary,
+				}
+				: operation === 'scope-request'
+					? {
+						...base,
+						operation,
+						requestId: createTaskScopeRequestId(),
+						access: (input as ScopeRequestInput).access,
+						paths: (input as ScopeRequestInput).paths,
+						reason: (input as ScopeRequestInput).reason,
+					}
+					: {
+						...base,
+						operation,
+						requestId: (input as ScopeResultInput).requestId,
+						result: (input as ScopeResultInput).result,
+					};
+			const parsed = parseTaskToolRequested(event);
+			if (!parsed) {
+				return createTaskToolErrorResult('invalid_input');
+			}
+			this.taskToolTransport.send(parsed, () => undefined);
+			return createTaskToolSuccessResult(
+				parsed.operation === 'scope-request' ? parsed.requestId : undefined,
+			);
+		} catch {
+			return createTaskToolErrorResult('internal_error');
 		}
 	}
 

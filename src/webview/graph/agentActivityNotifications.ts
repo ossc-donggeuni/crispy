@@ -291,6 +291,14 @@ function createPendingTargetPresentation(
 	target: Readonly<GraphNodeEffectTarget>,
 	scopeRoots: readonly AgentActivityTargetScopeRoot[],
 ): AgentActivityTargetPresentation | undefined {
+	if (target.nodeId.startsWith('task-node:')) {
+		return Object.freeze({
+			name: 'Task Flow 노드',
+			path: 'Task Flow',
+			kind: 'folder',
+			availability: 'present',
+		});
+	}
 	const parsedTarget = parseGraphNodeUri(target.nodeId);
 
 	if (!parsedTarget) {

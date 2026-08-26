@@ -7444,6 +7444,188 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Ready Start 버튼과 Host 실행 snapshot이 Task 효과·편집 잠금·AgentActivity 알림을 함께 갱신한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const startRequests: Array<{ taskId: string; storageRevision: number }> = [];
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{
+				onTaskExecutionStart: (taskId, storageRevision) => {
+					startRequests.push({ taskId, storageRevision });
+				},
+			},
+			[task],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const startNode = task.nodes.find((node) => node.kind === 'start');
+		const workNode = task.nodes.find((node) => node.kind === 'work');
+		const endNode = task.nodes.find((node) => node.kind === 'end');
+
+		assert.ok(startNode && workNode?.kind === 'work' && endNode);
+		let startElement = getTaskElement(
+			root, 'data-task-node-id', startNode.id, task.id,
+		);
+		let startButton = getDescendantByClass(startElement, 'task-start-run-action');
+		const record = graphView.taskState.getWorkspaceTask(task.id);
+
+		assert.ok(record);
+		assert.strictEqual(startButton.title, 'Task 시작');
+		startButton.dispatch('click', createClickEvent(startButton));
+		assert.deepStrictEqual(startRequests, [{
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+		}]);
+
+		startElement.dispatch('dblclick', createClickEvent(startElement));
+		assert.ok(findTaskInspector(root));
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-ui',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'running',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'running' }],
+		});
+
+		startElement = getTaskElement(
+			root, 'data-task-node-id', startNode.id, task.id,
+		);
+		const workElement = getTaskElement(
+			root, 'data-task-node-id', workNode.id, task.id,
+		);
+		const endElement = getTaskElement(
+			root, 'data-task-node-id', endNode.id, task.id,
+		);
+		assert.strictEqual(startElement.getAttribute('data-task-execution-state'), 'running');
+		assert.strictEqual(workElement.getAttribute('data-task-execution-state'), 'running');
+		assert.strictEqual(endElement.getAttribute('data-task-execution-state'), null);
+		assert.strictEqual(
+			findDescendantByClass(startElement, 'task-start-run-action'),
+			undefined,
+		);
+		assert.ok(findDescendantByAttribute(
+			startElement, 'data-graph-node-effect', 'pulse',
+		));
+		assert.ok(findDescendantByAttribute(
+			workElement, 'data-graph-node-effect', 'shimmer',
+		));
+		assert.strictEqual(findTaskInspector(root), undefined);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				startElement, TASK_NODE_ACTION_ATTRIBUTE, 'add-work',
+			).disabled,
+			true,
+		);
+		assert.deepStrictEqual(store.getActivities({ nodeId: startNode.id }).map(
+			({ sessionId, activity }) => ({ sessionId, activity }),
+		), [{ sessionId: `task:execution-ui:${startNode.id}`, activity: 'editing' }]);
+		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
+			({ sessionId, activity }) => ({ sessionId, activity }),
+		), [{ sessionId: `task:execution-ui:${workNode.id}`, activity: 'active' }]);
+		assert.strictEqual(
+			presentations.getSession(`task:execution-ui:${workNode.id}`)?.currentMessage,
+			'Work를 수행하고 있습니다.',
+		);
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-ui',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'rejected',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'running' }],
+		});
+		startElement = getTaskElement(
+			root, 'data-task-node-id', startNode.id, task.id,
+		);
+		assert.strictEqual(
+			findDescendantByClass(startElement, 'task-start-run-action'),
+			undefined,
+		);
+		assert.strictEqual(
+			getDescendantByAttribute(
+				startElement, TASK_NODE_ACTION_ATTRIBUTE, 'add-work',
+			).disabled,
+			true,
+		);
+
+		const startEffectLayer = getDescendantByAttribute(
+			startElement, 'data-graph-node-effects', '',
+		);
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-ui',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'completed',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'completed', summary: 'Done' }],
+		});
+
+		startElement = getTaskElement(
+			root, 'data-task-node-id', startNode.id, task.id,
+		);
+		startButton = getDescendantByClass(startElement, 'task-start-run-action');
+		assert.strictEqual(
+			getDescendantByAttribute(startElement, 'data-graph-node-effects', ''),
+			startEffectLayer,
+		);
+		assert.strictEqual(startElement.getAttribute('data-task-execution-state'), 'completed');
+		assert.strictEqual(
+			getTaskElement(root, 'data-task-node-id', endNode.id, task.id)
+				.getAttribute('data-task-execution-state'),
+			'completed',
+		);
+		assert.ok(findDescendantByAttribute(
+			startElement, 'data-graph-node-effect', 'outline',
+		));
+		assert.strictEqual(
+			getDescendantByAttribute(
+				startElement, 'data-graph-node-effect', 'icon',
+			).getAttribute('data-graph-node-effect-icon'),
+			'check',
+		);
+		assert.strictEqual(startButton.disabled, false);
+		assert.deepStrictEqual(store.getActivities({ nodeId: startNode.id }).map(
+			({ activity }) => activity,
+		), ['completed']);
+		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
+			({ activity }) => activity,
+		), ['completed']);
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-ui-next',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'running',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'running' }],
+		});
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: startNode.id }).map(({ sessionId }) => sessionId),
+			[`task:execution-ui-next:${startNode.id}`],
+		);
+		assert.strictEqual(
+			presentations.isKnownSession(`task:execution-ui:${startNode.id}`),
+			false,
+		);
+
+		graphView.dispose();
+		assert.deepStrictEqual(store.getSnapshot(), []);
+		presentations.dispose();
+	});
+
 	test('Task Port/Action/Grab CSS는 연결 상태와 pointer 충돌 규약을 표현한다', () => {
 		const taskViewCss = readFileSync(resolve(
 			__dirname,

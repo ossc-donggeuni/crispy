@@ -104,6 +104,13 @@ export interface AgentPanelUiController {
 	/** 탭별 Workspace/provider assignment lifecycle을 immutable snapshot으로 반환한다. */
 	getAssignmentState(tabId: AgentTabId): AgentTabAssignmentState | undefined;
 
+	/** Host가 ready Work에 요청한 ordinary Agent tab을 background pending 상태로 만든다. */
+	createTaskTab?(
+		providerId: ProviderId,
+		workspaceRootId: WorkspaceRootId,
+		switchAttemptId: SwitchAttemptId,
+	): AgentTabId | undefined;
+
 	/** atomic Workspace refresh의 새 Catalog 전체를 picker에 한 번에 적용한다. */
 	updateWorkspaceRootCatalog(
 		catalog: readonly WorkspaceRootCatalogEntry[],
@@ -712,6 +719,28 @@ export function initializeAgentPanelUi(
 		model,
 		getSnapshot: () => model.getSnapshot(),
 		getAssignmentState: (tabId) => assignmentStateByTab.get(tabId),
+		createTaskTab(providerId, workspaceRootId, switchAttemptId) {
+			if (
+				disposed
+				|| !Number.isSafeInteger(switchAttemptId)
+				|| switchAttemptId <= 0
+			) {
+				return undefined;
+			}
+			const tabId = model.createTab({ activate: false });
+			assignmentStateByTab.set(tabId, Object.freeze({
+				kind: 'unassigned',
+				selectedWorkspaceRootId: workspaceRootId,
+				pendingSwitch: Object.freeze({
+					providerId,
+					workspaceRootId,
+					switchAttemptId,
+				}),
+			}));
+			lastIssuedSwitchAttemptByTab.set(tabId, switchAttemptId);
+			renderViews();
+			return tabId;
+		},
 		updateWorkspaceRootCatalog(catalog): void {
 			if (disposed) {
 				return;

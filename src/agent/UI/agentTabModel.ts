@@ -84,7 +84,7 @@ export type AgentTabModelListener = (snapshot: AgentTabModelSnapshot) => void;
 export interface AgentTabModel {
 	getSnapshot(): AgentTabModelSnapshot;
 	subscribe(listener: AgentTabModelListener): () => void;
-	createTab(): AgentTabId;
+	createTab(options?: Readonly<{ readonly activate?: boolean }>): AgentTabId;
 	selectTab(tabId: AgentTabId): void;
 	assignProvider(
 		tabId: AgentTabId,
@@ -279,7 +279,7 @@ export function createAgentTabModel(
 			return () => listeners.delete(listener);
 		},
 
-		createTab(): AgentTabId {
+		createTab(options = {}): AgentTabId {
 			const tab: MutableAgentTab = {
 				id: createTabId(),
 				displayName: UNSELECTED_TAB_LABEL,
@@ -292,7 +292,9 @@ export function createAgentTabModel(
 				mcpRestartPending: false,
 			};
 			tabs.push(tab);
-			activeTabId = tab.id;
+			if (options.activate !== false || activeTabId === undefined) {
+				activeTabId = tab.id;
+			}
 			notify();
 			return tab.id;
 		},

@@ -56,6 +56,32 @@ export {
 	type WorkspaceTaskStateSubscriber,
 } from './workspaceTaskState';
 export {
+	createTaskWorkExecutionPlan,
+	createTaskExecutionScheduler,
+	isTaskExecutionActive,
+	type TaskExecutionScopeTarget,
+	type TaskExecutionScheduler,
+	type TaskExecutionSnapshot,
+	type TaskExecutionState,
+	type TaskExecutionSubscriber,
+	type TaskWorkExecutionPlan,
+	type TaskWorkExecutionSnapshot,
+	type TaskWorkExecutionState,
+} from './taskExecution';
+export {
+	parseTaskExecutionToHostMessage,
+	parseTaskExecutionToWebviewMessage,
+	TASK_EXECUTION_SUMMARY_MAX_BYTES,
+	type TaskExecutionStartMessage,
+	type TaskExecutionStartRejectedMessage,
+	type TaskExecutionStartRejectionReason,
+	type TaskExecutionToHostMessage,
+	type TaskExecutionToWebviewMessage,
+	type TaskExecutionUpdatedMessage,
+	type TaskSessionCreateMessage,
+	type TaskSessionCreateRequestedMessage,
+} from './taskExecutionProtocol';
+export {
 	materializeTaskTransfer,
 	parseTaskTransferJson,
 	serializeTaskTransfer,

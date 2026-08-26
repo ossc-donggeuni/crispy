@@ -1,5 +1,12 @@
 import { AGENT_PROVIDER_LABELS } from '../../agent/UI/agentProviders';
-import type { TaskNodePosition, TaskOrigin } from '../../task';
+import {
+	isTaskExecutionActive,
+	type TaskExecutionSnapshot,
+	type TaskNodePosition,
+	type TaskOrigin,
+} from '../../task';
+import type { GraphNodeLocalEffectHost } from '../graph/graphNodeEffects';
+import { getAgentActivityEffects } from '../graph/agentActivityPresentation';
 import {
 	createTaskEdgeGeometry,
 	getTaskPortCenter,
@@ -62,6 +69,8 @@ export interface TaskGraphTargetRegionStatus {
 export interface TaskRenderer {
 	/** 기존 DOM을 재사용하며 최신 Task Layout을 적용한다. */
 	applyLayout(layout: TaskGraphLayout): void;
+	/** Host-owned 실행 snapshot을 Task Node effect와 편집 잠금에 반영한다. */
+	applyExecutionSnapshot(snapshot: TaskExecutionSnapshot): void;
 	/** Task/Node ID가 일치하는 Node를 현재 선택으로 전환한다. */
 	selectNode(taskId: string, nodeId: string): boolean;
 	/** 현재 렌더된 Start Node의 import action에 focus를 복원한다. */
@@ -92,6 +101,10 @@ export interface TaskRendererInteractions {
 	onNodeSelectionChange?: (node: TaskLayoutNode | undefined) => void;
 	/** Start Action으로 연결 전 Work 하나를 추가한다. */
 	onWorkAdd?: (taskId: string) => void;
+	/** Ready Start의 floating 실행 버튼을 Host start 요청으로 전달한다. */
+	onTaskStart?: (taskId: string) => void;
+	/** Task Node에서도 공용 AgentActivity effect recipe를 쓰는 local host factory다. */
+	createNodeEffectHost?: (element: HTMLElement) => GraphNodeLocalEffectHost;
 	/** Start Action으로 현재 Task를 전송 JSON으로 내보낸다. */
 	onTaskExport?: (taskId: string) => void;
 	/** Start Action으로 현재 Task를 교체할 JSON 입력을 요청한다. */
@@ -157,6 +170,7 @@ interface TaskNodePositionDragSession extends TaskDragSessionBase {
 type TaskDragSession = TaskOriginDragSession | TaskNodePositionDragSession;
 type TaskPortDirection = 'input' | 'output';
 type TaskNodeAction =
+	| 'start-task'
 	| 'toggle-reference-area'
 	| 'toggle-work-area'
 	| 'add-work'
@@ -206,6 +220,12 @@ export function initializeTaskRenderer(
 ): TaskRenderer {
 	const ownerDocument = nodeLayer.ownerDocument;
 	const nodeElements = new Map<string, HTMLElement>();
+	const nodeEffectHosts = new Map<string, GraphNodeLocalEffectHost>();
+	const executionByTaskId = new Map<string, TaskExecutionSnapshot>();
+	const isExecutionLocked = (taskId: string): boolean => {
+		const snapshot = executionByTaskId.get(taskId);
+		return snapshot !== undefined && isTaskExecutionActive(snapshot);
+	};
 	const scopeAreaElements = new Map<string, HTMLElement>();
 	const scopeAreaTargets = new Map<string, TaskGraphTargetDropTarget>();
 	const edgeElements = new Map<string, SVGPathElement>();
@@ -218,6 +238,7 @@ export function initializeTaskRenderer(
 	let suppressClickKey: string | undefined;
 	let suppressDoubleClickKey: string | undefined;
 	let hoveredScopeAreaKey: string | undefined;
+	let appliedLayout = initialLayout;
 	let disposed = false;
 	const reducedMotionQuery = ownerDocument.defaultView?.matchMedia?.(
 		'(prefers-reduced-motion: reduce)',
@@ -636,6 +657,9 @@ export function initializeTaskRenderer(
 		if (!element || !renderKey || !node) {
 			return;
 		}
+		if (isExecutionLocked(node.taskId)) {
+			return;
+		}
 
 		cancelTaskConnection();
 		event.stopPropagation();
@@ -785,6 +809,10 @@ export function initializeTaskRenderer(
 		event.preventDefault();
 		event.stopPropagation();
 		clearTaskNodeSelection();
+		if (isExecutionLocked(port.node.taskId)) {
+			cancelTaskConnection();
+			return;
+		}
 		if (port.direction === 'output') {
 			if (connectionSession?.renderKey === port.renderKey) {
 				cancelTaskConnection();
@@ -846,6 +874,7 @@ export function initializeTaskRenderer(
 			if (
 				taskId
 				&& edgeId
+				&& !isExecutionLocked(taskId)
 				&& edgeAction.getAttribute(TASK_EDGE_ACTION_ATTRIBUTE) === 'disconnect-edge'
 			) {
 				interactions.onEdgeDisconnect?.(taskId, edgeId);
@@ -864,11 +893,21 @@ export function initializeTaskRenderer(
 				: undefined;
 			const node = renderKey ? nodesByRenderKey.get(renderKey) : undefined;
 			const action = nodeAction.getAttribute(TASK_NODE_ACTION_ATTRIBUTE);
+			const executionLocked = node ? isExecutionLocked(node.taskId) : false;
 
 			event.preventDefault();
 			event.stopPropagation();
 			cancelTaskConnection();
-			if (node?.kind === 'start' && action === 'add-work') {
+			if (
+				node?.kind === 'start'
+				&& action === 'start-task'
+				&& node.flowState === 'ready'
+				&& !executionLocked
+			) {
+				interactions.onTaskStart?.(node.taskId);
+			} else if (executionLocked) {
+				return;
+			} else if (node?.kind === 'start' && action === 'add-work') {
 				interactions.onWorkAdd?.(node.taskId);
 			} else if (node?.kind === 'start' && action === 'import-task') {
 				interactions.onTaskImport?.(node.taskId);
@@ -1000,6 +1039,7 @@ export function initializeTaskRenderer(
 		if (disposed) {
 			return;
 		}
+		appliedLayout = layout;
 
 		const nextNodeKeys = new Set(layout.nodes.map((node) => (
 			createTaskNodeRenderKey(node.taskId, node.id)
@@ -1089,6 +1129,8 @@ export function initializeTaskRenderer(
 
 		for (const [renderKey, element] of nodeElements) {
 			if (!nextNodeKeys.has(renderKey)) {
+				nodeEffectHosts.get(renderKey)?.dispose();
+				nodeEffectHosts.delete(renderKey);
 				element.remove();
 				nodeElements.delete(renderKey);
 			}
@@ -1172,9 +1214,17 @@ export function initializeTaskRenderer(
 				element = ownerDocument.createElement('div');
 				nodeLayer.append(element);
 				nodeElements.set(renderKey, element);
+				const effectHost = interactions.createNodeEffectHost?.(element);
+				if (effectHost) {
+					nodeEffectHosts.set(renderKey, effectHost);
+				}
 			}
 
-			syncTaskNodeElement(element, node, ownerDocument);
+			const execution = executionByTaskId.get(node.taskId);
+			syncTaskNodeElement(element, node, ownerDocument, execution);
+			nodeEffectHosts.get(renderKey)?.setEffects(
+				createTaskExecutionNodeEffects(node, execution),
+			);
 			if (selectedNodeKey === renderKey) {
 				element.classList.add('is-selected');
 			} else {
@@ -1189,6 +1239,7 @@ export function initializeTaskRenderer(
 
 		for (const edge of layout.edges) {
 			const renderKey = createTaskEdgeRenderKey(edge.taskId, edge.id);
+			const execution = executionByTaskId.get(edge.taskId);
 			let element = edgeElements.get(renderKey);
 
 			if (!element) {
@@ -1205,7 +1256,12 @@ export function initializeTaskRenderer(
 				nodeLayer.append(actionElement);
 				edgeActionElements.set(renderKey, actionElement);
 			}
-			syncTaskEdgeActionElement(actionElement, edge, ownerDocument);
+			syncTaskEdgeActionElement(
+				actionElement,
+				edge,
+				ownerDocument,
+				execution !== undefined && isTaskExecutionActive(execution),
+			);
 		}
 
 		syncTaskConnection();
@@ -1230,6 +1286,13 @@ export function initializeTaskRenderer(
 
 	return {
 		applyLayout,
+		applyExecutionSnapshot(snapshot): void {
+			if (disposed) {
+				return;
+			}
+			executionByTaskId.set(snapshot.taskId, snapshot);
+			applyLayout(appliedLayout);
+		},
 		selectNode,
 		focusImportAction,
 		updateGraphTargetDrag,
@@ -1240,6 +1303,11 @@ export function initializeTaskRenderer(
 			}
 
 			disposed = true;
+			for (const host of nodeEffectHosts.values()) {
+				host.dispose();
+			}
+			nodeEffectHosts.clear();
+			executionByTaskId.clear();
 			nodeLayer.removeEventListener('animationend', handleTaskScopeSlideFinished);
 			nodeLayer.removeEventListener('pointerdown', handlePointerDown);
 			nodeLayer.removeEventListener('pointermove', handlePointerMove);
@@ -1442,26 +1510,44 @@ function syncTaskNodeElement(
 	element: HTMLElement,
 	node: TaskLayoutNode,
 	ownerDocument: Document,
+	execution: TaskExecutionSnapshot | undefined,
 ): void {
+	// Local AgentActivity effect host는 Node DOM과 수명이 같다. Layout 갱신에서
+	// contents만 교체하되 host가 소유한 layer는 보존해 pulse/shimmer 위상을 잃지 않는다.
+	const effectLayer = [...element.children].find(
+		(child) => child.hasAttribute('data-graph-node-effects'),
+	);
+
 	element.className = `graph-node task-node task-${node.kind}-node`;
 	element.setAttribute(TASK_ID_ATTRIBUTE, node.taskId);
 	element.setAttribute(TASK_NODE_ID_ATTRIBUTE, node.id);
 	element.setAttribute(TASK_NODE_KIND_ATTRIBUTE, node.kind);
 	element.setAttribute(TASK_FLOW_STATE_ATTRIBUTE, node.flowState);
 	element.setAttribute(TASK_CONNECTION_STATE_ATTRIBUTE, node.connectionState);
+	const executionState = getTaskNodeExecutionState(node, execution);
+	if (executionState === undefined) {
+		element.removeAttribute('data-task-execution-state');
+	} else {
+		element.setAttribute('data-task-execution-state', executionState);
+	}
 	element.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	element.setAttribute('role', 'group');
 	element.setAttribute('aria-label', createTaskNodeAriaLabel(node));
 	element.style.width = `${node.width}px`;
 	element.style.height = `${node.height}px`;
 	element.style.transform = `translate(${node.position.x}px, ${node.position.y}px)`;
-	element.replaceChildren(...createTaskNodeContents(node, ownerDocument));
+	element.replaceChildren(
+		...createTaskNodeContents(node, ownerDocument, execution),
+		...(effectLayer ? [effectLayer] : []),
+	);
 }
 
 function createTaskNodeContents(
 	node: TaskLayoutNode,
 	ownerDocument: Document,
+	execution: TaskExecutionSnapshot | undefined,
 ): HTMLElement[] {
+	const executionLocked = execution !== undefined && isTaskExecutionActive(execution);
 	const icon = ownerDocument.createElement('span');
 	const content = ownerDocument.createElement('span');
 
@@ -1495,6 +1581,9 @@ function createTaskNodeContents(
 		return [
 			icon,
 			content,
+			...(node.flowState === 'ready' && !executionLocked
+				? [createTaskStartButton(ownerDocument, node)]
+				: []),
 			createTaskNodeActions(
 				ownerDocument,
 				node,
@@ -1506,19 +1595,24 @@ function createTaskNodeContents(
 					'export-task',
 					'remove-task',
 				],
+				executionLocked,
 			),
-			createTaskPort(ownerDocument, node, 'output'),
+			createTaskPort(ownerDocument, node, 'output', executionLocked),
 		];
 	}
 	if (node.kind === 'end') {
-		return [icon, content, createTaskPort(ownerDocument, node, 'input')];
+		return [
+			icon,
+			content,
+			createTaskPort(ownerDocument, node, 'input', executionLocked),
+		];
 	}
 
 	const contents = [
 		icon,
 		content,
-		createTaskPort(ownerDocument, node, 'input'),
-		createTaskPort(ownerDocument, node, 'output'),
+		createTaskPort(ownerDocument, node, 'input', executionLocked),
+		createTaskPort(ownerDocument, node, 'output', executionLocked),
 	];
 
 	if (node.prompt.length > 0) {
@@ -1536,6 +1630,7 @@ function createTaskNodeContents(
 			'toggle-work-area',
 			...(node.canRemove ? ['remove-work' as const] : []),
 		],
+		executionLocked,
 	));
 	return contents;
 }
@@ -1544,6 +1639,7 @@ function createTaskPort(
 	ownerDocument: Document,
 	node: TaskLayoutNode,
 	direction: TaskPortDirection,
+	disabled: boolean,
 ): HTMLButtonElement {
 	const port = ownerDocument.createElement('button');
 	const directionLabel = direction === 'input' ? '입력 연결' : '출력 연결';
@@ -1555,6 +1651,8 @@ function createTaskPort(
 	port.setAttribute(TASK_PORT_DIRECTION_ATTRIBUTE, direction);
 	port.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	port.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	port.disabled = disabled;
+	port.setAttribute('aria-disabled', String(disabled));
 	return port;
 }
 
@@ -1562,6 +1660,7 @@ function createTaskNodeActions(
 	ownerDocument: Document,
 	node: TaskGraphScopeLayoutNode,
 	actionTypes: readonly TaskNodeAction[],
+	executionLocked: boolean,
 ): HTMLElement {
 	const actions = ownerDocument.createElement('div');
 
@@ -1580,7 +1679,9 @@ function createTaskNodeActions(
 			: '';
 		const label = scopeAreaLayout
 			? `${scopeAreaLabel} ${scopeAreaLayout.collapsed ? '열기' : '접기'}`
-			: action === 'add-work'
+			: action === 'start-task'
+				? 'Task 시작'
+				: action === 'add-work'
 				? 'Work 추가'
 				: action === 'import-task'
 					? 'Task JSON 가져오기'
@@ -1608,11 +1709,15 @@ function createTaskNodeActions(
 		button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 		button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 		icon.setAttribute('aria-hidden', 'true');
+		const disabled = executionLocked || isScopeToggleLocked;
+		button.disabled = disabled;
+		button.setAttribute('aria-disabled', String(disabled));
 		if (scopeAreaLayout) {
-			button.disabled = isScopeToggleLocked;
-			button.setAttribute('aria-disabled', String(isScopeToggleLocked));
 			button.setAttribute('aria-expanded', String(!scopeAreaLayout.collapsed));
 			icon.className = 'task-scope-area-toggle-indicator';
+		} else if (action === 'start-task') {
+			icon.className = 'task-node-action-symbol';
+			icon.textContent = '▶';
 		} else if (action === 'add-work') {
 			icon.className = 'task-node-action-symbol';
 			icon.textContent = '+';
@@ -1627,6 +1732,69 @@ function createTaskNodeActions(
 		actions.append(button);
 	}
 	return actions;
+}
+
+function createTaskStartButton(
+	ownerDocument: Document,
+	node: Extract<TaskLayoutNode, { readonly kind: 'start' }>,
+): HTMLButtonElement {
+	const button = ownerDocument.createElement('button');
+	button.className = 'task-start-run-action';
+	button.type = 'button';
+	button.title = 'Task 시작';
+	button.setAttribute('aria-label', `${createTaskNodeAriaLabel(node)} 시작`);
+	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'start-task');
+	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	button.textContent = '▶';
+	return button;
+}
+
+function getTaskNodeExecutionState(
+	node: TaskLayoutNode,
+	execution: TaskExecutionSnapshot | undefined,
+): string | undefined {
+	if (!execution) {
+		return undefined;
+	}
+	if (node.kind === 'start') {
+		return execution.state;
+	}
+	if (node.kind === 'end') {
+		return execution.state === 'completed' ? 'completed' : undefined;
+	}
+	return execution.works.find(({ nodeId }) => nodeId === node.id)?.state;
+}
+
+function createTaskExecutionNodeEffects(
+	node: TaskLayoutNode,
+	execution: TaskExecutionSnapshot | undefined,
+) {
+	const state = getTaskNodeExecutionState(node, execution);
+	const activity = node.kind === 'start'
+		? state === 'running'
+			? 'editing'
+			: state === 'completed'
+				? 'completed'
+				: state === 'rejected' || state === 'failed'
+					? 'rejected'
+					: undefined
+		: state === 'running' || state === 'waiting-approval'
+			? 'active'
+			: state === 'starting'
+				? 'planned'
+				: state === 'completed'
+					? 'completed'
+					: state === 'rejected' || state === 'failed' || state === 'blocked'
+						? 'rejected'
+						: undefined;
+	return activity === undefined || execution === undefined
+		? []
+		: getAgentActivityEffects(
+			`task:${execution.executionId}:${node.id}`,
+			activity,
+			'var(--vscode-testing-iconPassed, #73c991)',
+		);
 }
 
 function resolveTaskGraphTargetToggleArea(
@@ -1667,6 +1835,7 @@ function syncTaskEdgeActionElement(
 	element: HTMLElement,
 	edge: TaskLayoutEdge,
 	ownerDocument: Document,
+	disabled: boolean,
 ): void {
 	const actionList = ownerDocument.createElement('div');
 	const hoverTarget = ownerDocument.createElement('span');
@@ -1690,6 +1859,8 @@ function syncTaskEdgeActionElement(
 	button.setAttribute(TASK_EDGE_ACTION_ATTRIBUTE, 'disconnect-edge');
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	button.disabled = disabled;
+	button.setAttribute('aria-disabled', String(disabled));
 	icon.className = 'task-edge-action-symbol';
 	icon.textContent = '×';
 	icon.setAttribute('aria-hidden', 'true');

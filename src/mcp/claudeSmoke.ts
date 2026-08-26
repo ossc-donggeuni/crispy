@@ -180,6 +180,9 @@ export class ClaudeSmokeEventObserver {
 			}
 			return;
 		}
+		if (event.type === 'session.taskToolRequested') {
+			return;
+		}
 		this.settle({ type: 'failure', reason: event.failure.reason });
 	}
 

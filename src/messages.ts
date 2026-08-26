@@ -6,6 +6,10 @@ import type {
 import { ID_MAX_LENGTH, ID_PATTERN } from './agent/protocol/limits';
 import type { WebviewSessionState } from './webview/webviewState';
 import type { TaskTransferSerializeFailureReason } from './task/taskTransfer';
+import type {
+	TaskExecutionToHostMessage,
+	TaskExecutionToWebviewMessage,
+} from './task/taskExecutionProtocol';
 import type { Graph } from './webview/graph/graphModel';
 import {
 	parseWorkspacePersistentState,
@@ -164,6 +168,7 @@ export interface TaskJsonCopyFailedMessage {
 /** Webview에서 Extension Host로 전송하는 Agent wire 및 상태 경계 메시지다. */
 export type WebviewToExtensionMessage =
 	| WebviewToHostWireMessage
+	| TaskExecutionToHostMessage
 	| WebviewStateChangedMessage
 	| WorkspaceStateChangedMessage
 	| WorkspaceOpenFileMessage
@@ -339,6 +344,7 @@ export type GraphNodeEffectToWebviewMessage =
 /** Extension Host에서 Webview로 전송하는 Agent wire 및 Workspace 메시지다. */
 export type ExtensionToWebviewMessage =
 	| HostToWebviewWireMessage
+	| TaskExecutionToWebviewMessage
 	| WorkspaceToWebviewMessage
 	| WorkspaceGitStatusUpdatedMessage
 	| WorkspaceNodeDetailsResultMessage

@@ -86,6 +86,12 @@ import {
 	TASK_TRANSFER_JSON_MAX_BYTES,
 } from './task/taskTransfer';
 import {
+	createTaskExecutionController,
+	type TaskExecutionController,
+} from './task/taskExecutionController';
+import { parseTaskExecutionToHostMessage } from './task/taskExecutionProtocol';
+import { resolveTaskExecutionScopePath } from './task/taskExecutionScope';
+import {
 	createCurrentWorkspaceGraph,
 	createCurrentWorkspacePresentation,
 	createWorkspaceRootId,
@@ -707,6 +713,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				.get<string>(`${providerId}CliPath`);
 		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
+		let taskExecutionController: TaskExecutionController | undefined;
 		let agentActivityBridge: AgentActivityGraphBridge | undefined;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,
@@ -752,11 +759,22 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 			onActivityLeaseRevoked: (lease) => {
 				agentActivityBridge?.revokeLease(lease);
 			},
+			onTaskSessionEvent: (event) => {
+				taskExecutionController?.handleTerminalEvent(event);
+			},
 			emitMessage: (message) => {
 				void Promise.resolve(panel.webview.postMessage(message)).catch(
 					() => undefined,
 				);
 			},
+		});
+		taskExecutionController = createTaskExecutionController({
+			getWorkspaceState: () => workspacePersistence.getDesiredState()
+				?? lastWorkspaceState
+				?? createDefaultWorkspacePersistentState(),
+			terminalHost,
+			postMessage: (message) => panel.webview.postMessage(message),
+			resolveScopePath: resolveTaskExecutionScopePath,
 		});
 
 		const stylesUri = panel.webview.asWebviewUri(
@@ -844,6 +862,15 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				if (agentActivityBridge?.handleWebviewMessage(message) === true) {
 					return;
 				}
+				const taskExecutionMessage = parseTaskExecutionToHostMessage(message);
+				if (taskExecutionMessage) {
+					if (taskExecutionMessage.type === 'task.execution.start') {
+						taskExecutionController?.start(taskExecutionMessage);
+					} else {
+						taskExecutionController?.createSession(taskExecutionMessage);
+					}
+					return;
+				}
 				handleWebviewMessage(
 					panel.webview,
 					message,
@@ -906,7 +933,11 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		runtime = createCanvasRuntime(
 			panel,
 			terminalRuntime,
-			[messageSubscription, workspaceGitStatusService],
+			[
+				messageSubscription,
+				workspaceGitStatusService,
+				{ dispose: () => taskExecutionController?.dispose() },
+			],
 			workspaceRefresh,
 			undefined,
 			(event) => terminalHost.handleAgentActivityWorkspaceFoldersChanged(

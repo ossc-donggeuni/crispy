@@ -12,6 +12,12 @@ import {
 	isValidMcpOpaqueId,
 	isValidMcpRouteId,
 } from './sessionCredentials';
+import {
+	isValidTaskToolLease,
+	parseTaskToolRequested,
+	type TaskToolLease,
+	type TaskToolRequested,
+} from './taskToolProtocol';
 
 export type HostToMcpChildMessage =
 	| {
@@ -22,6 +28,7 @@ export type HostToMcpChildMessage =
 		readonly routeId: string;
 		readonly token: string;
 		readonly agentActivityCompatible: boolean;
+		readonly taskLease?: TaskToolLease;
 	}
 	| {
 		readonly type: 'auth.revoke';
@@ -82,7 +89,10 @@ export type McpChildControlMessage =
 		readonly reason: McpChildOperationFailureReason;
 	};
 
-export type McpChildToHostMessage = McpChildControlMessage | AgentActivityRequested;
+export type McpChildToHostMessage =
+	| McpChildControlMessage
+	| AgentActivityRequested
+	| TaskToolRequested;
 
 export type McpIpcValidationErrorCode =
 	| 'invalid_message'
@@ -116,6 +126,7 @@ const port = field((value) => Number.isSafeInteger(value)
 const failureReason = field((value) => typeof value === 'string'
 	&& (MCP_CHILD_OPERATION_FAILURE_REASONS as readonly string[]).includes(value));
 const compatible = field((value) => typeof value === 'boolean');
+const taskLease = field(isValidTaskToolLease);
 
 const HOST_TO_CHILD_SCHEMAS = registry({
 	'auth.register': {
@@ -125,6 +136,7 @@ const HOST_TO_CHILD_SCHEMAS = registry({
 		routeId: route,
 		token,
 		agentActivityCompatible: compatible,
+		taskLease: optional(taskLease),
 	},
 	'auth.revoke': {
 		requestId: id,
@@ -188,6 +200,16 @@ export function parseMcpChildToHostMessage(
 		&& value.type === 'session.agentActivityRequested'
 	) {
 		return parseAgentActivityRequested(value);
+	}
+	if (
+		isRecord(value)
+		&& Object.hasOwn(value, 'type')
+		&& value.type === 'session.taskToolRequested'
+	) {
+		const taskRequest = parseTaskToolRequested(value);
+		return taskRequest
+			? { ok: true, value: taskRequest }
+			: failure('invalid_message');
 	}
 	return parseMessage(
 		value,

@@ -17,12 +17,25 @@ import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from './toolNames';
+import {
+	TASK_TOOL_PATH_MAX_COUNT,
+	TASK_TOOL_PATH_MAX_UTF8_BYTES,
+	TASK_TOOL_REASON_MAX_UTF8_BYTES,
+	TASK_TOOL_SUMMARY_MAX_UTF8_BYTES,
+	type TaskToolLease,
+} from './taskToolProtocol';
 
 export {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from './toolNames';
 
 export const CRISPY_MCP_SERVER_NAME = 'crispy';
@@ -39,6 +52,16 @@ export const ACTIVITY_TOOL_ERROR_CODES = Object.freeze([
 
 export type ActivityToolErrorCode = typeof ACTIVITY_TOOL_ERROR_CODES[number];
 export type AgentActivityToolOperation = 'set' | 'clear';
+export type TaskToolOperation = 'complete' | 'scope-request' | 'scope-result';
+
+export const TASK_TOOL_ERROR_CODES = Object.freeze([
+	'invalid_input',
+	'payload_too_large',
+	'registration_inactive',
+	'busy',
+	'internal_error',
+] as const);
+export type TaskToolErrorCode = typeof TASK_TOOL_ERROR_CODES[number];
 
 export const CRISPY_PING_INPUT_SCHEMA = z.object({}).strict();
 export const CRISPY_SET_AGENT_ACTIVITY_INPUT_SCHEMA = z.object({
@@ -50,11 +73,29 @@ export const CRISPY_CLEAR_AGENT_ACTIVITY_INPUT_SCHEMA = z.object({
 	path: z.string().min(1),
 	targetKind: z.enum(AGENT_ACTIVITY_TARGET_KINDS),
 }).strict();
+export const CRISPY_TASK_COMPLETE_INPUT_SCHEMA = z.object({
+	status: z.enum(['completed', 'rejected']),
+	summary: z.string(),
+}).strict();
+export const CRISPY_TASK_SCOPE_REQUEST_INPUT_SCHEMA = z.object({
+	access: z.enum(['read', 'write']),
+	paths: z.array(z.string()).min(1).max(TASK_TOOL_PATH_MAX_COUNT),
+	reason: z.string(),
+}).strict();
+export const CRISPY_TASK_SCOPE_RESULT_INPUT_SCHEMA = z.object({
+	requestId: z.string().min(1),
+	result: z.enum(['approved', 'rejected']),
+}).strict();
 
 export interface CrispyToolServerOptions {
 	readonly agentActivityCompatible: boolean;
 	readonly handleAgentActivity: (
 		operation: AgentActivityToolOperation,
+		input: unknown,
+	) => CallToolResult;
+	readonly taskLease?: TaskToolLease;
+	readonly handleTaskTool?: (
+		operation: TaskToolOperation,
 		input: unknown,
 	) => CallToolResult;
 }
@@ -71,6 +112,15 @@ const SET_ACTIVITY_INPUT_SCHEMA = createNonReflectingSchema(
 );
 const CLEAR_ACTIVITY_INPUT_SCHEMA = createNonReflectingSchema(
 	CRISPY_CLEAR_AGENT_ACTIVITY_INPUT_SCHEMA,
+);
+const TASK_COMPLETE_INPUT_SCHEMA = createNonReflectingSchema(
+	CRISPY_TASK_COMPLETE_INPUT_SCHEMA,
+);
+const TASK_SCOPE_REQUEST_INPUT_SCHEMA = createNonReflectingSchema(
+	CRISPY_TASK_SCOPE_REQUEST_INPUT_SCHEMA,
+);
+const TASK_SCOPE_RESULT_INPUT_SCHEMA = createNonReflectingSchema(
+	CRISPY_TASK_SCOPE_RESULT_INPUT_SCHEMA,
 );
 
 const PING_ANNOTATIONS = Object.freeze({
@@ -110,30 +160,73 @@ export function createCrispyToolServer(options: CrispyToolServerOptions): McpSer
 			: createPingSuccessResult(),
 	);
 
-	if (!options.agentActivityCompatible) {
-		return server;
+	if (options.agentActivityCompatible) {
+		server.registerTool(
+			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+			{
+				description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Updates the user-selected Crispy Canvas activity graph without changing workspace content or scope. Call on the completion anchor with planned before workspace work; call on each meaningful target with active before read/analyze/verify or editing before modification. Use mentioned only for a response-only path and rejected only for an intentional skip. After clearing child targets with crispy_caa, call on the anchor with completed as the final Activity call before a successful response.`,
+				inputSchema: SET_ACTIVITY_INPUT_SCHEMA,
+				annotations: ACTIVITY_ANNOTATIONS,
+			},
+			(input): CallToolResult => options.handleAgentActivity('set', input),
+		);
+		server.registerTool(
+			CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+			{
+				description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Removes a marker from the user-selected Crispy Canvas activity graph without changing workspace content. Before a successful final response, clear every non-anchor target used by the request deepest-first, including a completed child; then call crispy_saa once on the anchor with completed as the final Activity call. Also clear stale, irrelevant, renamed, or deleted targets. Do not clear the final completed anchor or recreate descendant mentioned markers.`,
+				inputSchema: CLEAR_ACTIVITY_INPUT_SCHEMA,
+				annotations: ACTIVITY_ANNOTATIONS,
+			},
+			(input): CallToolResult => options.handleAgentActivity('clear', input),
+		);
 	}
 
-	server.registerTool(
-		CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-		{
-			description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Updates the user-selected Crispy Canvas activity graph without changing workspace content or scope. Call on the completion anchor with planned before workspace work; call on each meaningful target with active before read/analyze/verify or editing before modification. Use mentioned only for a response-only path and rejected only for an intentional skip. After clearing child targets with crispy_caa, call on the anchor with completed as the final Activity call before a successful response.`,
-			inputSchema: SET_ACTIVITY_INPUT_SCHEMA,
-			annotations: ACTIVITY_ANNOTATIONS,
-		},
-		(input): CallToolResult => options.handleAgentActivity('set', input),
-	);
-	server.registerTool(
-		CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-		{
-			description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Removes a marker from the user-selected Crispy Canvas activity graph without changing workspace content. Before a successful final response, clear every non-anchor target used by the request deepest-first, including a completed child; then call crispy_saa once on the anchor with completed as the final Activity call. Also clear stale, irrelevant, renamed, or deleted targets. Do not clear the final completed anchor or recreate descendant mentioned markers.`,
-			inputSchema: CLEAR_ACTIVITY_INPUT_SCHEMA,
-			annotations: ACTIVITY_ANNOTATIONS,
-		},
-		(input): CallToolResult => options.handleAgentActivity('clear', input),
-	);
+	if (options.taskLease && options.handleTaskTool) {
+		registerTaskTools(server, options.handleTaskTool);
+	}
 
 	return server;
+}
+
+function registerTaskTools(
+	server: McpServer,
+	handleTaskTool: NonNullable<CrispyToolServerOptions['handleTaskTool']>,
+): void {
+	server.registerTool(
+		CRISPY_TASK_COMPLETE_TOOL_NAME,
+		{
+			description: 'Required terminal signal for this Crispy Task Work. Call exactly once after the assigned work is finished, using completed only for success and rejected for an intentional scope or user-denial outcome. This call ends the Task-owned Agent process after Host acceptance.',
+			inputSchema: TASK_COMPLETE_INPUT_SCHEMA,
+			annotations: ACTIVITY_ANNOTATIONS,
+		},
+		(input): CallToolResult => isCrispyToolValidationFailure(input)
+			|| !isTaskCompleteInputWithinByteLimits(input)
+			? createTaskToolErrorResult('invalid_input')
+			: handleTaskTool('complete', input),
+	);
+	server.registerTool(
+		CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+		{
+			description: 'Call before attempting to read or modify any path outside the assigned Task reference/work areas. Retain the returned requestId, then attempt that exact access so the provider opens its normal permission UI in this same tab. This tool requests attention but does not itself grant access.',
+			inputSchema: TASK_SCOPE_REQUEST_INPUT_SCHEMA,
+			annotations: ACTIVITY_ANNOTATIONS,
+		},
+		(input): CallToolResult => isCrispyToolValidationFailure(input)
+			|| !isTaskScopeRequestInputWithinByteLimits(input)
+			? createTaskToolErrorResult('invalid_input')
+			: handleTaskTool('scope-request', input),
+	);
+	server.registerTool(
+		CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+		{
+			description: 'After the normal permission prompt in this Task Agent tab is resolved, report the retained requestId as approved or rejected before doing anything else. A rejected result terminates this Work as rejected.',
+			inputSchema: TASK_SCOPE_RESULT_INPUT_SCHEMA,
+			annotations: ACTIVITY_ANNOTATIONS,
+		},
+		(input): CallToolResult => isCrispyToolValidationFailure(input)
+			? createTaskToolErrorResult('invalid_input')
+			: handleTaskTool('scope-result', input),
+	);
 }
 
 export function isCrispyToolValidationFailure(value: unknown): boolean {
@@ -161,6 +254,31 @@ export function createActivityToolErrorResult(
 	};
 }
 
+export function createTaskToolSuccessResult(requestId?: string): CallToolResult {
+	return {
+		content: [{
+			type: 'text',
+			text: JSON.stringify({
+				ok: true,
+				accepted: true,
+				...(requestId === undefined ? {} : { requestId }),
+			}),
+		}],
+	};
+}
+
+export function createTaskToolErrorResult(
+	error: TaskToolErrorCode,
+): CallToolResult {
+	return {
+		isError: true,
+		content: [{
+			type: 'text',
+			text: JSON.stringify({ ok: false, accepted: false, error }),
+		}],
+	};
+}
+
 /**
  * Normalize only SDK-recognizable Tool records. Invalid argument containers
  * become a private strict-schema failure without mutating the parsed body.
@@ -168,9 +286,14 @@ export function createActivityToolErrorResult(
 export function normalizeCrispyToolCallArguments(
 	parsedBody: unknown,
 	agentActivityCompatible: boolean,
+	taskCompatible = false,
 ): unknown {
 	if (!Array.isArray(parsedBody)) {
-		return normalizeRequestElement(parsedBody, agentActivityCompatible);
+		return normalizeRequestElement(
+			parsedBody,
+			agentActivityCompatible,
+			taskCompatible,
+		);
 	}
 
 	let normalizedBatch: unknown[] | undefined;
@@ -179,6 +302,7 @@ export function normalizeCrispyToolCallArguments(
 		const normalized = normalizeRequestElement(
 			original,
 			agentActivityCompatible,
+			taskCompatible,
 		);
 		if (normalized !== original) {
 			normalizedBatch ??= [...parsedBody];
@@ -237,6 +361,7 @@ function createNonReflectingSchema<Input, Output>(
 function normalizeRequestElement(
 	value: unknown,
 	agentActivityCompatible: boolean,
+	taskCompatible: boolean,
 ): unknown {
 	if (!isJSONRPCRequest(value) || value.method !== 'tools/call') {
 		return value;
@@ -246,7 +371,7 @@ function normalizeRequestElement(
 		return value;
 	}
 	const name = params.name;
-	if (!isRecognizedToolName(name, agentActivityCompatible)) {
+	if (!isRecognizedToolName(name, agentActivityCompatible, taskCompatible)) {
 		return value;
 	}
 	const argumentsValue = params.arguments;
@@ -265,6 +390,7 @@ function normalizeRequestElement(
 function isRecognizedToolName(
 	value: unknown,
 	agentActivityCompatible: boolean,
+	taskCompatible: boolean,
 ): boolean {
 	return value === CRISPY_PING_TOOL_NAME
 		|| (
@@ -273,7 +399,35 @@ function isRecognizedToolName(
 				value === CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME
 				|| value === CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME
 			)
+		)
+		|| (
+			taskCompatible
+			&& (
+				value === CRISPY_TASK_COMPLETE_TOOL_NAME
+				|| value === CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME
+				|| value === CRISPY_TASK_SCOPE_RESULT_TOOL_NAME
+			)
 		);
+}
+
+function isTaskCompleteInputWithinByteLimits(value: unknown): boolean {
+	return isPlainRecord(value)
+		&& typeof value.summary === 'string'
+		&& Buffer.byteLength(value.summary, 'utf8') <= TASK_TOOL_SUMMARY_MAX_UTF8_BYTES;
+}
+
+function isTaskScopeRequestInputWithinByteLimits(value: unknown): boolean {
+	return isPlainRecord(value)
+		&& typeof value.reason === 'string'
+		&& Buffer.byteLength(value.reason, 'utf8') <= TASK_TOOL_REASON_MAX_UTF8_BYTES
+		&& Array.isArray(value.paths)
+		&& new Set(value.paths).size === value.paths.length
+		&& value.paths.every((path) => (
+			typeof path === 'string'
+			&& path.length > 0
+			&& !path.includes('\0')
+			&& Buffer.byteLength(path, 'utf8') <= TASK_TOOL_PATH_MAX_UTF8_BYTES
+		));
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

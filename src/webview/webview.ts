@@ -57,6 +57,7 @@ import {
 	type WebviewSessionState,
 	type WebviewStateApi,
 } from './webviewState';
+import { parseTaskExecutionToWebviewMessage } from '../task/taskExecutionProtocol';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
@@ -197,6 +198,13 @@ const graphView = initializeGraphView(
 			vscodeApi.postMessage({
 				type: 'task.copyJsonFailed',
 				reason,
+			});
+		},
+		onTaskExecutionStart: (taskId, storageRevision) => {
+			vscodeApi.postMessage({
+				type: 'task.execution.start',
+				taskId,
+				storageRevision,
 			});
 		},
 		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
@@ -606,6 +614,31 @@ window.addEventListener('unload', () => {
  * @param message Extension Host에서 수신한 검증 전 메시지
  */
 function handleHostMessage(message: unknown): void {
+	const taskExecutionMessage = parseTaskExecutionToWebviewMessage(message);
+
+	if (taskExecutionMessage) {
+		if (taskExecutionMessage.type === 'task.session.createRequested') {
+			lastIssuedSwitchAttemptId += 1;
+			const tabId = agentPanelUi?.createTaskTab?.(
+				taskExecutionMessage.providerId,
+				taskExecutionMessage.workspaceRootId,
+				lastIssuedSwitchAttemptId,
+			);
+			if (tabId !== undefined && postAgentMessage({
+				type: 'task.session.create',
+				executionId: taskExecutionMessage.executionId,
+				workNodeId: taskExecutionMessage.workNodeId,
+				tabId,
+				switchAttemptId: lastIssuedSwitchAttemptId,
+			})) {
+				terminalPool.ensureTab(tabId);
+			}
+		} else if (taskExecutionMessage.type === 'task.execution.updated') {
+			graphView.applyTaskExecutionSnapshot?.(taskExecutionMessage.snapshot);
+		}
+		return;
+	}
+
 	const gitStatusMessage = parseWorkspaceGitStatusUpdatedMessage(message);
 
 	if (gitStatusMessage) {

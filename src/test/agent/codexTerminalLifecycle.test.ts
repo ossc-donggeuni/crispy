@@ -1,10 +1,12 @@
 import * as assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import type { HostToWebviewMessage } from '../../agent/protocol/messages';
 import type { ShellLaunchPolicy } from '../../agent/host/shell/types';
 import type { PrepareTerminalLaunch } from '../../agent/host/terminal/prepareTerminalLaunch';
 import {
 	TerminalHost,
 	type CodexMcpSupervisor,
+	type TaskTerminalSessionEvent,
 } from '../../agent/host/terminal/terminalHost';
 import type { SupervisorRuntimeEvent } from '../../mcp/adapterSupervisor';
 import { buildCodexMcpLaunchPlan } from '../../mcp/codexLaunchPlan';
@@ -20,6 +22,7 @@ import { createCaptureFailureProcessTreeController } from './support/fakeProcess
 import { FakeProcessTreeController } from './support/fakeProcessTreeController';
 import type { ProcessTreeController } from '../../agent/host/terminal/processTreeController';
 import type { ValidatedWorkspaceFsPath } from '../../agent/host/workspace/types';
+import type { TaskToolLease } from '../../mcp/taskToolProtocol';
 
 const shellPolicy: ShellLaunchPolicy = {
 	executable: '/host/shell',
@@ -66,6 +69,7 @@ type FakeCodexRuntimeHandle = FakeCodexRuntime & McpSessionRuntime;
 
 class FakeCodexSupervisor implements CodexMcpSupervisor {
 	readonly prepareCalls: string[] = [];
+	readonly taskLeases: Array<TaskToolLease | undefined> = [];
 	readonly stopCalls: string[] = [];
 	disposeCallCount = 0;
 	prepareFailure: McpPrepareResult | undefined;
@@ -79,8 +83,12 @@ class FakeCodexSupervisor implements CodexMcpSupervisor {
 		readonly resolve: (result: McpPrepareResult) => void;
 	}>();
 
-	prepareSession(sessionId: string): Promise<McpPrepareResult> {
+	prepareSession(
+		sessionId: string,
+		taskLease?: TaskToolLease,
+	): Promise<McpPrepareResult> {
 		this.prepareCalls.push(sessionId);
+		this.taskLeases.push(taskLease);
 		if (this.prepareFailure !== undefined) {
 			this.createRuntime(sessionId, 'stopped');
 			return Promise.resolve(this.prepareFailure);
@@ -230,6 +238,7 @@ function createFixture(options: {
 	readonly prepareCodexLaunch?: ConstructorParameters<typeof TerminalHost>[0][
 		'prepareCodexLaunch'
 	];
+	readonly onTaskSessionEvent?: (event: TaskTerminalSessionEvent) => void;
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -287,6 +296,7 @@ function createFixture(options: {
 		mcpSupervisor: supervisor,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
+		onTaskSessionEvent: options.onTaskSessionEvent,
 		...(options.buildPlan === undefined
 			? {}
 			: { buildCodexMcpLaunchPlan: options.buildPlan }),
@@ -361,6 +371,103 @@ function createDeferredCodexPreparationCleanup(): {
 }
 
 suite('Codex direct PTY and MCP transaction', () => {
+	test('Task Work는 ordinary tab transaction에 scope policy·prompt·MCP lease를 고정하고 완료 시 exact session을 정리한다', async () => {
+		const events: TaskTerminalSessionEvent[] = [];
+		const fixture = createFixture({
+			onTaskSessionEvent: (event) => events.push(event),
+		});
+		const descriptor = {
+			executionId: 'execution-terminal-task',
+			workNodeId: 'work-terminal-task',
+			prompt: [
+				'Task: Implement feature',
+				'Reference areas (read-only):',
+				'- /trusted/workspace/docs',
+				'Work areas (read/write):',
+				'- /trusted/workspace/src',
+			].join('\n'),
+			scope: [
+				{ path: '/trusted/workspace/docs', kind: 'folder' as const, access: 'read' as const },
+				{ path: '/trusted/workspace/src', kind: 'folder' as const, access: 'read-write' as const },
+			],
+		};
+
+		await fixture.host.createTaskSession(
+			'tab-task-work',
+			'codex',
+			WORKSPACE_ROOT_ID,
+			1,
+			descriptor,
+		);
+		await fixture.host.handleTerminalReady('tab-task-work', 100, 30);
+
+		const session = fixture.host.getActiveSession('tab-task-work');
+		assert.ok(session);
+		assert.deepStrictEqual(fixture.supervisor.taskLeases, [{
+			executionId: descriptor.executionId,
+			workNodeId: descriptor.workNodeId,
+		}]);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		const spawn = fixture.adapter.spawnCalls[0];
+		assert.notStrictEqual(spawn.cwd, workspaceRoot.fsPath);
+		assert.strictEqual(existsSync(spawn.cwd), true);
+		assert.deepStrictEqual((spawn.args as string[]).slice(0, 6), [
+			'--ask-for-approval',
+			'on-request',
+			'--config',
+			'default_permissions="crispy-task"',
+			'--config',
+			'permissions.crispy-task.filesystem.":minimal"="read"',
+		]);
+		assert.ok((spawn.args as string[]).includes(
+			'permissions.crispy-task.filesystem."/trusted/workspace/docs"="read"',
+		));
+		assert.ok((spawn.args as string[]).includes(
+			'permissions.crispy-task.filesystem."/trusted/workspace/src"="write"',
+		));
+		assert.strictEqual((spawn.args as string[]).at(-2), '--');
+		assert.match((spawn.args as string[]).at(-1) ?? '', /CRISPY TASK EXECUTION CONTRACT:/u);
+		assert.match((spawn.args as string[]).at(-1) ?? '', /crispy_task_complete/u);
+		assert.deepStrictEqual(events.map(({ type }) => type), ['started']);
+
+		// Task 소유 중 일반 reset/provider switch는 기존 session을 바꾸지 않는다.
+		fixture.host.resetAgent('tab-task-work');
+		await fixture.host.switchAgent(
+			'tab-task-work', 'claude', WORKSPACE_ROOT_ID, 2,
+		);
+		assert.strictEqual(fixture.host.getActiveSession('tab-task-work'), session);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime);
+		fixture.host.handleMcpRuntimeEvent({
+			sourceRuntime: runtime,
+			event: {
+				type: 'session.taskToolRequested',
+				sessionId: session.sessionId,
+				generation: runtime.generation,
+				executionId: descriptor.executionId,
+				workNodeId: descriptor.workNodeId,
+				operation: 'complete',
+				status: 'completed',
+				summary: 'Done',
+			},
+		});
+		assert.deepStrictEqual(events.map(({ type }) => type), ['started', 'tool']);
+
+		const taskCwd = spawn.cwd;
+		assert.strictEqual(await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		), true);
+		assert.strictEqual(fixture.host.getActiveSession('tab-task-work'), undefined);
+		assert.strictEqual(existsSync(taskCwd), false);
+		assert.strictEqual(await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		), false);
+	});
+
 	test('provider switch는 이전 preparation cleanup 완료 전 새 native spawn을 차단한다', async () => {
 		const deferred = createDeferredCodexPreparationCleanup();
 		const fixture = createFixture({

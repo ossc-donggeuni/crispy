@@ -24,6 +24,7 @@ export interface BuildClaudeMcpLaunchPlanOptions
 	readonly randomBytes?: McpRandomBytes;
 	/** Diagnostic callers may derive a prompt from the generated non-secret server name. */
 	readonly createArgs?: (serverName: string) => readonly string[];
+	readonly argsAfterConfig?: readonly string[];
 }
 
 /** A compatibility or fail-open launch never receives config or credentials. */
@@ -56,8 +57,8 @@ export function buildClaudeMcpLaunchPlan(
 	return freezeClaudePlan({
 		executable: options.executable,
 		cwd: options.cwd,
-		/** Keep MCP-generated additive instructions and config after user args. */
-		args: [...args, ...config.args],
+		/** Keep MCP-generated config between provider options and an optional prompt. */
+		args: [...args, ...config.args, ...(options.argsAfterConfig ?? [])],
 		createEnvOverlay: () => options.connection.withBearerToken((token) =>
 			Object.freeze({
 				[CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE]: token,
