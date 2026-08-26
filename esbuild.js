@@ -52,10 +52,11 @@ async function main() {
 			],
 		}));
 		contexts.push(await esbuild.context({
-			entryPoints: [
-				'src/webview/webview.ts',
-				'src/webview/webview.css',
-			],
+			entryPoints: {
+				webview: 'src/webview/webview.ts',
+				monacoEditorWorker: 'src/webview/monacoEditorWorker.ts',
+				styles: 'src/webview/webview.css',
+			},
 			bundle: true,
 			format: 'iife',
 			minify: production,
@@ -67,6 +68,7 @@ async function main() {
 			assetNames: '[dir]/[name]',
 			loader: {
 				'.svg': 'copy',
+				'.ttf': 'file',
 			},
 			logLevel: 'silent',
 			plugins: [

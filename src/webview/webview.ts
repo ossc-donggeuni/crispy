@@ -15,6 +15,8 @@ import {
 	getWorkspaceGraphRootIds,
 	parseAgentActivityToWebviewMessage,
 	parseGraphNodeEffectToWebviewMessage,
+	parseWorkspaceNodeDetailsResultMessage,
+	parseWorkspaceNodeMutationResultMessage,
 	parseWorkspaceRootIds,
 	parseWorkspaceToWebviewMessage,
 	type AgentActivityClearMessage,
@@ -41,6 +43,10 @@ import {
 import { initializePanelCollapse } from './panel/panelCollapse';
 import { initializePanelDock } from './panel/panelDock';
 import { applyPanelSize, initializePanelResize } from './panel/panelResize';
+import {
+	initializeWorkspaceNodeInspector,
+	type WorkspaceNodeInspector,
+} from './workspaceNodeInspector';
 
 import {
 	restoreWebviewState,
@@ -104,6 +110,10 @@ const serializedWorkspaceState = currentScript?.getAttribute('data-workspace-sta
 const serializedWorkspaceContextGeneration = currentScript?.getAttribute(
 	'data-workspace-context-generation',
 ) ?? null;
+const serializedWorkspaceRevision = currentScript?.getAttribute(
+	'data-workspace-revision',
+) ?? null;
+const monacoWorkerUri = currentScript?.getAttribute('data-monaco-worker-uri') ?? '';
 const app = getRequiredElement<HTMLElement>('#app');
 const serializedWorkspacePresentation = app.getAttribute(
 	'data-workspace-presentation',
@@ -130,6 +140,9 @@ if (
 let currentWorkspaceRootIds = initialWorkspaceRootIds;
 let currentWorkspaceContextGeneration = parseWorkspaceContextGeneration(
 	serializedWorkspaceContextGeneration,
+);
+let currentWorkspaceRevision = parseWorkspaceContextGeneration(
+	serializedWorkspaceRevision,
 );
 let lastIssuedSwitchAttemptId = 0;
 const panelState = initialState.panel;
@@ -182,6 +195,40 @@ const graphView = initializeGraphView(
 	initialWorkspaceState.tasks,
 	{ agentActivityStore, agentSessionPresentationStore },
 );
+const workspaceNodeInspectorFallback: WorkspaceNodeInspector = {
+	handleDetailsResult: () => undefined,
+	handleMutationResult: () => undefined,
+	refreshPosition: () => undefined,
+	dispose: () => undefined,
+};
+let workspaceNodeInspector = workspaceNodeInspectorFallback;
+
+if (typeof graphArea.querySelector === 'function' && monacoWorkerUri) {
+	const graphViewport = graphArea.querySelector<HTMLElement>('.graph-viewport');
+	const graphOverlayLayer = graphArea.querySelector<HTMLElement>(
+		'.graph-overlay-layer',
+	);
+
+	if (graphViewport && graphOverlayLayer) {
+		workspaceNodeInspector = initializeWorkspaceNodeInspector(
+			graphArea,
+			graphViewport,
+			graphOverlayLayer,
+			graphView.camera,
+			monacoWorkerUri,
+			{
+				getWorkspaceRevision: () => currentWorkspaceRevision,
+				postRequest: (message) => vscodeApi.postMessage(message),
+				resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
+					viewport,
+					chatPanel,
+					panelState.preferredDock,
+					panelState.collapsed,
+				),
+			},
+		);
+	}
+}
 
 const agentActivityEffects = createAgentActivityEffectReconciler(
 	agentActivityStore,
@@ -383,6 +430,7 @@ const refreshCollapse = initializePanelCollapse(
 	() => {
 		persistWebviewSessionState();
 		graphView.refreshVisibleGraphArea();
+		workspaceNodeInspector.refreshPosition();
 	},
 	() => terminalPool.scheduleActiveTerminalFit(),
 );
@@ -398,6 +446,7 @@ const refreshDock = initializePanelDock(
 		applyPanelSize(layout, panelState);
 		refreshCollapse();
 		graphView.refreshVisibleGraphArea();
+		workspaceNodeInspector.refreshPosition();
 		terminalPool.scheduleActiveTerminalFit();
 	},
 );
@@ -409,6 +458,7 @@ initializePanelResize(
 	() => {
 		refreshDock();
 		graphView.refreshVisibleGraphArea();
+		workspaceNodeInspector.refreshPosition();
 	},
 	persistWebviewSessionState,
 	() => terminalPool.scheduleActiveTerminalFit(),
@@ -428,6 +478,7 @@ const unsubscribeGraphState = graphView.state.subscribe((currentGraphState) => {
 		|| previousState.camera.scale !== currentGraphState.camera.scale
 	) {
 		persistWebviewSessionState();
+		workspaceNodeInspector.refreshPosition();
 	}
 
 });
@@ -436,6 +487,9 @@ const postWorkspaceSnapshot = (snapshot: GraphViewWorkspaceSnapshot): void => {
 		type: 'workspace.stateChanged',
 		contextGeneration: currentWorkspaceContextGeneration,
 		rootIds: currentWorkspaceRootIds,
+		...(currentWorkspaceRevision > 0
+			? { workspaceRevision: currentWorkspaceRevision }
+			: {}),
 		state: createWorkspacePersistentState(snapshot),
 	});
 };
@@ -463,6 +517,7 @@ window.addEventListener('unload', () => {
 	unsubscribeGraphState();
 	unsubscribeWorkspaceSnapshot();
 	agentActivityEffects.dispose();
+	workspaceNodeInspector.dispose();
 	graphView.dispose();
 	if (agentSessionPresentationCoordinator === undefined) {
 		agentSessionPresentationStore.dispose();
@@ -532,10 +587,71 @@ function handleHostMessage(message: unknown): void {
 		return;
 	}
 
+	const nodeDetailsMessage = parseWorkspaceNodeDetailsResultMessage(message);
+
+	if (nodeDetailsMessage) {
+		if (nodeDetailsMessage.workspaceRevision === currentWorkspaceRevision) {
+			workspaceNodeInspector.handleDetailsResult(nodeDetailsMessage);
+		}
+		return;
+	}
+
+	const nodeMutationMessage = parseWorkspaceNodeMutationResultMessage(message);
+
+	if (nodeMutationMessage) {
+		if (nodeMutationMessage.status === 'error') {
+			workspaceNodeInspector.handleMutationResult(nodeMutationMessage);
+			return;
+		}
+		if (
+			nodeMutationMessage.workspaceRevision < currentWorkspaceRevision
+			|| nodeMutationMessage.contextGeneration
+				!== currentWorkspaceContextGeneration
+			|| !haveSameWorkspaceRoots(
+				currentWorkspaceRootIds,
+				nodeMutationMessage.rootIds,
+			)
+		) {
+			return;
+		}
+		currentWorkspaceRevision = nodeMutationMessage.workspaceRevision;
+		currentWorkspaceRootIds = [...nodeMutationMessage.rootIds];
+		workspacePresentation = nodeMutationMessage.presentation;
+		graphView.updateWorkspace(
+			nodeMutationMessage.presentation.graph,
+			{
+				graph: {
+					nodePositions: nodeMutationMessage.state.nodePositions,
+					fileGroupPages: nodeMutationMessage.state.fileGroupPages,
+					openedFolders: nodeMutationMessage.state.openedFolders,
+					detachedRootNodeIds:
+						nodeMutationMessage.state.detachedRootNodeIds,
+					hiddenNodeIds: nodeMutationMessage.state.hiddenNodeIds,
+				},
+				tasks: nodeMutationMessage.state.tasks,
+			},
+		);
+		agentPanelUi?.updateWorkspaceRootCatalog(
+			nodeMutationMessage.presentation.rootCatalog,
+		);
+		workspaceNodeInspector.refreshPosition();
+		workspaceNodeInspector.handleMutationResult(nodeMutationMessage);
+		return;
+	}
+
 	const workspaceMessage = parseWorkspaceToWebviewMessage(message);
 
 	if (workspaceMessage) {
+		const incomingWorkspaceRevision = workspaceMessage.workspaceRevision ?? 0;
+
 		if (workspaceMessage.contextGeneration < currentWorkspaceContextGeneration) {
+			return;
+		}
+		if (
+			incomingWorkspaceRevision < currentWorkspaceRevision
+			|| (incomingWorkspaceRevision > currentWorkspaceRevision
+				&& !workspaceMessage.state)
+		) {
 			return;
 		}
 		const rootContextChanged = workspaceMessage.contextGeneration
@@ -565,6 +681,7 @@ function handleHostMessage(message: unknown): void {
 			// updateWorkspace의 final subscriber가 새 epoch로 응답하도록 먼저 바꾼다.
 			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
 			currentWorkspaceContextGeneration = workspaceMessage.contextGeneration;
+			currentWorkspaceRevision = incomingWorkspaceRevision;
 			workspacePresentation = workspaceMessage.presentation;
 			graphView.updateWorkspace(
 				workspaceMessage.presentation.graph,
@@ -583,16 +700,19 @@ function handleHostMessage(message: unknown): void {
 			agentPanelUi?.updateWorkspaceRootCatalog(
 				workspaceMessage.presentation.rootCatalog,
 			);
+			workspaceNodeInspector.refreshPosition();
 		} else {
 			if (rootContextChanged) {
 				return;
 			}
 			currentWorkspaceRootIds = [...workspaceMessage.rootIds];
+			currentWorkspaceRevision = incomingWorkspaceRevision;
 			workspacePresentation = workspaceMessage.presentation;
 			graphView.updateGraph(workspaceMessage.presentation.graph);
 			agentPanelUi?.updateWorkspaceRootCatalog(
 				workspaceMessage.presentation.rootCatalog,
 			);
+			workspaceNodeInspector.refreshPosition();
 		}
 		return;
 	}

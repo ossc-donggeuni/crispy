@@ -26,6 +26,7 @@ import {
 } from './agent/host/terminal/terminalRuntimeCleanup';
 import {
 	getWorkspaceGraphRootIds,
+	parseWorkspaceNodeRequestMessage,
 	parseWorkspaceRootIds,
 	clearAgentActivitiesBySession,
 	setAgentActivity,
@@ -90,6 +91,7 @@ import {
 	createWorkspaceRootId,
 	createWorkspaceRootCatalog,
 	createWorkspaceRefreshCoordinator,
+	createWorkspaceNodeRequestController,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
 	loadOrCreateWorkspaceFilters,
@@ -99,7 +101,9 @@ import {
 	serializeWorkspacePresentationForWebview,
 	watchWorkspaceChanges,
 	writeWorkspacePersistentState,
+	defaultWorkspaceNodeOperationHost,
 	type WorkspacePresentation,
+	type WorkspaceNodeRequestController,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRootFilter,
 } from './workspace';
@@ -140,6 +144,9 @@ let pendingWorkspaceMaterializationGeneration: number | undefined;
 let workspacePersistenceRootUris: readonly vscode.Uri[] = [];
 /** Webview가 새 context snapshot으로 응답하기 전까지만 이전 context 편집을 병합한다. */
 let workspaceContextGeneration = 0;
+/** 같은 Root context 안에서 완료된 파일시스템 mutation의 단조 증가 revision이다. */
+let workspaceRevision = 0;
+let latestAcknowledgedWorkspaceRevision = -1;
 let nextWorkspaceContextGeneration = 0;
 /** 이미 current Host state에 반영됐다고 확인한 가장 최신 Webview epoch다. */
 let latestAcknowledgedWorkspaceContextGeneration = -1;
@@ -750,11 +757,67 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		});
 
 		const stylesUri = panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(webviewRoot, 'styles.css'),
+		);
+		const monacoStylesUri = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(webviewRoot, 'webview.css'),
 		);
 		const scriptUri = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(webviewRoot, 'webview.js'),
 		);
+		const monacoWorkerUri = panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(webviewRoot, 'monacoEditorWorker.js'),
+		);
+		const workspaceNodeRequestController = createWorkspaceNodeRequestController({
+			operationHost: defaultWorkspaceNodeOperationHost,
+			getWorkspaceRevision: () => workspaceRevision,
+			advanceWorkspaceRevision: () => {
+				workspaceRevision = workspaceRevision < Number.MAX_SAFE_INTEGER
+					? workspaceRevision + 1
+					: workspaceRevision;
+				return workspaceRevision;
+			},
+			getWorkspaceContextGeneration: () => workspaceContextGeneration,
+			getWorkspaceState: () => workspacePersistence.getDesiredState()
+				?? lastWorkspaceState
+				?? createDefaultWorkspacePersistentState(),
+			commitWorkspaceState: async (state) => {
+				lastWorkspaceState = state;
+				const sessionState = lastWebviewState
+					? {
+						panel: lastWebviewState.panel,
+						camera: lastWebviewState.graph.camera,
+					}
+					: createDefaultWebviewSessionState();
+
+				lastWebviewState = {
+					panel: sessionState.panel,
+					graph: {
+						camera: sessionState.camera,
+						nodePositions: state.nodePositions,
+						fileGroupPages: state.fileGroupPages,
+						openedFolders: state.openedFolders,
+						detachedRootNodeIds: state.detachedRootNodeIds,
+						hiddenNodeIds: state.hiddenNodeIds,
+					},
+				};
+				const rootUris = workspacePersistenceRootUris.length > 0
+					? [...workspacePersistenceRootUris]
+					: getCurrentWorkspaceRootUris();
+				const persistence = workspacePersistence.acceptSnapshot(state, rootUris);
+
+				pendingWorkspaceWrites.add(persistence);
+				try {
+					await persistence.catch(() => undefined);
+				} finally {
+					pendingWorkspaceWrites.delete(persistence);
+				}
+			},
+			createWorkspacePresentation: () => createCurrentWorkspacePresentation(
+				workspacePresentationDependencies,
+			),
+			postMessage: (message) => panel.webview.postMessage(message),
+		});
 
 		let runtime: CanvasRuntime;
 		/** Webview snapshot과 Agent protocol을 각 validation boundary로 전달한다. */
@@ -771,6 +834,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 					undefined,
 					undefined,
 					workspacePersistence,
+					workspaceNodeRequestController,
 				);
 			},
 		);
@@ -778,6 +842,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		const workspaceRefresh = createWorkspaceRefreshCoordinator({
 			...workspacePresentationDependencies,
 			getWorkspaceContextGeneration: () => workspaceContextGeneration,
+			getWorkspaceRevision: () => workspaceRevision,
 			loadWorkspaceState: async (graph, _rootIds, signal) => {
 				const rootUris = getWorkspaceRootUrisFromGraph(graph);
 				const deliverState = shouldLoadWorkspacePersistenceState(
@@ -785,7 +850,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 					workspacePersistenceContextKey,
 					undefined,
 					latestAcknowledgedWorkspaceContextGeneration
-						< workspaceContextGeneration,
+						< workspaceContextGeneration
+						|| latestAcknowledgedWorkspaceRevision < workspaceRevision,
 				);
 
 				return refreshWorkspacePersistenceForSnapshot(
@@ -882,11 +948,14 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		panel.webview.html = getWebviewHtml(
 			panel.webview,
 			stylesUri,
+			monacoStylesUri,
 			scriptUri,
+			monacoWorkerUri,
 			initialWebviewState,
 			workspacePresentation,
 			initialWorkspaceState,
 			workspaceContextGeneration,
+			workspaceRevision,
 		);
 		return panel;
 	};
@@ -1198,9 +1267,20 @@ export function handleWebviewMessage(
 	taskClipboardHost: TaskClipboardHost = defaultTaskClipboardHost,
 	workspacePersistence: WorkspacePersistenceCoordinator | undefined
 		= activeWorkspacePersistence,
+	workspaceNodeRequestController?: WorkspaceNodeRequestController,
 ): Thenable<boolean> | undefined {
 	if (message && typeof message === 'object') {
 		const candidate = message as Record<string, unknown>;
+
+		if (typeof candidate.type === 'string'
+			&& candidate.type.startsWith('workspace.node')) {
+			const request = parseWorkspaceNodeRequestMessage(candidate);
+
+			if (request) {
+				workspaceNodeRequestController?.handle(request);
+			}
+			return undefined;
+		}
 
 		if (candidate.type === 'workspace.openFile') {
 			const openFileMessage = parseWorkspaceOpenFileMessage(candidate);
@@ -1265,16 +1345,29 @@ export function handleWebviewMessage(
 			) && (candidate.contextGeneration as number) >= 0
 				? candidate.contextGeneration as number
 				: undefined;
+			const messageWorkspaceRevision = candidate.workspaceRevision === undefined
+				? 0
+				: Number.isSafeInteger(candidate.workspaceRevision)
+					&& (candidate.workspaceRevision as number) >= 0
+					? candidate.workspaceRevision as number
+					: undefined;
 
 			if (
 				state
 				&& messageRootUris
 				&& contextGeneration !== undefined
-				&& Object.keys(candidate).length === 4
+				&& messageWorkspaceRevision === workspaceRevision
+				&& (Object.keys(candidate).length === 4
+					|| Object.keys(candidate).length === 5)
 			) {
 				const messageContextKey = createWorkspaceContextKey(messageRootUris);
 				let stateToPersist = state;
 				let rootUris = messageRootUris;
+
+				latestAcknowledgedWorkspaceRevision = Math.max(
+					latestAcknowledgedWorkspaceRevision,
+					messageWorkspaceRevision,
+				);
 
 				if (workspacePersistence && workspacePersistenceContextKey) {
 					if (
@@ -2145,6 +2238,8 @@ export async function deactivate(): Promise<void> {
 	pendingWorkspaceMaterializationGeneration = undefined;
 	workspacePersistenceRootUris = [];
 	workspaceContextGeneration = 0;
+	workspaceRevision = 0;
+	latestAcknowledgedWorkspaceRevision = -1;
 	nextWorkspaceContextGeneration = 0;
 	latestAcknowledgedWorkspaceContextGeneration = -1;
 	workspaceContextByGeneration.clear();
@@ -2188,11 +2283,14 @@ export async function deactivate(): Promise<void> {
 function getWebviewHtml(
 	webview: vscode.Webview,
 	stylesUri: vscode.Uri,
+	monacoStylesUri: vscode.Uri,
 	scriptUri: vscode.Uri,
+	monacoWorkerUri: vscode.Uri,
 	initialWebviewState: PersistedWebviewState | undefined,
 	workspacePresentation: WorkspacePresentation,
 	workspaceState: WorkspacePersistentState,
 	contextGeneration: number,
+	workspaceMutationRevision: number,
 ): string {
 	const serializedWebviewState = serializeWebviewState(initialWebviewState);
 	const serializedWorkspaceState = encodeURIComponent(JSON.stringify(
@@ -2209,8 +2307,9 @@ function getWebviewHtml(
 			<head>
 				<meta charset="UTF-8">
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
-				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; style-src-elem ${webview.cspSource} 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src ${webview.cspSource};">
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; style-src-elem ${webview.cspSource} 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src ${webview.cspSource}; worker-src ${webview.cspSource} blob:; font-src ${webview.cspSource};">
 				<link rel="stylesheet" href="${stylesUri}">
+				<link rel="stylesheet" href="${monacoStylesUri}">
 				<title>Crispy</title>
 			</head>
 			<body>
@@ -2235,7 +2334,7 @@ function getWebviewHtml(
 					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
-				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-state="${serializedWorkspaceState}" data-workspace-context-generation="${contextGeneration}"></script>
+				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-state="${serializedWorkspaceState}" data-workspace-context-generation="${contextGeneration}" data-workspace-revision="${workspaceMutationRevision}" data-monaco-worker-uri="${monacoWorkerUri}"></script>
 			</body>
 			</html>`;
 }
