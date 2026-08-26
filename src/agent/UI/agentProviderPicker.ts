@@ -20,8 +20,16 @@ export const AGENT_PROVIDER_PICKER_TITLE = 'Choose an agent';
 export const AGENT_PROVIDER_PICKER_DESCRIPTION =
 	'Select a CLI to start this terminal';
 
-/** 상표 자산을 대신해 모든 CLI 항목에 공통으로 쓰는 터미널 표식이다. */
+/** 공식 로고가 없는 CLI 항목에 쓰는 기존 터미널 표식이다. */
 export const AGENT_PROVIDER_MARK = '>_';
+
+/** 공식 provider 로고를 로컬 Webview asset 선택자와 연결한다. */
+export const AGENT_PROVIDER_LOGOS: Readonly<
+	Partial<Record<ProviderId, 'openai' | 'claude'>>
+> = Object.freeze({
+	codex: 'openai',
+	claude: 'claude',
+});
 
 /** 중앙 선택기가 상위 계층으로 전달하는 사용자 동작이다. */
 export interface AgentProviderPickerCallbacks {
@@ -107,8 +115,16 @@ export function initializeAgentProviderPicker(
 
 		const mark = dependencies.createElement('span');
 		mark.className = 'agent-provider-mark';
-		mark.textContent = AGENT_PROVIDER_MARK;
 		mark.setAttribute('aria-hidden', 'true');
+		const providerLogo = AGENT_PROVIDER_LOGOS[providerId];
+		if (providerLogo === undefined) {
+			mark.textContent = AGENT_PROVIDER_MARK;
+		} else {
+			const logo = dependencies.createElement('span');
+			logo.className = 'agent-provider-logo';
+			logo.dataset.providerLogo = providerLogo;
+			mark.append(logo);
+		}
 
 		const label = dependencies.createElement('span');
 		label.className = 'agent-provider-option-label';

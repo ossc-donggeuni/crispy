@@ -2,78 +2,90 @@ import * as assert from 'assert';
 import { resolveAgentExecutable } from '../../mcp/agentExecutableResolver';
 
 suite('Agent executable resolver', () => {
-	test('macOS와 Linux는 PATH의 native Codex를 direct executable로 resolve한다', async () => {
-		for (const platform of ['darwin', 'linux'] as const) {
-			const probes: string[] = [];
-			const result = await resolveAgentExecutable('codex', {
-				platform,
-				environment: { PATH: '/first:/opt/bin' },
-				isExecutableFile: async (candidate) => {
-					probes.push(candidate);
-					return candidate === '/opt/bin/codex';
-				},
-			});
+	test('macOS와 Linux는 PATH의 native Codex·Claude를 direct executable로 resolve한다', async () => {
+		for (const providerId of ['codex', 'claude'] as const) {
+			for (const platform of ['darwin', 'linux'] as const) {
+				const probes: string[] = [];
+				const expected = `/opt/bin/${providerId}`;
+				const result = await resolveAgentExecutable(providerId, {
+					platform,
+					environment: { PATH: '/first:/opt/bin' },
+					isExecutableFile: async (candidate) => {
+						probes.push(candidate);
+						return candidate === expected;
+					},
+				});
 
-			assert.deepStrictEqual(result, {
-				ok: true,
-				executable: {
-					executable: '/opt/bin/codex',
-					launcherKind: 'direct',
-				},
-			});
-			assert.deepStrictEqual(probes, ['/first/codex', '/opt/bin/codex']);
+				assert.deepStrictEqual(result, {
+					ok: true,
+					executable: {
+						executable: expected,
+						launcherKind: 'direct',
+					},
+				});
+				assert.deepStrictEqual(probes, [
+					`/first/${providerId}`,
+					expected,
+				]);
+			}
 		}
 	});
 
-	test('Windows PATHEXT 순서로 native exe와 npm cmd를 구분한다', async () => {
-		const exe = await resolveAgentExecutable('codex', {
-			platform: 'win32',
-			environment: {
-				Path: 'C:\\native;C:\\npm',
-				PATHEXT: '.EXE;.CMD',
-			},
-			isExecutableFile: async (candidate) => candidate === 'C:\\native\\codex.exe',
-		});
-		const cmd = await resolveAgentExecutable('codex', {
-			platform: 'win32',
-			environment: {
-				PATH: 'C:\\native;C:\\npm',
-				PATHEXT: '.EXE;.CMD',
-			},
-			isExecutableFile: async (candidate) => candidate === 'C:\\npm\\codex.cmd',
-		});
+	test('Windows PATHEXT 순서로 Codex·Claude native exe와 npm cmd를 구분한다', async () => {
+		for (const providerId of ['codex', 'claude'] as const) {
+			const exePath = `C:\\native\\${providerId}.exe`;
+			const cmdPath = `C:\\npm\\${providerId}.cmd`;
+			const exe = await resolveAgentExecutable(providerId, {
+				platform: 'win32',
+				environment: {
+					Path: 'C:\\native;C:\\npm',
+					PATHEXT: '.EXE;.CMD',
+				},
+				isExecutableFile: async (candidate) => candidate === exePath,
+			});
+			const cmd = await resolveAgentExecutable(providerId, {
+				platform: 'win32',
+				environment: {
+					PATH: 'C:\\native;C:\\npm',
+					PATHEXT: '.EXE;.CMD',
+				},
+				isExecutableFile: async (candidate) => candidate === cmdPath,
+			});
 
-		assert.deepStrictEqual(exe, {
-			ok: true,
-			executable: {
-				executable: 'C:\\native\\codex.exe',
-				launcherKind: 'direct',
-			},
-		});
-		assert.deepStrictEqual(cmd, {
-			ok: true,
-			executable: {
-				executable: 'C:\\npm\\codex.cmd',
-				launcherKind: 'cmd-one-shot',
-			},
-		});
+			assert.deepStrictEqual(exe, {
+				ok: true,
+				executable: {
+					executable: exePath,
+					launcherKind: 'direct',
+				},
+			});
+			assert.deepStrictEqual(cmd, {
+				ok: true,
+				executable: {
+					executable: cmdPath,
+					launcherKind: 'cmd-one-shot',
+				},
+			});
+		}
 	});
 
-	test('Windows custom exe/cmd 경로를 한 파일로만 받고 raw quote를 거부한다', async () => {
-		for (const [override, launcherKind] of [
-			['C:\\Program Files\\한글 & Codex\\codex.exe', 'direct'],
-			['C:\\Program Files\\100% (Codex)!\\codex.cmd', 'cmd-one-shot'],
-		] as const) {
-			const result = await resolveAgentExecutable('codex', {
-				platform: 'win32',
-				environment: {},
-				override,
-				isExecutableFile: async (candidate) => candidate === override,
-			});
-			assert.deepStrictEqual(result, {
-				ok: true,
-				executable: { executable: override, launcherKind },
-			});
+	test('Windows Codex·Claude override를 한 파일로만 받고 raw quote를 거부한다', async () => {
+		for (const providerId of ['codex', 'claude'] as const) {
+			for (const [override, launcherKind] of [
+				[`C:\\Program Files\\한글 & CLI\\${providerId}.exe`, 'direct'],
+				[`C:\\Program Files\\100% (CLI)!\\${providerId}.cmd`, 'cmd-one-shot'],
+			] as const) {
+				const result = await resolveAgentExecutable(providerId, {
+					platform: 'win32',
+					environment: {},
+					override,
+					isExecutableFile: async (candidate) => candidate === override,
+				});
+				assert.deepStrictEqual(result, {
+					ok: true,
+					executable: { executable: override, launcherKind },
+				});
+			}
 		}
 
 		const invalid = await resolveAgentExecutable('codex', {

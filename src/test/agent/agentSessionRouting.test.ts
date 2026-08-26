@@ -29,15 +29,17 @@ const successfulPrepare: PrepareTerminalLaunch = async () => ({
 	policy: launchPolicy,
 });
 
-/** 같은 Terminal lifecycle에서 CLI를 자동 실행하는 provider 목록이다. */
-const autoRunProviderIds = ['codex', 'claude', 'antigravity'] as const;
+/** 주입한 shell fallback에서 공통 Terminal lifecycle을 검증할 provider 목록이다. */
+const autoRunProviderIds = ['codex', 'claude'] as const;
 
 /**
- * FakePtyAdapter와 성공 준비 경계를 가진 Host 및 메시지 기록을 만든다.
+ * FakePtyAdapter와 성공 shell-fallback 준비 경계를 가진 Host 및 메시지 기록을 만든다.
+ * Provider별 structured/MCP 준비 의존성을 의도적으로 주입하지 않아 이 suite가
+ * provider protocol이 아니라 공통 Terminal routing만 관찰하게 한다.
  *
  * @returns Host, PTY adapter와 발행된 Host 메시지 기록
  */
-function createRoutingHost(fakePid: number = 4242): {
+function createBareRoutingHost(fakePid: number = 4242): {
 	readonly host: TerminalHost;
 	readonly ptyAdapter: FakePtyAdapter;
 	readonly messages: HostToWebviewMessage[];
@@ -84,7 +86,7 @@ function messagesOfType<Type extends HostToWebviewMessage['type']>(
 async function openTab(
 	host: TerminalHost,
 	tabId: string,
-	providerId: 'codex' | 'claude' | 'antigravity',
+	providerId: 'codex' | 'claude',
 ): Promise<void> {
 	host.createTab(tabId);
 	await host.handleTerminalReady(tabId, 80, 24);
@@ -112,14 +114,10 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		assert.strictEqual(resolveAgentAutoRunInput('claude', 'darwin'), 'claude\r');
 		assert.strictEqual(resolveAgentAutoRunInput('claude', 'linux'), 'claude\r');
 		assert.strictEqual(resolveAgentAutoRunInput('claude', 'win32'), 'claude\r');
-
-		assert.strictEqual(resolveAgentAutoRunInput('antigravity', 'darwin'), 'agy\r');
-		assert.strictEqual(resolveAgentAutoRunInput('antigravity', 'linux'), 'agy\r');
-		assert.strictEqual(resolveAgentAutoRunInput('antigravity', 'win32'), 'agy\r');
 	});
 
 	test('탭만 만들면 provider가 없으므로 세션을 시작하지 않는다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost();
+		const { host, ptyAdapter, messages } = createBareRoutingHost();
 
 		host.createTab('tab-created');
 		await host.handleTerminalReady('tab-created', 120, 40);
@@ -133,7 +131,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 
 	for (const providerId of autoRunProviderIds) {
 		test(`${providerId} 선택, 재선택과 overlay restart가 공통 auto-run lifecycle을 재사용한다`, async () => {
-			const { host, ptyAdapter, messages } = createRoutingHost();
+			const { host, ptyAdapter, messages } = createBareRoutingHost();
 			const tabId = `tab-lifecycle-${providerId}`;
 			const expected = resolveAgentAutoRunInput(providerId);
 			assert.ok(expected !== undefined);
@@ -175,7 +173,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		});
 
 		test(`${providerId} delayed PID 동안 running과 auto-run 입력을 보류한다`, async () => {
-			const { host, ptyAdapter, messages } = createRoutingHost(0);
+			const { host, ptyAdapter, messages } = createBareRoutingHost(0);
 			const tabId = `tab-delayed-${providerId}`;
 			const expected = resolveAgentAutoRunInput(providerId);
 			assert.ok(expected !== undefined);
@@ -218,7 +216,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 	}
 
 	test('provider 선택이 표면 준비보다 먼저 도착해도 준비 뒤에 시작한다', async () => {
-		const { host, ptyAdapter } = createRoutingHost();
+		const { host, ptyAdapter } = createBareRoutingHost();
 
 		host.createTab('tab-early-provider');
 		await host.switchAgent(
@@ -237,48 +235,48 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 		assert.strictEqual(latestHandle(ptyAdapter).writes.length, 1);
 	});
 
-	test('Antigravity와 Codex 탭의 세션과 입출력이 섞이지 않는다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost();
-		const antigravityExpected = resolveAgentAutoRunInput('antigravity');
+	test('Claude와 Codex 탭의 세션과 입출력이 섞이지 않는다', async () => {
+		const { host, ptyAdapter, messages } = createBareRoutingHost();
+		const claudeExpected = resolveAgentAutoRunInput('claude');
 		const codexExpected = resolveAgentAutoRunInput('codex');
 		assert.ok(
-			antigravityExpected !== undefined && codexExpected !== undefined,
+			claudeExpected !== undefined && codexExpected !== undefined,
 		);
 
-		await openTab(host, 'tab-antigravity', 'antigravity');
-		const antigravitySession = host.getActiveSession('tab-antigravity');
-		const antigravityHandle = latestHandle(ptyAdapter);
+		await openTab(host, 'tab-claude', 'claude');
+		const claudeSession = host.getActiveSession('tab-claude');
+		const claudeHandle = latestHandle(ptyAdapter);
 
 		await openTab(host, 'tab-codex', 'codex');
 		const codexSession = host.getActiveSession('tab-codex');
 		const codexHandle = latestHandle(ptyAdapter);
 
 		assert.ok(
-			antigravitySession !== undefined && codexSession !== undefined,
+			claudeSession !== undefined && codexSession !== undefined,
 		);
 		assert.notStrictEqual(
-			antigravitySession.sessionId,
+			claudeSession.sessionId,
 			codexSession.sessionId,
 		);
-		assert.notStrictEqual(antigravityHandle, codexHandle);
-		assert.deepStrictEqual(antigravityHandle.writes, [antigravityExpected]);
+		assert.notStrictEqual(claudeHandle, codexHandle);
+		assert.deepStrictEqual(claudeHandle.writes, [claudeExpected]);
 		assert.deepStrictEqual(codexHandle.writes, [codexExpected]);
 
 		host.routeInput({
 			type: 'terminal.input',
-			tabId: 'tab-antigravity',
-			sessionId: antigravitySession.sessionId,
+			tabId: 'tab-claude',
+			sessionId: claudeSession.sessionId,
 			data: 'x',
 		});
 
 		assert.deepStrictEqual(
-			antigravityHandle.writes,
-			[antigravityExpected, 'x'],
+			claudeHandle.writes,
+			[claudeExpected, 'x'],
 		);
 		assert.deepStrictEqual(codexHandle.writes, [codexExpected]);
 
 		messages.length = 0;
-		antigravityHandle.emitData('antigravity output');
+		claudeHandle.emitData('claude output');
 		codexHandle.emitData('codex output');
 		await Promise.resolve();
 
@@ -287,9 +285,9 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 			outputs.map(({ tabId, sessionId, data }) => ({ tabId, sessionId, data })),
 			[
 				{
-					tabId: 'tab-antigravity',
-					sessionId: antigravitySession.sessionId,
-					data: 'antigravity output',
+					tabId: 'tab-claude',
+					sessionId: claudeSession.sessionId,
+					data: 'claude output',
 				},
 				{
 					tabId: 'tab-codex',
@@ -299,41 +297,41 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 			],
 		);
 
-		host.closeTab('tab-antigravity');
+		host.closeTab('tab-claude');
 		await Promise.resolve();
-		assert.strictEqual(antigravityHandle.killCallCount, 1);
+		assert.strictEqual(claudeHandle.killCallCount, 1);
 		assert.strictEqual(codexHandle.killCallCount, 0);
 		assert.strictEqual(host.getActiveSession('tab-codex'), codexSession);
 		assert.strictEqual(codexSession.state.kind, 'running');
 	});
 
-	test('다른 provider 탭 종료가 Antigravity 세션에 영향을 주지 않는다', async () => {
-		const { host, ptyAdapter } = createRoutingHost();
+	test('다른 provider 탭 종료가 Codex 세션에 영향을 주지 않는다', async () => {
+		const { host, ptyAdapter } = createBareRoutingHost();
 
-		await openTab(host, 'tab-antigravity-survivor', 'antigravity');
-		const antigravitySession = host.getActiveSession(
-			'tab-antigravity-survivor',
+		await openTab(host, 'tab-codex-survivor', 'codex');
+		const codexSession = host.getActiveSession(
+			'tab-codex-survivor',
 		);
-		const antigravityHandle = latestHandle(ptyAdapter);
+		const codexHandle = latestHandle(ptyAdapter);
 		await openTab(host, 'tab-claude-closing', 'claude');
 		const claudeHandle = latestHandle(ptyAdapter);
-		assert.ok(antigravitySession !== undefined);
+		assert.ok(codexSession !== undefined);
 
 		host.closeTab('tab-claude-closing');
 		await Promise.resolve();
 
 		assert.strictEqual(claudeHandle.killCallCount, 1);
-		assert.strictEqual(antigravityHandle.killCallCount, 0);
+		assert.strictEqual(codexHandle.killCallCount, 0);
 		assert.strictEqual(
-			host.getActiveSession('tab-antigravity-survivor'),
-			antigravitySession,
+			host.getActiveSession('tab-codex-survivor'),
+			codexSession,
 		);
-		assert.strictEqual(antigravitySession.state.kind, 'running');
-		assert.deepStrictEqual(antigravityHandle.writes, ['agy\r']);
+		assert.strictEqual(codexSession.state.kind, 'running');
+		assert.deepStrictEqual(codexHandle.writes, ['codex\r']);
 	});
 
 	test('다른 탭이나 종료된 세션의 input, resize와 restart를 거부한다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost();
+		const { host, ptyAdapter, messages } = createBareRoutingHost();
 
 		await openTab(host, 'tab-owner', 'codex');
 		await openTab(host, 'tab-other', 'codex');
@@ -377,7 +375,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 	});
 
 	test('등록되지 않은 탭의 준비와 provider 지정을 거부한다', async () => {
-		const { host, ptyAdapter, messages } = createRoutingHost();
+		const { host, ptyAdapter, messages } = createBareRoutingHost();
 
 		await host.handleTerminalReady('tab-unregistered', 80, 24);
 		await host.switchAgent(
@@ -397,7 +395,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 	});
 
 	test('탭을 닫으면 기존 정리 경로로 세션과 탭 등록을 함께 해제한다', async () => {
-		const { host, ptyAdapter } = createRoutingHost();
+		const { host, ptyAdapter } = createBareRoutingHost();
 
 		await openTab(host, 'tab-closing', 'codex');
 		const handle = latestHandle(ptyAdapter);
@@ -421,7 +419,7 @@ suite('Agent 탭 provider 선택과 세션 routing', () => {
 	});
 
 	test('Host dispose는 열려 있는 모든 탭의 세션을 함께 정리한다', async () => {
-		const { host, ptyAdapter } = createRoutingHost();
+		const { host, ptyAdapter } = createBareRoutingHost();
 
 		await openTab(host, 'tab-dispose-one', 'codex');
 		await openTab(host, 'tab-dispose-two', 'claude');

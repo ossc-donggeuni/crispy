@@ -1,7 +1,7 @@
 # Crispy
 
-Crispy is a VS Code extension for visualizing a project and running Codex, Claude,
-or Antigravity in tab-scoped terminals. In a multi-root Workspace, every Agent tab
+Crispy is a VS Code extension for visualizing a project and running Codex or Claude
+in tab-scoped terminals. In a multi-root Workspace, every Agent tab
 selects one local root. The Extension Host resolves that selection again at every
 start, restart, MCP restart, fallback, and final spawn boundary, then uses the fresh
 folder path as the process `cwd`.

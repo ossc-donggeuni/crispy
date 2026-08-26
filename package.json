@@ -19,8 +19,7 @@
       "supported": "limited",
       "restrictedConfigurations": [
         "crispy.codexCliPath",
-        "crispy.claudeCliPath",
-        "crispy.antigravityCliPath"
+        "crispy.claudeCliPath"
       ]
     },
     "virtualWorkspaces": {
@@ -64,12 +63,6 @@
           "default": "",
           "scope": "machine-overridable",
           "markdownDescription": "Optional Claude CLI executable path. When empty, Windows tries `claude`, `claude.cmd`, and `claude.exe` in order."
-        },
-        "crispy.antigravityCliPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine-overridable",
-          "markdownDescription": "Optional Antigravity CLI executable path. When empty, Windows tries `agy`, `agy.cmd`, and `agy.exe` in order."
         }
       }
     }

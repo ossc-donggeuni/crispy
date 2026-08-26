@@ -39,6 +39,8 @@
 .agent-workspace-status-bar {
 	display: flex;
 	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
 	min-width: 0;
 	min-height: 24px;
 	padding: 4px 10px;
@@ -50,9 +52,39 @@
 }
 
 .agent-workspace-status-name {
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-workspace-status-name[hidden],
+.agent-mcp-connection-status[hidden] {
+	display: none;
+}
+
+.agent-mcp-connection-status {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 6px;
+	color: var(--vscode-testing-iconPassed, #2ea043);
+}
+
+.agent-mcp-connection-status[data-kind='failed'] {
+	color: var(--vscode-testing-iconFailed, #f85149);
+}
+
+.agent-mcp-connection-indicator {
+	display: block;
+	width: 7px;
+	height: 7px;
+	background-color: currentColor;
+	border-radius: 50%;
+}
+
+.agent-mcp-connection-label {
 	white-space: nowrap;
 }
 
@@ -326,8 +358,15 @@
 }
 
 .agent-provider-option:disabled {
-	opacity: 0.5;
 	cursor: default;
+}
+
+.agent-provider-option:disabled .agent-provider-mark {
+	opacity: 0.72;
+}
+
+.agent-provider-option:disabled .agent-provider-option-label {
+	opacity: 0.55;
 }
 
 .agent-provider-option:disabled:hover {
@@ -370,6 +409,31 @@
 	font-weight: 600;
 }
 
+.agent-provider-logo {
+	display: block;
+	width: 24px;
+	height: 24px;
+	background-position: center;
+	background-repeat: no-repeat;
+}
+
+.agent-provider-logo[data-provider-logo='openai'] {
+	background-image: url('../../webview/assets/provider-logos/openai.svg');
+	background-size: 23px 23px;
+}
+
+/* 공식 Claude wordmark의 asterisk가 원본 비율로 24px frame을 채우게 한다. */
+.agent-provider-logo[data-provider-logo='claude'] {
+	background-image: url('../../webview/assets/provider-logos/claude.svg');
+	background-position: left center;
+	background-size: 110.016px 24px;
+}
+
+.vscode-dark .agent-provider-logo[data-provider-logo='openai'],
+.vscode-high-contrast .agent-provider-logo[data-provider-logo='openai'] {
+	filter: invert(1);
+}
+
 .agent-provider-option-label {
 	min-width: 0;
 	overflow: hidden;
@@ -382,6 +446,21 @@
 	.agent-provider-option:focus-visible {
 		outline: 1px solid CanvasText;
 		outline-offset: -1px;
+	}
+
+	.agent-provider-mark {
+		color: CanvasText;
+		background-color: Canvas;
+		border-color: CanvasText;
+	}
+
+	.agent-provider-logo {
+		forced-color-adjust: none;
+	}
+
+	.agent-provider-option:disabled .agent-provider-mark {
+		border-style: dashed;
+		opacity: 1;
 	}
 }
 
@@ -540,22 +619,6 @@
 	color: var(--vscode-tab-activeForeground, #e8e8e8);
 }
 
-/* 각 탭이 자기 MCP 상태를 소유하므로 여러 탭의 연결 상태를 동시에 볼 수 있다. */
-.agent-tab-mcp-indicator {
-	display: block;
-	flex: 0 0 auto;
-	width: 8px;
-	height: 8px;
-	margin: 0 5px 0 2px;
-	background-color: var(--vscode-testing-iconPassed, #2ea043);
-	border: 1px solid currentColor;
-	border-radius: 50%;
-}
-
-.agent-tab-mcp-indicator[data-kind='failed'] {
-	background-color: var(--vscode-testing-iconFailed, #f85149);
-}
-
 .agent-tab-close {
 	flex: 0 0 16px;
 	width: 16px;
@@ -594,7 +657,7 @@
 		outline-offset: -2px;
 	}
 
-	.agent-tab-mcp-indicator {
+	.agent-mcp-connection-indicator {
 		background-color: CanvasText;
 	}
 }

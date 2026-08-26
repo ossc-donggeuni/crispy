@@ -270,9 +270,7 @@ pnpm run smoke:installed-vsix -- --target darwin-arm64
 ```
 
 실제 Codex/Claude smoke는 로그인된 provider와 loopback/PTY 실행 권한이 필요하므로 일반 CI unit
-gate와 구분한다. C5 gate가 완료된 뒤에만 Claude L0을 시작한다. Antigravity MCP 연결과
-`provider_update_required`의 실제 emit/update 정책은 별도 제품 결정이며 이 단계에서는
-구현하지 않는다.
+gate와 구분한다. C5 gate가 완료된 뒤에만 Claude L0을 시작한다.
 
 ## Claude Phase L0 공식 계약 검증 — 2026-08-22
 
@@ -456,8 +454,7 @@ process-tree kill smoke를 통과했다. Linux x64 glibc와 Windows native x64�
 workflow run은 commit/push 전이라 아직 수행되지 않았다.
 
 이 문단은 2026-08-22 당시 Codex C0→C5와 Claude L0→L4 검증 범위를 기록한다. 그 L4 범위에는
-Antigravity MCP, 사용자-visible `provider_update_required` emit/update 정책과 Graph report
-tool/state 연결이 포함되지 않았다. 이후 2026-08-26 Phase 5에서 VS Code Host capability로 제한한
-Codex/Claude Agent Activity Tool과 Graph/Store 연결을 추가했으며 현재 계약은 문서 앞부분의
-`Phase 5 production Agent Activity 계약`을 따른다. Antigravity MCP와
-`provider_update_required` 정책은 계속 별도 범위다.
+사용자-visible `provider_update_required` emit/update 정책과 Graph report tool/state 연결이
+포함되지 않았다. 이후 2026-08-26 Phase 5에서 VS Code Host capability로 제한한 Codex/Claude
+Agent Activity Tool과 Graph/Store 연결을 추가했으며 현재 계약은 문서 앞부분의
+`Phase 5 production Agent Activity 계약`을 따른다.

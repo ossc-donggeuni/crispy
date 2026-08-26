@@ -209,7 +209,6 @@ async function collectArchive(target, vsixPath) {
 const requiredRestrictedWorkspaceConfigurations = Object.freeze([
 	'crispy.codexCliPath',
 	'crispy.claudeCliPath',
-	'crispy.antigravityCliPath',
 ]);
 const requiredCrispyMcpToolNames = Object.freeze([
 	'crispy_ping',
