@@ -3,7 +3,9 @@ import { createAgentActivityStore } from '../../agent/webview/agentActivityStore
 import { createAgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
 import {
 	createAgentActivityNotificationEntries,
+	createAgentActivitySessionNotificationKey,
 	getAgentActivityNotificationStatusLabel,
+	groupAgentActivityNotificationsBySession,
 } from '../../webview/graph/agentActivityNotifications';
 import {
 	GRAPH_MOCK,
@@ -96,6 +98,47 @@ suite('Agent Activity Notifications', () => {
 		assert.strictEqual(entries[0]?.sequence, 3);
 		assert.strictEqual(entries[0]?.key, firstKey);
 
+		presentations.dispose();
+	});
+
+	test('선택한 Session의 여러 Target 완료 이벤트를 안정적인 알림 하나로 합친다', () => {
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+
+		presentations.activateSession('task-tab', 'task-session', 'Task');
+		store.setAgentActivity(
+			'task-session',
+			{ nodeId: 'folder:app/src' },
+			'completed',
+		);
+		store.setAgentActivity(
+			'task-session',
+			{ nodeId: 'folder:app/docs' },
+			'completed',
+		);
+		store.setAgentActivity(
+			'task-session',
+			{ nodeId: 'file:app/package.json' },
+			'completed',
+		);
+		const grouped = groupAgentActivityNotificationsBySession(
+			createAgentActivityNotificationEntries(
+				store.getSnapshot(),
+				presentations,
+				GRAPH_MOCK,
+			),
+			({ sessionId }) => sessionId === 'task-session',
+		);
+
+		assert.strictEqual(grouped.length, 1);
+		assert.strictEqual(
+			grouped[0]?.key,
+			createAgentActivitySessionNotificationKey('task-session'),
+		);
+		assert.strictEqual(grouped[0]?.dismissalScope, 'session');
+		assert.strictEqual(grouped[0]?.groupedTargetCount, 3);
+		assert.strictEqual(grouped[0]?.sequence, 1);
+		assert.strictEqual(grouped[0]?.target.nodeId, 'folder:app/src');
 		presentations.dispose();
 	});
 

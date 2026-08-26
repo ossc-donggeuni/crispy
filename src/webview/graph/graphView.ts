@@ -3842,16 +3842,32 @@ export function initializeGraphView(
 			nodeEffects.createLocalEffectHost,
 			{
 				onFocus: handleAgentActivityNotificationFocus,
+				shouldGroupBySession: (entry) => (
+					entry.activity === 'completed'
+					&& [...taskExecutionByTaskId.values()].some((snapshot) => (
+						snapshot.state === 'completed'
+						&& entry.sessionId === createTaskExecutionActivitySessionId(
+							snapshot.executionId,
+							snapshot.startNodeId,
+						)
+					))
+				),
 				onDismiss: (entry) => {
 					if (
 						pendingAgentActivityNotificationFocus?.key === entry.key
 					) {
 						pendingAgentActivityNotificationFocus = undefined;
 					}
-					runtimeOptions.agentActivityStore?.clearAgentActivity(
-						entry.sessionId,
-						entry.target,
-					);
+					if (entry.dismissalScope === 'session') {
+						runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+							entry.sessionId,
+						);
+					} else {
+						runtimeOptions.agentActivityStore?.clearAgentActivity(
+							entry.sessionId,
+							entry.target,
+						);
+					}
 				},
 			},
 			getVisibleGraphArea,

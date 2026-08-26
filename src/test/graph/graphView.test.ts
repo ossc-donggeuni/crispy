@@ -82,6 +82,9 @@ import {
 	AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
 } from '../../webview/graph/agentActivityNotificationCenter';
 import {
+	createAgentActivitySessionNotificationKey,
+} from '../../webview/graph/agentActivityNotifications';
+import {
 	AGENT_ACTIVITY_FLOATING_NOTIFICATION_ATTRIBUTE,
 	AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_ANIMATION,
 	AGENT_ACTIVITY_FLOATING_NOTIFICATION_EXIT_MS,
@@ -7732,20 +7735,48 @@ suite('Graph View', () => {
 			[`task:execution-ui:${startNode.id}`, 'completed'],
 		]);
 		const taskCompletionSessionId = `task:execution-ui:${startNode.id}`;
-		const endNotification = getDescendantByAttribute(
-			getDescendantByAttribute(
-				root,
-				AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
-				'',
-			),
+		const notificationCenter = getDescendantByAttribute(
+			root,
+			AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+			'',
+		);
+		const notificationList = getDescendantByClass(
+			notificationCenter,
+			'graph-agent-activity-notification-list',
+		);
+		const taskCompletionNotification = getDescendantByAttribute(
+			notificationCenter,
 			AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
-			JSON.stringify([taskCompletionSessionId, endNode.id, null]),
+			createAgentActivitySessionNotificationKey(taskCompletionSessionId),
 		);
 
+		assert.strictEqual(
+			notificationList.children.length,
+			2,
+			'Task 전체 완료와 Work 세션 완료가 각각 알림 하나여야 한다.',
+		);
+		assert.strictEqual(
+			getDescendantByClass(
+				taskCompletionNotification,
+				'graph-agent-activity-notification-target-name',
+			).textContent,
+			'Task 전체',
+		);
+		assert.strictEqual(
+			getDescendantByClass(
+				taskCompletionNotification,
+				'graph-agent-activity-notification-target-path',
+			).textContent,
+			'3개 노드의 완료 이벤트',
+		);
 		getDescendantByClass(
-			endNotification,
+			taskCompletionNotification,
 			'graph-agent-activity-notification-dismiss',
-		).dispatch('click', createClickEvent(endNotification));
+		).dispatch('click', createClickEvent(taskCompletionNotification));
+		assert.deepStrictEqual(store.getActivities({ nodeId: startNode.id }), []);
+		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
+			({ sessionId }) => sessionId,
+		), [`task:execution-ui:${workNode.id}`]);
 		assert.deepStrictEqual(store.getActivities({ nodeId: endNode.id }), []);
 		assert.strictEqual(
 			findDescendantByAttribute(

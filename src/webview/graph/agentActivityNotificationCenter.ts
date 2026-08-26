@@ -10,6 +10,7 @@ import {
 	createAgentActivityNotificationEntriesFromIndex,
 	createAgentActivityTargetPresentationIndex,
 	getAgentActivityNotificationStatusLabel,
+	groupAgentActivityNotificationsBySession,
 	type AgentActivityNotificationEntry,
 } from './agentActivityNotifications';
 import {
@@ -30,6 +31,8 @@ export const AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE =
 export interface AgentActivityNotificationCenterInteractions {
 	onFocus?: (entry: AgentActivityNotificationEntry) => void;
 	onDismiss?: (entry: AgentActivityNotificationEntry) => void;
+	/** true인 Activity는 같은 Session의 모든 Target을 하나의 알림으로 표시한다. */
+	shouldGroupBySession?: (entry: AgentActivityNotificationEntry) => boolean;
 }
 
 /** 알림 Center의 Graph 표시 정보, 위치와 DOM lifecycle이다. */
@@ -66,7 +69,7 @@ const CENTER_CONTROL_SIZE = 40;
 
 /**
  * Graph Overlay 우측 상단에 현재 MCP Activity 전체를 표시하는 알림 Center를 만든다.
- * 목록은 Store state를 소유하지 않고 exact Target×Session dismiss만 상위에 요청한다.
+ * 목록은 Store state를 소유하지 않고 Target 또는 그룹 Session dismiss를 상위에 요청한다.
  */
 export function initializeAgentActivityNotificationCenter(
 	overlayLayer: HTMLElement,
@@ -194,10 +197,13 @@ export function initializeAgentActivityNotificationCenter(
 			return;
 		}
 
-		const entries = createAgentActivityNotificationEntriesFromIndex(
-			store.getSnapshot(),
-			presentationStore,
-			targetPresentations,
+		const entries = groupAgentActivityNotificationsBySession(
+			createAgentActivityNotificationEntriesFromIndex(
+				store.getSnapshot(),
+				presentationStore,
+				targetPresentations,
+			),
+			(entry) => interactions.shouldGroupBySession?.(entry) === true,
 		);
 		const currentKeys = new Set(entries.map(({ key }) => key));
 		const orderedElements: HTMLLIElement[] = [];
@@ -393,25 +399,32 @@ function updateNotificationRegistration(
 	registration: NotificationRegistration,
 	entry: AgentActivityNotificationEntry,
 ): void {
+	const targetName = entry.dismissalScope === 'session'
+		? 'Task 전체'
+		: entry.targetName;
+	const targetPath = entry.dismissalScope === 'session'
+		? `${entry.groupedTargetCount}개 노드의 완료 이벤트`
+		: entry.targetPath;
+
 	registration.entry = entry;
 	registration.element.setAttribute('data-activity', entry.activity);
 	registration.element.setAttribute('data-availability', entry.availability);
 	registration.focusButton.setAttribute(
 		'aria-label',
-		`${entry.sessionTitle}, ${entry.targetPath}, ${getAgentActivityNotificationStatusLabel(
+		`${entry.sessionTitle}, ${targetPath}, ${getAgentActivityNotificationStatusLabel(
 			entry.activity,
 		)}`,
 	);
 	registration.focusButton.disabled = entry.availability === 'outside';
 	registration.focusButton.title = entry.availability === 'outside'
 		? '현재 Workspace Graph 범위 밖의 대상입니다.'
-		: entry.targetPath;
+		: targetPath;
 	registration.sessionTitle.textContent = entry.sessionTitle;
 	registration.status.textContent = getAgentActivityNotificationStatusLabel(
 		entry.activity,
 	);
-	registration.targetName.textContent = entry.targetName;
-	registration.targetPath.textContent = entry.targetPath;
+	registration.targetName.textContent = targetName;
+	registration.targetPath.textContent = targetPath;
 	registration.currentMessage.textContent = entry.currentMessage;
 	registration.effectHost.setEffects(getAgentActivityEffects(
 		entry.sessionId,
