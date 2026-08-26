@@ -9,12 +9,17 @@ Graph는 `GraphRoot[]`와 Project/Folder/File을 허용하는 Root Node Map을 �
 ```text
 src/webview/graph/
 ├── assets/
+├── agentActivityFocus.ts
+├── agentActivityFloatingNotifications.ts
+├── agentActivityNotificationCenter.ts
+├── agentActivityNotifications.ts
 ├── fileIconResolver.ts
 ├── graphCamera.ts
 ├── graphDetachDrag.ts
 ├── graphLayout.ts
 ├── graphMockData.ts
 ├── graphModel.ts
+├── graphNodeUri.ts
 ├── graphNavigator.ts
 ├── graphNavigatorMinimap.ts
 ├── graphNavigatorRoots.ts
@@ -27,6 +32,59 @@ src/webview/graph/
 ├── graphView.ts
 └── README.md
 ```
+
+### `agentActivityNotifications.ts`
+
+> 현재 Agent Activity Store를 알림 Center용 표시 행으로 투영합니다.
+
+- 모든 Target의 현재 Activity를 Graph binding 우선순위와 분리된 전역 수신 sequence 최신순으로 정렬
+- 실행 중인 Session만 포함하고 Session 제목, 현재 메시지와 canonical Target 이름/경로를 결합
+- `sessionId + nodeId + rootId`의 안정적인 key로 상태 전환 시 같은 DOM 행 재사용
+- Graph가 바뀔 때만 Target 표시 index를 재생성해 고빈도 PTY 메시지 갱신에서 Tree 재순회 방지
+- Graph snapshot에 아직 없는 Target도 URI가 현재 Workspace Root 안이면 이름/경로를 복원해 pending으로 표시
+- URI scheme/authority/path segment 경계상 모든 현재 Root 밖인 Target만 내부 ID 없는 unavailable 문구로 표시
+
+### `agentActivityFocus.ts`
+
+> 알림 Target을 Graph에 드러내고 현재 occurrence의 World Focus 지점을 계산합니다.
+
+- Target과 조상의 Filter 숨김 상태만 제거하고 Target이 표시될 때까지 Project/Folder ancestor만 최소 범위로 Open
+- Grouped File이 현재 page 밖이면 해당 File을 포함하는 page까지만 확장
+- 명시적인 `rootId`와 detached occurrence를 source occurrence보다 우선
+- 최신 Layout과 저장 위치, 앞선 File Row의 Agent Binding footprint를 반영해 Card/Row 중심 계산
+- Graph에 없는 Target은 State나 Camera를 변경하지 않고 안전하게 생략
+
+### `graphNodeUri.ts`
+
+> URI 기반 production Graph Node ID의 종류, Root 포함 관계와 상대 경로를 해석합니다.
+
+- `workspace-root:`, `folder:`, `file:` prefix 뒤 absolute URI만 구조적으로 복원
+- URI scheme, credentials, host와 path segment 경계를 보존한 Root containment 판정
+- encoded URI segment를 사용자 표시 경로에서만 안전하게 decode
+- 가장 구체적인 nested Workspace Root 선택을 위한 정규화 path 길이 제공
+
+### `agentActivityNotificationCenter.ts`
+
+> Graph Overlay 우측 상단의 알림 Button, Panel과 알림 행 DOM lifecycle을 관리합니다.
+
+- 현재 Activity 수 Badge, 빈 상태와 최신순 Scroll 목록 표시
+- 각 알림에 Graph의 동일한 Activity Effect recipe와 연속 Animation timeline 적용
+- 알림 본문 Click은 Panel을 유지한 채 Focus callback, 별도 삭제 Button은 exact Target×Session dismiss callback으로 분리
+- Escape, 외부 Pointer와 Focus 복원 및 Camera 입력 차단 attribute 처리
+- Agent Panel dock을 제외한 실제 Graph 가시 영역의 우측 상단에 위치
+- Minimap보다 투명한 4% blur 표면을 사용하고 Chat의 실제 transform 경계를 frame마다 따라 이동
+- Store/Session 구독, 행별 Effect host와 Listener를 `dispose()`에서 정리
+
+### `agentActivityFloatingNotifications.ts`
+
+> 새 Activity event를 Bell 왼쪽에 transient floating stack으로 표시합니다.
+
+- 초기 마운트의 기존 알림은 재생하지 않고 새 Store sequence만 수신순으로 쌓음
+- Bell과 같은 40px 높이에 Session 제목과 Activity 상태만 표시하고 현재 Session 메시지와 Target 경로는 숨김
+- Graph와 같은 Activity Effect recipe와 Animation timeline을 재사용
+- 새 박스는 기존 stack의 왼쪽으로 slide-in하고 10초 후 exit Animation 뒤 제거되며 남은 박스가 오른쪽으로 재배치
+- Click은 자신의 퇴장을 시작하고 기존 알림과 같은 Graph reveal/Focus callback만 호출
+- Scheduler, Listener와 local Effect host를 자신의 dispose 경계에서 정리
 
 ### `fileIconResolver.ts`
 
@@ -247,6 +305,8 @@ src/webview/graph/
 - Detach Drag 및 Reattach Target 최소 활성 상태
 - Floating Root List Panel의 Button Hover/Focus/Active, Ellipsis와 목록 Scroll 스타일
 - Minimap Background 탐색 Cursor와 Viewport Indicator Grab/Grabbing 상태
+- 알림 Button/Badge, Scroll Panel, Activity 행 Animation 및 삭제 interaction 스타일
+- VS Code Theme 변수와 High Contrast outline을 사용하는 알림 Center 상태 표현
 
 ### `graphState.ts`
 
@@ -293,7 +353,13 @@ src/webview/graph/
 - Overlay Navigator 초기화 후 최초 Graph를 `createGraphNavigatorRoots()`로 변환해 Root 목록에 전달
 - Navigator Root 선택 시 저장된 `nodePositions`를 우선하고 현재 Layout 위치로 fallback해 기존 Camera Focus 요청
 - Root Focus는 현재 Camera scale과 기존 ease-out Animation 정책을 유지
+- Activity/Session runtime Store가 함께 주입되면 Overlay 우측 상단 알림 Center 초기화
+- 알림 Focus에서 Target 자신은 열지 않고 표시에 필요한 ancestor, Filter와 File pagination만 복원한 최신 Layout 중심으로 Camera 이동
+- Workspace 범위 안이지만 snapshot에 아직 없는 알림 Focus는 보류하고 Graph 갱신에서 Target이 나타나는 즉시 reveal/Focus 재시도
+- 현재 Workspace URI 경계 밖의 unavailable 알림은 Focus를 비활성화하고 삭제만 허용
+- 알림 삭제를 기존 `AgentActivityStore.clearAgentActivity()`에 연결해 알림, Graph Binding과 Effect를 같은 경로로 정리
+- Graph 교체와 가시 영역 변경을 알림 Target 표시 index와 Overlay 위치에 동기화
 - 초기화와 성공한 Detach/Reattach에서 공통 projection으로 최신 `currentGraph.roots`를 Navigator에 동기화
 - 실패한 Promotion/Reattach에서는 Root 목록을 유지하고 Panel Open 상태와 독립적으로 Content만 교체
 - 외부 Graph 기능을 위한 State와 Camera 인터페이스 제공
-- `dispose()` 시 Layout 구독, Navigator, Renderer, Camera와 Graph View DOM 정리
+- `dispose()` 시 알림 Center를 포함한 Layout 구독, Navigator, Renderer, Camera와 Graph View DOM 정리

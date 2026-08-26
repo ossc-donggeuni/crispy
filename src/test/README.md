@@ -200,6 +200,37 @@
 - 복원된 File Group page를 최초 Layout 높이와 Renderer contents에 반영한다
 - 더보기와 접기가 File Group size, sibling 위치와 Edge를 함께 Reflow한다
 - Layout 입력 변경만 Reflow하고 Camera와 Node 위치 변경은 건너뛰며 Renderer/Navigator에 같은 Layout을 전달한다
+- 알림 Center를 실제 가시 Graph 우측 상단에 배치하고 최신 Activity 정보와 동일 Effect를 표시한다
+- Graph overlay는 Chat보다 아래 stacking을 유지한 채 실제 transform bounds를 frame마다 따라가고, 4% 투명 Center의 알림 Click 뒤에도 Panel이 닫히지 않는다
+- Webview 창 복귀 시 transient 0 bounds를 적용하지 않고 현재 Panel Layout과 Overlay 위치를 다시 측정한다
+- 초기 알림은 Floating으로 재생하지 않고 새 Activity sequence만 Bell 왼쪽에 slide stack으로 쌓으며 Session 내용은 숨긴다
+- Floating 알림은 10초 후 Animation/fallback으로 제거하고 남은 항목을 오른쪽으로 당기며 dispose에서 Timer를 정리한다
+- Floating 알림 Click은 File Editor를 열지 않고 Target 표시에 필요한 Graph 조상만 열어 Focus한 뒤 자신을 제거한다
+- 알림 Click으로 Target 자신의 하위는 열지 않고 Target 표시에 필요한 조상과 File page만 복원해 Camera Focus하며 File Editor도 열지 않는다
+- Workspace 범위 안 pending Target은 Graph 갱신 뒤 조상/Filter를 열어 Focus하고 같은 알림 DOM을 present 상태로 전환한다
+- Graph View dispose에서 알림 Store 구독, Effect와 Overlay DOM을 함께 정리한다
+
+## `graph/agentActivityNotifications.test.ts`
+
+- 모든 Target의 현재 Activity를 전역 수신 sequence 최신순으로 투영한다
+- 같은 Target×Session 상태 전환에서 안정적인 key를 유지하고 중복 행을 만들지 않는다
+- 실행 중인 Session만 표시하고 누락 Target의 내부 ID를 노출하지 않는다
+- Graph snapshot에 없는 Workspace 내부 URI는 decoded pending 경로로, URI 경계 밖 Target만 unavailable로 구분한다
+- Multi-Root context를 포함한 Target 경로와 Activity 상태명을 생성한다
+
+## `graph/agentActivityFocus.test.ts`
+
+- 숨긴 Target/ancestor와 접힌 Project/Folder를 열고 필요한 File page까지만 확장한다
+- Grouped File Row의 저장 위치와 앞선 Agent Binding footprint로 정확한 중심을 계산한다
+- 명시적인 occurrence와 preferred Detached Root를 source occurrence보다 우선한다
+- 존재하지 않는 Target의 State 복원과 Focus를 안전하게 생략한다
+
+## `graph/graphNodeUri.test.ts`
+
+- production Graph Node prefix와 absolute URI만 구조적으로 복원한다
+- scheme, authority와 path segment 경계를 보존해 Workspace Root 포함 여부를 판정한다
+- Root 상대 URI segment를 사용자 표시 단계에서만 decode한다
+- trailing slash를 제외한 Root path 길이로 nested Root 구체성을 비교한다
 
 ## `graph/graphNavigator.test.ts`
 

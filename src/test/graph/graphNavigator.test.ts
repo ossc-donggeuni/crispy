@@ -114,6 +114,31 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(navigatorStyle.bottom, '16px');
 	});
 
+	test('일시적으로 축소된 Visible Graph 좌표도 Navigator를 Viewport 밖으로 밀지 않는다', () => {
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createLargeMinimapLayout(),
+			undefined,
+			() => ({
+				left: 0,
+				top: 0,
+				right: 1,
+				bottom: 1,
+				width: 1,
+				height: 1,
+				center: { x: 0.5, y: 0.5 },
+			}),
+		);
+		const navigatorStyle = fixture.navigatorElement.style as unknown as Record<
+			string,
+			string
+		>;
+
+		assert.strictEqual(navigatorStyle.right, '640px');
+		assert.strictEqual(navigatorStyle.bottom, '504px');
+	});
+
 	test('초기 Layout을 SVG Line과 Rect로 렌더링하고 Text를 생성하지 않는다', () => {
 		const nodes = [
 			createMinimapNode('node:a', 0, 0),

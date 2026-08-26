@@ -104,24 +104,29 @@ export function resolveGraphVisibleArea(
 	viewport: HTMLElement,
 	panel: HTMLElement,
 	dock: DockPosition,
-	collapsed: boolean,
 ): GraphVisibleArea {
 	const viewportSize = {
 		width: viewport.clientWidth,
 		height: viewport.clientHeight,
 	};
+	const fullArea = createFullGraphVisibleArea(viewportSize);
 
-	if (collapsed || panel.hidden) {
-		return createFullGraphVisibleArea(viewportSize);
+	if (panel.hidden || viewportSize.width <= 0 || viewportSize.height <= 0) {
+		return fullArea;
 	}
 
-	return calculateGraphVisibleArea(
+	const visibleArea = calculateGraphVisibleArea(
 		viewportSize,
 		viewport.getBoundingClientRect(),
 		panel.getBoundingClientRect(),
 		dock,
 		false,
 	);
+
+	/** 창 전환 중 일시적인 0/역전 bounds로 Overlay가 viewport 밖에 배치되지 않게 한다. */
+	return visibleArea.width > 0 && visibleArea.height > 0
+		? visibleArea
+		: fullArea;
 }
 
 /** 네 경계와 파생 크기/중심을 하나의 불변 값으로 묶는다. */

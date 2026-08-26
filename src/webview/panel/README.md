@@ -61,4 +61,6 @@ src/webview/panel/
 - Dock 방향에 맞는 Sticker 위치와 열림 방향 아이콘 적용
 - 접어도 저장된 Side / Vertical 크기를 그대로 두어 같은 크기로 복원
 - 접힘 여부가 바뀐 경우에만 상위 저장 callback 호출
+- Chat transform의 실제 DOM 경계를 frame마다 전달해 Graph Overlay가 접기·열기를 함께 따라가도록 함
+- 숨겨진 Webview가 다시 표시되면 현재 Dock·크기·접힘 DOM을 재적용하고 Overlay를 재측정
 - 다시 펼친 뒤 Terminal fit 등 layout 의존 기능 갱신 callback 호출

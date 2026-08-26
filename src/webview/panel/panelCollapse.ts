@@ -15,6 +15,15 @@ export interface PanelCollapseElements {
 	readonly stickerOpener: HTMLElement;
 }
 
+/** Chat slide 동안 Graph overlay 위치를 같은 frame에 갱신하는 Scheduler다. */
+export interface PanelCollapseAnimationFrameScheduler {
+	request(callback: FrameRequestCallback): number;
+	cancel(requestId: number): void;
+}
+
+/** transitionend 누락이나 숨겨진 Webview에서도 추적을 끝내는 상한이다. */
+export const PANEL_COLLAPSE_TRACKING_MAX_MS = 320;
+
 /** Dock 방향별 접기 버튼 SVG이며 Panel이 접히는 방향을 가리킨다. */
 const COLLAPSE_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
 	left: 'panel-left.svg',
@@ -41,6 +50,8 @@ const OPENER_ICON_ASSETS: Readonly<Record<DockPosition, string>> = {
  * @param state 현재 Dock 위치와 접힘 여부를 담는 Layout 상태
  * @param onCollapsedChange 접힘 여부가 바뀐 뒤 상태를 저장하는 콜백
  * @param onExpand 다시 펼친 뒤 layout 의존 기능을 갱신하는 콜백
+ * @param onTransitionFrame Chat slide의 각 frame에서 Graph overlay 위치를 갱신하는 콜백
+ * @param animationFrameScheduler 테스트 또는 runtime requestAnimationFrame 경계
  * @returns Dock 위치가 바뀐 뒤 접힘 UI를 다시 반영하는 함수
  */
 export function initializePanelCollapse(
@@ -48,7 +59,40 @@ export function initializePanelCollapse(
 	state: PanelLayoutState,
 	onCollapsedChange: () => void,
 	onExpand: () => void = () => undefined,
+	onTransitionFrame: () => void = () => undefined,
+	animationFrameScheduler: PanelCollapseAnimationFrameScheduler | undefined =
+		resolveAnimationFrameScheduler(elements.chatPanel),
 ): () => void {
+	let transitionFrameId: number | undefined;
+	let transitionStartedAt: number | undefined;
+
+	const stopTransitionTracking = () => {
+		if (transitionFrameId !== undefined) {
+			animationFrameScheduler?.cancel(transitionFrameId);
+			transitionFrameId = undefined;
+		}
+		transitionStartedAt = undefined;
+	};
+	const trackTransitionFrame: FrameRequestCallback = (timestamp) => {
+		transitionFrameId = undefined;
+		transitionStartedAt ??= timestamp;
+		onTransitionFrame();
+
+		if (
+			animationFrameScheduler
+			&& timestamp - transitionStartedAt < PANEL_COLLAPSE_TRACKING_MAX_MS
+		) {
+			transitionFrameId = animationFrameScheduler.request(trackTransitionFrame);
+		}
+	};
+	const startTransitionTracking = () => {
+		stopTransitionTracking();
+		onTransitionFrame();
+		if (animationFrameScheduler) {
+			transitionFrameId = animationFrameScheduler.request(trackTransitionFrame);
+		}
+	};
+
 	/**
 	 * 첫 렌더에서는 저장된 상태를 즉시 반영하고, 사용자 동작부터 Slide transition을 사용한다.
 	 * 접힌 상태로 복원할 때 펼친 Panel이 잠깐 보이는 현상도 함께 막는다.
@@ -92,6 +136,7 @@ export function initializePanelCollapse(
 		state.collapsed = true;
 		refreshCollapse();
 		onCollapsedChange();
+		startTransitionTracking();
 	};
 
 	/**
@@ -106,12 +151,44 @@ export function initializePanelCollapse(
 		state.collapsed = false;
 		refreshCollapse();
 		onCollapsedChange();
+		startTransitionTracking();
 		onExpand();
+	};
+	const handleTransitionSettled = (event: TransitionEvent) => {
+		if (
+			event.target !== elements.chatPanel
+			|| event.propertyName !== 'transform'
+		) {
+			return;
+		}
+
+		stopTransitionTracking();
+		onTransitionFrame();
 	};
 
 	elements.collapseButton.addEventListener('click', handleCollapse);
 	elements.stickerOpener.addEventListener('click', handleExpand);
+	elements.chatPanel.addEventListener('transitionend', handleTransitionSettled);
 	refreshCollapse();
 
 	return refreshCollapse;
+}
+
+function resolveAnimationFrameScheduler(
+	element: HTMLElement,
+): PanelCollapseAnimationFrameScheduler | undefined {
+	const ownerWindow = element.ownerDocument?.defaultView;
+
+	if (
+		!ownerWindow
+		|| typeof ownerWindow.requestAnimationFrame !== 'function'
+		|| typeof ownerWindow.cancelAnimationFrame !== 'function'
+	) {
+		return undefined;
+	}
+
+	return {
+		request: (callback) => ownerWindow.requestAnimationFrame(callback),
+		cancel: (requestId) => ownerWindow.cancelAnimationFrame(requestId),
+	};
 }
