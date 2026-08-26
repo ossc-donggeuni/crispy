@@ -7480,6 +7480,16 @@ suite('Graph View', () => {
 
 		assert.ok(record);
 		assert.strictEqual(startButton.title, 'Task 시작');
+		assert.strictEqual(startElement.children[0], startButton);
+		assert.strictEqual(
+			getDescendantsByClass(startElement, 'task-start-icon').length,
+			1,
+		);
+		assert.ok(getDescendantByClass(startButton, 'task-start-icon'));
+		assert.strictEqual(
+			getDescendantByClass(startButton, 'task-start-run-symbol').textContent,
+			'▶',
+		);
 		startButton.dispatch('click', createClickEvent(startButton));
 		assert.deepStrictEqual(startRequests, [{
 			taskId: task.id,
@@ -7775,6 +7785,28 @@ suite('Graph View', () => {
 		assert.match(
 			taskViewCss,
 			/\.task-start-icon\s*\{[^}]*task-start\.svg[^}]*\}/s,
+		);
+		const taskStartRunActionRule = taskViewCss.match(
+			/\.task-start-run-action\s*\{[^}]*\}/s,
+		);
+
+		assert.ok(taskStartRunActionRule);
+		assert.match(
+			taskStartRunActionRule[0],
+			/position:\s*relative;[^}]*width:\s*28px;[^}]*height:\s*28px;[^}]*background:\s*transparent;[^}]*border:\s*0;/s,
+		);
+		assert.doesNotMatch(taskStartRunActionRule[0], /left:\s*calc\(100%/);
+		assert.match(
+			taskViewCss,
+			/\.task-start-run-action:hover\s*>\s*\.task-start-icon,[^{]*\{[^}]*opacity:\s*0;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-start-run-action:hover\s*>\s*\.task-start-run-symbol,[^{]*\{[^}]*opacity:\s*1;/s,
+		);
+		assert.doesNotMatch(
+			taskViewCss,
+			/\.task-start-node:hover\s*>\s*\.task-start-run-action/,
 		);
 		assert.match(
 			taskViewCss,

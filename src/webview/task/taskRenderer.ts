@@ -1587,12 +1587,13 @@ function createTaskNodeContents(
 	}
 
 	if (node.kind === 'start') {
+		const startVisual = node.flowState === 'ready' && !executionLocked
+			? createTaskStartButton(ownerDocument, node)
+			: icon;
+
 		return [
-			icon,
+			startVisual,
 			content,
-			...(node.flowState === 'ready' && !executionLocked
-				? [createTaskStartButton(ownerDocument, node)]
-				: []),
 			createTaskNodeActions(
 				ownerDocument,
 				node,
@@ -1748,6 +1749,9 @@ function createTaskStartButton(
 	node: Extract<TaskLayoutNode, { readonly kind: 'start' }>,
 ): HTMLButtonElement {
 	const button = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
+	const runSymbol = ownerDocument.createElement('span');
+
 	button.className = 'task-start-run-action';
 	button.type = 'button';
 	button.title = 'Task 시작';
@@ -1755,7 +1759,12 @@ function createTaskStartButton(
 	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'start-task');
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
-	button.textContent = '▶';
+	icon.className = 'task-node-icon task-start-icon';
+	icon.setAttribute('aria-hidden', 'true');
+	runSymbol.className = 'task-start-run-symbol';
+	runSymbol.setAttribute('aria-hidden', 'true');
+	runSymbol.textContent = '▶';
+	button.append(icon, runSymbol);
 	return button;
 }
 
