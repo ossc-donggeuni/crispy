@@ -10,7 +10,6 @@ export const AGENT_PROVIDER_LABELS: Readonly<Record<ProviderId, string>> =
 	Object.freeze({
 		codex: 'Codex',
 		claude: 'Claude Code',
-		antigravity: 'Antigravity',
 	});
 
 /** provider가 정해지기 전 탭 strip에 표시하는 고정 라벨이다. */

@@ -1,7 +1,8 @@
 import * as assert from 'node:assert/strict';
-import type { ShellLaunchPolicyResult } from '../../agent/host/shell/types';
-import { createPrepareTerminalLaunch } from '../../agent/host/terminal/prepareTerminalLaunch';
-import { TerminalHost } from '../../agent/host/terminal/terminalHost';
+import {
+	TerminalHost,
+	type McpSupervisor,
+} from '../../agent/host/terminal/terminalHost';
 import {
 	createWorkspaceResolver,
 } from '../../agent/host/workspace/workspaceResolver';
@@ -17,6 +18,7 @@ import {
 	buildCodexMcpLaunchPlan,
 } from '../../mcp/codexLaunchPlan';
 import { createPrepareCodexTerminalLaunch } from '../../mcp/codexTerminalLaunch';
+import { createPrepareClaudeTerminalLaunch } from '../../mcp/claudeTerminalLaunch';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import type { WorkspaceRootId } from '../../workspace/workspaceRootId';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
@@ -48,7 +50,7 @@ function trustedRoots(
 }
 
 suite('Multi-root execution integration', () => {
-	test('서로 다른 탭의 generic provider를 exact selected root cwd에서 실행한다', async () => {
+	test('서로 다른 Claude 탭을 exact selected root cwd에서 실행한다', async () => {
 		const snapshot = trustedRoots(
 			folder(FIRST_ROOT_ID, FIRST_POSIX_PATH),
 			folder(SECOND_ROOT_ID, SECOND_POSIX_PATH),
@@ -58,28 +60,44 @@ suite('Multi-root execution integration', () => {
 			validatePolicy: (current, workspaceRootId) =>
 				validateWorkspacePolicy(current, workspaceRootId, 'linux'),
 		});
-		const prepareLaunch = createPrepareTerminalLaunch({
+		const prepareClaudeLaunch = createPrepareClaudeTerminalLaunch({
 			workspaceResolver,
-			shellResolver: async (_platform, _environment, root): Promise<ShellLaunchPolicyResult> => ({
-				ok: true,
-				policy: {
-					executable: '/bin/sh',
-					args: [],
-					cwd: root.fsPath,
-					env: { PATH: '/bin' },
-				},
-			}),
+			resolveExecutable: async (providerId) => {
+				assert.strictEqual(providerId, 'claude');
+				return {
+					ok: true,
+					executable: {
+						executable: '/opt/claude',
+						launcherKind: 'direct',
+					},
+				};
+			},
 			readPlatform: () => 'linux',
 			readEnvironment: () => ({ PATH: '/bin' }),
+			/** Version/probe failure intentionally selects credential-free bare Claude. */
+			resolveCompatibility: async () => undefined,
 		});
+		let mcpPrepareCalls = 0;
+		const bareOnlySupervisor: McpSupervisor = {
+			prepareSession: async () => {
+				mcpPrepareCalls += 1;
+				throw new Error('bare Claude must not prepare MCP');
+			},
+			getSessionRuntime: () => undefined,
+			retireExactRuntime: async () => undefined,
+			dispose: async () => undefined,
+		};
 		const adapter = new FakePtyAdapter(8401);
 		const messages: HostToWebviewMessage[] = [];
 		const host = new TerminalHost({
 			ptyAdapter: adapter,
-			prepareLaunch,
+			prepareLaunch: async () => {
+				throw new Error('Claude bare launch must not use the shell fallback');
+			},
+			prepareClaudeLaunch,
+			mcpSupervisor: bareOnlySupervisor,
 			workspaceResolver,
 			readWorkspaceTrust: () => true,
-			resolveAgentAutoRunInput: async () => undefined,
 			processTreeController: createCaptureFailureProcessTreeController(),
 			emitMessage: (message) => messages.push(message),
 		});
@@ -90,27 +108,36 @@ suite('Multi-root execution integration', () => {
 			await host.handleTerminalReady('tab-first-root', 80, 24);
 			await host.handleTerminalReady('tab-second-root', 100, 30);
 			await host.switchAgent(
-				'tab-first-root', 'antigravity', FIRST_ROOT_ID, 1,
+				'tab-first-root', 'claude', FIRST_ROOT_ID, 1,
 			);
 			await host.switchAgent(
-				'tab-second-root', 'antigravity', SECOND_ROOT_ID, 1,
+				'tab-second-root', 'claude', SECOND_ROOT_ID, 1,
 			);
 
 			assert.deepStrictEqual(
 				adapter.spawnCalls.map(({ cwd }) => cwd),
 				[FIRST_POSIX_PATH, SECOND_POSIX_PATH],
 			);
+			assert.deepStrictEqual(
+				adapter.spawnCalls.map(({ executable }) => executable),
+				['/opt/claude', '/opt/claude'],
+			);
+			assert.deepStrictEqual(
+				adapter.handles.map(({ writes }) => writes),
+				[[], []],
+			);
+			assert.strictEqual(mcpPrepareCalls, 0);
 			assert.deepStrictEqual(host.getTabAssignment('tab-first-root'), {
-				providerId: 'antigravity',
+				providerId: 'claude',
 				workspaceRootId: FIRST_ROOT_ID,
 			});
 			assert.deepStrictEqual(host.getTabAssignment('tab-second-root'), {
-				providerId: 'antigravity',
+				providerId: 'claude',
 				workspaceRootId: SECOND_ROOT_ID,
 			});
 
 			await host.switchAgent(
-				'tab-first-root', 'antigravity', SECOND_ROOT_ID, 2,
+				'tab-first-root', 'claude', SECOND_ROOT_ID, 2,
 			);
 
 			assert.strictEqual(adapter.spawnCalls.length, 2);

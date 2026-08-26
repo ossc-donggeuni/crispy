@@ -358,8 +358,15 @@
 }
 
 .agent-provider-option:disabled {
-	opacity: 0.5;
 	cursor: default;
+}
+
+.agent-provider-option:disabled .agent-provider-mark {
+	opacity: 0.72;
+}
+
+.agent-provider-option:disabled .agent-provider-option-label {
+	opacity: 0.55;
 }
 
 .agent-provider-option:disabled:hover {
@@ -402,6 +409,31 @@
 	font-weight: 600;
 }
 
+.agent-provider-logo {
+	display: block;
+	width: 24px;
+	height: 24px;
+	background-position: center;
+	background-repeat: no-repeat;
+}
+
+.agent-provider-logo[data-provider-logo='openai'] {
+	background-image: url('../../webview/assets/provider-logos/openai.svg');
+	background-size: 23px 23px;
+}
+
+/* 공식 Claude wordmark의 asterisk가 원본 비율로 24px frame을 채우게 한다. */
+.agent-provider-logo[data-provider-logo='claude'] {
+	background-image: url('../../webview/assets/provider-logos/claude.svg');
+	background-position: left center;
+	background-size: 110.016px 24px;
+}
+
+.vscode-dark .agent-provider-logo[data-provider-logo='openai'],
+.vscode-high-contrast .agent-provider-logo[data-provider-logo='openai'] {
+	filter: invert(1);
+}
+
 .agent-provider-option-label {
 	min-width: 0;
 	overflow: hidden;
@@ -414,6 +446,21 @@
 	.agent-provider-option:focus-visible {
 		outline: 1px solid CanvasText;
 		outline-offset: -1px;
+	}
+
+	.agent-provider-mark {
+		color: CanvasText;
+		background-color: Canvas;
+		border-color: CanvasText;
+	}
+
+	.agent-provider-logo {
+		forced-color-adjust: none;
+	}
+
+	.agent-provider-option:disabled .agent-provider-mark {
+		border-style: dashed;
+		opacity: 1;
 	}
 }
 

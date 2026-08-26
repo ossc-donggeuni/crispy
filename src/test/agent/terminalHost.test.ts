@@ -59,6 +59,13 @@ const successfulPrepare: PrepareTerminalLaunch = async () => ({
 	policy: launchPolicy,
 });
 
+/**
+ * 공통 Terminal orchestration 테스트는 provider별 MCP 준비 의존성을 생략하고
+ * 주입한 shell fallback seam만 관찰한다. 지원 provider 중 Codex ID를 대표값으로 쓴다.
+ */
+const COMMON_TERMINAL_TEST_PROVIDER = 'codex' as const;
+const COMMON_TERMINAL_TEST_AUTO_RUN_INPUT = 'codex\r';
+
 function createHost(
 	options: Omit<TerminalHostOptions, 'emitMessage'>,
 ): {
@@ -727,7 +734,7 @@ suite('TerminalHost start orchestration', () => {
 
 		await host.switchAgent(
 			'tab-final-cwd',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -759,7 +766,7 @@ suite('TerminalHost start orchestration', () => {
 
 		await host.switchAgent(
 			'tab-post-assignment-failure',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -801,7 +808,7 @@ suite('TerminalHost start orchestration', () => {
 
 		await host.switchAgent(
 			'tab-final-preflight-failure',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -847,7 +854,7 @@ suite('TerminalHost start orchestration', () => {
 				workspaceAvailable = false;
 				childGuardCalls += 1;
 				assert.strictEqual(resolveWorkspaceCwdBeforeSpawn?.(), undefined);
-				return 'agy\r';
+				return COMMON_TERMINAL_TEST_AUTO_RUN_INPUT;
 			},
 		});
 		host.createTab('tab-windows-probe-preflight');
@@ -855,7 +862,7 @@ suite('TerminalHost start orchestration', () => {
 
 		await host.switchAgent(
 			'tab-windows-probe-preflight',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -1539,7 +1546,7 @@ suite('TerminalHost restart orchestration', () => {
 		await host.handleTerminalReady('tab-restart-post-cleanup', 80, 24);
 		await host.switchAgent(
 			'tab-restart-post-cleanup',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -1598,7 +1605,7 @@ suite('TerminalHost restart orchestration', () => {
 		await host.handleTerminalReady('tab-restart-fresh-cwd', 80, 24);
 		await host.switchAgent(
 			'tab-restart-fresh-cwd',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -1893,7 +1900,7 @@ suite('TerminalHost Workspace Trust revoke', () => {
 		await host.handleTerminalReady('tab-trust-input', 80, 24);
 		await host.switchAgent(
 			'tab-trust-input',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -1973,7 +1980,7 @@ suite('TerminalHost Workspace Trust revoke', () => {
 		await host.handleTerminalReady('tab-trust-monitor', 100, 30);
 		await host.switchAgent(
 			'tab-trust-monitor',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -2052,7 +2059,7 @@ suite('TerminalHost Workspace Trust revoke', () => {
 		await host.handleTerminalReady('tab-root-removal-running', 80, 24);
 		await host.switchAgent(
 			'tab-root-removal-running',
-			'antigravity',
+			COMMON_TERMINAL_TEST_PROVIDER,
 			WORKSPACE_ROOT_ID,
 			1,
 		);
@@ -2098,7 +2105,7 @@ suite('TerminalHost Workspace Trust revoke', () => {
 			await host.handleTerminalReady(tabId, 80, 24);
 			await host.switchAgent(
 				tabId,
-				'antigravity',
+				COMMON_TERMINAL_TEST_PROVIDER,
 				WORKSPACE_ROOT_ID,
 				1,
 			);

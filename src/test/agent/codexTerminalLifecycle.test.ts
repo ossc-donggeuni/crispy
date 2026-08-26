@@ -247,7 +247,7 @@ function createFixture(options: {
 		readWorkspaceTrust: options.readWorkspaceTrust ?? (() => true),
 		onWorkspaceTrustRevoked: options.onWorkspaceTrustRevoked,
 		resolveAgentAutoRunInput: async (providerId) =>
-			providerId === 'claude' ? 'claude\r' : 'agy\r',
+			providerId === 'claude' ? 'claude\r' : 'codex\r',
 		prepareCodexLaunch: options.prepareCodexLaunch ?? (async () => ({
 			ok: true,
 			preparation: {
@@ -270,6 +270,20 @@ function createFixture(options: {
 					}),
 			},
 		})),
+		/** Cross-provider cancellation tests use a direct, credential-free Claude. */
+		prepareClaudeLaunch: async () => ({
+			ok: true,
+			preparation: {
+				executable: {
+					executable: '/resolved/claude',
+					launcherKind: 'direct',
+				},
+				cwd: '/trusted/workspace',
+				environment: { PATH: '/bin' },
+				platform: 'linux',
+				mcpCompatible: false,
+			},
+		}),
 		mcpSupervisor: supervisor,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
@@ -357,7 +371,7 @@ suite('Codex direct PTY and MCP transaction', () => {
 
 		const switching = fixture.host.switchAgent(
 			'tab-preparation-switch',
-			'antigravity',
+			'claude',
 			WORKSPACE_ROOT_ID,
 			2,
 		);
@@ -371,8 +385,13 @@ suite('Codex direct PTY and MCP transaction', () => {
 
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
 		assert.strictEqual(
+			fixture.adapter.spawnCalls[0].executable,
+			'/resolved/claude',
+		);
+		assert.deepStrictEqual(fixture.adapter.handles[0].writes, []);
+		assert.strictEqual(
 			fixture.host.getTabProvider('tab-preparation-switch'),
-			'antigravity',
+			'claude',
 		);
 		assert.strictEqual(
 			fixture.host.getActiveSession('tab-preparation-switch')?.state.kind,
@@ -391,7 +410,7 @@ suite('Codex direct PTY and MCP transaction', () => {
 		fixture.host.resetAgent('tab-preparation-reset');
 		const switching = fixture.host.switchAgent(
 			'tab-preparation-reset',
-			'antigravity',
+			'claude',
 			WORKSPACE_ROOT_ID,
 			2,
 		);
@@ -410,8 +429,13 @@ suite('Codex direct PTY and MCP transaction', () => {
 
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
 		assert.strictEqual(
+			fixture.adapter.spawnCalls[0].executable,
+			'/resolved/claude',
+		);
+		assert.deepStrictEqual(fixture.adapter.handles[0].writes, []);
+		assert.strictEqual(
 			fixture.host.getTabProvider('tab-preparation-reset'),
-			'antigravity',
+			'claude',
 		);
 		assert.strictEqual(
 			fixture.host.getActiveSession('tab-preparation-reset')?.state.kind,
@@ -977,8 +1001,8 @@ suite('Codex stale attempt and cleanup', () => {
 		await codexSwitch;
 
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
-		assert.strictEqual(fixture.adapter.spawnCalls[0].executable, '/host/shell');
-		assert.deepStrictEqual(fixture.adapter.handles[0].writes, ['claude\r']);
+		assert.strictEqual(fixture.adapter.spawnCalls[0].executable, '/resolved/claude');
+		assert.deepStrictEqual(fixture.adapter.handles[0].writes, []);
 		assert.strictEqual(fixture.messages.filter(
 			(message) => message.type === 'terminal.started',
 		).length, 1);

@@ -111,9 +111,8 @@ suite('Host session lifecycle completion contract', () => {
 			}
 		});
 
-		test('mcp.restart는 non-retryable, non-failed, non-MCP provider와 중복 요청을 거부한다', () => {
+		test('mcp.restart는 non-retryable, non-failed 상태와 중복 요청을 거부한다', () => {
 			for (const overrides of [
-				{ providerId: 'antigravity' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: true },
 				{ providerId: 'codex' as const, mcpStatus: 'connected' as const, mcpFailureRetryable: true },
 				{ providerId: 'codex' as const, mcpStatus: 'failed' as const, mcpFailureRetryable: false },
 			]) {

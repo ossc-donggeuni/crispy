@@ -188,6 +188,7 @@ function createFixture(options: {
 	readonly mcpCompatible?: boolean;
 	readonly fakePid?: number;
 	readonly withCodex?: boolean;
+	readonly codexMcpCompatible?: boolean;
 	readonly prepareClaudeLaunch?: ConstructorParameters<typeof TerminalHost>[0][
 		'prepareClaudeLaunch'
 	];
@@ -210,7 +211,7 @@ function createFixture(options: {
 		prepareLaunch: successfulShellPrepare,
 		workspaceResolver: () => ({ ok: true, root: workspaceRoot }),
 		resolveAgentAutoRunInput: async (providerId) =>
-			providerId === 'antigravity' ? 'agy\r' : 'claude\r',
+			providerId === 'codex' ? 'codex\r' : 'claude\r',
 		prepareClaudeLaunch: options.prepareClaudeLaunch ?? (async () => ({
 			ok: true,
 			preparation: {
@@ -240,7 +241,12 @@ function createFixture(options: {
 						cwd: '/trusted/workspace',
 						environment: { PATH: '/bin' },
 						platform: 'linux' as const,
-						shellEnvironmentPolicyStyle: 'keyed-filters' as const,
+						...(options.codexMcpCompatible === false
+							? {}
+							: {
+								shellEnvironmentPolicyStyle:
+									'keyed-filters' as const,
+							}),
 					},
 				}),
 			}
@@ -430,6 +436,8 @@ suite('Claude direct PTY and MCP transaction', () => {
 		});
 		const fixture = createFixture({
 			prepareClaudeLaunch: () => deferred,
+			withCodex: true,
+			codexMcpCompatible: false,
 		});
 		fixture.host.createTab('tab-stale-probe');
 		await fixture.host.handleTerminalReady('tab-stale-probe', 100, 30);
@@ -441,9 +449,9 @@ suite('Claude direct PTY and MCP transaction', () => {
 		);
 		await Promise.resolve();
 
-		const antigravityStart = fixture.host.switchAgent(
+		const codexStart = fixture.host.switchAgent(
 			'tab-stale-probe',
-			'antigravity',
+			'codex',
 			WORKSPACE_ROOT_ID,
 			2,
 		);
@@ -459,12 +467,12 @@ suite('Claude direct PTY and MCP transaction', () => {
 				mcpCompatible: true,
 			},
 		});
-		await Promise.all([claudeStart, antigravityStart]);
+		await Promise.all([claudeStart, codexStart]);
 
 		assert.strictEqual(fixture.supervisor.prepareCalls.length, 0);
 		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
-		assert.strictEqual(fixture.adapter.spawnCalls[0].executable, '/host/shell');
-		assert.deepStrictEqual(fixture.adapter.handles[0].writes, ['agy\r']);
+		assert.strictEqual(fixture.adapter.spawnCalls[0].executable, '/resolved/codex');
+		assert.deepStrictEqual(fixture.adapter.handles[0].writes, []);
 	});
 
 	test('PTY 전 adapter crash는 bare로 전환하고 PTY 후 crash는 Claude를 유지한다', async () => {

@@ -176,7 +176,7 @@ suite('Agent Tab Model', () => {
 		assert.strictEqual(tab.autoTitleAttempted, false);
 	});
 
-	test('자동 제목은 current Codex/Claude session에서 한 번만 시도하고 Antigravity에는 적용하지 않는다', () => {
+	test('자동 제목은 current Codex/Claude session에서 한 번만 시도한다', () => {
 		const model = createModel();
 		const codex = model.createTab();
 		model.assignProvider(codex, 'codex');
@@ -197,19 +197,6 @@ suite('Agent Tab Model', () => {
 			codex,
 			'session-codex',
 			['later-title'],
-		), false);
-
-		const antigravity = model.createTab();
-		model.assignProvider(antigravity, 'antigravity');
-		model.setSession(antigravity, 'session-antigravity');
-		assert.strictEqual(
-			model.canAttemptAutomaticTitle(antigravity, 'session-antigravity'),
-			false,
-		);
-		assert.strictEqual(model.applyAutomaticTitleCandidates(
-			antigravity,
-			'session-antigravity',
-			['ignored-title'],
 		), false);
 	});
 
@@ -329,11 +316,11 @@ suite('Agent Tab Model', () => {
 		const third = model.createTab();
 
 		model.assignProvider(first, 'codex');
-		model.assignProvider(second, 'antigravity');
+		model.assignProvider(second, 'claude');
 		model.assignProvider(third, 'codex');
 
 		const labels = model.getSnapshot().tabs.map((tab) => tab.label);
-		assert.deepStrictEqual(labels, ['Codex #1', 'Antigravity #1', 'Codex #2']);
+		assert.deepStrictEqual(labels, ['Codex #1', 'Claude Code #1', 'Codex #2']);
 	});
 
 	test('같은 provider를 다시 배정해도 번호를 다시 매기지 않는다', () => {
