@@ -14,6 +14,13 @@ import {
 	type GraphStateSnapshot,
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
+import type { GraphViewWorkspaceSnapshot } from '../webview/graph/graphView';
+import { createDefaultTaskBlueprint } from '../task';
+import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
+import {
+	WORKSPACE_PERSISTENT_STATE_VERSION,
+	type WorkspacePersistentState,
+} from '../workspace/workspaceMetadata';
 import { serializeWorkspacePresentationForWebview } from '../workspace/workspacePresentation';
 import { DEFAULT_PANEL_LAYOUT_STATE } from '../webview/panel/panelState';
 import type { PanelLayoutState } from '../webview/panel/panelState';
@@ -434,13 +441,13 @@ suite('Webview State Wiring', () => {
 		const initialState = createWebviewState('left', 35, -25, 1.25);
 		const initialWorkspaceGraph: Graph = {
 			roots: [
-				{ id: 'root:app', nodeId: 'project:app' },
-				{ id: 'root:api', nodeId: 'project:api' },
+				{ id: 'root:app', nodeId: 'workspace-root:project:app' },
+				{ id: 'root:api', nodeId: 'workspace-root:project:api' },
 			],
 			rootNodes: {
-				'project:app': {
+				'workspace-root:project:app': {
 					kind: 'project',
-					id: 'project:app',
+					id: 'workspace-root:project:app',
 					name: 'app',
 					status: 'loaded',
 					children: [{
@@ -449,26 +456,106 @@ suite('Webview State Wiring', () => {
 						name: 'index.ts',
 					}],
 				},
-				'project:api': {
+				'workspace-root:project:api': {
 					kind: 'project',
-					id: 'project:api',
+					id: 'workspace-root:project:api',
 					name: 'api',
 					status: 'loaded',
 					children: [],
 				},
 			},
 		};
+		const initialWorkspaceRootCatalog = [
+			{
+				id: 'workspace-root:project:app' as const,
+				name: 'app',
+				description: 'file:///workspace/app',
+				selectable: true as const,
+			},
+			{
+				id: 'workspace-root:project:api' as const,
+				name: 'api',
+				description: 'file:///workspace/api',
+				selectable: true as const,
+			},
+		];
 		const refreshedWorkspaceGraph: Graph = {
-			roots: [{ id: 'root:refreshed', nodeId: 'project:refreshed' }],
+			roots: [
+				{
+					id: 'root:refreshed',
+					nodeId: 'workspace-root:project:refreshed',
+				},
+				{
+					id: 'root:sibling',
+					nodeId: 'workspace-root:file:///workspace/sibling',
+				},
+			],
 			rootNodes: {
-				'project:refreshed': {
+				'workspace-root:project:refreshed': {
 					kind: 'project',
-					id: 'project:refreshed',
+					id: 'workspace-root:project:refreshed',
 					name: 'refreshed',
 					status: 'loaded',
 					children: [],
 				},
+				'workspace-root:file:///workspace/sibling': {
+					kind: 'project',
+					id: 'workspace-root:file:///workspace/sibling',
+					name: 'sibling',
+					status: 'loaded',
+					children: [],
+				},
 			},
+		};
+		const refreshedWorkspaceRootCatalog = [
+			{
+				id: 'workspace-root:project:refreshed' as const,
+				name: 'refreshed',
+				description: 'file:///workspace/refreshed',
+				selectable: true as const,
+			},
+			{
+				id: 'workspace-root:file:///workspace/sibling' as const,
+				name: 'sibling',
+				description: 'file:///workspace/sibling',
+				selectable: true as const,
+			},
+		];
+		let taskIdSequence = 0;
+		const initialTask = createDefaultTaskBlueprint(
+			{ title: 'Initial persisted Task' },
+			() => `webview-initial-${++taskIdSequence}`,
+		);
+		const refreshedTask = createDefaultTaskBlueprint(
+			{ title: 'Refreshed persisted Task' },
+			() => `webview-refreshed-${++taskIdSequence}`,
+		);
+		const initialWorkspaceTasks: readonly WorkspaceTaskRecord[] = [{
+			ownerRootId: 'workspace-root:project:app',
+			storageRevision: 1,
+			task: initialTask,
+			targetOrigins: [],
+		}];
+		const refreshedWorkspaceTasks: readonly WorkspaceTaskRecord[] = [{
+			ownerRootId: 'workspace-root:project:refreshed',
+			storageRevision: 4,
+			task: refreshedTask,
+			targetOrigins: [],
+		}];
+		const initialWorkspaceState: WorkspacePersistentState = {
+			version: WORKSPACE_PERSISTENT_STATE_VERSION,
+			nodePositions: {},
+			fileGroupPages: {},
+			openedFolders: {},
+			detachedRootNodeIds: {},
+			hiddenNodeIds: {},
+				tasks: initialWorkspaceTasks,
+				taskRelocations: [],
+				taskStorageReceipts: [],
+		};
+		const refreshedWorkspaceState: WorkspacePersistentState = {
+			...initialWorkspaceState,
+			tasks: refreshedWorkspaceTasks,
 		};
 		const agentTabId = 'agent-tab-test';
 		const savedStates: WebviewSessionState[] = [];
@@ -476,6 +563,10 @@ suite('Webview State Wiring', () => {
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
 		const graphUpdates: Graph[] = [];
+		const workspaceUpdates: Array<{
+			readonly graph: Graph;
+			readonly snapshot: GraphViewWorkspaceSnapshot;
+		}> = [];
 		const graphEffectSets: Array<{
 			readonly target: GraphNodeEffectTarget;
 			readonly effect: GraphNodeEffect;
@@ -512,6 +603,33 @@ suite('Webview State Wiring', () => {
 			hiddenNodeIds: initialState.graph.hiddenNodeIds ?? {},
 		};
 		let graphSubscriber: ((state: typeof currentGraphState) => void) | undefined;
+		let workspaceSubscriber: ((
+			snapshot: import('../webview/graph/graphView').GraphViewWorkspaceSnapshot,
+		) => void) | undefined;
+		let currentWorkspaceTasks = initialWorkspaceTasks;
+		const getCurrentWorkspaceSnapshot = (): import(
+			'../webview/graph/graphView'
+		).GraphViewWorkspaceSnapshot => ({
+			graph: {
+				nodePositions: currentGraphState.nodePositions,
+				fileGroupPages: currentGraphState.fileGroupPages,
+				openedFolders: currentGraphState.openedFolders,
+				detachedRootNodeIds: currentGraphState.detachedRootNodeIds,
+				hiddenNodeIds: currentGraphState.hiddenNodeIds,
+			},
+			tasks: currentWorkspaceTasks,
+		});
+		const getCurrentWorkspacePersistentState = (): WorkspacePersistentState => ({
+			version: WORKSPACE_PERSISTENT_STATE_VERSION,
+			nodePositions: currentGraphState.nodePositions,
+			fileGroupPages: currentGraphState.fileGroupPages,
+			openedFolders: currentGraphState.openedFolders,
+			detachedRootNodeIds: currentGraphState.detachedRootNodeIds,
+			hiddenNodeIds: currentGraphState.hiddenNodeIds,
+				tasks: currentWorkspaceTasks,
+				taskRelocations: [],
+				taskStorageReceipts: [],
+		});
 		let panelState: PanelLayoutState | undefined;
 		let persistPanelState: (() => void) | undefined;
 		let dockFit: (() => void) | undefined;
@@ -529,7 +647,10 @@ suite('Webview State Wiring', () => {
 		let hostMessageHandler: ((event: MessageEvent) => void) | undefined;
 		let graphInitializeCount = 0;
 		let graphVisibleRefreshCount = 0;
+		let graphViewInteractions:
+			import('../webview/graph/graphView').GraphViewInteractions | undefined;
 		let graphUnsubscribed = false;
+		let workspaceUnsubscribed = false;
 		let graphDisposed = false;
 		let agentEffectOwnerDisposed = false;
 		let agentPanelUiInitialized = false;
@@ -591,13 +712,18 @@ suite('Webview State Wiring', () => {
 			_root,
 			restoredGraphState,
 			graph,
-			_interactions,
-			agentActivityStore,
+			interactions,
+			_initialTasks,
+			restoredWorkspaceTasks,
+			options,
 		) => {
 			graphInitializeCount += 1;
-			graphAgentActivityStore = agentActivityStore;
+			graphViewInteractions = interactions;
+			graphAgentActivityStore = options?.agentActivityStore;
 			assert.deepStrictEqual(restoredGraphState, initialState.graph);
 			assert.deepStrictEqual(graph, initialWorkspaceGraph);
+			assert.deepStrictEqual(restoredWorkspaceTasks, initialWorkspaceTasks);
+			currentWorkspaceTasks = restoredWorkspaceTasks ?? [];
 			const graphState = restoredGraphState ?? INITIAL_GRAPH_STATE;
 			currentGraphState = {
 				camera: { ...graphState.camera },
@@ -653,11 +779,36 @@ suite('Webview State Wiring', () => {
 				camera: {} as ReturnType<
 					typeof originalInitializeGraphView
 				>['camera'],
+				taskState: {} as ReturnType<
+					typeof originalInitializeGraphView
+				>['taskState'],
+				getWorkspaceSnapshot: getCurrentWorkspaceSnapshot,
+				subscribeWorkspaceSnapshot: (subscriber) => {
+					workspaceSubscriber = subscriber;
+
+					return () => {
+						workspaceSubscriber = undefined;
+						workspaceUnsubscribed = true;
+					};
+				},
 				refreshVisibleGraphArea: () => {
 					graphVisibleRefreshCount += 1;
 				},
 				updateGraph: (nextGraph) => {
 					graphUpdates.push(nextGraph);
+				},
+				updateTasks: () => undefined,
+				updateWorkspace: (nextGraph, snapshot) => {
+					workspaceUpdates.push({ graph: nextGraph, snapshot });
+					currentGraphState = {
+						...currentGraphState,
+						nodePositions: snapshot.graph.nodePositions,
+						fileGroupPages: snapshot.graph.fileGroupPages,
+						openedFolders: snapshot.graph.openedFolders,
+						detachedRootNodeIds: snapshot.graph.detachedRootNodeIds,
+						hiddenNodeIds: snapshot.graph.hiddenNodeIds,
+					};
+					currentWorkspaceTasks = snapshot.tasks;
 				},
 				setNodeEffect: (target, effect) => {
 					graphEffectSets.push({ target, effect });
@@ -839,7 +990,7 @@ suite('Webview State Wiring', () => {
 				attribute === 'data-workspace-presentation'
 					? serializeWorkspacePresentationForWebview({
 						graph: initialWorkspaceGraph,
-						rootCatalog: [],
+						rootCatalog: initialWorkspaceRootCatalog,
 					})
 					: null
 			),
@@ -865,7 +1016,15 @@ suite('Webview State Wiring', () => {
 		]);
 		const documentMock = {
 			currentScript: {
-				getAttribute: () => null,
+				getAttribute: (attribute: string) => {
+					if (attribute === 'data-workspace-state') {
+						return encodeURIComponent(JSON.stringify(initialWorkspaceState));
+					}
+					if (attribute === 'data-workspace-context-generation') {
+						return '0';
+					}
+					return null;
+				},
 			},
 			querySelector: (selector: string) => elements.get(selector) ?? null,
 		};
@@ -916,40 +1075,90 @@ suite('Webview State Wiring', () => {
 			assert.ok(agentProviderSelect);
 
 			/** 초기 atomic Presentation의 Catalog를 Agent UI에도 같은 값으로 전달한다. */
-			assert.deepStrictEqual(initialAgentWorkspaceCatalog, []);
+			assert.deepStrictEqual(
+				initialAgentWorkspaceCatalog,
+				initialWorkspaceRootCatalog,
+			);
+
+			const taskJson = '{"format":"crispy.task"}';
+			graphViewInteractions?.onTaskJsonCopyRequest?.(taskJson);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'task.copyJson'),
+				[{ type: 'task.copyJson', json: taskJson }],
+			);
+			graphViewInteractions?.onTaskJsonCopyFailure?.('transfer_limit');
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'task.copyJsonFailed'),
+				[{ type: 'task.copyJsonFailed', reason: 'transfer_limit' }],
+			);
+
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: initialWorkspaceGraph,
+						rootCatalog: initialWorkspaceRootCatalog,
+					},
+					contextGeneration: 0,
+					rootIds: initialWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
+				},
+			} as MessageEvent);
+
+			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
+			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [
+				initialWorkspaceRootCatalog,
+			]);
+			assert.deepStrictEqual(terminalHostMessages, []);
+			assert.strictEqual(graphInitializeCount, 1);
+			assert.strictEqual(graphDisposed, false);
 
 			hostMessageHandler({
 				data: {
 					type: 'workspace.snapshotUpdated',
 					presentation: {
 						graph: refreshedWorkspaceGraph,
-						rootCatalog: [{
-							id: 'workspace-root:file:///workspace/refreshed',
-							name: 'refreshed',
-							description: 'file:///workspace/refreshed',
-							selectable: true,
-						}],
+						rootCatalog: refreshedWorkspaceRootCatalog,
 					},
+					contextGeneration: 1,
+					rootIds: refreshedWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
+					state: refreshedWorkspaceState,
 				},
 			} as MessageEvent);
 
-			assert.deepStrictEqual(graphUpdates, [refreshedWorkspaceGraph]);
-			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [[{
-				id: 'workspace-root:file:///workspace/refreshed',
-				name: 'refreshed',
-				description: 'file:///workspace/refreshed',
-				selectable: true,
-			}]]);
+			assert.deepStrictEqual(workspaceUpdates, [{
+				graph: refreshedWorkspaceGraph,
+				snapshot: {
+					graph: {
+						nodePositions: refreshedWorkspaceState.nodePositions,
+						fileGroupPages: refreshedWorkspaceState.fileGroupPages,
+						openedFolders: refreshedWorkspaceState.openedFolders,
+						detachedRootNodeIds:
+							refreshedWorkspaceState.detachedRootNodeIds,
+						hiddenNodeIds: refreshedWorkspaceState.hiddenNodeIds,
+					},
+					tasks: refreshedWorkspaceTasks,
+				},
+			}]);
+			assert.deepStrictEqual(currentWorkspaceTasks, refreshedWorkspaceTasks);
+			assert.deepStrictEqual(graphUpdates, [initialWorkspaceGraph]);
+			assert.deepStrictEqual(agentWorkspaceCatalogUpdates, [
+				initialWorkspaceRootCatalog,
+				refreshedWorkspaceRootCatalog,
+			]);
 			assert.strictEqual(agentProviderSelect(
 				agentTabId,
 				'claude',
-				'workspace-root:file:///workspace/refreshed',
+				'workspace-root:project:refreshed',
 			), 1);
 			assert.deepStrictEqual(getAgentSwitchMessages(postedMessages), [{
 				type: 'agent.switch',
 				tabId: agentTabId,
 				providerId: 'claude',
-				workspaceRootId: 'workspace-root:file:///workspace/refreshed',
+				workspaceRootId: 'workspace-root:project:refreshed',
 				switchAttemptId: 1,
 			}]);
 
@@ -958,21 +1167,12 @@ suite('Webview State Wiring', () => {
 					type: 'workspace.snapshotUpdated',
 					presentation: {
 						graph: refreshedWorkspaceGraph,
-						rootCatalog: [
-							{
-								id: 'workspace-root:file:///workspace/refreshed',
-								name: 'refreshed',
-								description: 'file:///workspace/refreshed',
-								selectable: true,
-							},
-							{
-								id: 'workspace-root:file:///workspace/sibling',
-								name: 'sibling',
-								description: 'file:///workspace/sibling',
-								selectable: true,
-							},
-						],
+						rootCatalog: refreshedWorkspaceRootCatalog,
 					},
+					contextGeneration: 1,
+					rootIds: refreshedWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
 				},
 			} as MessageEvent);
 
@@ -998,7 +1198,7 @@ suite('Webview State Wiring', () => {
 				data: {
 					type: 'workspace.snapshotUpdated',
 					presentation: {
-						graph: initialWorkspaceGraph,
+						graph: refreshedWorkspaceGraph,
 						rootCatalog: [{
 							id: 'workspace-root:',
 							name: 'invalid',
@@ -1006,14 +1206,35 @@ suite('Webview State Wiring', () => {
 							selectable: true,
 						}],
 					},
+					contextGeneration: 1,
+					rootIds: refreshedWorkspaceGraph.roots.map(
+						(root) => root.nodeId,
+					),
 				},
 			} as MessageEvent);
 
 			/** Catalog가 잘못되면 유효한 Graph도 부분 적용하지 않는다. */
 			assert.deepStrictEqual(graphUpdates, [
-				refreshedWorkspaceGraph,
+				initialWorkspaceGraph,
 				refreshedWorkspaceGraph,
 			]);
+
+			/** 이전 generation의 full snapshot은 Graph, Catalog, Task를 되돌리지 않는다. */
+			hostMessageHandler({
+				data: {
+					type: 'workspace.snapshotUpdated',
+					presentation: {
+						graph: initialWorkspaceGraph,
+						rootCatalog: initialWorkspaceRootCatalog,
+					},
+					contextGeneration: 0,
+					rootIds: initialWorkspaceGraph.roots.map((root) => root.nodeId),
+					state: initialWorkspaceState,
+				},
+			} as MessageEvent);
+			assert.strictEqual(workspaceUpdates.length, 1);
+			assert.deepStrictEqual(currentWorkspaceTasks, refreshedWorkspaceTasks);
+			assert.strictEqual(agentWorkspaceCatalogUpdates.length, 3);
 
 			hostMessageHandler({
 				data: {
@@ -1108,7 +1329,7 @@ suite('Webview State Wiring', () => {
 				type: 'agent.switchAccepted',
 				tabId: agentTabId,
 				providerId: 'claude',
-				workspaceRootId: 'workspace-root:file:///workspace/refreshed',
+				workspaceRootId: 'workspace-root:project:refreshed',
 				switchAttemptId: 1,
 				assignmentRevision: 1,
 			} as const;
@@ -1126,7 +1347,7 @@ suite('Webview State Wiring', () => {
 				acceptedSwitchAccepted,
 			]);
 			assert.deepStrictEqual(graphUpdates, [
-				refreshedWorkspaceGraph,
+				initialWorkspaceGraph,
 				refreshedWorkspaceGraph,
 			]);
 
@@ -1170,19 +1391,15 @@ suite('Webview State Wiring', () => {
 				nodePositions: { 'folder:src': { x: 800, y: 240 } },
 			};
 			currentGraphState = nodePositionState;
-			graphSubscriber(nodePositionState);
+			assert.ok(workspaceSubscriber);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.deepStrictEqual(getWorkspaceStateChangedMessages(postedMessages), [{
 				type: 'workspace.stateChanged',
-				state: {
-					version: 1,
-					nodePositions: { 'folder:src': { x: 800, y: 240 } },
-					fileGroupPages: {},
-					openedFolders: {},
-					detachedRootNodeIds: {},
-					hiddenNodeIds: {},
-				},
+				contextGeneration: 1,
+				rootIds: refreshedWorkspaceGraph.roots.map((root) => root.nodeId),
+				state: getCurrentWorkspacePersistentState(),
 			}]);
 
 			const fileGroupPageState: GraphStateSnapshot = {
@@ -1190,7 +1407,7 @@ suite('Webview State Wiring', () => {
 				fileGroupPages: { 'folder:src:files': 2 },
 			};
 			currentGraphState = fileGroupPageState;
-			graphSubscriber(fileGroupPageState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1207,7 +1424,7 @@ suite('Webview State Wiring', () => {
 				openedFolders: { 'folder:src': true },
 			};
 			currentGraphState = openedFolderState;
-			graphSubscriber(openedFolderState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1224,7 +1441,7 @@ suite('Webview State Wiring', () => {
 				detachedRootNodeIds: { 'folder:src': true },
 			};
 			currentGraphState = detachedRootState;
-			graphSubscriber(detachedRootState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1233,14 +1450,7 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(
 				getWorkspaceStateChangedMessages(postedMessages)[3]?.state,
-				{
-					version: 1,
-					nodePositions: { 'folder:src': { x: 800, y: 240 } },
-					fileGroupPages: { 'folder:src:files': 2 },
-					openedFolders: { 'folder:src': true },
-					detachedRootNodeIds: { 'folder:src': true },
-					hiddenNodeIds: {},
-				},
+				getCurrentWorkspacePersistentState(),
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
@@ -1250,7 +1460,7 @@ suite('Webview State Wiring', () => {
 				detachedRootNodeIds: {},
 			};
 			currentGraphState = reattachedRootState;
-			graphSubscriber(reattachedRootState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1259,14 +1469,7 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(
 				getWorkspaceStateChangedMessages(postedMessages)[4]?.state,
-				{
-					version: 1,
-					nodePositions: {},
-					fileGroupPages: { 'folder:src:files': 2 },
-					openedFolders: { 'folder:src': true },
-					detachedRootNodeIds: {},
-					hiddenNodeIds: {},
-				},
+				getCurrentWorkspacePersistentState(),
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
@@ -1275,7 +1478,7 @@ suite('Webview State Wiring', () => {
 				hiddenNodeIds: { 'folder:src/private': true },
 			};
 			currentGraphState = hiddenNodeState;
-			graphSubscriber(hiddenNodeState);
+			workspaceSubscriber(getCurrentWorkspaceSnapshot());
 
 			assert.strictEqual(savedStates.length, 1);
 			assert.strictEqual(
@@ -1284,14 +1487,7 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(
 				getWorkspaceStateChangedMessages(postedMessages)[5]?.state,
-				{
-					version: 1,
-					nodePositions: {},
-					fileGroupPages: { 'folder:src:files': 2 },
-					openedFolders: { 'folder:src': true },
-					detachedRootNodeIds: {},
-					hiddenNodeIds: { 'folder:src/private': true },
-				},
+				getCurrentWorkspacePersistentState(),
 			);
 			assert.strictEqual(getStateChangedMessages(postedMessages).length, 1);
 
@@ -1409,6 +1605,7 @@ suite('Webview State Wiring', () => {
 			unloadHandler();
 
 			assert.strictEqual(graphUnsubscribed, true);
+			assert.strictEqual(workspaceUnsubscribed, true);
 			assert.strictEqual(graphDisposed, true);
 			assert.strictEqual(agentEffectOwnerDisposed, true);
 			assert.strictEqual(terminalPoolDisposed, true);

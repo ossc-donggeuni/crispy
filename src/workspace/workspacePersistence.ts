@@ -1,10 +1,16 @@
 import * as vscode from 'vscode';
+import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
 import {
 	createDefaultWorkspacePersistentState,
 	parseWorkspacePersistentState,
 	type WorkspacePersistentState,
+	type WorkspaceTaskRelocation,
+	type WorkspaceTaskStorageReceipt,
 } from './workspaceMetadata';
-import { WORKSPACE_ROOT_ID_PREFIX } from './workspaceRootId';
+import {
+	createWorkspaceRootId,
+	WORKSPACE_ROOT_ID_PREFIX,
+} from './workspaceRootId';
 
 type WorkspacePersistenceFileSystem = Pick<
 	typeof vscode.workspace.fs,
@@ -12,6 +18,11 @@ type WorkspacePersistenceFileSystem = Pick<
 >;
 
 type WorkspaceTrustReader = () => boolean;
+
+/** Disk write가 완료됐는지 Trust 복구 후 재시도가 필요한지 구분한다. */
+export type WorkspacePersistenceWriteOutcome =
+	| 'written'
+	| 'deferred-untrusted';
 
 /** Root URI와 해당 Root가 소유하는 Persistent State를 함께 유지한다. */
 export interface WorkspaceRootPersistentState {
@@ -21,27 +32,41 @@ export interface WorkspaceRootPersistentState {
 
 const CRISPY_DIRECTORY_NAME = '.crispy';
 const WORKSPACE_STATE_FILE_NAME = 'state.json';
-const writeChains = new Map<string, Promise<void>>();
+const writeChains = new Map<string, Promise<WorkspacePersistenceWriteOutcome>>();
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
 /**
  * Workspace Root의 `.crispy/state.json`을 읽고 현재 metadata 형식으로 검증한다.
- * 파일이 없거나 읽기, JSON 또는 schema 검증이 실패하면 새 기본 상태를 반환한다.
+ * 파일이 없을 때만 새 기본 상태를 반환하고, 읽기 또는 검증 실패는 호출자에게 전파한다.
  */
 export async function readWorkspacePersistentState(
 	rootUri: vscode.Uri,
 	fileSystem: WorkspacePersistenceFileSystem = vscode.workspace.fs,
 ): Promise<WorkspacePersistentState> {
-	try {
-		const content = await fileSystem.readFile(getWorkspaceStateUri(rootUri));
-		const value = JSON.parse(textDecoder.decode(content)) as unknown;
+	let content: Uint8Array;
 
-		return parseWorkspacePersistentState(value)
-			?? createDefaultWorkspacePersistentState();
-	} catch {
-		return createDefaultWorkspacePersistentState();
+	try {
+		content = await fileSystem.readFile(getWorkspaceStateUri(rootUri));
+	} catch (error) {
+		if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') {
+			return createDefaultWorkspacePersistentState();
+		}
+		throw error;
 	}
+	let value: unknown;
+
+	try {
+		value = JSON.parse(textDecoder.decode(content)) as unknown;
+	} catch {
+		throw new Error('Workspace persistent state JSON is invalid.');
+	}
+	const state = parseWorkspacePersistentState(value);
+
+	if (!state) {
+		throw new Error('Workspace persistent state schema is invalid.');
+	}
+	return state;
 }
 
 /**
@@ -53,15 +78,16 @@ export function writeWorkspacePersistentState(
 	state: WorkspacePersistentState,
 	fileSystem: WorkspacePersistenceFileSystem = vscode.workspace.fs,
 	readWorkspaceTrust: WorkspaceTrustReader = () => vscode.workspace.isTrusted,
-): Promise<void> {
+): Promise<WorkspacePersistenceWriteOutcome> {
 	const snapshot = parseWorkspacePersistentState(state);
 
 	if (!snapshot) {
-		return Promise.resolve();
+		return Promise.reject(new Error('Workspace persistent state is invalid.'));
 	}
 
 	const rootKey = rootUri.toString();
-	const previousWrite = writeChains.get(rootKey) ?? Promise.resolve();
+	const previousWrite = writeChains.get(rootKey)
+		?? Promise.resolve('written' as const);
 	const currentWrite = previousWrite.then(
 		() => persistWorkspaceState(
 			rootUri,
@@ -108,6 +134,9 @@ export function partitionWorkspacePersistentStateByRoot(
 		'detachedRootNodeIds',
 	);
 	partitionRecord(source.hiddenNodeIds, rootStates, rootUris, 'hiddenNodeIds');
+	partitionTasks(source.tasks, rootStates);
+	partitionTaskRelocations(source.taskRelocations, rootStates);
+	partitionTaskStorageReceipts(source.taskStorageReceipts, rootStates);
 
 	return rootStates;
 }
@@ -118,6 +147,10 @@ export function mergeWorkspacePersistentStates(
 ): WorkspacePersistentState {
 	const merged = createDefaultWorkspacePersistentState();
 	const rootUris = rootStates.map(({ rootUri }) => rootUri);
+	const liveTasksById = new Map<string, WorkspaceTaskRecord>();
+	const liveTasksByOwnerKey = new Map<string, WorkspaceTaskRecord>();
+	const relocationsByKey = new Map<string, WorkspaceTaskRelocation>();
+	const receiptsByKey = new Map<string, WorkspaceTaskStorageReceipt>();
 
 	for (const { rootUri, state } of rootStates) {
 		const source = parseWorkspacePersistentState(state);
@@ -156,7 +189,45 @@ export function mergeWorkspacePersistentStates(
 			rootUri,
 			rootUris,
 		);
+		mergeOwnedTasks(
+			source.tasks,
+			liveTasksById,
+			liveTasksByOwnerKey,
+			rootUri,
+		);
+		mergeOwnedTaskRelocations(
+			source.taskRelocations,
+			relocationsByKey,
+			rootUri,
+		);
+		mergeOwnedTaskStorageReceipts(
+			source.taskStorageReceipts,
+			receiptsByKey,
+			rootUri,
+		);
 	}
+	const activeRootIds = new Set<string>(rootUris.map(createWorkspaceRootId));
+	const resolvedTasks = resolveWorkspaceTaskRecords(
+		liveTasksById,
+		liveTasksByOwnerKey,
+		relocationsByKey.values(),
+		receiptsByKey.values(),
+	).filter((record) => (
+		activeRootIds.has(record.ownerRootId)
+	));
+
+	// 실제 active owner에 복구된 record만 receipt를 전진시킨다. 비활성
+	// destination journal은 아직 저장되지 않았으므로 receipt를 만들지 않는다.
+	for (const record of resolvedTasks) {
+		mergeTaskStorageReceipt({
+			ownerRootId: record.ownerRootId,
+			taskId: record.task.id,
+			storageRevision: record.storageRevision,
+		}, receiptsByKey);
+	}
+	merged.tasks = resolvedTasks;
+	merged.taskRelocations = [...relocationsByKey.values()];
+	merged.taskStorageReceipts = [...receiptsByKey.values()];
 
 	return merged;
 }
@@ -167,9 +238,9 @@ async function persistWorkspaceState(
 	state: WorkspacePersistentState,
 	fileSystem: WorkspacePersistenceFileSystem,
 	readWorkspaceTrust: WorkspaceTrustReader,
-): Promise<void> {
+): Promise<WorkspacePersistenceWriteOutcome> {
 	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
-		return;
+		return 'deferred-untrusted';
 	}
 	const crispyDirectoryUri = vscode.Uri.joinPath(
 		rootUri,
@@ -178,12 +249,13 @@ async function persistWorkspaceState(
 
 	await fileSystem.createDirectory(crispyDirectoryUri);
 	if (!isWorkspaceTrusted(readWorkspaceTrust)) {
-		return;
+		return 'deferred-untrusted';
 	}
 	await fileSystem.writeFile(
 		vscode.Uri.joinPath(crispyDirectoryUri, WORKSPACE_STATE_FILE_NAME),
 		textEncoder.encode(JSON.stringify(state)),
 	);
+	return 'written';
 }
 
 /** Trust 판독 실패를 Workspace write 허용으로 해석하지 않는다. */
@@ -196,7 +268,10 @@ function isWorkspaceTrusted(readWorkspaceTrust: WorkspaceTrustReader): boolean {
 }
 
 /** 완료된 write가 아직 Root의 최신 chain일 때만 Map에서 제거한다. */
-function removeCompletedWrite(rootKey: string, write: Promise<void>): void {
+function removeCompletedWrite(
+	rootKey: string,
+	write: Promise<WorkspacePersistenceWriteOutcome>,
+): void {
 	if (writeChains.get(rootKey) === write) {
 		writeChains.delete(rootKey);
 	}
@@ -257,6 +332,317 @@ function mergeOwnedRecord<T>(
 			target[id] = value;
 		}
 	}
+}
+
+/** Task를 명시된 ownerRootId와 정확히 일치하는 Root state에만 분배한다. */
+function partitionTasks(
+	tasks: readonly WorkspaceTaskRecord[],
+	rootStates: WorkspaceRootPersistentState[],
+): void {
+	const rootIndexes = new Map<string, number>();
+	for (const [index, { rootUri }] of rootStates.entries()) {
+		const rootId = createWorkspaceRootId(rootUri);
+
+		if (!rootIndexes.has(rootId)) {
+			rootIndexes.set(rootId, index);
+		}
+	}
+
+	for (const task of tasks) {
+		const rootIndex = rootIndexes.get(task.ownerRootId);
+		const rootState = rootIndex === undefined
+			? undefined
+			: rootStates[rootIndex];
+
+		if (rootState) {
+			(rootState.state.tasks as WorkspaceTaskRecord[]).push(task);
+		}
+	}
+}
+
+/** 이동 journal은 destination이 아니라 명시된 source Root에만 저장한다. */
+function partitionTaskRelocations(
+	relocations: readonly WorkspaceTaskRelocation[],
+	rootStates: WorkspaceRootPersistentState[],
+): void {
+	const rootIndexes = new Map<string, number>(rootStates.map(({ rootUri }, index) => [
+		createWorkspaceRootId(rootUri),
+		index,
+	]));
+
+	for (const relocation of relocations) {
+		const rootIndex = rootIndexes.get(relocation.sourceRootId);
+		const rootState = rootIndex === undefined
+			? undefined
+			: rootStates[rootIndex];
+
+		if (rootState) {
+			(rootState.state.taskRelocations as WorkspaceTaskRelocation[]).push(
+				relocation,
+			);
+		}
+	}
+}
+
+/** Task storage receipt를 명시된 owner Root state에만 분배한다. */
+function partitionTaskStorageReceipts(
+	receipts: readonly WorkspaceTaskStorageReceipt[],
+	rootStates: WorkspaceRootPersistentState[],
+): void {
+	const rootIndexes = new Map<string, number>(rootStates.map(({ rootUri }, index) => [
+		createWorkspaceRootId(rootUri),
+		index,
+	]));
+
+	for (const receipt of receipts) {
+		const rootIndex = rootIndexes.get(receipt.ownerRootId);
+		const rootState = rootIndex === undefined
+			? undefined
+			: rootStates[rootIndex];
+
+		if (rootState) {
+			(rootState.state.taskStorageReceipts as WorkspaceTaskStorageReceipt[]).push(
+				receipt,
+			);
+		}
+	}
+}
+
+/**
+ * 물리 Root와 persisted owner가 일치하는 Task만 병합한다.
+ * 같은 Task ID는 높은 revision을, 동률이면 canonical record가 앞선 값을 택한다.
+ */
+function mergeOwnedTasks(
+	tasks: readonly WorkspaceTaskRecord[],
+	byTaskId: Map<string, WorkspaceTaskRecord>,
+	byOwnerKey: Map<string, WorkspaceTaskRecord>,
+	rootUri: vscode.Uri,
+): void {
+	const rootId = createWorkspaceRootId(rootUri);
+
+	for (const candidate of tasks) {
+		if (candidate.ownerRootId !== rootId) {
+			continue;
+		}
+		mergePreferredTaskRecord(candidate, byTaskId);
+		const ownerKey = createTaskStorageKey(
+			candidate.ownerRootId,
+			candidate.task.id,
+		);
+		const current = byOwnerKey.get(ownerKey);
+
+		if (!current || isPreferredTaskRecord(candidate, current)) {
+			byOwnerKey.set(ownerKey, candidate);
+		}
+	}
+}
+
+/** 물리 source와 일치하는 이동 journal만 병합하고 중복은 높은 revision을 택한다. */
+function mergeOwnedTaskRelocations(
+	relocations: readonly WorkspaceTaskRelocation[],
+	target: Map<string, WorkspaceTaskRelocation>,
+	rootUri: vscode.Uri,
+): void {
+	const sourceRootId = createWorkspaceRootId(rootUri);
+
+	for (const relocation of relocations) {
+		if (relocation.sourceRootId !== sourceRootId) {
+			continue;
+		}
+		const key = JSON.stringify([sourceRootId, relocation.record.task.id]);
+		const current = target.get(key);
+
+		if (
+			!current
+			|| isPreferredTaskRecord(relocation.record, current.record)
+		) {
+			target.set(key, relocation);
+		}
+	}
+}
+
+/** 물리 Root와 owner가 일치하는 receipt만 병합하고 revision을 단조 증가시킨다. */
+function mergeOwnedTaskStorageReceipts(
+	receipts: readonly WorkspaceTaskStorageReceipt[],
+	target: Map<string, WorkspaceTaskStorageReceipt>,
+	rootUri: vscode.Uri,
+): void {
+	const ownerRootId = createWorkspaceRootId(rootUri);
+
+	for (const receipt of receipts) {
+		if (receipt.ownerRootId === ownerRootId) {
+			mergeTaskStorageReceipt(receipt, target);
+		}
+	}
+}
+
+/**
+ * live record, 아직 destination이 수락하지 않은 journal과 deletion receipt의
+ * 전역 revision winner를 고른다. receipt와 같은 revision의 live record는 같은
+ * owner에 실제로 존재할 때만 유지해 이미 삭제된 Task를 되살리지 않는다.
+ */
+function resolveWorkspaceTaskRecords(
+	liveTasksById: ReadonlyMap<string, WorkspaceTaskRecord>,
+	liveTasksByOwnerKey: ReadonlyMap<string, WorkspaceTaskRecord>,
+	relocations: Iterable<WorkspaceTaskRelocation>,
+	receipts: Iterable<WorkspaceTaskStorageReceipt>,
+): WorkspaceTaskRecord[] {
+	const candidateById = new Map(liveTasksById);
+	const receiptsByTaskId = new Map<string, WorkspaceTaskStorageReceipt[]>();
+
+	for (const relocation of relocations) {
+		mergePreferredTaskRecord(relocation.record, candidateById);
+	}
+	for (const receipt of receipts) {
+		const taskReceipts = receiptsByTaskId.get(receipt.taskId) ?? [];
+
+		taskReceipts.push(receipt);
+		receiptsByTaskId.set(receipt.taskId, taskReceipts);
+	}
+
+	return [...candidateById.values()].flatMap((candidate) => {
+		const live = liveTasksById.get(candidate.task.id);
+		const receipt = selectLatestTaskStorageReceipt(
+			receiptsByTaskId.get(candidate.task.id) ?? [],
+			liveTasksByOwnerKey,
+			live,
+		);
+
+		if (!receipt || candidate.storageRevision > receipt.storageRevision) {
+			return [candidate];
+		}
+		if (candidate.storageRevision < receipt.storageRevision) {
+			return [];
+		}
+
+		const matchingLive = liveTasksByOwnerKey.get(createTaskStorageKey(
+			receipt.ownerRootId,
+			receipt.taskId,
+		));
+
+		return matchingLive
+			&& matchingLive.storageRevision >= receipt.storageRevision
+			? [matchingLive]
+			: [];
+	});
+}
+
+/** 같은 revision이면 실제 live와 일치하지 않는 tombstone receipt를 우선한다. */
+function selectLatestTaskStorageReceipt(
+	receipts: readonly WorkspaceTaskStorageReceipt[],
+	liveTasksByOwnerKey: ReadonlyMap<string, WorkspaceTaskRecord>,
+	preferredLive: WorkspaceTaskRecord | undefined,
+): WorkspaceTaskStorageReceipt | undefined {
+	let selected: WorkspaceTaskStorageReceipt | undefined;
+
+	for (const candidate of receipts) {
+		if (!selected || candidate.storageRevision > selected.storageRevision) {
+			selected = candidate;
+			continue;
+		}
+		if (candidate.storageRevision < selected.storageRevision) {
+			continue;
+		}
+		const candidateIsTombstone = !hasMatchingLiveTask(
+			candidate,
+			liveTasksByOwnerKey,
+		);
+		const selectedIsTombstone = !hasMatchingLiveTask(
+			selected,
+			liveTasksByOwnerKey,
+		);
+		const candidateMatchesPreferred = preferredLive?.ownerRootId
+			=== candidate.ownerRootId;
+		const selectedMatchesPreferred = preferredLive?.ownerRootId
+			=== selected.ownerRootId;
+
+		if (
+			(candidateIsTombstone && !selectedIsTombstone)
+			|| (
+				candidateIsTombstone === selectedIsTombstone
+				&& candidateMatchesPreferred
+				&& !selectedMatchesPreferred
+			)
+			|| (
+				candidateIsTombstone === selectedIsTombstone
+				&& candidateMatchesPreferred === selectedMatchesPreferred
+				&& candidate.ownerRootId < selected.ownerRootId
+			)
+		) {
+			selected = candidate;
+		}
+	}
+	return selected;
+}
+
+function hasMatchingLiveTask(
+	receipt: WorkspaceTaskStorageReceipt,
+	liveTasksByOwnerKey: ReadonlyMap<string, WorkspaceTaskRecord>,
+): boolean {
+	const live = liveTasksByOwnerKey.get(createTaskStorageKey(
+		receipt.ownerRootId,
+		receipt.taskId,
+	));
+
+	return !!live && live.storageRevision >= receipt.storageRevision;
+}
+
+function mergeTaskStorageReceipt(
+	receipt: WorkspaceTaskStorageReceipt,
+	target: Map<string, WorkspaceTaskStorageReceipt>,
+): void {
+	const key = createTaskStorageKey(receipt.ownerRootId, receipt.taskId);
+	const current = target.get(key);
+
+	if (!current || receipt.storageRevision > current.storageRevision) {
+		target.set(key, receipt);
+	}
+}
+
+function createTaskStorageKey(ownerRootId: string, taskId: string): string {
+	return JSON.stringify([ownerRootId, taskId]);
+}
+
+function mergePreferredTaskRecord(
+	candidate: WorkspaceTaskRecord,
+	target: Map<string, WorkspaceTaskRecord>,
+): void {
+	const current = target.get(candidate.task.id);
+
+	if (!current || isPreferredTaskRecord(candidate, current)) {
+		target.set(candidate.task.id, candidate);
+	}
+}
+
+/** revision과 canonical JSON 순서로 Task ID 충돌 winner를 결정한다. */
+function isPreferredTaskRecord(
+	candidate: WorkspaceTaskRecord,
+	current: WorkspaceTaskRecord,
+): boolean {
+	if (candidate.storageRevision !== current.storageRevision) {
+		return candidate.storageRevision > current.storageRevision;
+	}
+
+	return createCanonicalJson(candidate) < createCanonicalJson(current);
+}
+
+/** object key 순서를 제거한 JSON 문자열로 동률 비교를 입력 순서와 분리한다. */
+function createCanonicalJson(value: unknown): string {
+	return JSON.stringify(sortJsonObjectKeys(value));
+}
+
+/** JSON value의 모든 object key를 재귀적으로 정렬한다. */
+function sortJsonObjectKeys(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(sortJsonObjectKeys);
+	}
+	if (!value || typeof value !== 'object') {
+		return value;
+	}
+
+	return Object.fromEntries(Object.entries(value).sort(([left], [right]) => (
+		left < right ? -1 : left > right ? 1 : 0
+	)).map(([key, entry]) => [key, sortJsonObjectKeys(entry)]));
 }
 
 /** Node ID가 나타내는 URI를 포함하는 가장 구체적인 Workspace Root index를 찾는다. */

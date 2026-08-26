@@ -70,6 +70,25 @@ License: Public Domain (CC0)
 Author: IonutNeagu
 Attribution required: No
 
+- task-add.svg
+- task-start.svg
+Source: SVG Repo / Sign And Symbols Icooon Mono Vectors
+License: Public Domain (CC0)
+Author: Icooon Mono
+Attribution required: No
+
+- task-work.svg
+Source: SVG Repo / Mini Tiny Interface Icons
+License: Public Domain (CC0)
+Author: premiumpixels
+Attribution required: No
+
+- task-end.svg
+Source: SVG Repo / Chuck Icons
+License: Public Domain (CC0)
+Author: LaylaRen
+Attribution required: No
+
 - toolbar-add.svg
 - toolbar-switch.svg
 - toolbar-restart.svg

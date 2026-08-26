@@ -12,6 +12,8 @@ export interface GraphNodeDrag {
 
 /** Graph Node Drag가 Renderer와 Click interaction에 전달하는 callback이다. */
 export interface GraphNodeDragOptions {
+	/** 현재 Pointer 입력이 Node body 위치 Drag를 시작할 수 있는지 동적으로 확인한다. */
+	canStart?: () => boolean;
 	/** Pointer Drag 시작 직전에 진행 중인 Renderer transition을 정리한다. */
 	onDragStart?: () => void;
 	/** Threshold를 넘어 실제 Drag로 전환된 순간 한 번 호출된다. */
@@ -97,6 +99,7 @@ export function initializeGraphNodeDrag(
 			|| !event.isPrimary
 			|| event.button !== 0
 			|| shouldIgnoreNodeDrag(event)
+			|| options.canStart?.() === false
 		) {
 			return;
 		}

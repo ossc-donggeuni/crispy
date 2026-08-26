@@ -584,6 +584,44 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(openedNodeIds.has('folder:app/src'), false);
 	});
 
+	test('닫힌 ancestor에서도 pinned actual occurrence의 원래 Edge path만 유지한다', () => {
+		const targetId = 'file:app/src/graphView.ts';
+		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
+		const unarrangedOnly = createBaseGraphLayout(graph, {
+			unarrangedNodeIds: new Set([targetId]),
+		});
+		const pinned = createBaseGraphLayout(graph, {
+			unarrangedNodeIds: new Set([targetId]),
+			pinnedNodeIds: new Set([targetId]),
+		});
+		const pinnedNodeIds = new Set(pinned.nodes.map((node) => node.id));
+
+		assert.deepStrictEqual(
+			unarrangedOnly.nodes.map((node) => node.id),
+			[GRAPH_MOCK_PROJECT.id],
+		);
+		assert.deepStrictEqual([...pinnedNodeIds], [
+			GRAPH_MOCK_PROJECT.id,
+			'folder:app',
+			'folder:app/src',
+			targetId,
+		]);
+		assert.deepStrictEqual(
+			pinned.edges.map((edge) => [edge.sourceId, edge.targetId]),
+			[
+				[GRAPH_MOCK_PROJECT.id, 'folder:app'],
+				['folder:app', 'folder:app/src'],
+				['folder:app/src', targetId],
+			],
+		);
+		const target = getLayoutNode(pinned.nodes, targetId);
+
+		assert.ok(target.kind === 'file-group');
+		assert.strictEqual(target.presentation, 'standalone');
+		assert.strictEqual(pinned.unarrangedNodeIds.has(targetId), true);
+		assert.strictEqual(pinnedNodeIds.has('folder:app/docs'), false);
+	});
+
 	test('Project와 Folder 자신의 위치는 subtree Open/Close와 무관하게 유지한다', () => {
 		const graph = createSingleRootGraph(GRAPH_MOCK_PROJECT);
 		const projectClosedLayout = createBaseGraphLayout(graph);
@@ -750,7 +788,7 @@ suite('Graph Model / Layout', () => {
 		);
 	});
 
-	test('grouped File의 개별 비정렬 요청은 standalone Card를 만들지 않는다', () => {
+	test('grouped File의 개별 비정렬 요청은 parent Edge를 가진 standalone Card로 추출한다', () => {
 		const project: Project = {
 			kind: 'project',
 			id: 'project:file-arrangement',
@@ -771,18 +809,22 @@ suite('Graph Model / Layout', () => {
 		assert.ok(group.kind === 'file-group');
 		assert.deepStrictEqual(
 			group.children.map((file) => file.id),
-			['file:arranged-a', 'file:floating', 'file:arranged-b'],
+			['file:arranged-a', 'file:arranged-b'],
 		);
 		assert.strictEqual(group.presentation, 'grouped');
-		assert.strictEqual(
-			layout.nodes.some((node) => node.id === 'file:floating'),
-			false,
-		);
-		assert.strictEqual(layout.unarrangedNodeIds.has('file:floating'), false);
+		const floating = getLayoutNode(layout.nodes, 'file:floating');
+
+		assert.ok(floating.kind === 'file-group');
+		assert.strictEqual(floating.presentation, 'standalone');
+		assert.deepStrictEqual(floating.children.map((file) => file.id), [floating.id]);
+		assert.strictEqual(layout.unarrangedNodeIds.has(floating.id), true);
 		assert.strictEqual(layout.arrangedNodeIds.has(group.id), true);
+		assert.ok(layout.edges.some((edge) => (
+			edge.sourceId === project.id && edge.targetId === floating.id
+		)));
 	});
 
-	test('두 File 중 하나의 이전 비정렬 상태도 grouped presentation으로 정규화한다', () => {
+	test('두 File 중 하나를 비정렬하면 두 actual standalone Card와 기존 parent Edge를 만든다', () => {
 		const project: Project = {
 			kind: 'project',
 			id: 'project:file-arrangement-target',
@@ -797,17 +839,19 @@ suite('Graph Model / Layout', () => {
 			openedFolders: { [project.id]: true },
 			unarrangedNodeIds: new Set(['file:floating-target']),
 		});
-		const group = getLayoutNode(layout.nodes, createFileGroupId(project.id));
+		const arranged = getLayoutNode(layout.nodes, 'file:arranged');
+		const floating = getLayoutNode(layout.nodes, 'file:floating-target');
 
-		assert.ok(group.kind === 'file-group');
-		assert.strictEqual(group.presentation, 'grouped');
+		assert.ok(arranged.kind === 'file-group' && floating.kind === 'file-group');
+		assert.strictEqual(arranged.presentation, 'standalone');
+		assert.strictEqual(floating.presentation, 'standalone');
+		assert.strictEqual(layout.arrangedNodeIds.has(arranged.id), true);
+		assert.strictEqual(layout.unarrangedNodeIds.has(floating.id), true);
 		assert.deepStrictEqual(
-			group.children.map((file) => file.id),
-			['file:arranged', 'file:floating-target'],
-		);
-		assert.strictEqual(
-			layout.nodes.some((node) => node.id === 'file:floating-target'),
-			false,
+			layout.edges.filter((edge) => edge.sourceId === project.id).map(
+				(edge) => edge.targetId,
+			),
+			[arranged.id, floating.id],
 		);
 	});
 
@@ -1459,6 +1503,51 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(
 			twoSecond.position.y - baselineSecond.position.y,
 			getAgentActivityBindingBlockHeight(2),
+		);
+	});
+
+	test('unarranged File로 분리한 standalone occurrence에도 Binding resolver를 전달한다', () => {
+		const first = {
+			kind: 'file' as const,
+			id: 'file:unarranged-binding/first.ts',
+			name: 'first.ts',
+		};
+		const second = {
+			kind: 'file' as const,
+			id: 'file:unarranged-binding/second.ts',
+			name: 'second.ts',
+		};
+		const folder: Folder = {
+			kind: 'folder',
+			id: 'folder:unarranged-binding',
+			name: 'unarranged-binding',
+			status: 'loaded',
+			children: [first, second],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: 'project:unarranged-binding',
+			name: 'unarranged-binding',
+			status: 'loaded',
+			children: [folder],
+		};
+		const layout = createBaseGraphLayout(createSingleRootGraph(project), {
+			openedFolders: {
+				[project.id]: true,
+				[folder.id]: true,
+			},
+			unarrangedNodeIds: new Set([first.id]),
+			getAgentActivityBindingCount: (target) => (
+				target.nodeId === first.id ? 1 : 0
+			),
+		});
+		const occurrence = getLayoutNode(layout.nodes, first.id);
+
+		assert.strictEqual(layout.unarrangedNodeIds.has(first.id), true);
+		assert.strictEqual(occurrence.agentActivityBindingCount, 1);
+		assert.strictEqual(
+			occurrence.agentActivityBindingTop,
+			GRAPH_FILE_GROUP_STANDALONE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP,
 		);
 	});
 

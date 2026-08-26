@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { createCanvasRuntime } from '../../extension';
 import { createWorkspaceRefreshCoordinator } from '../../workspace/workspaceRefresh';
+import { createWorkspaceRootCatalog } from '../../workspace/workspaceRootCatalog';
+import { createWorkspaceRootId } from '../../workspace/workspaceRootId';
 import { watchWorkspaceChanges } from '../../workspace/workspaceWatcher';
 
 suite('Workspace Watcher', () => {
@@ -144,27 +146,47 @@ suite('Workspace Watcher', () => {
 		const coordinator = createWorkspaceRefreshCoordinator({
 			async createWorkspaceSnapshot() {
 				snapshotCalls += 1;
-				return { roots: [] };
+				const uri = vscode.Uri.file(`/workspace/${graphVersion}`);
+
+				return {
+					roots: [{
+						id: createWorkspaceRootId(uri),
+						name: graphVersion,
+						uri,
+						status: 'loaded',
+						children: [],
+					}],
+				};
 			},
-			convertWorkspaceSnapshotToGraph() {
+			convertWorkspaceSnapshotToGraph(snapshot) {
+				const root = snapshot.roots[0];
+
+				if (!root) {
+					return { roots: [], rootNodes: {} };
+				}
 				const project = {
 					kind: 'project' as const,
-					id: `project:${graphVersion}`,
-					name: graphVersion,
+					id: root.id,
+					name: root.name,
 					status: 'loaded' as const,
 					children: [],
 				};
 
 				return {
-					roots: [{ id: `root:${graphVersion}`, nodeId: project.id }],
+					roots: [{ id: `root:${root.name}`, nodeId: project.id }],
 					rootNodes: { [project.id]: project },
 				};
 			},
 			readWorkspaceTrust: () => true,
-			createWorkspaceRootCatalog: () => [],
+			createWorkspaceRootCatalog: (snapshot) => (
+				createWorkspaceRootCatalog(snapshot, true, 'linux')
+			),
 			async postMessage(message) {
+				const { graph } = message.presentation;
+				const root = graph.roots[0];
+
 				graphMessages.push(
-					message.presentation.graph.roots[0]?.nodeId ?? 'empty',
+					(root ? graph.rootNodes[root.nodeId]?.name : undefined) ?? 'empty',
 				);
 				return true;
 			},
@@ -208,10 +230,10 @@ suite('Workspace Watcher', () => {
 
 		assert.strictEqual(snapshotCalls, 4);
 		assert.deepStrictEqual(graphMessages, [
-			'project:root-c-added',
-			'project:root-b-removed',
-			'project:file-created',
-			'project:folder-deleted',
+			'root-c-added',
+			'root-b-removed',
+			'file-created',
+			'folder-deleted',
 		]);
 
 		runtime.detach();

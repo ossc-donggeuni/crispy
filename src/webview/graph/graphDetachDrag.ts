@@ -15,7 +15,19 @@ export interface GraphDetachDrag {
 
 /** Detach Drag가 완료됐을 때 요청을 전달하는 선택적 callback이다. */
 export interface GraphDetachDragOptions {
+	/** Detach lifecycle을 Node body source drag에 재사용할 때 시작 가능 여부를 확인한다. */
+	canStart?: () => boolean;
 	onDetachDrop?: (request: GraphDetachDropRequest) => void;
+	/** Threshold 이후 최신 Pointer client 좌표를 관찰한다. */
+	onDragMove?: (request: GraphDetachDropRequest) => void;
+	/** Drop을 다른 의미로 소비하면 true를 반환해 기존 Detach를 건너뛴다. */
+	onDrop?: (request: GraphDetachDropRequest) => boolean;
+	/** 실제 Drag pointerup 뒤 후속 synthetic click을 억제할 기회를 제공한다. */
+	onDragComplete?: () => void;
+	/** Cancel, capture 상실 또는 dispose 시 외부 transient 상태를 정리한다. */
+	onDragCancel?: () => void;
+	/** Detach Handle 외의 host에 재사용할 때 일반 click을 보존한다. */
+	consumeClick?: boolean;
 }
 
 /** Pointer Capture 동안 유지하는 armed/dragging session이다. */
@@ -55,6 +67,15 @@ export function initializeGraphDetachDrag(
 			handle.releasePointerCapture(pointerId);
 		}
 	};
+	const createDropRequest = (
+		clientX: number,
+		clientY: number,
+	): GraphDetachDropRequest => ({
+		nodeId,
+		...(instanceRootId ? { instanceRootId } : {}),
+		clientX,
+		clientY,
+	});
 
 	/** Primary left Pointer만 armed 상태로 만들고 Handle이 Capture를 소유한다. */
 	const handlePointerDown = (event: PointerEvent): void => {
@@ -63,6 +84,7 @@ export function initializeGraphDetachDrag(
 			|| session
 			|| !event.isPrimary
 			|| event.button !== 0
+			|| options.canStart?.() === false
 		) {
 			return;
 		}
@@ -100,6 +122,7 @@ export function initializeGraphDetachDrag(
 
 		session.didDrag = true;
 		handle.classList.add('is-detach-dragging');
+		options.onDragMove?.(createDropRequest(event.clientX, event.clientY));
 	};
 
 	/** 실제 Drag만 client 좌표 요청으로 완료하며 Graph/Graph State는 변경하지 않는다. */
@@ -115,12 +138,13 @@ export function initializeGraphDetachDrag(
 		stopDragging(event.pointerId, true);
 
 		if (didDrag) {
-			options.onDetachDrop?.({
-				nodeId,
-				...(instanceRootId ? { instanceRootId } : {}),
-				clientX: event.clientX,
-				clientY: event.clientY,
-			});
+			const request = createDropRequest(event.clientX, event.clientY);
+
+			options.onDragComplete?.();
+			if (options.onDrop?.(request) !== true) {
+				options.onDetachDrop?.(request);
+			}
+			options.onDragCancel?.();
 		}
 	};
 
@@ -132,6 +156,7 @@ export function initializeGraphDetachDrag(
 
 		event.preventDefault();
 		event.stopPropagation();
+		options.onDragCancel?.();
 		stopDragging(event.pointerId, true);
 	};
 
@@ -142,11 +167,15 @@ export function initializeGraphDetachDrag(
 		}
 
 		event.stopPropagation();
+		options.onDragCancel?.();
 		stopDragging(event.pointerId, false);
 	};
 
 	/** Handle Click이 Folder/File 선택 interaction으로 전파되지 않게 소비한다. */
 	const handleClick = (event: MouseEvent): void => {
+		if (options.consumeClick === false) {
+			return;
+		}
 		event.preventDefault();
 		event.stopPropagation();
 	};
@@ -173,6 +202,7 @@ export function initializeGraphDetachDrag(
 			handle.removeEventListener('click', handleClick);
 
 			if (session) {
+				options.onDragCancel?.();
 				stopDragging(session.pointerId, true);
 			}
 		},

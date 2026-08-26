@@ -12,30 +12,50 @@ import {
 	type GraphNodeEffectClearMessage,
 	type GraphNodeEffectSetMessage,
 	type GraphNodeEffectTarget,
+	type TaskJsonCopyFailedMessage,
+	type TaskJsonCopyMessage,
 	type WebviewToExtensionMessage,
 	type WorkspaceOpenFileMessage,
 	type WorkspaceStateChangedMessage,
 	type WorkspaceToWebviewMessage,
 } from '../messages';
 import type { Graph, Project } from '../webview/graph/graphModel';
+import { createDefaultTaskBlueprint } from '../task';
+import { WORKSPACE_PERSISTENT_STATE_VERSION } from '../workspace/workspaceMetadata';
 
 suite('Extension to Webview Workspace messages', () => {
 	test('Workspace Persistent State 전체 snapshot을 Webview에서 Host로 전달한다', () => {
+		let sequence = 0;
+		const task = createDefaultTaskBlueprint(
+			{ title: 'Persisted Task' },
+			() => `message-task-${++sequence}`,
+		);
 		const workspaceMessage = {
 			type: 'workspace.stateChanged',
+			contextGeneration: 3,
+			rootIds: ['workspace-root:file:///workspace/app'],
 			state: {
-				version: 1,
+				version: WORKSPACE_PERSISTENT_STATE_VERSION,
 				nodePositions: { 'folder:file:///workspace/app/src': { x: 10, y: 20 } },
 				fileGroupPages: { 'folder:file:///workspace/app/src:files': 2 },
 				openedFolders: { 'folder:file:///workspace/app/src': true },
 				detachedRootNodeIds: { 'file:file:///workspace/app/index.ts': true },
 				hiddenNodeIds: { 'folder:file:///workspace/app/private': true },
+				tasks: [{
+					ownerRootId: 'workspace-root:file:///workspace/app',
+					storageRevision: 1,
+					task,
+					targetOrigins: [],
+				}],
+				taskRelocations: [],
+				taskStorageReceipts: [],
 			},
 		} satisfies WorkspaceStateChangedMessage;
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
 
 		assert.strictEqual(webviewMessage.type, 'workspace.stateChanged');
 		assert.deepStrictEqual(webviewMessage.state, workspaceMessage.state);
+		assert.strictEqual(webviewMessage.state.tasks[0]?.task.title, 'Persisted Task');
 	});
 
 	test('File Open 요청은 File ID만 포함해 Host union에 연결된다', () => {
@@ -46,6 +66,26 @@ suite('Extension to Webview Workspace messages', () => {
 		const webviewMessage: WebviewToExtensionMessage = workspaceMessage;
 
 		assert.deepStrictEqual(webviewMessage, workspaceMessage);
+	});
+
+	test('Task JSON clipboard 요청은 전송 JSON만 Host union에 연결된다', () => {
+		const copyMessage = {
+			type: 'task.copyJson',
+			json: '{"format":"crispy.task","version":1}',
+		} satisfies TaskJsonCopyMessage;
+		const webviewMessage: WebviewToExtensionMessage = copyMessage;
+
+		assert.deepStrictEqual(webviewMessage, copyMessage);
+	});
+
+	test('Task JSON 생성 실패는 allowlist reason만 Host union에 연결한다', () => {
+		const failureMessage = {
+			type: 'task.copyJsonFailed',
+			reason: 'transfer_limit',
+		} satisfies TaskJsonCopyFailedMessage;
+		const webviewMessage: WebviewToExtensionMessage = failureMessage;
+
+		assert.deepStrictEqual(webviewMessage, failureMessage);
 	});
 
 	test('Workspace 도메인 메시지가 atomic Presentation으로 최상위 Host union에 연결된다', () => {
@@ -59,6 +99,8 @@ suite('Extension to Webview Workspace messages', () => {
 		const workspaceMessage = {
 			type: 'workspace.snapshotUpdated',
 			presentation: { graph, rootCatalog },
+			contextGeneration: 3,
+			rootIds: rootCatalog.map(({ id }) => id),
 		} satisfies WorkspaceToWebviewMessage;
 		const extensionMessage: ExtensionToWebviewMessage = workspaceMessage;
 		const graphPayload: Graph = workspaceMessage.presentation.graph;
@@ -73,10 +115,19 @@ suite('Extension to Webview Workspace messages', () => {
 
 	test('잘못된 Workspace 메시지와 Graph를 수신 경계에서 무시한다', () => {
 		const graph = createWorkspaceGraph();
+		const rootIds = ['workspace-root:file:///workspace/app'] as const;
+		const rootCatalog = [{
+			id: rootIds[0],
+			name: 'app',
+			description: 'file:///workspace/app',
+			selectable: true as const,
+		}];
 
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
 			type: 'workspace.snapshotUpdated',
-			presentation: { graph, rootCatalog: [] },
+			presentation: { graph, rootCatalog },
+			contextGeneration: 3,
+			rootIds,
 			unexpected: true,
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
@@ -88,6 +139,8 @@ suite('Extension to Webview Workspace messages', () => {
 				},
 				rootCatalog: [],
 			},
+			contextGeneration: 3,
+			rootIds: [],
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
 			type: 'workspace.snapshotUpdated',
@@ -100,6 +153,20 @@ suite('Extension to Webview Workspace messages', () => {
 					selectable: true,
 				}],
 			},
+			contextGeneration: 3,
+			rootIds,
+		}), undefined);
+		assert.strictEqual(parseWorkspaceToWebviewMessage({
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
+			contextGeneration: 3,
+			rootIds: ['workspace-root:file:///workspace/other'],
+		}), undefined);
+		assert.strictEqual(parseWorkspaceToWebviewMessage({
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog },
+			contextGeneration: -1,
+			rootIds,
 		}), undefined);
 		assert.strictEqual(parseWorkspaceToWebviewMessage({
 			type: 'terminal.started',
@@ -315,8 +382,15 @@ suite('Agent Activity messages', () => {
 			type: 'workspace.snapshotUpdated',
 			presentation: {
 				graph: createWorkspaceGraph(),
-				rootCatalog: [],
+				rootCatalog: [{
+					id: 'workspace-root:file:///workspace/app',
+					name: 'app',
+					description: 'file:///workspace/app',
+					selectable: true,
+				}],
 			},
+			contextGeneration: 2,
+			rootIds: ['workspace-root:file:///workspace/app'],
 		} satisfies WorkspaceToWebviewMessage;
 
 		assert.deepStrictEqual(
@@ -341,7 +415,7 @@ suite('Agent Activity messages', () => {
 function createWorkspaceGraph(): Graph {
 	const project: Project = {
 		kind: 'project',
-		id: 'project:workspace-message',
+		id: 'workspace-root:file:///workspace/app',
 		name: 'workspace-message',
 		status: 'loaded',
 		children: [{
@@ -352,7 +426,7 @@ function createWorkspaceGraph(): Graph {
 	};
 
 	return {
-		roots: [{ id: 'root:workspace-message', nodeId: project.id }],
+		roots: [{ id: `root:${project.id}`, nodeId: project.id }],
 		rootNodes: { [project.id]: project },
 	};
 }

@@ -7,8 +7,10 @@ import {
 	DEBUG_AGENT_ACTIVITIES_COMMAND_ID,
 	DEBUG_NODE_EFFECTS_COMMAND_ID,
 	OPEN_CANVAS_COMMAND_ID,
+	TaskClipboardHost,
 	TerminalMessageHost,
 	WorkspaceFileHost,
+	canMergeRetainedWorkspaceContextGeneration,
 	createCanvasRuntime,
 	createAgentActivityDebugClearMessages,
 	createAgentActivityDebugMessages,
@@ -16,7 +18,13 @@ import {
 	createInitialWebviewState,
 	handleWebviewMessage as handleHostWebviewMessage,
 	loadWorkspacePersistentStateForRoots,
+	materializeWorkspacePersistenceContext,
+	mergeWorkspacePersistenceRootTransition,
 	persistWorkspacePersistentStateForRoots,
+	preserveUnresolvedTaskRelocations,
+	refreshWorkspacePersistenceContext,
+	refreshWorkspacePersistenceForSnapshot,
+	shouldLoadWorkspacePersistenceState,
 	postAgentActivityDebugClearMessages,
 	postAgentActivityDebugMessages,
 } from '../extension';
@@ -37,7 +45,9 @@ import {
 import {
 	createDefaultWorkspacePersistentState,
 	parseWorkspacePersistentState,
+	WORKSPACE_PERSISTENT_STATE_VERSION,
 	type WorkspacePersistentState,
+	type WorkspaceTaskRelocation,
 } from '../workspace/workspaceMetadata';
 import {
 	deserializeWorkspacePresentationFromWebview,
@@ -53,6 +63,9 @@ import {
 	createCurrentWorkspaceGraph,
 	createWorkspaceRefreshCoordinator,
 } from '../workspace/workspaceRefresh';
+import { createWorkspacePersistenceCoordinator } from '../workspace/workspacePersistenceCoordinator';
+import { TASK_TRANSFER_JSON_MAX_BYTES } from '../task/taskTransfer';
+import { createDefaultTaskBlueprint } from '../task';
 
 import * as vscode from 'vscode';
 
@@ -652,6 +665,7 @@ suite('Crispy Extension Host', () => {
 			},
 			[{ dispose: () => messageDisposals += 1 }],
 			{
+				signal: new AbortController().signal,
 				requestWorkspaceRefresh() {
 					refreshRequests += 1;
 					return Promise.resolve();
@@ -679,6 +693,36 @@ suite('Crispy Extension Host', () => {
 		runtime.detach();
 		assert.strictEqual(refreshRequests, 1);
 		assert.strictEqual(watcher.disposeCalls, 1);
+	});
+
+	test('ready 전 직접 Refresh 요청도 pending 한 번으로 병합해 ready 뒤 실행한다', async () => {
+		const watcher = createWorkspaceWatcherStub();
+		let refreshRequests = 0;
+		const runtime = createCanvasRuntime(
+			{} as vscode.WebviewPanel,
+			{ detach: () => undefined, terminate: () => undefined },
+			[],
+			{
+				signal: new AbortController().signal,
+				requestWorkspaceRefresh() {
+					refreshRequests += 1;
+					return Promise.resolve();
+				},
+				dispose: () => undefined,
+			},
+			watcher.watch,
+		);
+
+		await runtime.requestWorkspaceRefresh();
+		await runtime.requestWorkspaceRefresh();
+		watcher.fireWorkspaceChange();
+		assert.strictEqual(refreshRequests, 0);
+
+		runtime.markWebviewReady();
+		await waitFor(() => refreshRequests === 1);
+		runtime.markWebviewReady();
+		assert.strictEqual(refreshRequests, 1);
+		runtime.detach();
 	});
 
 	test('Canvas Close/Reopen은 이전 watcher를 제거하고 최신 초기 Graph와 watcher 하나만 복원한다', async () => {
@@ -713,6 +757,7 @@ suite('Crispy Extension Host', () => {
 			{ detach: () => undefined, terminate: () => undefined },
 			[{ dispose: () => firstMessageDisposals += 1 }],
 			{
+				signal: new AbortController().signal,
 				requestWorkspaceRefresh() {
 					firstRefreshRequests += 1;
 					return Promise.resolve();
@@ -749,6 +794,7 @@ suite('Crispy Extension Host', () => {
 			{ detach: () => undefined, terminate: () => undefined },
 			[{ dispose: () => reopenedMessageDisposals += 1 }],
 			{
+				signal: new AbortController().signal,
 				requestWorkspaceRefresh() {
 					reopenedRefreshRequests += 1;
 					return Promise.resolve();
@@ -772,6 +818,36 @@ suite('Crispy Extension Host', () => {
 		assert.strictEqual(reopenedRefreshDisposals, 1);
 		assert.strictEqual(reopenedMessageDisposals, 1);
 		assert.strictEqual(reopenedWatcher.disposeCalls, 1);
+	});
+
+	test('Workspace Refresh는 같은 시점의 Graph와 Persistent State를 한 메시지로 보낸다', async () => {
+		const graph: Graph = { roots: [], rootNodes: {} };
+		const state = createWorkspacePersistentState();
+		const messages: ExtensionToWebviewMessage[] = [];
+		const coordinator = createWorkspaceRefreshCoordinator({
+			async createWorkspaceSnapshot() {
+				return { roots: [] };
+			},
+			convertWorkspaceSnapshotToGraph: () => graph,
+			readWorkspaceTrust: () => true,
+			createWorkspaceRootCatalog: () => [],
+			loadWorkspaceState: async () => state,
+			async postMessage(message) {
+				messages.push(message);
+				return true;
+			},
+		});
+
+		await coordinator.requestWorkspaceRefresh();
+
+		assert.deepStrictEqual(messages, [{
+			type: 'workspace.snapshotUpdated',
+			presentation: { graph, rootCatalog: [] },
+			contextGeneration: 0,
+			rootIds: [],
+			state,
+		}]);
+		coordinator.dispose();
 	});
 
 	test('초기 Graph 생성 중 변경은 ready 전 전송하지 않고 최신 Graph로 후속 Refresh한다', async () => {
@@ -839,6 +915,7 @@ suite('Crispy Extension Host', () => {
 			{ detach: () => undefined, terminate: () => undefined },
 			[],
 			{
+				signal: new AbortController().signal,
 				requestWorkspaceRefresh() {
 					refreshRequests += 1;
 					return Promise.resolve();
@@ -869,7 +946,7 @@ suite('Crispy Extension Host', () => {
 		const staleGraph: Graph = { roots: [], rootNodes: {} };
 		const latestProject = {
 			kind: 'project' as const,
-			id: 'project:latest-workspace',
+			id: 'workspace-root:file:///workspace/latest-workspace' as const,
 			name: 'latest-workspace',
 			status: 'loaded' as const,
 			children: [],
@@ -900,7 +977,14 @@ suite('Crispy Extension Host', () => {
 				return conversionCalls === 1 ? staleGraph : latestGraph;
 			},
 			readWorkspaceTrust: () => true,
-			createWorkspaceRootCatalog: () => [],
+			createWorkspaceRootCatalog: () => conversionCalls === 1
+				? []
+				: [{
+					id: latestProject.id,
+					name: latestProject.name,
+					description: 'file:///workspace/latest-workspace',
+					selectable: true,
+				}],
 			async postMessage(message) {
 				graphMessages.push(message.presentation.graph);
 				return true;
@@ -1031,10 +1115,16 @@ suite('Crispy Extension Host', () => {
 		const panel = await openCanvas();
 		const presentation = getInitialWorkspacePresentation(panel);
 		const graph = presentation.graph;
+		const workspaceState = getInitialWorkspaceState(panel);
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 
 		assert.strictEqual(graph.roots.length, workspaceFolders.length);
 		assert.strictEqual(presentation.rootCatalog.length, workspaceFolders.length);
+		assert.strictEqual(
+			workspaceState.version,
+			WORKSPACE_PERSISTENT_STATE_VERSION,
+		);
+		assert.ok(Array.isArray(workspaceState.tasks));
 		for (const [index, workspaceFolder] of workspaceFolders.entries()) {
 			const projectId = `workspace-root:${workspaceFolder.uri.toString()}`;
 			const graphRoot = graph.roots[index];
@@ -1066,7 +1156,7 @@ suite('Crispy Extension Host', () => {
 		);
 	});
 
-	test('Multi-root metadata를 병합하고 한 Root의 read 실패를 격리한다', async () => {
+	test('Multi-root metadata를 병합하고 한 Root의 read 실패면 전체 전환을 중단한다', async () => {
 		const frontendUri = vscode.Uri.file('/workspace/frontend');
 		const backendUri = vscode.Uri.file('/workspace/backend');
 		const frontendState = createWorkspacePersistentStateForRoot(
@@ -1089,7 +1179,7 @@ suite('Crispy Extension Host', () => {
 			backendState,
 		));
 
-		const isolated = await loadWorkspacePersistentStateForRoots(
+		await assert.rejects(loadWorkspacePersistentStateForRoots(
 			[frontendUri, backendUri],
 			async (rootUri) => {
 				if (rootUri.toString() === frontendUri.toString()) {
@@ -1098,9 +1188,507 @@ suite('Crispy Extension Host', () => {
 
 				return backendState;
 			},
+		), /frontend read failed/);
+	});
+
+	test('acknowledged generation floor는 이전 epoch만 거부하고 직전 epoch는 current ack 전 허용한다', () => {
+		const currentGeneration = 3;
+		const latestAcknowledgedGeneration = 2;
+
+		assert.strictEqual(
+			canMergeRetainedWorkspaceContextGeneration(
+				1,
+				currentGeneration,
+				latestAcknowledgedGeneration,
+			),
+			false,
+		);
+		assert.strictEqual(
+			canMergeRetainedWorkspaceContextGeneration(
+				2,
+				currentGeneration,
+				latestAcknowledgedGeneration,
+			),
+			true,
+		);
+		assert.strictEqual(
+			canMergeRetainedWorkspaceContextGeneration(
+				2,
+				currentGeneration,
+				currentGeneration,
+			),
+			false,
+		);
+	});
+
+	test('비활성 destination relocation만 보존하고 활성 destination 삭제는 되살리지 않는다', () => {
+		const sourceUri = vscode.Uri.file('/workspace/source');
+		const activeDestinationUri = vscode.Uri.file('/workspace/active');
+		const inactiveDestinationUri = vscode.Uri.file('/workspace/inactive');
+		const sourceRootId = `workspace-root:${sourceUri.toString()}`;
+		const activeDestinationRootId =
+			`workspace-root:${activeDestinationUri.toString()}`;
+		const inactiveDestinationRootId =
+			`workspace-root:${inactiveDestinationUri.toString()}`;
+		const activeRelocation = createTaskRelocation(
+			sourceRootId,
+			activeDestinationRootId,
+			'active-deleted',
+			5,
+		);
+		const inactiveRelocation = createTaskRelocation(
+			sourceRootId,
+			inactiveDestinationRootId,
+			'inactive-recovery',
+			6,
+		);
+		const current = {
+			...createDefaultWorkspacePersistentState(),
+			taskRelocations: [activeRelocation, inactiveRelocation],
+		};
+
+		const result = preserveUnresolvedTaskRelocations(
+			current,
+			createDefaultWorkspacePersistentState(),
+			[sourceUri, activeDestinationUri],
 		);
 
-		assert.deepStrictEqual(isolated, backendState);
+		assert.deepStrictEqual(result.tasks, []);
+		assert.deepStrictEqual(result.taskRelocations, [inactiveRelocation]);
+	});
+
+	test('동일 logical journal 상태도 새 topology Root에 Task를 materialize한다', async () => {
+		const sourceUri = vscode.Uri.file('/workspace/materialize-source');
+		const destinationUri = vscode.Uri.file('/workspace/materialize-destination');
+		const relocation = createTaskRelocation(
+			`workspace-root:${sourceUri.toString()}`,
+			`workspace-root:${destinationUri.toString()}`,
+			'materialized-recovery',
+			8,
+		);
+		const recovered = {
+			...createDefaultWorkspacePersistentState(),
+			tasks: [relocation.record],
+			taskRelocations: [relocation],
+			taskStorageReceipts: [{
+				ownerRootId: relocation.record.ownerRootId,
+				taskId: relocation.record.task.id,
+				storageRevision: relocation.record.storageRevision,
+			}],
+		};
+		const writes: Array<{
+			readonly rootUri: vscode.Uri;
+			readonly state: WorkspacePersistentState;
+		}> = [];
+		const coordinator = createWorkspacePersistenceCoordinator({
+			async writeState(rootUri, state) {
+				writes.push({ rootUri, state });
+			},
+		});
+
+		const result = await materializeWorkspacePersistenceContext(
+			coordinator,
+			recovered,
+			recovered,
+			[sourceUri, destinationUri],
+		);
+
+		assert.deepStrictEqual(result, recovered);
+		assert.deepStrictEqual(
+			writes.map(({ rootUri }) => rootUri.toString()),
+			[sourceUri.toString(), destinationUri.toString()],
+		);
+		assert.deepStrictEqual(writes[0]?.state.taskRelocations, [relocation]);
+		assert.deepStrictEqual(writes[1]?.state.tasks, [relocation.record]);
+	});
+
+	test('materialization 실패 context는 같은 Panel refresh에서 write와 state 전달을 재시도한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/materialize-retry');
+		const contextKey = JSON.stringify([rootUri.toString()]);
+		let failWrites = true;
+		let writeCount = 0;
+		const coordinator = createWorkspacePersistenceCoordinator({
+			async writeState() {
+				writeCount += 1;
+				if (failWrites) {
+					throw new Error('write failed');
+				}
+			},
+			logger: { warn: () => undefined },
+		});
+
+		assert.strictEqual(
+			shouldLoadWorkspacePersistenceState([rootUri], contextKey, 1),
+			true,
+		);
+		assert.strictEqual(
+			shouldLoadWorkspacePersistenceState([rootUri], contextKey, undefined),
+			false,
+		);
+		await assert.rejects(
+			refreshWorkspacePersistenceContext(coordinator, [rootUri]),
+			/flush did not reach desired state/,
+		);
+		assert.strictEqual(writeCount, 2);
+		assert.strictEqual(coordinator.hasPendingPersistence(), true);
+		failWrites = false;
+		assert.strictEqual(
+			await refreshWorkspacePersistenceForSnapshot(
+				() => refreshWorkspacePersistenceContext(coordinator, [rootUri]),
+				{
+					deliverState: false,
+					retryPendingPersistence:
+						coordinator.hasPendingPersistence(),
+				},
+			),
+			undefined,
+		);
+		assert.strictEqual(writeCount, 3);
+		assert.strictEqual(coordinator.hasPendingPersistence(), false);
+	});
+
+	test('untrusted deferral은 initial delivery를 유지하고 Trust grant retry에서 state를 replay하지 않는다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/trust-grant-retry');
+		const contextKey = JSON.stringify([rootUri.toString()]);
+		let trusted = false;
+		let writeCount = 0;
+		const coordinator = createWorkspacePersistenceCoordinator({
+			async writeState() {
+				writeCount += 1;
+				return trusted ? 'written' : 'deferred-untrusted';
+			},
+		});
+
+		await assert.rejects(
+			refreshWorkspacePersistenceContext(coordinator, [rootUri]),
+			/flush did not reach desired state/,
+		);
+		const deliveredWhileUntrusted = coordinator.getDesiredState();
+
+		assert.ok(deliveredWhileUntrusted);
+		assert.strictEqual(coordinator.hasPendingPersistence(), true);
+		assert.strictEqual(
+			shouldLoadWorkspacePersistenceState(
+				[rootUri],
+				contextKey,
+				undefined,
+				false,
+			),
+			false,
+		);
+
+		trusted = true;
+		assert.strictEqual(
+			await refreshWorkspacePersistenceForSnapshot(
+				() => refreshWorkspacePersistenceContext(coordinator, [rootUri]),
+				{
+					deliverState: false,
+					retryPendingPersistence:
+						coordinator.hasPendingPersistence(),
+				},
+			),
+			undefined,
+		);
+		assert.strictEqual(coordinator.hasPendingPersistence(), false);
+		assert.strictEqual(writeCount, 3);
+	});
+
+	test('untrusted pending 중 Root 전환은 새 context state를 공개하고 Trust grant 뒤 새 Root에 확정한다', async () => {
+		const rootAUri = vscode.Uri.file('/workspace/untrusted-root-a');
+		const rootBUri = vscode.Uri.file('/workspace/untrusted-root-b');
+		const rootAId = `workspace-root:${rootAUri.toString()}`;
+		let trusted = false;
+		const writes: Array<{
+			readonly rootUri: vscode.Uri;
+			readonly trusted: boolean;
+		}> = [];
+		const coordinator = createWorkspacePersistenceCoordinator({
+			async writeState(rootUri) {
+				writes.push({ rootUri, trusted });
+				return trusted ? 'written' : 'deferred-untrusted';
+			},
+		});
+		const rootAState = await refreshWorkspacePersistenceContext(
+			coordinator,
+			[rootAUri],
+			undefined,
+			{ allowPendingPersistence: true },
+		);
+		const rootATask = createTaskRelocation(
+			rootAId,
+			rootAId,
+			'untrusted-root-a-task',
+			1,
+		).record;
+
+		await coordinator.acceptSnapshot({
+			...rootAState,
+			tasks: [rootATask],
+		}, [rootAUri]);
+		assert.strictEqual(coordinator.hasPendingPersistence(), true);
+
+		const rootBState = await refreshWorkspacePersistenceContext(
+			coordinator,
+			[rootBUri],
+			undefined,
+			{ allowPendingPersistence: true },
+		);
+
+		assert.deepStrictEqual(rootBState.tasks, []);
+		assert.deepStrictEqual(coordinator.getDesiredState(), rootBState);
+		assert.strictEqual(coordinator.hasPendingPersistence(), true);
+
+		trusted = true;
+		assert.deepStrictEqual(
+			await refreshWorkspacePersistenceContext(coordinator, [rootBUri]),
+			rootBState,
+		);
+		assert.strictEqual(coordinator.hasPendingPersistence(), false);
+		assert.deepStrictEqual(
+			writes
+				.filter((write) => write.trusted)
+				.map((write) => write.rootUri.toString()),
+			[rootBUri.toString()],
+		);
+	});
+
+	test('unacknowledged Workspace state는 persistence retry 여부와 무관하게 전달한다', async () => {
+		const state = createWorkspacePersistentState();
+		let refreshCalls = 0;
+
+		assert.strictEqual(
+			await refreshWorkspacePersistenceForSnapshot(
+				async () => {
+					refreshCalls += 1;
+					return state;
+				},
+				{ deliverState: true, retryPendingPersistence: false },
+			),
+			state,
+		);
+		assert.strictEqual(refreshCalls, 1);
+	});
+
+	test('full state 전달 실패는 현재 epoch 확인 전까지 다음 Refresh에서도 state를 유지한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace/delivery-retry');
+		const contextKey = JSON.stringify([rootUri.toString()]);
+		const currentGeneration = 4;
+		const state = createWorkspacePersistentState();
+
+		for (const failure of ['false', 'rejection'] as const) {
+			const messages: Array<Extract<
+				ExtensionToWebviewMessage,
+				{ type: 'workspace.snapshotUpdated' }
+			>> = [];
+			let latestAcknowledgedGeneration = currentGeneration - 1;
+			let postMessageCalls = 0;
+			const coordinator = createWorkspaceRefreshCoordinator({
+				async createWorkspaceSnapshot() {
+					return { roots: [] };
+				},
+				convertWorkspaceSnapshotToGraph: () => ({ roots: [], rootNodes: {} }),
+				readWorkspaceTrust: () => true,
+				createWorkspaceRootCatalog: () => [],
+				getWorkspaceContextGeneration: () => currentGeneration,
+				async loadWorkspaceState() {
+					return shouldLoadWorkspacePersistenceState(
+						[rootUri],
+						contextKey,
+						undefined,
+						latestAcknowledgedGeneration < currentGeneration,
+					)
+						? state
+						: undefined;
+				},
+				async postMessage(message) {
+					messages.push(message);
+					postMessageCalls += 1;
+					if (postMessageCalls === 1) {
+						if (failure === 'rejection') {
+							throw new Error('delivery failed');
+						}
+						return false;
+					}
+					if (postMessageCalls === 2) {
+						latestAcknowledgedGeneration = currentGeneration;
+					}
+					return true;
+				},
+			});
+
+			await coordinator.requestWorkspaceRefresh();
+			await coordinator.requestWorkspaceRefresh();
+			await coordinator.requestWorkspaceRefresh();
+
+			assert.deepStrictEqual(
+				messages.map((message) => message.state !== undefined),
+				[true, true, false],
+				failure,
+			);
+			coordinator.dispose();
+		}
+	});
+
+	test('aborted Canvas는 topology materialization을 예약하지 않는다', async () => {
+		const controller = new AbortController();
+		const writes: WorkspacePersistentState[] = [];
+		const coordinator = createWorkspacePersistenceCoordinator({
+			async writeState(_rootUri, state) {
+				writes.push(state);
+			},
+		});
+
+		controller.abort();
+		await assert.rejects(materializeWorkspacePersistenceContext(
+			coordinator,
+			createDefaultWorkspacePersistentState(),
+			createWorkspacePersistentState(),
+			[vscode.Uri.file('/workspace/aborted-materialize')],
+			controller.signal,
+		));
+
+		assert.deepStrictEqual(writes, []);
+		assert.strictEqual(coordinator.getDesiredState(), undefined);
+	});
+
+	test('활성 destination Task는 오래된 relocation journal 없이 coordinator에 넘긴다', () => {
+		const sourceUri = vscode.Uri.file('/workspace/source');
+		const destinationUri = vscode.Uri.file('/workspace/destination');
+		const sourceRootId = `workspace-root:${sourceUri.toString()}`;
+		const destinationRootId = `workspace-root:${destinationUri.toString()}`;
+		const relocation = createTaskRelocation(
+			sourceRootId,
+			destinationRootId,
+			'active-recovered',
+			7,
+		);
+		const next = {
+			...createDefaultWorkspacePersistentState(),
+			tasks: [relocation.record],
+		};
+
+		const result = preserveUnresolvedTaskRelocations(
+			{
+				...createDefaultWorkspacePersistentState(),
+				taskRelocations: [relocation],
+			},
+			next,
+			[sourceUri, destinationUri],
+		);
+
+		assert.deepStrictEqual(result.tasks, [relocation.record]);
+		assert.deepStrictEqual(result.taskRelocations, []);
+	});
+
+	test('Webview의 Task 삭제 snapshot도 Host의 storage receipt를 제거하지 않는다', () => {
+		const ownerUri = vscode.Uri.file('/workspace/receipt-owner');
+		const ownerRootId = `workspace-root:${ownerUri.toString()}`;
+		const record = createTaskRelocation(
+			'workspace-root:file:///workspace/source',
+			ownerRootId,
+			'deleted-with-receipt',
+			4,
+		).record;
+		const result = preserveUnresolvedTaskRelocations(
+			{
+				...createDefaultWorkspacePersistentState(),
+				tasks: [record],
+				taskStorageReceipts: [{
+					ownerRootId,
+					taskId: record.task.id,
+					storageRevision: record.storageRevision,
+				}],
+			},
+			createDefaultWorkspacePersistentState(),
+			[ownerUri],
+		);
+
+		assert.deepStrictEqual(result.tasks, []);
+		assert.deepStrictEqual(result.taskStorageReceipts, [{
+			ownerRootId,
+			taskId: record.task.id,
+			storageRevision: record.storageRevision,
+		}]);
+	});
+
+	test('A-only에서 B-only로 직접 바뀌면 제거된 source journal만 B에 복구한다', () => {
+		const sourceUri = vscode.Uri.file('/workspace/source-only');
+		const destinationUri = vscode.Uri.file('/workspace/destination-only');
+		const sourceRootId = `workspace-root:${sourceUri.toString()}`;
+		const destinationRootId = `workspace-root:${destinationUri.toString()}`;
+		const relocation = createTaskRelocation(
+			sourceRootId,
+			destinationRootId,
+			'direct-recovery',
+			8,
+		);
+		const staleSourceTask = createTaskRelocation(
+			'workspace-root:file:///workspace/older',
+			sourceRootId,
+			'removed-live',
+			3,
+		).record;
+		const sourceNodeId = `folder:${vscode.Uri.joinPath(
+			sourceUri,
+			'src',
+		).toString()}`;
+		const latestDesired: WorkspacePersistentState = {
+			...createDefaultWorkspacePersistentState(),
+			nodePositions: { [sourceNodeId]: { x: 10, y: 20 } },
+			tasks: [staleSourceTask],
+			taskRelocations: [relocation],
+		};
+
+		const recovered = mergeWorkspacePersistenceRootTransition(
+			latestDesired,
+			createDefaultWorkspacePersistentState(),
+			[sourceUri],
+			[destinationUri],
+		);
+
+		assert.deepStrictEqual(recovered.nodePositions, {});
+		assert.deepStrictEqual(recovered.tasks, [relocation.record]);
+		assert.deepStrictEqual(recovered.taskRelocations, []);
+		assert.deepStrictEqual(recovered.taskStorageReceipts, [{
+			ownerRootId: destinationRootId,
+			taskId: relocation.record.task.id,
+			storageRevision: relocation.record.storageRevision,
+		}]);
+	});
+
+	test('B의 covering receipt가 있으면 A-only journal이 삭제한 Task를 되살리지 않는다', () => {
+		const sourceUri = vscode.Uri.file('/workspace/source-deleted');
+		const destinationUri = vscode.Uri.file('/workspace/destination-deleted');
+		const relocation = createTaskRelocation(
+			`workspace-root:${sourceUri.toString()}`,
+			`workspace-root:${destinationUri.toString()}`,
+			'direct-deletion',
+			6,
+		);
+		const destinationState: WorkspacePersistentState = {
+			...createDefaultWorkspacePersistentState(),
+			taskStorageReceipts: [{
+				ownerRootId: relocation.record.ownerRootId,
+				taskId: relocation.record.task.id,
+				storageRevision: relocation.record.storageRevision,
+			}],
+		};
+
+		const retainedDeletion = mergeWorkspacePersistenceRootTransition(
+			{
+				...createDefaultWorkspacePersistentState(),
+				taskRelocations: [relocation],
+			},
+			destinationState,
+			[sourceUri],
+			[destinationUri],
+		);
+
+		assert.deepStrictEqual(retainedDeletion.tasks, []);
+		assert.deepStrictEqual(
+			retainedDeletion.taskStorageReceipts,
+			destinationState.taskStorageReceipts,
+		);
 	});
 
 	test('Workspace snapshot을 Root별로 write하고 실패 Root만 warning으로 격리한다', async () => {
@@ -1153,6 +1741,16 @@ suite('Crispy Extension Host', () => {
 		const firstPanel = await openCanvas();
 		const secondPanel = await openCanvas();
 
+		assert.strictEqual(secondPanel, firstPanel);
+	});
+
+	test('동시에 실행한 최초 Canvas command는 같은 초기화와 Panel을 공유한다', async () => {
+		const [firstPanel, secondPanel] = await Promise.all([
+			vscode.commands.executeCommand<vscode.WebviewPanel>(COMMAND_ID),
+			vscode.commands.executeCommand<vscode.WebviewPanel>(COMMAND_ID),
+		]);
+
+		assert.ok(firstPanel);
 		assert.strictEqual(secondPanel, firstPanel);
 	});
 
@@ -1260,6 +1858,7 @@ suite('Crispy Extension Host', () => {
 				workspaceState,
 			)),
 		);
+		assert.deepStrictEqual(getInitialWorkspaceState(restoredPanel), workspaceState);
 	});
 
 	test('Session 뒤 Workspace 변경이 Panel/Camera와 Workspace 상태를 서로 덮어쓰지 않는다', async () => {
@@ -1274,9 +1873,20 @@ suite('Crispy Extension Host', () => {
 		};
 		const workspaceState = createWorkspacePersistentState();
 		const panel = await openCanvas();
+		const workspaceRootIds = getInitialWorkspacePresentation(
+			panel,
+		).rootCatalog.map(
+			({ id }) => id,
+		);
+		const contextGeneration = getInitialWorkspaceContextGeneration(panel);
 
 		await sendWebviewState(panel, sessionState);
-		await sendWorkspaceState(panel, workspaceState);
+		await sendWorkspaceState(
+			panel,
+			workspaceState,
+			workspaceRootIds,
+			contextGeneration,
+		);
 		await disposePanel(panel);
 
 		const restoredPanel = await openCanvas();
@@ -1358,6 +1968,168 @@ suite('Crispy Extension Host', () => {
 
 		assert.strictEqual(result, undefined);
 		assert.deepStrictEqual(postedMessages, []);
+	});
+
+	test('task.copyJson은 검증된 전송 JSON만 clipboard에 기록하고 성공을 알린다', async () => {
+		const writes: string[] = [];
+		let successCount = 0;
+		let failureCount = 0;
+		const clipboardHost: TaskClipboardHost = {
+			writeText: (value) => {
+				writes.push(value);
+				return Promise.resolve();
+			},
+			reportCopySuccess: () => { successCount += 1; },
+			reportCopyFailure: () => { failureCount += 1; },
+		};
+		const json = JSON.stringify({
+			format: 'crispy.task',
+			version: 1,
+			task: {
+				title: '',
+				description: '',
+				nodes: [{ key: 'start', kind: 'start' }, {
+					key: 'end',
+					kind: 'end',
+					position: { x: 640, y: 0 },
+				}],
+				edges: [],
+			},
+		});
+		const result = handleHostWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{ type: 'task.copyJson', json },
+			undefined,
+			undefined,
+			undefined,
+			clipboardHost,
+		);
+
+		assert.strictEqual(result, undefined);
+		await Promise.resolve();
+		assert.deepStrictEqual(writes, [json]);
+		assert.strictEqual(successCount, 1);
+		assert.strictEqual(failureCount, 0);
+	});
+
+	test('task.copyJson은 malformed/oversized payload를 clipboard 경계 전에 거부한다', () => {
+		let writeCalls = 0;
+		const clipboardHost: TaskClipboardHost = {
+			writeText: () => {
+				writeCalls += 1;
+				return Promise.resolve();
+			},
+			reportCopySuccess: () => undefined,
+			reportCopyFailure: () => undefined,
+		};
+
+		for (const message of [
+			{ type: 'task.copyJson' },
+			{ type: 'task.copyJson', json: '' },
+			{ type: 'task.copyJson', json: 42 },
+			{ type: 'task.copyJson', json: '{}' },
+			{ type: 'task.copyJson', json: '{}', cwd: '/sensitive/workspace' },
+			{
+				type: 'task.copyJson',
+				json: 'x'.repeat(TASK_TRANSFER_JSON_MAX_BYTES + 1),
+			},
+		]) {
+			const result = handleHostWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				message,
+				undefined,
+				undefined,
+				undefined,
+				clipboardHost,
+			);
+
+			assert.strictEqual(result, undefined);
+		}
+
+		assert.strictEqual(writeCalls, 0);
+	});
+
+	test('task.copyJsonFailed는 검증된 reason만 clipboard write 없이 알린다', () => {
+		let writeCalls = 0;
+		const failures: Array<string | undefined> = [];
+		const clipboardHost: TaskClipboardHost = {
+			writeText: () => {
+				writeCalls += 1;
+				return Promise.resolve();
+			},
+			reportCopySuccess: () => undefined,
+			reportCopyFailure: (reason) => { failures.push(reason); },
+		};
+
+		for (const message of [{
+			type: 'task.copyJsonFailed',
+			reason: 'transfer_limit',
+		}, {
+			type: 'task.copyJsonFailed',
+			reason: 'invalid_task',
+		}, {
+			type: 'task.copyJsonFailed',
+			reason: 'unknown',
+		}, {
+			type: 'task.copyJsonFailed',
+			reason: 'transfer_limit',
+			cwd: '/sensitive/workspace',
+		}, {
+			type: 'task.copyJsonFailed',
+		}]) {
+			const result = handleHostWebviewMessage(
+				{ postMessage: () => Promise.resolve(true) },
+				message,
+				undefined,
+				undefined,
+				undefined,
+				clipboardHost,
+			);
+
+			assert.strictEqual(result, undefined);
+		}
+
+		assert.strictEqual(writeCalls, 0);
+		assert.deepStrictEqual(failures, ['transfer_limit', 'invalid_task']);
+	});
+
+	test('task.copyJson clipboard 실패는 상태를 변경하지 않고 실패만 알린다', async () => {
+		let successCount = 0;
+		let failureCount = 0;
+		const clipboardHost: TaskClipboardHost = {
+			writeText: () => Promise.reject(new Error('clipboard unavailable')),
+			reportCopySuccess: () => { successCount += 1; },
+			reportCopyFailure: () => { failureCount += 1; },
+		};
+
+		handleHostWebviewMessage(
+			{ postMessage: () => Promise.resolve(true) },
+			{
+				type: 'task.copyJson',
+				json: JSON.stringify({
+					format: 'crispy.task',
+					version: 1,
+					task: {
+						title: '',
+						description: '',
+						nodes: [{ key: 'start', kind: 'start' }, {
+							key: 'end',
+							kind: 'end',
+							position: { x: 640, y: 0 },
+						}],
+						edges: [],
+					},
+				}),
+			},
+			undefined,
+			undefined,
+			undefined,
+			clipboardHost,
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(successCount, 0);
+		assert.strictEqual(failureCount, 1);
 	});
 
 	test('workspace.openFile은 File ID URI를 복원해 Active 일반 Editor Tab으로 연다', () => {
@@ -1822,9 +2594,19 @@ async function sendWebviewState(
 async function sendWorkspaceState(
 	panel: vscode.WebviewPanel,
 	state: WorkspacePersistentState,
+	rootIds?: WorkspacePresentation['rootCatalog'][number]['id'][],
+	contextGeneration?: number,
 ): Promise<void> {
+	const resolvedRootIds = rootIds ?? getInitialWorkspacePresentation(
+		panel,
+	).rootCatalog.map(
+		({ id }) => id,
+	);
 	const message: WebviewToExtensionMessage = {
 		type: 'workspace.stateChanged',
+		contextGeneration: contextGeneration
+			?? getInitialWorkspaceContextGeneration(panel),
+		rootIds: resolvedRootIds,
 		state,
 	};
 	const received = onceWebviewMessage(
@@ -1887,7 +2669,7 @@ function createPersistedStateFromSession(
 
 function createWorkspacePersistentState(): WorkspacePersistentState {
 	return {
-		version: 1,
+		version: WORKSPACE_PERSISTENT_STATE_VERSION,
 		nodePositions: {
 			'folder:file:///workspace/app/src': { x: 640, y: 280 },
 		},
@@ -1903,6 +2685,9 @@ function createWorkspacePersistentState(): WorkspacePersistentState {
 		hiddenNodeIds: {
 			'folder:file:///workspace/app/private': true,
 		},
+		tasks: [],
+		taskRelocations: [],
+		taskStorageReceipts: [],
 	};
 }
 
@@ -1918,12 +2703,38 @@ function createWorkspacePersistentStateForRoot(
 	).toString()}`;
 
 	return {
-		version: 1,
+		version: WORKSPACE_PERSISTENT_STATE_VERSION,
 		nodePositions: { [folderId]: { x: page * 100, y: page * 50 } },
 		fileGroupPages: { [`${folderId}:files`]: page },
 		openedFolders: { [folderId]: true },
 		detachedRootNodeIds: { [fileId]: true },
 		hiddenNodeIds: { [folderId]: true },
+		tasks: [],
+		taskRelocations: [],
+		taskStorageReceipts: [],
+	};
+}
+
+function createTaskRelocation(
+	sourceRootId: string,
+	ownerRootId: string,
+	idPrefix: string,
+	storageRevision: number,
+): WorkspaceTaskRelocation {
+	let sequence = 0;
+	const task = createDefaultTaskBlueprint(
+		{ title: idPrefix },
+		() => `${idPrefix}-${++sequence}`,
+	);
+
+	return {
+		sourceRootId,
+		record: {
+			ownerRootId,
+			storageRevision,
+			task,
+			targetOrigins: [],
+		},
 	};
 }
 
@@ -1931,7 +2742,7 @@ function mergeWorkspaceStates(
 	...states: readonly WorkspacePersistentState[]
 ): WorkspacePersistentState {
 	return {
-		version: 1,
+		version: WORKSPACE_PERSISTENT_STATE_VERSION,
 		nodePositions: Object.assign({}, ...states.map((state) => state.nodePositions)),
 		fileGroupPages: Object.assign({}, ...states.map((state) => state.fileGroupPages)),
 		openedFolders: Object.assign({}, ...states.map((state) => state.openedFolders)),
@@ -1943,6 +2754,9 @@ function mergeWorkspaceStates(
 			{},
 			...states.map((state) => state.hiddenNodeIds),
 		),
+		tasks: states.flatMap((state) => state.tasks),
+		taskRelocations: states.flatMap((state) => state.taskRelocations),
+		taskStorageReceipts: states.flatMap((state) => state.taskStorageReceipts),
 	};
 }
 
@@ -1981,10 +2795,37 @@ function getSerializedInitialWebviewState(panel: vscode.WebviewPanel): string {
 	return match[1];
 }
 
+function getInitialWorkspaceGraph(panel: vscode.WebviewPanel): Graph {
+	return getInitialWorkspacePresentation(panel).graph;
+}
+
 function getInitialWorkspacePresentation(
 	panel: vscode.WebviewPanel,
 ): WorkspacePresentation {
 	const match = panel.webview.html.match(/data-workspace-presentation="([^"]*)"/);
 	assert.ok(match, 'Webview 초기 HTML에 atomic Workspace Presentation이 있어야 한다.');
 	return deserializeWorkspacePresentationFromWebview(match[1]);
+}
+
+function getInitialWorkspaceState(
+	panel: vscode.WebviewPanel,
+): WorkspacePersistentState {
+	const match = panel.webview.html.match(/data-workspace-state="([^"]*)"/);
+
+	assert.ok(match, 'Webview 초기 HTML에 serialized Workspace state가 있어야 한다.');
+	const parsed = parseWorkspacePersistentState(
+		JSON.parse(decodeURIComponent(match[1])) as unknown,
+	);
+
+	assert.ok(parsed, 'Webview 초기 Workspace state가 현재 schema여야 한다.');
+	return parsed;
+}
+
+function getInitialWorkspaceContextGeneration(panel: vscode.WebviewPanel): number {
+	const match = panel.webview.html.match(
+		/data-workspace-context-generation="(\d+)"/,
+	);
+
+	assert.ok(match, 'Webview 초기 HTML에 Workspace context epoch가 있어야 한다.');
+	return Number(match[1]);
 }

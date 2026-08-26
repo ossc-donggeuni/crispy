@@ -1,9 +1,15 @@
-import type { WorkspaceToWebviewMessage } from '../messages';
+import {
+	getWorkspaceGraphRootIds,
+	parseWorkspaceRootIds,
+	type WorkspaceToWebviewMessage,
+} from '../messages';
 import type { Graph } from '../webview/graph/graphModel';
 import type { WorkspaceSnapshot } from './workspaceModel';
 import type { WorkspaceRootFilter } from './workspaceFilterPersistence';
+import type { WorkspacePersistentState } from './workspaceMetadata';
 import type { WorkspacePresentation } from './workspacePresentation';
 import type { WorkspaceRootCatalogEntry } from './workspaceRootCatalog';
+import type { WorkspaceRootId } from './workspaceRootId';
 
 /** 현재 Workspace Snapshot 수집에 필요한 좁은 의존성 경계다. */
 export interface WorkspaceSnapshotDependencies {
@@ -30,11 +36,21 @@ export interface WorkspacePresentationDependencies extends WorkspaceGraphDepende
 /** 현재 Workspace Presentation 생성과 Webview 전송에 필요한 의존성 경계다. */
 export interface WorkspaceRefreshDependencies
 	extends WorkspacePresentationDependencies {
+	/** Root 추가/제거 시 새 Root의 Task까지 함께 복원할 snapshot이다. */
+	loadWorkspaceState?(
+		graph: Graph,
+		rootIds: readonly WorkspaceRootId[],
+		signal: AbortSignal,
+	): Promise<WorkspacePersistentState | undefined>;
+	/** loadWorkspaceState가 확정한 Host Root context epoch를 반환한다. */
+	getWorkspaceContextGeneration?(): number;
 	postMessage(message: WorkspaceToWebviewMessage): PromiseLike<boolean>;
 }
 
 /** 한 Canvas runtime에 귀속되는 Workspace Refresh 단일 진입점이다. */
 export interface WorkspaceRefreshCoordinator {
+	/** Canvas runtime detach와 동시에 중단되는 이 coordinator의 lifecycle 신호다. */
+	readonly signal: AbortSignal;
 	/** 실행 중 요청을 pending 후속 실행으로 병합하며 완료 Promise는 reject하지 않는다. */
 	requestWorkspaceRefresh(): Promise<void>;
 	/** 새 요청과 결과 전송을 차단하고 pending 후속 실행을 폐기한다. */
@@ -92,6 +108,8 @@ export function createWorkspaceRefreshCoordinator(
 	let pending = false;
 	let activeRefresh: Promise<void> | undefined;
 	let disposed = false;
+	const abortController = new AbortController();
+	const { signal } = abortController;
 
 	const runRefreshLoop = async (): Promise<void> => {
 		try {
@@ -99,12 +117,51 @@ export function createWorkspaceRefreshCoordinator(
 				pending = false;
 
 				try {
-					const presentation = await createCurrentWorkspacePresentation(dependencies);
+					const presentation = await createCurrentWorkspacePresentation(
+						dependencies,
+					);
+					if (signal.aborted) {
+						break;
+					}
+					const rootIds = parseWorkspaceRootIds(
+						getWorkspaceGraphRootIds(presentation.graph),
+					);
+					const catalogRootIds = presentation.rootCatalog.map(({ id }) => id);
+
+					if (
+						!rootIds
+						|| rootIds.length !== catalogRootIds.length
+						|| !rootIds.every((rootId, index) => (
+							rootId === catalogRootIds[index]
+						))
+					) {
+						throw new Error('Invalid Workspace root context.');
+					}
+					const workspaceState = await dependencies.loadWorkspaceState?.(
+						presentation.graph,
+						rootIds,
+						signal,
+					);
+					if (signal.aborted) {
+						break;
+					}
+					const contextGeneration =
+						dependencies.getWorkspaceContextGeneration?.() ?? 0;
+
+					if (
+						!Number.isSafeInteger(contextGeneration)
+						|| contextGeneration < 0
+					) {
+						throw new Error('Invalid Workspace context generation.');
+					}
 
 					if (!disposed) {
 						await dependencies.postMessage({
 							type: 'workspace.snapshotUpdated',
 							presentation,
+							contextGeneration,
+							rootIds,
+							...(workspaceState ? { state: workspaceState } : {}),
 						} satisfies WorkspaceToWebviewMessage);
 					}
 				} catch {
@@ -122,6 +179,7 @@ export function createWorkspaceRefreshCoordinator(
 	};
 
 	return {
+		signal,
 		requestWorkspaceRefresh(): Promise<void> {
 			if (disposed) {
 				return Promise.resolve();
@@ -141,8 +199,12 @@ export function createWorkspaceRefreshCoordinator(
 			return refresh;
 		},
 		dispose(): void {
+			if (disposed) {
+				return;
+			}
 			disposed = true;
 			pending = false;
+			abortController.abort();
 		},
 	};
 }

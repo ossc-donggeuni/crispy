@@ -7,6 +7,7 @@ import {
 	type GraphRoot,
 	type GraphRootContext,
 	type ProjectContainer,
+	type ProjectEntry,
 } from './graphModel';
 import {
 	createFileBacklinkGroupId,
@@ -137,6 +138,8 @@ export interface GraphLayoutOptions {
 	readonly hiddenNodeIds?: Readonly<Record<string, true>>;
 	/** 수동으로 꺼내 일반 sibling flow의 subtree 높이 계산에서 제외할 Node다. */
 	readonly unarrangedNodeIds?: ReadonlySet<string>;
+	/** 닫힌 ancestor 아래에서도 실제 occurrence와 원래 Edge 경로를 유지할 Node다. */
+	readonly pinnedNodeIds?: ReadonlySet<string>;
 	/** G-12.5와 동일한 effective source/occurrence Binding 개수 resolver다. */
 	readonly getAgentActivityBindingCount?: (
 		target: GraphNodeEffectTarget,
@@ -302,6 +305,7 @@ export function createGraphLayout(
 				rootsByNodeId,
 				options.hiddenNodeIds ?? {},
 				options.unarrangedNodeIds ?? new Set(),
+				options.pinnedNodeIds ?? new Set(),
 				root,
 				options.getAgentActivityBindingCount,
 			);
@@ -376,13 +380,24 @@ function createContainerTree(
 	rootsByNodeId: ReadonlyMap<string, readonly GraphRoot[]>,
 	hiddenNodeIds: Readonly<Record<string, true>>,
 	unarrangedNodeIds: ReadonlySet<string>,
+	pinnedNodeIds: ReadonlySet<string>,
 	layoutRoot: GraphRoot,
 	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): LayoutTreeNode {
 	const id = createGraphLayoutNodeId(layoutRoot.id, container.id);
 	const isOpened = openedFolders[id] === true
 		|| (id !== container.id && openedFolders[container.id] === true);
-	const visibleChildren = isOpened ? container.children : [];
+	// Scope에 위치한 normal occurrence는 Detached 복제 없이 원래 hierarchy와
+	// parent Edge를 유지한다. 닫힌 ancestor에서도 해당 occurrence까지의 실제
+	// path만 projection에 남기고, 관계없는 sibling subtree는 계속 접힌다.
+	const visibleChildren = isOpened
+		? container.children
+		: container.children.filter((child) => containsPinnedOccurrence(
+			child,
+			layoutRoot,
+			pinnedNodeIds,
+			hiddenNodeIds,
+		));
 	const folderChildren = visibleChildren
 		.filter(isFolder)
 		.filter((folder) => hiddenNodeIds[folder.id] !== true)
@@ -407,6 +422,7 @@ function createContainerTree(
 					rootsByNodeId,
 					hiddenNodeIds,
 					unarrangedNodeIds,
+					pinnedNodeIds,
 					layoutRoot,
 					getAgentActivityBindingCount,
 				);
@@ -488,9 +504,19 @@ function createFileLayoutTrees(
 	layoutRoot: GraphRoot,
 	getAgentActivityBindingCount?: GraphLayoutOptions['getAgentActivityBindingCount'],
 ): readonly LayoutTreeNode[] {
-	return createArrangedFileLayoutTrees(
+	const unarrangedFiles = files.filter((file) => {
+		const occurrenceNodeId = createGraphLayoutNodeId(layoutRoot.id, file.id);
+
+		return unarrangedNodeIds.has(occurrenceNodeId)
+			&& !getDetachedRootsForOccurrence(
+				rootsByNodeId.get(file.id),
+				layoutRoot,
+			);
+	});
+	const unarrangedFileIds = new Set(unarrangedFiles.map((file) => file.id));
+	const arrangedTrees = createArrangedFileLayoutTrees(
 		parent,
-		files,
+		files.filter((file) => !unarrangedFileIds.has(file.id)),
 		depth,
 		fileGroupPages,
 		rootsByNodeId,
@@ -499,6 +525,42 @@ function createFileLayoutTrees(
 		layoutRoot,
 		getAgentActivityBindingCount,
 	);
+	const unarrangedTrees = unarrangedFiles
+		.filter((file) => hiddenNodeIds[file.id] !== true)
+		.map((file) => createStandaloneFileGroupTree(
+			file,
+			depth,
+			parent.id,
+			undefined,
+			unarrangedNodeIds,
+			layoutRoot,
+			getAgentActivityBindingCount,
+		));
+
+	return [...arrangedTrees, ...unarrangedTrees];
+}
+
+/** 닫힌 Container에서 pinned actual occurrence까지의 원래 hierarchy만 찾는다. */
+function containsPinnedOccurrence(
+	entry: ProjectEntry,
+	layoutRoot: GraphRoot,
+	pinnedNodeIds: ReadonlySet<string>,
+	hiddenNodeIds: Readonly<Record<string, true>>,
+): boolean {
+	if (hiddenNodeIds[entry.id] === true) {
+		return false;
+	}
+	if (pinnedNodeIds.has(createGraphLayoutNodeId(layoutRoot.id, entry.id))) {
+		return true;
+	}
+
+	return entry.kind === 'folder'
+		&& entry.children.some((child) => containsPinnedOccurrence(
+			child,
+			layoutRoot,
+			pinnedNodeIds,
+			hiddenNodeIds,
+		));
 }
 
 /** Filter를 통과한 File을 singleton/grouped presentation 규칙으로 묶는다. */

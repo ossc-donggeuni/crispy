@@ -1,6 +1,13 @@
 /** Renderer가 제공한 문자열별 실제 표시 폭 측정 함수다. */
 export type GraphContextTextMeasurer = (text: string) => number;
 
+/** Root card 폭 대비 Context label 최대 폭이다. */
+export const GRAPH_ROOT_CONTEXT_MAX_WIDTH_MULTIPLIER = 1.5;
+/** Context label 한 줄의 고정 line-height다. */
+export const GRAPH_ROOT_CONTEXT_LINE_HEIGHT = 16;
+/** Root card와 Context label 사이의 고정 간격이다. */
+export const GRAPH_ROOT_CONTEXT_GAP = 6;
+
 const PATH_ELLIPSIS_PREFIX = '…/';
 const TEXT_ELLIPSIS = '…';
 

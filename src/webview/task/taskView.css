@@ -1,0 +1,897 @@
+.task-scope-area {
+	--task-scope-accent: var(--vscode-descriptionForeground, #9d9d9d);
+	--task-scope-outline-color: color-mix(
+		in srgb,
+		var(--task-scope-accent) 58%,
+		var(--graph-node-default-border-color)
+	);
+
+	position: absolute;
+	top: 0;
+	left: 0;
+	z-index: 0;
+	display: grid;
+	box-sizing: border-box;
+	grid-template-rows: 28px minmax(0, 1fr);
+	min-width: 0;
+	overflow: hidden;
+	color: var(--graph-node-foreground);
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 5%,
+		transparent
+	);
+	border: 1px dashed var(--task-scope-outline-color);
+	border-radius: 9px;
+	font-family: Inter, var(--vscode-font-family);
+	clip-path: inset(0 0 0 0);
+	pointer-events: none;
+	user-select: none;
+	transition:
+		clip-path 220ms ease,
+		opacity 160ms ease,
+		visibility 0s linear,
+		background 100ms ease,
+		border-color 100ms ease,
+		box-shadow 100ms ease;
+}
+
+.task-scope-area.is-collapsed {
+	clip-path: inset(100% 0 0 0);
+	opacity: 0;
+	visibility: hidden;
+	transition:
+		clip-path 220ms ease,
+		opacity 160ms ease,
+		visibility 0s linear 220ms,
+		background 100ms ease,
+		border-color 100ms ease,
+		box-shadow 100ms ease;
+}
+
+.task-scope-area.is-scope-slide-a {
+	animation: task-scope-area-slide-a 220ms ease;
+	animation-fill-mode: none;
+}
+
+.task-scope-area.is-scope-slide-b {
+	animation: task-scope-area-slide-b 220ms ease;
+	animation-fill-mode: none;
+}
+
+@keyframes task-scope-area-slide-a {
+	from {
+		height: var(--task-scope-slide-from-height);
+		transform: var(--task-scope-slide-from-transform);
+	}
+
+	to {
+		height: var(--task-scope-slide-to-height);
+		transform: var(--task-scope-slide-to-transform);
+	}
+}
+
+@keyframes task-scope-area-slide-b {
+	from {
+		height: var(--task-scope-slide-from-height);
+		transform: var(--task-scope-slide-from-transform);
+	}
+
+	to {
+		height: var(--task-scope-slide-to-height);
+		transform: var(--task-scope-slide-to-transform);
+	}
+}
+
+.task-reference-area,
+.task-reference-area-toggle {
+	--task-scope-accent: var(--vscode-charts-blue, var(--vscode-focusBorder, #007fd4));
+}
+
+.task-work-area,
+.task-work-area-toggle {
+	--task-scope-accent: var(--vscode-charts-orange, #d18616);
+}
+
+.task-scope-area.is-drag-hover {
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 14%,
+		var(--graph-node-default-background)
+	);
+	border-color: var(--task-scope-accent);
+	border-style: solid;
+	box-shadow:
+		0 0 0 3px color-mix(in srgb, var(--task-scope-accent) 22%, transparent),
+		0 0 28px color-mix(in srgb, var(--task-scope-accent) 18%, transparent);
+}
+
+.task-scope-header {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	padding: 5px 9px 3px;
+}
+
+.task-scope-title {
+	overflow: hidden;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 16px;
+	letter-spacing: 0.04em;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-scope-body {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+	align-items: center;
+	justify-content: center;
+	padding: 3px 12px 8px;
+	overflow: hidden;
+}
+
+.task-scope-empty {
+	display: flex;
+	height: 100%;
+	align-items: center;
+	justify-content: center;
+	flex-direction: column;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-size: 10px;
+	line-height: 14px;
+	text-align: center;
+}
+
+.task-scope-unavailable-summary {
+	color: var(--vscode-editorWarning-foreground, #cca700);
+	font-size: 10px;
+	line-height: 14px;
+	text-align: center;
+}
+
+.task-scope-drop-hint {
+	position: absolute;
+	inset: 28px 6px 5px;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	color: var(--task-scope-accent);
+	font-size: 12px;
+	font-weight: 700;
+	text-align: center;
+}
+
+.task-scope-area.is-drag-hover > .task-scope-body {
+	opacity: 0.18;
+}
+
+.task-scope-area.is-drag-hover > .task-scope-drop-hint {
+	display: flex;
+}
+
+/* Region은 배경이고 GraphRenderer/TaskRenderer가 소유한 실제 Node가 그 위에 놓인다. */
+.graph-node-layer > .graph-node {
+	z-index: 1;
+}
+
+.task-node {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 7px 16px;
+	cursor: grab;
+}
+
+.task-node.is-selected {
+	--graph-node-border-color: var(--graph-viewport-accent-color);
+	--graph-node-shadow: var(--graph-node-active-shadow);
+}
+
+.task-node.is-dragging {
+	cursor: grabbing;
+}
+
+.task-work-node {
+	--graph-node-border-color: var(--graph-node-outline-color);
+}
+
+.task-work-node[data-task-connection-state='disconnected'] {
+	--graph-node-outline-color: color-mix(
+		in srgb,
+		var(--vscode-descriptionForeground, #9d9d9d) 72%,
+		transparent
+	);
+}
+
+.task-work-node[data-task-connection-state='connected'] {
+	--graph-node-outline-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.task-work-node[data-task-connection-state='connected']:not(.is-selected) {
+	--graph-node-border-color: var(--vscode-foreground);
+}
+
+.task-work-node[data-task-connection-state='connected'] > .task-work-icon {
+	background-color: var(--graph-node-border-color);
+}
+
+.task-start-node,
+.task-end-node {
+	--graph-node-border-color: var(--graph-node-outline-color);
+}
+
+.task-start-node[data-task-connection-state='disconnected'] {
+	--graph-node-outline-color: var(
+		--vscode-editorWarning-foreground,
+		var(--vscode-notificationsWarningIcon-foreground, #cca700)
+	);
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-node-default-background) 62%,
+		transparent
+	);
+	--graph-node-shadow: none;
+}
+
+.task-start-node[data-task-connection-state='connected'] {
+	--graph-node-outline-color: var(--vscode-testing-iconPassed, #73c991);
+	--graph-node-background: var(--graph-node-default-background);
+	--graph-node-shadow: var(--graph-node-default-shadow);
+}
+
+.task-end-node[data-task-connection-state='disconnected'] {
+	--graph-node-outline-color: color-mix(
+		in srgb,
+		var(--vscode-charts-orange, #d18616) 68%,
+		#7a2e00
+	);
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-node-default-background) 62%,
+		transparent
+	);
+	--graph-node-shadow: none;
+}
+
+.task-end-node[data-task-connection-state='connected'] {
+	--graph-node-outline-color: var(--vscode-testing-iconFailed, #f14c4c);
+	--graph-node-background: var(--graph-node-default-background);
+	--graph-node-shadow: var(--graph-node-default-shadow);
+}
+
+.task-node-icon {
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	background-color: var(--graph-node-outline-color);
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+	pointer-events: none;
+}
+
+.task-start-icon {
+	mask-image: url('../graph/assets/ui-icons/task-start.svg');
+	-webkit-mask-image: url('../graph/assets/ui-icons/task-start.svg');
+}
+
+.task-work-icon {
+	mask-image: url('../graph/assets/ui-icons/task-work.svg');
+	-webkit-mask-image: url('../graph/assets/ui-icons/task-work.svg');
+	transform: scale(0.8);
+}
+
+.task-end-icon {
+	mask-image: url('../graph/assets/ui-icons/task-end.svg');
+	-webkit-mask-image: url('../graph/assets/ui-icons/task-end.svg');
+}
+
+.task-node-content {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.task-node-title-row {
+	display: flex;
+	min-width: 0;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.task-node-title {
+	display: -webkit-box;
+	overflow: hidden;
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 19px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+}
+
+.task-node-title-row > .task-node-title {
+	display: block;
+	flex: 1 1 auto;
+	min-width: 0;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-node-agent {
+	flex: 0 0 auto;
+	color: var(--vscode-foreground, #f2f2f2);
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 19px;
+	white-space: nowrap;
+}
+
+.task-node-description {
+	display: -webkit-box;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #9d9d9d);
+	font-size: 12px;
+	line-height: 15px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+}
+
+.task-node-prompt {
+	display: -webkit-box;
+	overflow: hidden;
+	color: var(--vscode-charts-blue, #3794ff);
+	font-size: 12px;
+	line-height: 15px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+}
+
+.task-node-actions {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	z-index: 3;
+	display: flex;
+	width: 100%;
+	box-sizing: border-box;
+	gap: 4px;
+	justify-content: flex-end;
+	padding-top: 12px;
+	opacity: 0;
+	pointer-events: none;
+	touch-action: none;
+	transition: opacity 100ms ease;
+}
+
+.task-start-node:hover > .task-start-actions,
+.task-start-node:focus-within > .task-start-actions,
+.task-work-node:hover > .task-work-actions,
+.task-work-node:focus-within > .task-work-actions {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.task-node:has(> .task-node-actions):hover,
+.task-node:has(> .task-node-actions):focus-within {
+	z-index: 2;
+}
+
+.task-scope-area-toggle {
+	--task-scope-outline-color: color-mix(
+		in srgb,
+		var(--task-scope-accent) 58%,
+		var(--graph-node-default-border-color)
+	);
+
+	position: relative;
+	display: flex;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	color: var(--task-scope-accent);
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 5%,
+		transparent
+	);
+	border: 1px dashed var(--task-scope-outline-color);
+	border-radius: 6px;
+	outline: none;
+	touch-action: none;
+	cursor: pointer;
+	transition:
+		background 100ms ease,
+		border-color 100ms ease;
+}
+
+.task-scope-area-toggle:hover:not(:disabled),
+.task-scope-area-toggle:focus-visible:not(:disabled) {
+	background: color-mix(
+		in srgb,
+		var(--task-scope-accent) 14%,
+		var(--graph-node-default-background)
+	);
+	border-color: var(--task-scope-accent);
+}
+
+.task-scope-area-toggle:disabled {
+	cursor: not-allowed;
+}
+
+.task-work-area-toggle {
+	margin-right: auto;
+}
+
+.task-scope-area-toggle-indicator {
+	display: block;
+	width: 8px;
+	height: 8px;
+	background: var(--task-scope-outline-color);
+	border-radius: 1px;
+	opacity: 0;
+	transform: scale(0.6);
+	pointer-events: none;
+	transition:
+		opacity 100ms ease,
+		transform 100ms ease;
+}
+
+.task-scope-area-toggle[aria-expanded='true']
+> .task-scope-area-toggle-indicator {
+	opacity: 1;
+	transform: scale(1);
+}
+
+.task-remove-task-action {
+	color: var(--vscode-errorForeground, #f14c4c);
+	background: color-mix(
+		in srgb,
+		var(--vscode-errorForeground, #f14c4c) 14%,
+		var(--graph-floating-control-background)
+	);
+	border-color: color-mix(
+		in srgb,
+		var(--vscode-errorForeground, #f14c4c) 42%,
+		var(--graph-secondary-control-border)
+	);
+}
+
+.task-remove-task-action:hover,
+.task-remove-task-action:focus-visible {
+	color: var(--vscode-errorForeground, #f14c4c);
+	background: color-mix(
+		in srgb,
+		var(--vscode-errorForeground, #f14c4c) 22%,
+		var(--graph-floating-control-hover-background)
+	);
+	border-color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.task-node-action-symbol {
+	display: block;
+	font-size: 17px;
+	font-weight: 600;
+	line-height: 1;
+	pointer-events: none;
+}
+
+.task-node-port {
+	--task-port-color: var(--graph-node-border-color);
+
+	position: absolute;
+	top: 50%;
+	z-index: 4;
+	box-sizing: border-box;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	appearance: none;
+	opacity: 0.78;
+	cursor: pointer;
+	touch-action: none;
+	transition: opacity 100ms ease;
+}
+
+.task-node-port::after {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	box-sizing: border-box;
+	width: 12px;
+	height: 12px;
+	border: 2px solid var(--task-port-color);
+	border-radius: 50%;
+	background: var(--vscode-editor-background, #1e1e1e);
+	box-shadow: 0 0 0 2px color-mix(
+		in srgb,
+		var(--vscode-editor-background, #1e1e1e) 82%,
+		transparent
+	);
+	transform: translate(-50%, -50%);
+	content: '';
+	transition:
+		border-color 100ms ease,
+		background-color 100ms ease,
+		box-shadow 100ms ease;
+}
+
+.task-input-port {
+	left: 0;
+	transform: translate(-50%, -50%);
+}
+
+.task-output-port {
+	right: 0;
+	transform: translate(50%, -50%);
+}
+
+.task-node:hover > .task-node-port,
+.task-node:focus-within > .task-node-port,
+.graph-node-layer.is-task-connecting .task-node-port {
+	opacity: 1;
+}
+
+.task-node-port.is-connection-source {
+	--task-port-color: var(--graph-viewport-accent-color);
+}
+
+.task-node-port.is-connection-source::after {
+	background: var(--graph-viewport-accent-color);
+	box-shadow: 0 0 0 4px color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 24%,
+		transparent
+	);
+}
+
+.task-node-port.is-valid-target {
+	--task-port-color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.task-node-port.is-invalid-target {
+	--task-port-color: var(--vscode-testing-iconFailed, #f14c4c);
+	opacity: 0.62;
+}
+
+.task-node-port:focus-visible::after,
+.task-node-port.is-connection-target::after {
+	box-shadow: 0 0 0 5px color-mix(
+		in srgb,
+		var(--task-port-color) 25%,
+		transparent
+	);
+}
+
+.task-node-port.is-valid-target.is-connection-target::after {
+	background: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.task-node-port.is-invalid-target.is-connection-target::after {
+	background: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.task-edge {
+	stroke: color-mix(
+		in srgb,
+		var(--vscode-focusBorder, #007fd4) 72%,
+		var(--graph-edge-color)
+	);
+	stroke-width: 1.25;
+	pointer-events: stroke;
+	cursor: pointer;
+}
+
+.task-connection-preview {
+	stroke-dasharray: 7 5;
+	stroke-width: 1.5;
+	opacity: 0.82;
+	pointer-events: none;
+}
+
+.task-connection-preview.is-valid {
+	stroke: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.task-connection-preview.is-invalid {
+	stroke: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.task-edge-actions {
+	position: absolute;
+	z-index: 3;
+	width: 48px;
+	height: 28px;
+	transform: translate(-50%, -50%);
+	pointer-events: auto;
+	touch-action: none;
+}
+
+.task-edge-hover-target {
+	position: absolute;
+	top: 9px;
+	left: 0;
+	display: block;
+	width: 48px;
+	height: 10px;
+	border-radius: 5px;
+}
+
+.task-edge-action-list {
+	position: absolute;
+	bottom: 18px;
+	left: 50%;
+	display: flex;
+	gap: 4px;
+	padding-bottom: 6px;
+	transform: translateX(-50%);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition: opacity 100ms ease;
+}
+
+.task-edge-actions:hover > .task-edge-action-list,
+.task-edge-actions:focus-within > .task-edge-action-list {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.task-edge-action-symbol {
+	display: block;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1;
+	pointer-events: none;
+}
+
+.task-inspector {
+	position: absolute;
+	z-index: 4;
+	display: grid;
+	box-sizing: border-box;
+	width: 320px;
+	max-width: calc(100% - 24px);
+	gap: 12px;
+	max-height: calc(100% - 24px);
+	padding: 14px;
+	overflow: auto;
+	color: var(--vscode-foreground);
+	background: var(
+		--vscode-editorWidget-background,
+		var(--graph-floating-control-background)
+	);
+	border: 1px solid var(
+		--vscode-widget-border,
+		var(--vscode-contrastBorder, var(--graph-secondary-control-border))
+	);
+	border-radius: 8px;
+	box-shadow: var(--graph-floating-control-shadow);
+	pointer-events: auto;
+	touch-action: auto;
+	cursor: default;
+}
+
+.task-inspector-heading {
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 16px;
+	letter-spacing: 0.08em;
+}
+
+.task-inspector-field {
+	display: grid;
+	gap: 5px;
+	min-width: 0;
+	color: var(--vscode-foreground);
+	cursor: default;
+}
+
+.task-inspector-field-label {
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 16px;
+}
+
+.task-inspector-control {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	padding: 6px 8px;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	font: inherit;
+	font-size: 13px;
+	line-height: 18px;
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	border: 1px solid var(
+		--vscode-input-border,
+		var(--vscode-contrastBorder, var(--graph-secondary-control-border))
+	);
+	border-radius: 3px;
+	outline: none;
+	cursor: text;
+}
+
+textarea.task-inspector-control {
+	min-height: 96px;
+	resize: none;
+}
+
+select.task-inspector-control {
+	cursor: pointer;
+}
+
+select.task-inspector-control:disabled {
+	color: var(
+		--vscode-disabledForeground,
+		var(--vscode-descriptionForeground, var(--vscode-foreground))
+	);
+	cursor: default;
+	opacity: 0.8;
+}
+
+.task-inspector-control:focus,
+.task-inspector-control:focus-visible {
+	border-color: var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--graph-viewport-accent-color))
+	);
+	outline: 1px solid var(
+		--vscode-focusBorder,
+		var(--vscode-contrastActiveBorder, var(--graph-viewport-accent-color))
+	);
+	outline-offset: -1px;
+}
+
+.task-import-dialog-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: rgb(0 0 0 / 46%);
+	pointer-events: auto;
+}
+
+.task-import-dialog-overlay[hidden] {
+	display: none;
+}
+
+.task-import-dialog-panel {
+	display: grid;
+	width: min(640px, 100%);
+	max-height: min(680px, 100%);
+	gap: 12px;
+	padding: 20px;
+	color: var(--vscode-foreground);
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 8px;
+	box-shadow: 0 8px 28px rgb(0 0 0 / 36%);
+}
+
+.task-import-dialog-title,
+.task-import-dialog-message,
+.task-import-dialog-error {
+	margin: 0;
+}
+
+.task-import-dialog-title {
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.task-import-dialog-message {
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.45;
+}
+
+.task-import-dialog-input {
+	width: 100%;
+	min-height: 300px;
+	padding: 10px;
+	resize: vertical;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+	border-radius: 3px;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 13px);
+	line-height: 1.45;
+	outline: none;
+}
+
+.task-import-dialog-input:focus,
+.task-import-dialog-input:focus-visible {
+	border-color: var(--vscode-focusBorder);
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.task-import-dialog-input[aria-invalid='true'] {
+	border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+.task-import-dialog-error {
+	color: var(--vscode-errorForeground, #f14c4c);
+	line-height: 1.4;
+}
+
+.task-import-dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.task-import-dialog-accept,
+.task-import-dialog-cancel {
+	padding: 5px 14px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	cursor: pointer;
+}
+
+.task-import-dialog-accept {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+.task-import-dialog-accept:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.task-import-dialog-cancel {
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+.task-import-dialog-cancel:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+body.vscode-high-contrast .task-inspector,
+body.vscode-high-contrast-light .task-inspector,
+body.vscode-high-contrast .task-import-dialog-panel,
+body.vscode-high-contrast-light .task-import-dialog-panel {
+	border-color: var(--vscode-contrastBorder, var(--vscode-widget-border));
+	box-shadow: none;
+}
+
+body.vscode-high-contrast .task-scope-area,
+body.vscode-high-contrast-light .task-scope-area,
+body.vscode-high-contrast .task-scope-area-toggle,
+body.vscode-high-contrast-light .task-scope-area-toggle {
+	--task-scope-outline-color: var(
+		--vscode-contrastBorder,
+		var(--task-scope-accent)
+	);
+
+	border-color: var(--task-scope-outline-color);
+	box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.task-scope-area,
+	.task-scope-area.is-collapsed,
+	.task-scope-area.is-scope-slide-a,
+	.task-scope-area.is-scope-slide-b,
+	.task-scope-area-toggle,
+	.task-scope-area-toggle-indicator {
+		transition: none;
+		animation: none;
+	}
+}
