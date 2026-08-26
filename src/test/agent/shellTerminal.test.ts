@@ -161,18 +161,26 @@ suite('Shell Terminal Webview', () => {
 	test('Claude spinner 경계와 idle prompt 앞의 마지막 정적 논리 행을 읽는다', () => {
 		const terminal = new FakeTerminal();
 		terminal.setBuffer([
-			'⏺ Bash(pnpm test)',
-			'  ⎿ 1753 passing',
-			'✶ Wiring… (esc to interrupt · 12s · ↓ 88 tokens)',
-			'❯',
-		], 3);
+			'● Running 1 shell command…',
+			'  └ $ sleep 4',
+			'✱ Roosting… (12s · ↓ 88 tokens)',
+			'  └ Tip: Use Plan Mode before making changes.',
+			'────────────────────────────────',
+			'›',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle) · esc to interrupt ·…',
+		], 5);
 		const running = captureTerminalBufferSnapshot(terminal);
 		terminal.setBuffer([
-			'⏺ Bash(pnpm test)',
-			'  ⎿ 1753 passing',
-			'✻ Reticulating… (esc to interrupt · 13s · ↓ 91 tokens)',
-			'❯',
-		], 3);
+			'● Running 1 shell command…',
+			'  └ $ sleep 4',
+			'✱ Roosting… (13s · ↓ 91 tokens)',
+			'  └ Tip: Use Plan Mode before making changes.',
+			'────────────────────────────────',
+			'›',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle) · esc to interrupt ·…',
+		], 5);
 
 		assert.strictEqual(
 			readTerminalOutputPreviewMessage(
@@ -180,14 +188,23 @@ suite('Shell Terminal Webview', () => {
 				running,
 				'claude',
 			),
-			'⎿ 1753 passing',
+			'└ $ sleep 4',
+		);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				running,
+				undefined,
+			),
+			'└ $ sleep 4',
 		);
 
 		terminal.setBuffer([
 			'Claude 작업을 완료했습니다.',
-			'',
-			'❯',
-			'Opus 4.6',
+			'────────────────────────────────',
+			'›',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle) · esc to interrupt ·…',
 		], 2);
 		assert.strictEqual(
 			readTerminalOutputPreviewMessage(
@@ -196,6 +213,64 @@ suite('Shell Terminal Webview', () => {
 				'claude',
 			),
 			'Claude 작업을 완료했습니다.',
+		);
+	});
+
+	test('고배율 Claude composer가 여러 행이어도 입력 prompt와 장식을 반환하지 않는다', () => {
+		const terminal = new FakeTerminal();
+		terminal.setBuffer([
+			'● Running 1 shell command · 3s…',
+			'  └ $ sleep 4 (3s)',
+			'    (ctrl+b to run in background)',
+			'Leavening… (40s · ↓ 1.4k tokens)',
+			'  └ Tip: Use /btw to ask a quick side',
+			'    question without interrupting Claude’s',
+			'    current work',
+			'    continued tip row 1',
+			'    continued tip row 2',
+			'    continued tip row 3',
+			'    continued tip row 4',
+			'    continued tip row 5',
+			'────────────────────────────────',
+			'❯',
+			'────────────────────────────────',
+			'▶▶ auto mode on (shift+tab to cycle)',
+			'   · esc to interrupt · ← for agents',
+		], 13);
+
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'claude',
+				'❯',
+			),
+			'└ $ sleep 4 (3s)',
+		);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				undefined,
+				'❯',
+			),
+			'└ $ sleep 4 (3s)',
+		);
+
+		terminal.setBuffer([
+			'────────────────────────────────',
+			'❯',
+			'────────────────────────────────',
+			'▶▶ auto mode on · esc to interrupt',
+		], 1);
+		assert.strictEqual(
+			readTerminalOutputPreviewMessage(
+				terminal,
+				undefined,
+				'claude',
+				'❯',
+			),
+			'',
 		);
 	});
 

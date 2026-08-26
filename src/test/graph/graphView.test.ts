@@ -7379,19 +7379,15 @@ suite('Graph View', () => {
 		assert.match(containerRule[0], /left:\s*0;/);
 		assert.match(containerRule[0], /width:\s*100%;/);
 		assert.ok(bindingRule);
-		assert.match(
-			bindingRule[0],
-			/grid-template-columns:\s*minmax\(0,\s*2fr\)\s+minmax\(0,\s*3fr\);/,
-		);
-		assert.match(
-			bindingRule[0],
-			/grid-template-rows:\s*minmax\(0,\s*1fr\);/,
-		);
+		assert.match(bindingRule[0], /display:\s*flex;/);
 		assert.match(bindingRule[0], /column-gap:\s*8px;/);
 		assert.ok(sessionRule);
+		assert.match(sessionRule[0], /flex:\s*0\s+1\s+auto;/);
+		assert.match(sessionRule[0], /max-width:\s*50%;/);
 		assert.match(sessionRule[0], /overflow:\s*hidden;/);
 		assert.match(sessionRule[0], /text-overflow:\s*ellipsis;/);
 		assert.ok(messageRule);
+		assert.match(messageRule[0], /flex:\s*1\s+1\s+0;/);
 		assert.match(messageRule[0], /overflow:\s*hidden;/);
 		assert.match(messageRule[0], /text-overflow:\s*ellipsis;/);
 		assert.match(

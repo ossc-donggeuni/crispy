@@ -110,8 +110,8 @@ export interface TerminalOutputPreviewEvent {
 /** cursor 주변에서 현재 보이는 메시지를 찾을 때 역방향으로 탐색할 최대 행 수다. */
 export const TERMINAL_CURRENT_MESSAGE_SCAN_LINES = 64;
 
-/** TUI 하단에서 provider 동적 상태 경계를 찾을 최대 논리 행 수다. */
-export const TERMINAL_DYNAMIC_STATUS_SCAN_LOGICAL_LINES = 12;
+/** 고배율 TUI의 여러 Tip/footer 행을 지나 동적 상태 경계를 찾는 최대 논리 행 수다. */
+export const TERMINAL_DYNAMIC_STATUS_SCAN_LOGICAL_LINES = 24;
 
 /** provider 공통 실행 중 상태가 제공하는 interrupt 안내다. */
 const TERMINAL_INTERRUPT_STATUS_PATTERN =
@@ -121,12 +121,28 @@ const TERMINAL_INTERRUPT_STATUS_PATTERN =
 const CODEX_DYNAMIC_STATUS_PATTERN =
 	/^[\s•●○◦·]*Working(?:\s*(?:…|\.{3})|\s*\([^)]*(?:\d+\s*[smh]|interrupt)[^)]*\))/iu;
 
+/** Claude 하단 composer의 영구 footer는 실행 상태 경계로 사용하지 않는다. */
+const CLAUDE_PERSISTENT_FOOTER_PATTERN =
+	/(?:\bauto mode\b|\bshift\+tab\s+to\s+cycle\b|(?:←|<-)\s*for agents\b)/iu;
+
+/** 실행 명령 아래의 `(ctrl+b to run in background)` 같은 조작 안내다. */
+const CLAUDE_COMMAND_HINT_PATTERN =
+	/^(?:[└┗╰]\s*)?\((?:ctrl|shift|alt|cmd|option|esc|enter|tab)(?:\s*[-+]\s*|\b)[^)]*\)$/iu;
+
 /** Claude의 spinner+ellipsis 상태 행과 알려진 직접 상태 동사를 식별한다. */
 const CLAUDE_DYNAMIC_STATUS_PATTERN =
-	/^(?:[\s·✢✳✶✻✽*●]+[^\r\n]{1,96}(?:…|\.{3})(?:\s*\(|\s*$)|\s*(?:Wiring|Working|Thinking|Compacting)(?:…|\.{3}))/iu;
+	/^(?:\s*[\p{S}*·•●]+\s+[^\r\n]{1,96}(?:…|\.{3})(?:\s*\(|\s*$)|\s*[\p{L}][\p{L}\p{M}\p{N} '-]{0,40}(?:…|\.{3})\s*\([^)]*(?:\d+\s*[smh]|tokens?)[^)]*\)|\s*(?:Wiring|Working|Thinking|Compacting)(?:…|\.{3}))/iu;
+
+/** spinner glyph/verb가 바뀌어도 ellipsis와 elapsed-time shape로 실행 상태를 식별한다. */
+const CLAUDE_ELAPSED_STATUS_PATTERN =
+	/^(?=.{1,192}$).*?(?:…|\.{3})\s*\([^)]*\b\d+\s*[smh]\b[^)]*\)/iu;
 
 const CODEX_PROMPT_PATTERN = /(?:^[>›]\s*|\bAsk Codex\b)/iu;
-const CLAUDE_PROMPT_PATTERN = /(?:^[>❯]\s*|\bAsk Claude\b)/iu;
+const CLAUDE_PROMPT_PATTERN = /(?:^[>›❯]\s*|\bAsk Claude\b)/iu;
+
+/** 입력 composer를 둘러싼 수평선처럼 내용이 없는 장식 전용 행이다. */
+const TERMINAL_DECORATIVE_LINE_PATTERN =
+	/^[\s\-_‐‑‒–—―─━═╌╍┄┅┈┉]+$/u;
 
 /** xterm buffer가 없는 대역에서도 delta를 안전하게 표시하기 위한 ANSI 제어 제거다. */
 const ANSI_OSC_SEQUENCE = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu;
@@ -326,38 +342,31 @@ export function readTerminalOutputPreviewMessage(
 			providerId,
 		);
 		if (dynamicBoundary !== undefined) {
-			return readPreviousNonEmptyLogicalLine(
+			return readPreviousStaticLogicalLine(
 				buffer,
 				dynamicBoundary,
 				minimumIndex,
+				providerId,
 			);
 		}
 
-		if (providerId === 'codex' || providerId === 'claude') {
-			const cursorIndex = Math.min(
-				buffer.length - 1,
-				Math.max(0, buffer.baseY + buffer.cursorY),
-			);
-			const promptStart = findLogicalTerminalLineStart(
+		const promptBoundary = findProviderPromptBoundary(
+			buffer,
+			minimumIndex,
+			providerId,
+		);
+		if (promptBoundary !== undefined) {
+			return readPreviousStaticLogicalLine(
 				buffer,
-				cursorIndex,
+				promptBoundary,
 				minimumIndex,
+				providerId,
 			);
-			const prompt = readLogicalTerminalLine(buffer, promptStart);
-			if (isProviderPromptLine(prompt, providerId)) {
-				const message = readPreviousNonEmptyLogicalLine(
-					buffer,
-					promptStart,
-					minimumIndex,
-				);
-				if (message.length > 0) {
-					return message;
-				}
-			}
 		}
 	}
 
-	return readChangedTerminalMessage(terminal, before, fallbackDelta);
+	const changed = readChangedTerminalMessage(terminal, before, fallbackDelta);
+	return isTerminalUiChromeLine(changed, providerId) ? '' : changed;
 }
 
 /** 하단 제한 영역에서 provider의 실행 중 상태 논리 행 시작점을 찾는다. */
@@ -389,39 +398,97 @@ function findDynamicStatusBoundary(
 	return undefined;
 }
 
-/** 공통 interrupt 표식과 provider별 제한 패턴으로 동적 상태 행만 판정한다. */
+/** provider별 제한 패턴으로 동적 상태 행만 판정한다. */
 function isProviderDynamicStatusLine(
 	text: string,
 	providerId: ProviderId | undefined,
 ): boolean {
-	if (TERMINAL_INTERRUPT_STATUS_PATTERN.test(text)) {
-		return true;
-	}
 	if (providerId === 'codex') {
 		return CODEX_DYNAMIC_STATUS_PATTERN.test(text);
 	}
 	if (providerId === 'claude') {
-		return CLAUDE_DYNAMIC_STATUS_PATTERN.test(text);
+		return !CLAUDE_PERSISTENT_FOOTER_PATTERN.test(text)
+			&& (
+				CLAUDE_DYNAMIC_STATUS_PATTERN.test(text)
+				|| CLAUDE_ELAPSED_STATUS_PATTERN.test(text)
+			);
 	}
-	return false;
+	if (CLAUDE_PERSISTENT_FOOTER_PATTERN.test(text)) {
+		return false;
+	}
+	return CODEX_DYNAMIC_STATUS_PATTERN.test(text)
+		|| CLAUDE_DYNAMIC_STATUS_PATTERN.test(text)
+		|| CLAUDE_ELAPSED_STATUS_PATTERN.test(text)
+		|| TERMINAL_INTERRUPT_STATUS_PATTERN.test(text);
 }
 
 /** provider 입력 composer인지 확인해 idle 화면의 정적 영역 끝을 정한다. */
-function isProviderPromptLine(text: string, providerId: ProviderId): boolean {
+function isProviderPromptLine(
+	text: string,
+	providerId: ProviderId | undefined,
+): boolean {
 	if (providerId === 'codex') {
 		return CODEX_PROMPT_PATTERN.test(text);
 	}
 	if (providerId === 'claude') {
 		return CLAUDE_PROMPT_PATTERN.test(text);
 	}
-	return false;
+	return providerId === undefined
+		&& (
+			CODEX_PROMPT_PATTERN.test(text)
+			|| CLAUDE_PROMPT_PATTERN.test(text)
+		);
 }
 
-/** 주어진 경계 직전에서 마지막 비어 있지 않은 wrapped 논리 행을 읽는다. */
-function readPreviousNonEmptyLogicalLine(
+/** cursor의 provider 입력 prompt를 provider 누락 시에도 동일한 경계로 찾는다. */
+function findProviderPromptBoundary(
+	buffer: XtermBuffer,
+	minimumIndex: number,
+	providerId: ProviderId | undefined,
+): number | undefined {
+	const cursorIndex = Math.min(
+		buffer.length - 1,
+		Math.max(0, buffer.baseY + buffer.cursorY),
+	);
+	const promptStart = findLogicalTerminalLineStart(
+		buffer,
+		cursorIndex,
+		minimumIndex,
+	);
+	return isProviderPromptLine(
+		readLogicalTerminalLine(buffer, promptStart),
+		providerId,
+	)
+		? promptStart
+		: undefined;
+}
+
+/** provider의 prompt/status/footer와 장식 행은 정적 메시지 후보에서 제외한다. */
+function isTerminalUiChromeLine(
+	text: string,
+	providerId: ProviderId | undefined,
+): boolean {
+	const canBeClaudeUi = providerId === undefined || providerId === 'claude';
+	return text.length === 0
+		|| TERMINAL_DECORATIVE_LINE_PATTERN.test(text)
+		|| (
+			canBeClaudeUi
+			&& CLAUDE_PERSISTENT_FOOTER_PATTERN.test(text)
+		)
+		|| (
+			canBeClaudeUi
+			&& CLAUDE_COMMAND_HINT_PATTERN.test(text)
+		)
+		|| isProviderPromptLine(text, providerId)
+		|| isProviderDynamicStatusLine(text, providerId);
+}
+
+/** 주어진 경계 직전에서 마지막 정적 wrapped 논리 행을 읽는다. */
+function readPreviousStaticLogicalLine(
 	buffer: XtermBuffer,
 	boundaryStart: number,
 	minimumIndex: number,
+	providerId: ProviderId | undefined,
 ): string {
 	let lineIndex = boundaryStart - 1;
 	while (lineIndex >= minimumIndex) {
@@ -431,7 +498,7 @@ function readPreviousNonEmptyLogicalLine(
 			minimumIndex,
 		);
 		const text = readLogicalTerminalLine(buffer, logicalStart);
-		if (text.length > 0) {
+		if (!isTerminalUiChromeLine(text, providerId)) {
 			return text;
 		}
 		lineIndex = logicalStart - 1;

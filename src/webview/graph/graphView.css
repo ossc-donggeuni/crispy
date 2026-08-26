@@ -376,13 +376,11 @@ body.vscode-high-contrast-light .graph-viewport {
 }
 
 .graph-agent-activity-binding {
-	display: grid;
+	display: flex;
 	height: var(--graph-agent-activity-binding-row-height);
 	width: 100%;
 	min-width: 0;
 	box-sizing: border-box;
-	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-	grid-template-rows: minmax(0, 1fr);
 	align-items: center;
 	column-gap: 8px;
 	padding: 4px 8px;
@@ -427,6 +425,8 @@ body.vscode-high-contrast-light .graph-viewport {
 .graph-agent-activity-session-title {
 	position: relative;
 	z-index: 3;
+	flex: 0 1 auto;
+	max-width: 50%;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -437,6 +437,7 @@ body.vscode-high-contrast-light .graph-viewport {
 .graph-agent-activity-current-message {
 	position: relative;
 	z-index: 3;
+	flex: 1 1 0;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
