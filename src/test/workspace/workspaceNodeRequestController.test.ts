@@ -216,6 +216,93 @@ suite('Workspace Node Request Controller', () => {
 			[standaloneFileId]: nextStandaloneFileId,
 		});
 	});
+
+	test('file 상세에 같은 Git revision의 HEAD 원본만 atomic하게 결합한다', async () => {
+		const rootUri = vscode.Uri.file('/workspace');
+		const fileUri = vscode.Uri.file('/workspace/index.ts');
+		const fileId = `file:${fileUri.toString()}`;
+		const messages: ExtensionToWebviewMessage[] = [];
+		let gitRevision = 5;
+		let makeGitReadStale = false;
+		const currentText = 'const value = 2;\n';
+		const controller = createWorkspaceNodeRequestController({
+			operationHost: {
+				isTrusted: true,
+				getWorkspaceFolder: () => ({ uri: rootUri, name: 'workspace', index: 0 }),
+				stat: async () => ({
+					type: vscode.FileType.File,
+					ctime: 0,
+					mtime: 0,
+					size: new TextEncoder().encode(currentText).byteLength,
+				}),
+				readFile: async () => new TextEncoder().encode(currentText),
+				readDirectory: async () => [],
+				rename: async () => undefined,
+				delete: async () => undefined,
+			},
+			getWorkspaceRevision: () => 0,
+			advanceWorkspaceRevision: () => 0,
+			getWorkspaceContextGeneration: () => 0,
+			getWorkspaceState: createDefaultWorkspacePersistentState,
+			commitWorkspaceState: async () => undefined,
+			createWorkspacePresentation: async () => createPresentation(
+				createWorkspaceRootId(rootUri),
+				fileId,
+			),
+			getGitRevision: () => gitRevision,
+			readGitOriginalText: async (nodeId, maxBytes) => {
+				assert.strictEqual(nodeId, fileId);
+				assert.strictEqual(maxBytes, 1_048_576);
+				if (makeGitReadStale) {
+					gitRevision += 1;
+				}
+				return 'const value = 1;\n';
+			},
+			postMessage: async (message) => {
+				messages.push(message);
+				return true;
+			},
+		});
+
+		controller.handle({
+			type: 'workspace.nodeDetails.request',
+			requestId: 20,
+			nodeId: fileId,
+			kind: 'file',
+			workspaceRevision: 0,
+		});
+		await waitFor(() => messages.length === 1);
+		const success = messages[0];
+
+		assert.strictEqual(success?.type, 'workspace.nodeDetails.result');
+		assert.strictEqual(success?.status, 'success');
+		if (success?.type !== 'workspace.nodeDetails.result' || success.status !== 'success') {
+			assert.fail('file details success 결과가 필요하다.');
+		}
+		assert.deepStrictEqual(success.details.preview, {
+			status: 'ready',
+			text: currentText,
+			languageId: 'typescript',
+			originalText: 'const value = 1;\n',
+		});
+
+		makeGitReadStale = true;
+		controller.handle({
+			type: 'workspace.nodeDetails.request',
+			requestId: 21,
+			nodeId: fileId,
+			kind: 'file',
+			workspaceRevision: 0,
+		});
+		await waitFor(() => messages.length === 2);
+		assert.deepStrictEqual(messages[1], {
+			type: 'workspace.nodeDetails.result',
+			requestId: 21,
+			workspaceRevision: 0,
+			status: 'error',
+			reason: 'stale',
+		});
+	});
 });
 
 function createPresentation(rootId: ReturnType<typeof createWorkspaceRootId>, fileId: string) {

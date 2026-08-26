@@ -54,6 +54,7 @@ import {
 	getAgentActivityBindingBlockHeight,
 	type AgentActivityBindings,
 } from './agentActivityBindings';
+import type { GitDecorationBindings } from './gitDecorationStore';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
@@ -230,6 +231,8 @@ export interface GraphRendererOptions {
 	/** Renderer DOM의 생성/제거 및 Layout을 Agent Binding과 연결한다. */
 	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>
 		& Partial<Pick<AgentActivityBindings, 'syncLayout'>>;
+	/** Git runtime snapshot을 실제 Source file/folder DOM occurrence에만 연결한다. */
+	gitDecorations?: GitDecorationBindings;
 }
 
 /** 특정 Layout 전환에서 새 Detached subtree가 출발할 기존 Instance를 지정한다. */
@@ -326,6 +329,7 @@ export function initializeGraphRenderer(
 	const nodeFileOpenRequestCleanups = new Map<string, () => void>();
 	const nodeEffectCleanups = new Map<string, () => void>();
 	const nodeActivityBindingCleanups = new Map<string, () => void>();
+	const nodeGitDecorationCleanups = new Map<string, () => void>();
 	const backlinkClickCleanups = new Map<string, () => void>();
 	const backlinkElements = new Map<string, HTMLElement>();
 	const fileGroupContents = new Map<string, FileGroupContentRenderer>();
@@ -1220,6 +1224,20 @@ export function initializeGraphRenderer(
 				),
 			);
 		}
+		if (presentationTarget && options.gitDecorations) {
+			nodeGitDecorationCleanups.set(
+				layoutNode.id,
+				layoutNode.kind === 'project' || layoutNode.kind === 'folder'
+					? options.gitDecorations.registerContainer(
+						presentationTarget.nodeId,
+						element,
+					)
+					: options.gitDecorations.registerFile(
+						presentationTarget.nodeId,
+						element,
+					),
+			);
+		}
 		element.hidden = layoutNode.hidden === true;
 		syncDetachDrag(layoutNode, element);
 		if (
@@ -1270,6 +1288,7 @@ export function initializeGraphRenderer(
 				initializeFileArrangementDrag,
 				options.nodeEffects,
 				options.agentActivityBindings,
+				options.gitDecorations,
 			);
 
 			content.render(graphState.getFileGroupPage(
@@ -1615,6 +1634,8 @@ export function initializeGraphRenderer(
 		nodeEffectCleanups.delete(nodeId);
 		nodeActivityBindingCleanups.get(nodeId)?.();
 		nodeActivityBindingCleanups.delete(nodeId);
+		nodeGitDecorationCleanups.get(nodeId)?.();
+		nodeGitDecorationCleanups.delete(nodeId);
 		backlinkClickCleanups.get(nodeId)?.();
 		backlinkClickCleanups.delete(nodeId);
 		fileGroupContents.get(nodeId)?.dispose();
@@ -2699,6 +2720,7 @@ function initializeFileGroupContent(
 	initializeFileArrangementDrag: FileArrangementDragInitializer,
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>,
+	gitDecorations?: GitDecorationBindings,
 ): FileGroupContentRenderer {
 	let renderedNode = node;
 	let renderedRootNodeIds = rootNodeIds;
@@ -2746,6 +2768,7 @@ function initializeFileGroupContent(
 					renderedNode.id,
 					nodeEffects,
 					agentActivityBindings,
+					gitDecorations,
 					);
 
 				list.append(row.element);
@@ -2871,6 +2894,7 @@ function createFileRow(
 	fileGroupId: string,
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
 	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>,
+	gitDecorations?: GitDecorationBindings,
 ): FileRowRenderer {
 	const item = ownerDocument.createElement('li');
 
@@ -2904,6 +2928,9 @@ function createFileRow(
 		: undefined;
 	const disposeAgentActivityBinding = presentationTarget
 		? agentActivityBindings?.registerTarget(presentationTarget, item)
+		: undefined;
+	const disposeGitDecoration = presentationTarget
+		? gitDecorations?.registerFile(presentationTarget.nodeId, item)
 		: undefined;
 	const backlinkTargetRootIds = file.targetRootIds
 		?? (file.targetRootId ? [file.targetRootId] : []);
@@ -2980,6 +3007,7 @@ function createFileRow(
 		dispose: () => {
 			disposeNodeEffect?.();
 			disposeAgentActivityBinding?.();
+			disposeGitDecoration?.();
 			disposeBacklinkClick?.();
 			detachDrag?.dispose();
 			sourceRowDrag?.dispose();

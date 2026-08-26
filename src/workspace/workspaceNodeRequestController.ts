@@ -9,6 +9,7 @@ import {
 	deleteWorkspaceNode,
 	readWorkspaceNodeDetails,
 	renameWorkspaceNode,
+	WORKSPACE_FILE_PREVIEW_MAX_BYTES,
 	WorkspaceNodeOperationError,
 	type WorkspaceNodeOperationHost,
 } from './workspaceNodeOperations';
@@ -33,6 +34,10 @@ export interface WorkspaceNodeRequestControllerDependencies {
 	commitWorkspaceState(state: WorkspacePersistentState): Promise<void>;
 	createWorkspacePresentation(): Promise<WorkspacePresentation>;
 	postMessage(message: ExtensionToWebviewMessage): PromiseLike<boolean>;
+	/** Git runtime이 연결된 경우 상세 file의 HEAD 원본을 선택적으로 제공한다. */
+	getGitRevision?(): number;
+	readGitOriginalText?(nodeId: string, maxBytes: number): Promise<string | undefined>;
+	requestGitRefresh?(): void;
 }
 
 /** 상세 조회와 직렬화 mutation을 Host 단일 revision 경계로 조정한다. */
@@ -54,11 +59,36 @@ export function createWorkspaceNodeRequestController(
 			return;
 		}
 		try {
-			const details = await readWorkspaceNodeDetails(
+			const gitRevision = dependencies.getGitRevision?.();
+			let details = await readWorkspaceNodeDetails(
 				request,
 				dependencies.operationHost,
 			);
+			if (
+				details.kind === 'file'
+				&& details.preview?.status === 'ready'
+				&& dependencies.readGitOriginalText
+			) {
+				const originalText = await dependencies.readGitOriginalText(
+					request.nodeId,
+					WORKSPACE_FILE_PREVIEW_MAX_BYTES,
+				);
+
+				if (originalText !== undefined) {
+					details = {
+						...details,
+						preview: { ...details.preview, originalText },
+					};
+				}
+			}
 			if (request.workspaceRevision !== dependencies.getWorkspaceRevision()) {
+				postDetailsFailure(request.requestId, 'stale');
+				return;
+			}
+			if (
+				gitRevision !== undefined
+				&& gitRevision !== dependencies.getGitRevision?.()
+			) {
 				postDetailsFailure(request.requestId, 'stale');
 				return;
 			}
@@ -155,6 +185,11 @@ export function createWorkspaceNodeRequestController(
 				...(mutation.nodeId ? { nodeId: mutation.nodeId } : {}),
 				...(stateIdChanges ? { stateIdChanges } : {}),
 			});
+			try {
+				dependencies.requestGitRefresh?.();
+			} catch {
+				/** 완료된 filesystem mutation은 후속 Git refresh 실패로 되돌리지 않는다. */
+			}
 		} catch (error) {
 			postMutationFailure(request.requestId, operation, getFailureReason(error));
 		}

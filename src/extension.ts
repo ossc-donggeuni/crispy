@@ -92,9 +92,11 @@ import {
 	createWorkspaceRootCatalog,
 	createWorkspaceRefreshCoordinator,
 	createWorkspaceNodeRequestController,
+	createWorkspaceGitStatusService,
 	convertWorkspaceSnapshotToGraph,
 	createWorkspaceSnapshot,
 	loadOrCreateWorkspaceFilters,
+	getBuiltInGitExtension,
 	mergeWorkspacePersistentStates,
 	partitionWorkspacePersistentStateByRoot,
 	readWorkspacePersistentState,
@@ -104,6 +106,7 @@ import {
 	defaultWorkspaceNodeOperationHost,
 	type WorkspacePresentation,
 	type WorkspaceNodeRequestController,
+	type WorkspaceGitStatusService,
 	type WorkspaceRefreshCoordinator,
 	type WorkspaceRootFilter,
 } from './workspace';
@@ -768,6 +771,14 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		const monacoWorkerUri = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(webviewRoot, 'monacoEditorWorker.js'),
 		);
+		const workspaceGitStatusService: WorkspaceGitStatusService =
+			createWorkspaceGitStatusService({
+				workspace: vscode.workspace,
+				getGitExtension: getBuiltInGitExtension,
+				loadRootFilters: workspaceGraphDependencies.loadWorkspaceFilters,
+				getWorkspaceContextGeneration: () => workspaceContextGeneration,
+				postMessage: (message) => panel.webview.postMessage(message),
+			});
 		const workspaceNodeRequestController = createWorkspaceNodeRequestController({
 			operationHost: defaultWorkspaceNodeOperationHost,
 			getWorkspaceRevision: () => workspaceRevision,
@@ -817,6 +828,13 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				workspacePresentationDependencies,
 			),
 			postMessage: (message) => panel.webview.postMessage(message),
+			getGitRevision: () => workspaceGitStatusService.getGitRevision(),
+			readGitOriginalText: (nodeId, maxBytes) => (
+				workspaceGitStatusService.readOriginalText(nodeId, maxBytes)
+			),
+			requestGitRefresh: () => {
+				void workspaceGitStatusService.requestRefresh();
+			},
 		});
 
 		let runtime: CanvasRuntime;
@@ -830,7 +848,10 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 					panel.webview,
 					message,
 					terminalHost,
-					() => runtime?.markWebviewReady(),
+					() => {
+						runtime?.markWebviewReady();
+						workspaceGitStatusService.markWebviewReady();
+					},
 					undefined,
 					undefined,
 					workspacePersistence,
@@ -863,9 +884,14 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 					},
 				);
 			},
-			postMessage: (message: WorkspaceToWebviewMessage) => (
-				panel.webview.postMessage(message)
-			),
+			postMessage: async (message: WorkspaceToWebviewMessage) => {
+				const posted = await panel.webview.postMessage(message);
+
+				// Root context가 먼저 교체된 뒤 같은 generation의 Git snapshot을
+				// 후속 발행해 Webview의 stale-context 거부와 경합하지 않게 한다.
+				void workspaceGitStatusService.requestRefresh();
+				return posted;
+			},
 		});
 		requestWorkspaceTrustRefresh = () => {
 			void workspaceRefresh.requestWorkspaceRefresh();
@@ -880,7 +906,7 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		runtime = createCanvasRuntime(
 			panel,
 			terminalRuntime,
-			[messageSubscription],
+			[messageSubscription, workspaceGitStatusService],
 			workspaceRefresh,
 			undefined,
 			(event) => terminalHost.handleAgentActivityWorkspaceFoldersChanged(
