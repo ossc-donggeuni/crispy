@@ -7743,6 +7743,8 @@ suite('Graph View', () => {
 		assert.ok(bindingRule);
 		assert.match(bindingRule[0], /display:\s*flex;/);
 		assert.match(bindingRule[0], /column-gap:\s*8px;/);
+		assert.match(bindingRule[0], /pointer-events:\s*auto;/);
+		assert.match(bindingRule[0], /cursor:\s*pointer;/);
 		assert.ok(sessionRule);
 		assert.match(sessionRule[0], /flex:\s*0\s+1\s+auto;/);
 		assert.match(sessionRule[0], /max-width:\s*50%;/);
@@ -15049,6 +15051,58 @@ suite('Graph View', () => {
 
 		assert.deepStrictEqual(fileOpenRequests, ['file:app/src/graphView.ts']);
 		graphView.dispose();
+	});
+
+	test('File의 이벤트 Animation Binding Double Click은 정확한 Session을 열고 File Double Click은 Editor Open을 유지한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const target = { nodeId: 'file:app/src/graphView.ts' };
+		const sessionOpenRequests: string[] = [];
+		const fileOpenRequests: string[] = [];
+
+		presentations.activateSession('tab-session', 'session-event', 'Event Agent');
+		store.setAgentActivity('session-event', target, 'editing');
+		const graphView = initializeGraphView(root.asHtmlElement(), {
+			...INITIAL_GRAPH_STATE,
+			openedFolders: {
+				[GRAPH_MOCK_PROJECT.id]: true,
+				'folder:app': true,
+				'folder:app/src': true,
+			},
+		}, GRAPH_MOCK, {
+			onAgentSessionOpenRequest: (sessionId) => {
+				sessionOpenRequests.push(sessionId);
+			},
+			onFileOpenRequest: (fileId) => fileOpenRequests.push(fileId),
+		}, [], undefined, {
+			agentActivityStore: store,
+			agentSessionPresentationStore: presentations,
+		});
+		const fileRow = getDescendantByAttribute(
+			root,
+			'data-file-id',
+			target.nodeId,
+		);
+		const bindingContainer = findAgentBindingContainer(fileRow);
+
+		assert.ok(bindingContainer);
+		const binding = bindingContainer.children[0];
+		assert.ok(binding);
+		binding.dispatch('click', createClickEvent(binding));
+		binding.dispatch('click', createClickEvent(binding));
+		binding.dispatch('dblclick', createClickEvent(binding));
+
+		assert.deepStrictEqual(sessionOpenRequests, ['session-event']);
+		assert.deepStrictEqual(fileOpenRequests, []);
+		assert.strictEqual(fileRow.hasClass('is-file-clicking'), false);
+
+		fileRow.dispatch('dblclick', createClickEvent(fileRow));
+		assert.deepStrictEqual(fileOpenRequests, [target.nodeId]);
+
+		graphView.dispose();
+		presentations.dispose();
 	});
 
 	test('접힌 Parent를 이동한 뒤 열면 하위 Node도 같은 Offset으로 나타난다', () => {

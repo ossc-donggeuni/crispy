@@ -36,6 +36,7 @@ src/webview/
 - Camera, Node 위치 및 File Group page State 조회, 변경 및 구독
 - Camera Pan / Zoom, Viewport / World 좌표 변환 및 ease-out Focus Animation
 - 실행 중인 MCP Activity를 최신 수신순 Animation 행으로 보여주고 새 Activity를 Bell 왼쪽 10초 Floating stack으로 표시하는 우측 상단 반투명 알림 Center
+- Session별 Activity Animation 행 Double Click으로 정확한 Agent 탭을 선택하고 접힌 Panel을 펼침
 - 알림 Target의 접힘, Filter와 File page를 열어 Camera Focus하고 개별 삭제를 Graph clear와 동기화
 - Workspace URI 범위 안의 snapshot 대기 Target은 Graph 갱신 후 Focus하고 범위 밖 Target만 unavailable 처리
 - Camera scale을 고려한 Node 자유 이동

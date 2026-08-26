@@ -10,6 +10,7 @@ Graph는 `GraphRoot[]`와 Project/Folder/File을 허용하는 Root Node Map을 �
 src/webview/graph/
 ├── assets/
 ├── agentActivityFocus.ts
+├── agentActivityBindings.ts
 ├── agentActivityFloatingNotifications.ts
 ├── agentActivityNotificationCenter.ts
 ├── agentActivityNotifications.ts
@@ -53,6 +54,14 @@ src/webview/graph/
 - 명시적인 `rootId`와 detached occurrence를 source occurrence보다 우선
 - 최신 Layout과 저장 위치, 앞선 File Row의 Agent Binding footprint를 반영해 Card/Row 중심 계산
 - Graph에 없는 Target은 State나 Camera를 변경하지 않고 안전하게 생략
+
+### `agentActivityBindings.ts`
+
+> Graph Target 아래에 실행 중인 Session별 Activity Animation 행을 표시합니다.
+
+- Target×Session Activity를 우선순위대로 표시하고 제목, 현재 메시지와 세션 색을 동기화
+- Animation 행 Double Click은 해당 행의 exact `sessionId`를 상위에 전달하고 File Double Click으로의 전파를 차단
+- Binding 제거, Target remount와 Graph View dispose 시 Effect DOM과 Double Click listener를 같이 정리
 
 ### `graphNodeUri.ts`
 
