@@ -2,7 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { MCP_LOOPBACK_HOST } from './httpPolicy';
 import { isValidMcpRouteId, type McpRandomBytes } from './sessionCredentials';
 import type { McpConnectionDescriptor } from './sessionRuntime';
-import { CRISPY_PING_TOOL_NAME } from './toolServer';
+import { createCrispyMcpInstructions } from './agentActivityInstructions';
+import {
+	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_PING_TOOL_NAME,
+	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+} from './toolServer';
 
 export const CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
 export const CODEX_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
@@ -10,6 +15,7 @@ export const CODEX_MCP_SERVER_NAME_RANDOM_BYTES = 16;
 export const CODEX_CONFIG_OVERRIDE_ARGUMENT = '--config';
 export const CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT =
 	'features.shell_snapshot=false';
+export const CODEX_DEVELOPER_INSTRUCTIONS_KEY = 'developer_instructions';
 
 export type CodexShellEnvironmentPolicyStyle =
 	| 'keyed-filters'
@@ -44,15 +50,28 @@ export function createCodexMcpConfig(
 	connection: McpConnectionDescriptor,
 	random?: McpRandomBytes,
 	shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle = 'keyed-filters',
+	agentActivityCompatible = false,
 ): CodexMcpConfig {
 	assertValidCodexMcpUrl(connection.url);
 	const serverName = createCodexMcpServerName(random);
 	const serverKey = `mcp_servers.${serverName}`;
+	const enabledTools = agentActivityCompatible
+		? [
+			CRISPY_PING_TOOL_NAME,
+			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+			CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+		]
+		: [CRISPY_PING_TOOL_NAME];
 	const assignments = [
 		`${serverKey}.url=${serializeCodexTomlString(connection.url)}`,
 		`${serverKey}.bearer_token_env_var=${serializeCodexTomlString(CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE)}`,
 		`${serverKey}.required=false`,
-		`${serverKey}.enabled_tools=[${serializeCodexTomlString(CRISPY_PING_TOOL_NAME)}]`,
+		`${serverKey}.enabled_tools=[${enabledTools
+			.map(serializeCodexTomlString)
+			.join(',')}]`,
+		`${CODEX_DEVELOPER_INSTRUCTIONS_KEY}=${serializeCodexTomlString(
+			createCrispyMcpInstructions(agentActivityCompatible),
+		)}`,
 		CODEX_SHELL_SNAPSHOT_DISABLED_ASSIGNMENT,
 		createShellEnvironmentPolicyAssignment(shellEnvironmentPolicyStyle),
 	];

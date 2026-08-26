@@ -1291,6 +1291,7 @@ export class TerminalHost {
 				executable: preparation.executable,
 				cwd: preparation.cwd,
 				connection,
+				agentActivityCompatible: this.agentActivityCompatible,
 				shellEnvironmentPolicyStyle:
 					preparation.shellEnvironmentPolicyStyle!,
 			}),
@@ -1319,6 +1320,7 @@ export class TerminalHost {
 				executable: preparation.executable,
 				cwd: preparation.cwd,
 				connection,
+				agentActivityCompatible: this.agentActivityCompatible,
 			}),
 			buildBarePlan: (preparation) => this.buildClaudeBarePlan({
 				executable: preparation.executable,

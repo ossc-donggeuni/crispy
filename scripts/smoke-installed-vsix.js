@@ -12,7 +12,7 @@ const {
 const packageJson = require('../package.json');
 const { nodePtyRuntimeDependency } = require('./runtime-dependencies');
 
-const vscodeVersion = '1.125.0';
+const defaultVscodeVersion = '1.125.0';
 const repositoryRoot = path.resolve(__dirname, '..');
 const supportedTargets = Object.freeze(Object.keys(nodePtyRuntimeDependency.staging.artifactsByTarget));
 
@@ -39,8 +39,16 @@ function parseArguments(argv) {
 		if (argument === '--') {
 			continue;
 		}
-		if (argument !== '--target' && argument !== '--vsix') {
-			throw smokeError('unknown argument', '--target <target> [--vsix <path>]', argument);
+		if (
+			argument !== '--target'
+			&& argument !== '--vsix'
+			&& argument !== '--vscode-version'
+		) {
+			throw smokeError(
+				'unknown argument',
+				'--target <target> [--vsix <path>] [--vscode-version <version>]',
+				argument,
+			);
 		}
 		if (values.has(argument) || argv[index + 1] === undefined) {
 			throw smokeError(`expected exactly one ${argument} value`);
@@ -60,7 +68,88 @@ function parseArguments(argv) {
 	}
 
 	const defaultPath = path.join(repositoryRoot, 'artifacts', 'vsix', `${packageJson.name}-${packageJson.version}-${target}.vsix`);
-	return { target, vsixPath: path.resolve(values.get('--vsix') ?? defaultPath) };
+	const vscodeVersion = values.get('--vscode-version') ?? defaultVscodeVersion;
+	if (
+		vscodeVersion !== 'stable'
+		&& vscodeVersion !== 'insiders'
+		&& !/^\d+\.\d+\.\d+$/u.test(vscodeVersion)
+	) {
+		throw smokeError(
+			'invalid VS Code version',
+			'exact numeric semver, stable, or insiders',
+			vscodeVersion,
+		);
+	}
+	return {
+		target,
+		vsixPath: path.resolve(values.get('--vsix') ?? defaultPath),
+		vscodeVersion,
+	};
+}
+
+function quotePosixShellWord(value) {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function createFakeCodexLauncher(temporaryRoot) {
+	const fakeCodexScript = path.join(
+		repositoryRoot,
+		'scripts',
+		'installed-smoke',
+		'fake-codex.js',
+	);
+	if (!fs.statSync(fakeCodexScript).isFile()) {
+		throw smokeError(
+			'fake Codex script is missing',
+			fakeCodexScript,
+			'missing or not a file',
+		);
+	}
+
+	if (process.platform === 'win32') {
+		const launcher = path.join(temporaryRoot, 'fake-codex.cmd');
+		fs.writeFileSync(
+			launcher,
+			`@echo off\r\n"${process.execPath}" "${fakeCodexScript}" %*\r\n`,
+			{ encoding: 'utf8' },
+		);
+		return launcher;
+	}
+
+	const launcher = path.join(temporaryRoot, 'fake-codex');
+	fs.writeFileSync(
+		launcher,
+		[
+			'#!/bin/sh',
+			`exec ${quotePosixShellWord(process.execPath)} ${quotePosixShellWord(fakeCodexScript)} "$@"`,
+			'',
+		].join('\n'),
+		{ encoding: 'utf8', mode: 0o700 },
+	);
+	return launcher;
+}
+
+function findAvailableLoopbackPort() {
+	return new Promise((resolve, reject) => {
+		const server = require('node:net').createServer();
+		server.unref();
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', () => {
+			const address = server.address();
+			if (!address || typeof address === 'string') {
+				server.close();
+				reject(smokeError('could not reserve a CDP loopback port'));
+				return;
+			}
+			server.close((error) => {
+				if (error) {
+					reject(error);
+					return;
+				}
+				resolve(address.port);
+			});
+		});
+	});
 }
 
 /** Windows archive의 code.cmd가 가리키는 versioned CLI script를 안전하게 해석한다. */
@@ -173,7 +262,7 @@ function runCli(vscodeExecutablePath, args) {
 }
 
 async function main() {
-	const { target, vsixPath } = parseArguments(process.argv.slice(2));
+	const { target, vsixPath, vscodeVersion } = parseArguments(process.argv.slice(2));
 	if (!fs.existsSync(vsixPath)) {
 		throw smokeError('VSIX does not exist', vsixPath, 'missing');
 	}
@@ -182,11 +271,20 @@ async function main() {
 	const userDataDirectory = path.join(temporaryRoot, 'user-data');
 	const extensionsDirectory = path.join(temporaryRoot, 'extensions');
 	const workspaceDirectory = path.join(temporaryRoot, 'workspace');
+	const activityControlDirectory = path.join(temporaryRoot, 'activity-control');
 
 	try {
 		fs.mkdirSync(userDataDirectory, { recursive: true });
 		fs.mkdirSync(extensionsDirectory, { recursive: true });
 		fs.mkdirSync(workspaceDirectory, { recursive: true });
+		fs.mkdirSync(activityControlDirectory, { recursive: true });
+		fs.writeFileSync(
+			path.join(workspaceDirectory, 'README.md'),
+			'# Crispy installed Activity smoke\n',
+			'utf8',
+		);
+		const fakeCodexPath = createFakeCodexLauncher(temporaryRoot);
+		const cdpPort = await findAvailableLoopbackPort();
 
 		const vscodeExecutablePath = await downloadAndUnzipVSCode(vscodeVersion);
 		const installOutput = runCli(vscodeExecutablePath, [
@@ -205,9 +303,14 @@ async function main() {
 				CRISPY_INSTALLED_EXTENSIONS_DIR: extensionsDirectory,
 				CRISPY_INSTALLED_TARGET: target,
 				CRISPY_INSTALLED_EXTENSION_NAME: packageJson.name,
+				CRISPY_INSTALLED_FAKE_CODEX_PATH: fakeCodexPath,
+				CRISPY_INSTALLED_ACTIVITY_CONTROL_DIR: activityControlDirectory,
+				CRISPY_INSTALLED_CDP_PORT: String(cdpPort),
 			},
 			launchArgs: [
 				workspaceDirectory,
+				`--remote-debugging-port=${cdpPort}`,
+				'--remote-debugging-address=127.0.0.1',
 				'--user-data-dir', userDataDirectory,
 				'--extensions-dir', extensionsDirectory,
 				'--disable-workspace-trust',
@@ -216,7 +319,7 @@ async function main() {
 			],
 		});
 
-		console.log(`[installed-vsix-smoke] VS Code ${vscodeVersion} Extension Host PTY and MCP child smoke passed for ${target}.`);
+		console.log(`[installed-vsix-smoke] VS Code ${vscodeVersion} installed PTY, MCP, and live Canvas Activity smoke passed for ${target}.`);
 	} finally {
 		fs.rmSync(temporaryRoot, { recursive: true, force: true });
 	}
@@ -229,4 +332,8 @@ if (require.main === module) {
 	});
 }
 
-module.exports = Object.freeze({ resolveCliInvocation, resolveWindowsCliEntry });
+module.exports = Object.freeze({
+	parseArguments,
+	resolveCliInvocation,
+	resolveWindowsCliEntry,
+});

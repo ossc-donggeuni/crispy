@@ -211,6 +211,11 @@ const requiredRestrictedWorkspaceConfigurations = Object.freeze([
 	'crispy.claudeCliPath',
 	'crispy.antigravityCliPath',
 ]);
+const requiredCrispyMcpToolNames = Object.freeze([
+	'crispy_ping',
+	'crispy_set_agent_activity',
+	'crispy_clear_agent_activity',
+]);
 
 function findExtensionManifestCapabilityProblems(manifest) {
 	const problems = [];
@@ -219,6 +224,9 @@ function findExtensionManifestCapabilityProblems(manifest) {
 	}
 	if (manifest?.engines?.node !== '24.x') {
 		problems.push('engines.node');
+	}
+	if (manifest?.engines?.vscode !== '^1.125.0') {
+		problems.push('engines.vscode');
 	}
 	if (manifest?.capabilities?.untrustedWorkspaces?.supported !== 'limited') {
 		problems.push('capabilities.untrustedWorkspaces.supported');
@@ -263,7 +271,7 @@ function verifyExtensionManifest(target, vsixPath, entries) {
 			target,
 			'extension manifest execution capabilities are incomplete',
 			`${vsixPath}:${entryName}`,
-			'host-owned entrypoint, Node 24 and limited Workspace capabilities',
+			'host-owned entrypoint, Node 24, VS Code ^1.125.0 and limited Workspace capabilities',
 			problems.join(', '),
 		);
 	}
@@ -345,6 +353,12 @@ function findUnresolvedMcpRuntimeSpecifiers(source) {
 	);
 }
 
+function findMissingCrispyMcpToolNames(source) {
+	return Object.freeze(requiredCrispyMcpToolNames.filter(
+		(toolName) => !source.includes(toolName),
+	));
+}
+
 function verifyMcpChildBundle(target, vsixPath, entries) {
 	const entryName = 'extension/dist/mcp-server.mjs';
 	const record = requireEntry(target, vsixPath, entries, entryName);
@@ -409,6 +423,16 @@ function verifyMcpChildBundle(target, vsixPath, entries) {
 			`${vsixPath}:${entryName}`,
 			'bundled crispy_ping implementation',
 			'missing',
+		);
+	}
+	const missingToolNames = findMissingCrispyMcpToolNames(source);
+	if (missingToolNames.length > 0) {
+		throw inspectionError(
+			target,
+			'MCP child bundle does not contain every Crispy Tool implementation',
+			`${vsixPath}:${entryName}`,
+			requiredCrispyMcpToolNames.join(', '),
+			`missing: ${missingToolNames.join(', ')}`,
 		);
 	}
 
@@ -536,6 +560,7 @@ if (require.main === module) {
 
 module.exports = Object.freeze({
 	findExtensionManifestCapabilityProblems,
+	findMissingCrispyMcpToolNames,
 	findUnresolvedMcpRuntimeSpecifiers,
 	findUnexpectedVsixPayloadEntries,
 	inspectVsix,

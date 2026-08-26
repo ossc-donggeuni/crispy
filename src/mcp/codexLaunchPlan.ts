@@ -20,6 +20,8 @@ export interface BuildCodexBareLaunchPlanOptions {
 export interface BuildCodexMcpLaunchPlanOptions
 	extends BuildCodexBareLaunchPlanOptions {
 	readonly connection: McpConnectionDescriptor;
+	/** Host-owned immutable VS Code capability; omission is fail-closed. */
+	readonly agentActivityCompatible?: boolean;
 	readonly argsBeforeConfig?: readonly string[];
 	readonly argsAfterConfig?: readonly string[];
 	readonly randomBytes?: McpRandomBytes;
@@ -47,6 +49,7 @@ export function buildCodexMcpLaunchPlan(
 		options.connection,
 		options.randomBytes,
 		options.shellEnvironmentPolicyStyle,
+		options.agentActivityCompatible === true,
 	);
 	/** Building and final environment materialization both require an active descriptor. */
 	options.connection.withBearerToken(() => undefined);

@@ -19,6 +19,8 @@ export interface BuildClaudeBareLaunchPlanOptions {
 export interface BuildClaudeMcpLaunchPlanOptions
 	extends BuildClaudeBareLaunchPlanOptions {
 	readonly connection: McpConnectionDescriptor;
+	/** Host-owned immutable VS Code capability; omission is fail-closed. */
+	readonly agentActivityCompatible?: boolean;
 	readonly randomBytes?: McpRandomBytes;
 	/** Diagnostic callers may derive a prompt from the generated non-secret server name. */
 	readonly createArgs?: (serverName: string) => readonly string[];
@@ -44,6 +46,7 @@ export function buildClaudeMcpLaunchPlan(
 	const config = createClaudeMcpConfig(
 		options.connection,
 		options.randomBytes,
+		options.agentActivityCompatible === true,
 	);
 	if (options.args !== undefined && options.createArgs !== undefined) {
 		throw new Error('Claude launch arguments are invalid.');

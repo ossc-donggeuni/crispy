@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { MCP_LOOPBACK_HOST } from './httpPolicy';
 import { isValidMcpRouteId, type McpRandomBytes } from './sessionCredentials';
 import type { McpConnectionDescriptor } from './sessionRuntime';
+import { createCrispyMcpInstructions } from './agentActivityInstructions';
 
 export const CLAUDE_MCP_CONFIG_ARGUMENT = '--mcp-config';
+export const CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT = '--append-system-prompt';
 export const CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
 export const CLAUDE_MCP_TOKEN_PLACEHOLDER = '${CRISPY_MCP_TOKEN}';
 export const CLAUDE_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
@@ -30,6 +32,7 @@ export function createClaudeMcpServerName(
 export function createClaudeMcpConfig(
 	connection: McpConnectionDescriptor,
 	random?: McpRandomBytes,
+	agentActivityCompatible = false,
 ): ClaudeMcpConfig {
 	assertValidClaudeMcpUrl(connection.url);
 	const serverName = createClaudeMcpServerName(random);
@@ -48,7 +51,12 @@ export function createClaudeMcpConfig(
 	return Object.freeze({
 		serverName,
 		inlineConfig,
-		args: Object.freeze([CLAUDE_MCP_CONFIG_ARGUMENT, inlineConfig]),
+		args: Object.freeze([
+			CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
+			createCrispyMcpInstructions(agentActivityCompatible),
+			CLAUDE_MCP_CONFIG_ARGUMENT,
+			inlineConfig,
+		]),
 	});
 }
 

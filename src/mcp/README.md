@@ -4,7 +4,7 @@
 
 ```bash
 cd /Users/idonghyeon/crispy
-pnpm install
+pnpm install --frozen-lockfile
 codex --version
 claude --version
 ```
@@ -38,6 +38,60 @@ Call the crispy_ping MCP tool once. Do not run shell commands and do not modify 
 {"ok":true,"server":"crispy","mode":"observation-only"}
 ```
 
+`mode: "observation-only"`는 기존 `crispy_ping` 응답의 호환 필드일 뿐 server 전체의 현재
+기능을 뜻하지 않는다.
+
+## Phase 5 production Agent Activity 계약 — 2026-08-26
+
+Extension activation은 `vscode.version`을 canonical version으로 strict parse하고 Host 소유
+capability를 한 번만 계산한다. stable `1.125.0` 이상 `2.0.0` 미만을 지원하고, prerelease는 core
+version이 minimum stable보다 새 버전일 때만 허용한다. malformed, 구버전, `1.125.0` prerelease와
+next major는 false다. 이 경계는 `package.json`의 `engines.vscode: ^1.125.0` stable 지원 범위와
+맞춘다. provider config, environment, persisted setting, CLI 또는 child가 gate를 override할 수 없다.
+
+| capability | request-local Tool 등록 |
+| --- | --- |
+| true — supported `^1.125.0` Host | `crispy_ping`, `crispy_set_agent_activity`, `crispy_clear_agent_activity` |
+| false | `crispy_ping`만 |
+
+false에서도 Extension, Terminal, MCP, ping과 Graph/debug는 유지된다. Activity rate/IPC, lease,
+delivery, receipt, quota와 cleanup state는 만들지 않는다. Codex의 `enabled_tools`도 위 목록과
+exact하게 일치한다. Claude는 기존 inline HTTP config와 `alwaysLoad: true`를 유지하면서 server의
+request-local 등록과 runtime instructions를 같은 Host boolean으로 선택한다. unsupported
+instructions에는 두 Activity Tool 이름이나 사용법이 없다.
+
+true의 provider instructions는 다음 계약을 전달한다.
+
+- `path`는 tab에 배정된 root에 대한 canonical 상대 경로다. root 자체는 `.`이며
+  `targetKind: "folder"`를 사용한다.
+- `targetKind`는 `file` 또는 `folder`이고 set의 `activity`는 `planned`, `active`, `editing`,
+  `completed`, `mentioned`, `rejected` 중 하나다.
+- 작업 시작과 상태 전환에는 `crispy_set_agent_activity`, 종료에는
+  `crispy_clear_agent_activity`를 사용한다. PTY output이나 file change에서 Activity를 추론하지 않는다.
+- Tool은 root, session, runtime, URI, token 또는 internal identity를 선택할 수 없다. Host가 현재
+  Terminal assignment와 exact lease에서 모두 결정한다.
+- Tool success는 child가 handoff 대상으로 수락했다는 뜻이며 Host, Webview, Store 또는 화면의 ACK가
+  아니다. `postMessage: true`도 Store delivery proof가 아니다. tracked clear receipt는 Host의
+  occupancy/quota 정산 전용 internal signal이며 provider-visible ACK가 아니다.
+
+credential boundary는 기존 provider 계약을 유지한다. Codex argv에는
+`bearer_token_env_var="CRISPY_MCP_TOKEN"` 이름만 들어가고 Claude inline header에는 literal
+`Bearer ${CRISPY_MCP_TOKEN}` placeholder만 들어간다. 실제 bearer 값은 final provider environment에만
+overlay하며 argv, persisted config, settings, log, telemetry 또는 Webview state에 반사하지 않는다.
+
+구현 제약도 capability qualification의 일부다. Node path walk는 bounded/fail-closed하지만 atomic하지
+않아 TOCTOU 가능성이 있고, 같은 `WebviewPanel`의 `postMessage` invocation FIFO를 pinned assumption으로
+사용한다. Promise settlement order는 wire ordering이 아니며 public sequence를 추가하지 않는다.
+cleanup clear는 best-effort이고, 끝나지 않는 validation/post work는 고정 cap 안에서 detach한 채 quota를
+낙관적으로 반환하지 않는다. 지원 범위 밖에서는 이 Activity 경로 전체를 inactive로 유지한다.
+
+minimum, current Stable과 current Insiders Host에서 strict parser와 true/false provider
+config/instructions, placeholder와 ping 회귀, HTTP부터 Store receipt/quota까지의 full-chain FIFO,
+multi-root 및 Trust/root/restart lifecycle, unsupported zero-state, 실제 provider와 해당 native VSIX
+smoke를 검증한다. minimum 또는 major boundary를 바꿀 때에는 manifest와
+`AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION`을 함께 qualification한다. 상세 순서와 문제 해결은
+repository `README.md`와 `TROUBLESHOOTING.md`를 따른다.
+
 ## 상태 UI의 의미
 
 - indicator 없음: MCP를 준비 중이거나 authenticated activity를 아직 관찰하지 않은 상태다.
@@ -69,7 +123,8 @@ provider를 한 번 실행하므로 CLI 자체는 계속 사용할 수 있다.
   Agent와 MCP runtime을 모두 종료하고 assignment와 retry 가능한 error session을 보존한다.
 - session마다 최소 256-bit CSPRNG bearer token, opaque route, random loopback port와 generation을
   따로 만들며 파일, settings, Webview state, argv, log와 telemetry에 영속화하지 않는다.
-- MCP server는 `127.0.0.1`의 exact random route에서만 요청을 받고 `crispy_ping`만 등록한다.
+- MCP server는 `127.0.0.1`의 exact random route에서만 요청을 받는다. request-local Tool 등록은
+  production Agent Activity capability가 true면 세 Tool, false면 `crispy_ping`만 포함한다.
 - 배포 보장 target은 macOS Apple Silicon `darwin-arm64`, Linux glibc `linux-x64`, Windows native
   `win32-x64`다. 지원 밖 환경에서는 MCP만 비활성화하고 bare CLI를 막지 않는다.
 - Windows `.cmd`만 `ComSpec` one-shot wrapper를 사용하며 macOS/Linux native executable과
@@ -98,6 +153,18 @@ pnpm run smoke:claude-config-compat
 pnpm run prepare:claude-mcp-smoke
 pnpm run smoke:claude-mcp
 ```
+
+설치된 VSIX의 Activity 전체 경로는 target이 현재 머신과 일치할 때 다음으로 확인한다.
+
+```bash
+pnpm run package:vsix -- --target <darwin-arm64|linux-x64|win32-x64>
+pnpm run smoke:installed-vsix -- --target <same-target>
+```
+
+이 smoke는 실제 provider 계정 대신 disposable Codex-compatible process를 Canvas UI에서 시작한다.
+Host가 발급한 session URL/token으로 ping, 여섯 Activity set과 clear를 호출하고, loopback-only CDP로
+실제 Webview의 binding/effect DOM, continuous CSS animation name과 clear 후 제거를 단계별 확인한다.
+`--vscode-version stable` 또는 `--vscode-version insiders`로 release channel을 별도 지정할 수 있다.
 
 정상 실행 결과는 다음과 같다.
 
@@ -213,8 +280,8 @@ protocol integration test가 검증한다.
   막을 수 있다.
 - `MCP_DISCOVERY_CACHE`, `ENABLE_TOOL_SEARCH`, `MCP_CONNECTION_NONBLOCKING` 등 user의 다른 MCP
   동작을 바꾸는 environment override를 주입하지 않는다.
-- Crispy Claude server의 최종 tool allowlist는 공통 server가 등록한 `crispy_ping` 하나뿐이다.
-  `alwaysLoad`는 이 작은 server에만 inline으로 적용한다.
+- 이 2026-08-22 L0 검증 시점의 Crispy Claude server는 공통 server가 등록한
+  `crispy_ping` 하나만 대상으로 삼았다. `alwaysLoad`는 이 작은 inline server에만 적용했다.
 - managed `allowedMcpServers`/`deniedMcpServers`는 `--mcp-config` server에도 적용되며 Crispy가
   우회하지 않는다.
 
@@ -243,7 +310,7 @@ protocol integration test가 검증한다.
 - `AgentLaunchPlan`, `createAgentProcessSpawnRequest`, `spawnAgentPty`: credential을 최종 environment에
   합성하고 direct 또는 Windows `cmd-one-shot` PTY root process로 실행하는 경계
 - `resolveAgentExecutable`: Claude의 `claude`, `claude.cmd`, `claude.exe`와 설정된 executable path
-- 공통 MCP protocol server, `crispy_ping`, authenticated activity 판정과 failure domain
+- 당시 공통 MCP protocol server의 `crispy_ping`, authenticated activity 판정과 failure domain
 
 L1에서 추가할 최소 provider surface는 `src/mcp/**`의 Claude inline-config serializer,
 bare/authenticated launch-plan builder, 좁은 diagnostic matcher와 실제 smoke runner다. 새 unit test와
@@ -341,6 +408,9 @@ process-tree kill smoke를 통과했다. Linux x64 glibc와 Windows native x64�
 의도적으로 거부하므로 각 native GitHub Actions runner에서 실행해야 하며, 이 변경 자체의 remote
 workflow run은 commit/push 전이라 아직 수행되지 않았다.
 
-이로써 Codex C0→C5 뒤 Claude L0→L4의 현재 MCP 자동 연결 범위는 code-complete다. Antigravity MCP,
-사용자-visible `provider_update_required` emit/update 정책, Graph report tool/state 연결은 각각
-별도 후속 제품 결정이며 L4 완료 범위에 포함하지 않는다.
+이 문단은 2026-08-22 당시 Codex C0→C5와 Claude L0→L4 검증 범위를 기록한다. 그 L4 범위에는
+Antigravity MCP, 사용자-visible `provider_update_required` emit/update 정책과 Graph report
+tool/state 연결이 포함되지 않았다. 이후 2026-08-26 Phase 5에서 VS Code Host capability로 제한한
+Codex/Claude Agent Activity Tool과 Graph/Store 연결을 추가했으며 현재 계약은 문서 앞부분의
+`Phase 5 production Agent Activity 계약`을 따른다. Antigravity MCP와
+`provider_update_required` 정책은 계속 별도 범위다.

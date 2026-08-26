@@ -109,7 +109,8 @@ export async function runClaudeConfigCompatSmoke(
 
 export function hasClaudeSessionMcpConfigSurface(helpOutput: string): boolean {
 	return /(?:^|\s)--mcp-config(?:\s|,|$)/u.test(helpOutput)
-		&& /(?:^|\s)--strict-mcp-config(?:\s|,|$)/u.test(helpOutput);
+		&& /(?:^|\s)--strict-mcp-config(?:\s|,|$)/u.test(helpOutput)
+		&& /(?:^|\s)--append-system-prompt(?:\s|,|$)/u.test(helpOutput);
 }
 
 function readClaudeHelpOutput(options: {
@@ -182,7 +183,7 @@ async function main(): Promise<void> {
 	}
 
 	console.log(
-		`[claude-config-compat-smoke] version=${formatVersion(result.version)} minimum=${formatVersion(CLAUDE_MCP_MINIMUM_COMPATIBLE_VERSION)} session config CLI surface available.`,
+		`[claude-config-compat-smoke] version=${formatVersion(result.version)} minimum=${formatVersion(CLAUDE_MCP_MINIMUM_COMPATIBLE_VERSION)} session config/instruction CLI surface available.`,
 	);
 }
 

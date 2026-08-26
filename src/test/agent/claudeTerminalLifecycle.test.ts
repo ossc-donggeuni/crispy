@@ -297,9 +297,23 @@ suite('Claude direct PTY and MCP transaction', () => {
 		assert.strictEqual(typeof spawn.env.CRISPY_MCP_TOKEN, 'string');
 		assert.strictEqual(Array.isArray(spawn.args), true);
 		const args = spawn.args as readonly string[];
-		assert.strictEqual(args[0], '--mcp-config');
-		assert.strictEqual(args[1].includes('${CRISPY_MCP_TOKEN}'), true);
-		assert.strictEqual(args[1].includes(spawn.env.CRISPY_MCP_TOKEN!), false);
+		const instructionIndex = args.indexOf('--append-system-prompt');
+		const configIndex = args.indexOf('--mcp-config');
+		assert.strictEqual(instructionIndex, 0);
+		assert.strictEqual(args[instructionIndex + 1].includes('crispy_ping'), true);
+		assert.strictEqual(
+			args[instructionIndex + 1].includes('crispy_set_agent_activity'),
+			false,
+		);
+		assert.strictEqual(configIndex, args.length - 2);
+		assert.strictEqual(
+			args[configIndex + 1].includes('${CRISPY_MCP_TOKEN}'),
+			true,
+		);
+		assert.strictEqual(
+			args[configIndex + 1].includes(spawn.env.CRISPY_MCP_TOKEN!),
+			false,
+		);
 		const session = fixture.host.getActiveSession('tab-authenticated');
 		assert.ok(session !== undefined);
 		assert.strictEqual(

@@ -733,12 +733,19 @@ export function initializeShellTerminal(
 			}
 
 			try {
+				const collectorState = titleCollector?.getState();
 				if (
 					isXtermProtocolResponse(data)
 					|| (
 						!isKeyboardData
 						&& data.startsWith('\u001b')
 						&& !data.startsWith(BRACKETED_PASTE_START)
+					)
+					|| (
+						isKeyboardData
+						&& data.startsWith('\u001b')
+						&& collectorState?.bufferByteLength === 0
+						&& collectorState.inBracketedPaste === false
 					)
 				) {
 					return;

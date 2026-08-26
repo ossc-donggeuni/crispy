@@ -15,6 +15,9 @@ import { McpAdapterSupervisor } from './mcp/adapterSupervisor';
 import { createPrepareCodexTerminalLaunch } from './mcp/codexTerminalLaunch';
 import { createPrepareClaudeTerminalLaunch } from './mcp/claudeTerminalLaunch';
 import { resolveAgentExecutable } from './mcp/agentExecutableResolver';
+import {
+	isAgentActivityVscodeVersionAllowed,
+} from './mcp/agentActivityCapability';
 import { resolveCurrentWorkspace } from './agent/host/workspace/workspaceResolver';
 import {
 	createTerminalRuntimeCleanup,
@@ -564,12 +567,19 @@ export interface CrispyExtensionApi {
 	): Thenable<boolean> | undefined;
 }
 
+/** Reads the production Host version without accepting provider or environment input. */
+export function readAgentActivityCompatibilityFromHost(): boolean {
+	return isAgentActivityVscodeVersionAllowed(vscode.version);
+}
+
 /**
  * Crispy 확장을 활성화하고 Canvas Webview를 여는 명령을 등록한다.
  *
  * @param context 확장의 구독 항목과 설치 경로를 제공하는 VS Code 확장 컨텍스트
  */
 export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
+	/** Production capability is captured exactly once from the activated Host. */
+	const agentActivityCompatible = readAgentActivityCompatibilityFromHost();
 	const workspaceGraphDependencies = {
 		loadWorkspaceFilters: () => loadOrCreateWorkspaceFilters(
 			getCurrentWorkspaceRootUris(),
@@ -621,8 +631,6 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 				.get<string>(`${providerId}CliPath`);
 		let requestWorkspaceTrustRefresh = (): void => undefined;
 		let terminalHost!: TerminalHost;
-		/** Phase 5 will replace this Host-owned default with the VS Code allowlist. */
-		const agentActivityCompatible: boolean = false;
 		let agentActivityBridge: AgentActivityGraphBridge | undefined;
 		const mcpSupervisor = new McpAdapterSupervisor({
 			extensionUri: context.extensionUri,

@@ -127,6 +127,7 @@ export {
 } from './agentExecutableResolver';
 export {
 	CODEX_CONFIG_OVERRIDE_ARGUMENT,
+	CODEX_DEVELOPER_INSTRUCTIONS_KEY,
 	CODEX_MCP_SERVER_NAME_PREFIX,
 	CODEX_MCP_SERVER_NAME_RANDOM_BYTES,
 	CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE,
@@ -156,6 +157,7 @@ export {
 	type BuildCodexMcpLaunchPlanOptions,
 } from './codexLaunchPlan';
 export {
+	CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
 	CLAUDE_MCP_CONFIG_ARGUMENT,
 	CLAUDE_MCP_SERVER_NAME_PREFIX,
 	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
@@ -218,3 +220,14 @@ export {
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 	type ActivityToolErrorCode,
 } from './toolServer';
+export {
+	AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION,
+	isAgentActivityVscodeVersionAllowed,
+	parseStableVscodeVersion,
+	type StableVscodeVersion,
+} from './agentActivityCapability';
+export {
+	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+	CRISPY_PING_ONLY_INSTRUCTIONS,
+	createCrispyMcpInstructions,
+} from './agentActivityInstructions';

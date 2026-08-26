@@ -255,7 +255,7 @@ suite('Agent Tab Model', () => {
 		);
 	});
 
-	test('자동 제목 충돌 또는 잘못된 후보에서는 baseLabel을 유지한다', () => {
+	test('중복 자동 제목은 12자 suffix로 구분하고 잘못된 후보는 baseLabel을 유지한다', () => {
 		const model = createModel();
 		const first = model.createTab();
 		model.renameTab(first, 'fix-auth-timeout');
@@ -267,16 +267,15 @@ suite('Agent Tab Model', () => {
 			second,
 			'session',
 			['fix-auth-timeout', 'fix-auth-task'],
-		), false);
-		assert.strictEqual(model.getSnapshot().tabs[1].displayName, 'Codex #1');
+		), true);
+		assert.strictEqual(model.getSnapshot().tabs[1].displayName, 'fix-auth-…·2');
 		assert.strictEqual(model.getSnapshot().tabs[1].autoTitleAttempted, true);
 
 		model.setSession(second, 'session-fresh');
-		model.renameTab(first, 'only-valid-title');
 		assert.strictEqual(model.applyAutomaticTitleCandidates(
 			second,
 			'session-fresh',
-			['only-valid-title', 'a'.repeat(41)],
+			['a'.repeat(41)],
 		), false);
 		assert.strictEqual(model.getSnapshot().tabs[1].displayName, 'Codex #1');
 		assert.strictEqual(model.getSnapshot().tabs[1].autoTitleAttempted, true);

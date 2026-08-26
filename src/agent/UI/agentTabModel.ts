@@ -13,6 +13,7 @@ import {
 	AGENT_TAB_TITLE_MAX_CANDIDATES,
 	countUnicodeCodePoints,
 	createAgentTabNameKey,
+	createDisambiguatedAutomaticAgentTabTitle,
 	normalizeManualAgentTabName,
 	type ManualTabNameError,
 } from './agentTabTitle';
@@ -517,11 +518,33 @@ export function createAgentTabModel(
 
 			tab.autoTitleAttempted = true;
 			for (const candidate of candidates.slice(0, AGENT_TAB_TITLE_MAX_CANDIDATES)) {
-				if (
-					isValidAutomaticCandidate(candidate)
-					&& isNameAvailable(candidate, tab)
+				if (!isValidAutomaticCandidate(candidate)) {
+					continue;
+				}
+
+				let availableCandidate = isNameAvailable(candidate, tab)
+					? candidate
+					: undefined;
+				for (
+					let ordinal = 2;
+					availableCandidate === undefined && ordinal <= tabs.length + 1;
+					ordinal += 1
 				) {
-					tab.displayName = candidate;
+					const disambiguated = createDisambiguatedAutomaticAgentTabTitle(
+						candidate,
+						ordinal,
+					);
+					if (
+						disambiguated !== undefined
+						&& isValidAutomaticCandidate(disambiguated)
+						&& isNameAvailable(disambiguated, tab)
+					) {
+						availableCandidate = disambiguated;
+					}
+				}
+
+				if (availableCandidate !== undefined) {
+					tab.displayName = availableCandidate;
 					tab.titleSource = 'automatic';
 					notify();
 					return true;
