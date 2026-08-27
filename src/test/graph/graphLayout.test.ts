@@ -1493,6 +1493,10 @@ suite('Graph Model / Layout', () => {
 		assert.strictEqual(oneFirst.height, baselineFirst.height);
 		assert.strictEqual(oneFirst.renderedHeight, undefined);
 		assert.strictEqual(
+			oneFirst.graphContentHeight,
+			oneFirst.height + getAgentActivityBindingBlockHeight(1),
+		);
+		assert.strictEqual(
 			oneFirst.agentActivityBindingTop,
 			GRAPH_FILE_GROUP_STANDALONE_HEIGHT + AGENT_ACTIVITY_BINDING_TOP_GAP,
 		);
@@ -1638,7 +1642,7 @@ suite('Graph Model / Layout', () => {
 		);
 	});
 
-	test('Grouped File의 graphContentHeight는 Binding 뒤 실제 Graph Content까지만 확장한다', () => {
+	test('Grouped File의 graphContentHeight는 마지막 visible Binding까지 확장한다', () => {
 		const files = ['a', 'b', 'c', 'd'].map((name) => ({
 			kind: 'file' as const,
 			id: `file:content-extent/${name}.ts`,
@@ -1687,7 +1691,10 @@ suite('Graph Model / Layout', () => {
 			lastBindingGroup.renderedHeight,
 			lastBindingGroup.height + bindingHeight,
 		);
-		assert.strictEqual(lastBindingGroup.graphContentHeight, undefined);
+		assert.strictEqual(
+			lastBindingGroup.graphContentHeight,
+			lastBindingGroup.height + bindingHeight,
+		);
 	});
 
 	test('Detached occurrence Layout은 G-12.5 source merge와 Session override 개수를 재사용한다', () => {

@@ -40,22 +40,73 @@ suite('Panel Collapse', () => {
 		}
 	});
 
-	test('펼침 상태에서는 Chat Panel과 Resize Handle을 표시하고 Sticker를 숨긴다', () => {
+	test('하나의 Toggle만 두 상태에서 같은 규격을 유지하고 Panel 경계와 Dock 가장자리를 오간다', () => {
+		const webviewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/webview.css',
+		), 'utf8');
+		const extensionSource = readFileSync(resolve(
+			__dirname,
+			'../../../src/extension.ts',
+		), 'utf8');
+
+		assert.strictEqual(
+			extensionSource.match(/id="chat-panel-toggle"/g)?.length,
+			1,
+		);
+		assert.ok(!extensionSource.includes('id="chat-collapse-toggle"'));
+		assert.ok(!extensionSource.includes('id="chat-sticker-opener"'));
+		assert.match(
+			webviewCss,
+			/#chat-panel-toggle\[data-dock='left'\],[\s\S]*?width: 18px;[\s\S]*?height: 48px;/,
+		);
+		assert.match(
+			webviewCss,
+			/#chat-panel-toggle\[data-dock='top'\],[\s\S]*?width: 48px;[\s\S]*?height: 18px;/,
+		);
+		const collapsedInsets: Readonly<Record<DockPosition, string>> = {
+			left: 'left',
+			right: 'right',
+			top: 'top',
+			bottom: 'bottom',
+		};
+
+		for (const [dock, inset] of Object.entries(collapsedInsets)) {
+			const selector = `#chat-panel-toggle[data-dock='${dock}'][data-collapse-state='collapsed']`;
+			const ruleStart = webviewCss.indexOf(selector);
+			const ruleEnd = webviewCss.indexOf('}', ruleStart);
+
+			assert.ok(ruleStart >= 0);
+			assert.ok(ruleEnd > ruleStart);
+			assert.ok(webviewCss.slice(ruleStart, ruleEnd).includes(`${inset}: 0;`));
+			assert.ok(!webviewCss.slice(ruleStart, ruleEnd).includes('transform'));
+			assert.ok(!webviewCss.slice(ruleStart, ruleEnd).includes(
+				dock === 'left' || dock === 'right'
+					? 'var(--chat-side-display)'
+					: 'var(--chat-vertical-display)',
+			));
+		}
+	});
+
+	test('펼침 상태에서 Chat Panel, Resize Handle과 단일 Toggle을 표시한다', () => {
 		const fixture = createCollapseFixture('right');
 
 		assert.strictEqual(fixture.chatPanel.hidden, false);
 		assert.strictEqual(fixture.resizeHandle.hidden, false);
-		assert.strictEqual(fixture.stickerOpener.hidden, true);
+		assert.strictEqual(fixture.toggleButton.hidden, false);
 		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'expanded');
 		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.toggleButton.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.toggleButton.dataset.panelIcon, 'panel-right.svg');
+		assert.strictEqual(fixture.toggleButton.getAttribute('aria-expanded'), 'true');
 		assert.strictEqual(fixture.chatPanel.inert, false);
 		assert.strictEqual(fixture.state.collapsed, false);
 	});
 
-	test('접기 버튼은 Chat Panel 전체와 Resize Handle의 Slide 상태를 적용하고 Sticker를 표시한다', () => {
+	test('단일 Toggle은 Chat Panel과 함께 Dock 가장자리로 Slide하고 열기 동작으로 바뀐다', () => {
 		const fixture = createCollapseFixture('right');
 
-		fixture.collapseButton.click();
+		fixture.toggleButton.click();
 
 		assert.strictEqual(fixture.state.collapsed, true);
 		assert.strictEqual(fixture.chatPanel.hidden, false);
@@ -64,14 +115,18 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'collapsed');
 		assert.strictEqual(fixture.chatPanel.dataset.collapseMotion, 'slide');
 		assert.strictEqual(fixture.resizeHandle.dataset.collapseMotion, 'slide');
+		assert.strictEqual(fixture.toggleButton.dataset.collapseMotion, 'slide');
+		assert.strictEqual(fixture.toggleButton.dataset.collapseState, 'collapsed');
 		assert.strictEqual(fixture.chatPanel.inert, true);
-		assert.strictEqual(fixture.stickerOpener.hidden, false);
+		assert.strictEqual(fixture.toggleButton.hidden, false);
+		assert.strictEqual(fixture.toggleButton.dataset.panelIcon, 'panel-left.svg');
+		assert.strictEqual(fixture.toggleButton.getAttribute('aria-expanded'), 'false');
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 1);
 		assert.strictEqual(fixture.getExpandCount(), 0);
 	});
 
-	test('Sticker를 현재 Dock 방향에 맞춰 표시한다', () => {
-		const stickerIcons: Record<DockPosition, string> = {
+	test('단일 Toggle은 Dock과 접힘 상태에 맞는 아이콘을 사용한다', () => {
+		const openerIcons: Record<DockPosition, string> = {
 			left: 'panel-right.svg',
 			right: 'panel-left.svg',
 			top: 'panel-down.svg',
@@ -81,13 +136,13 @@ suite('Panel Collapse', () => {
 		for (const dock of ['left', 'right', 'top', 'bottom'] as const) {
 			const fixture = createCollapseFixture(dock);
 
-			fixture.collapseButton.click();
+			fixture.toggleButton.click();
 
-			assert.strictEqual(fixture.stickerOpener.hidden, false);
-			assert.strictEqual(fixture.stickerOpener.dataset.dock, dock);
+			assert.strictEqual(fixture.toggleButton.hidden, false);
+			assert.strictEqual(fixture.toggleButton.dataset.dock, dock);
 			assert.strictEqual(
-				fixture.stickerOpener.dataset.panelIcon,
-				stickerIcons[dock],
+				fixture.toggleButton.dataset.panelIcon,
+				openerIcons[dock],
 			);
 		}
 	});
@@ -95,18 +150,18 @@ suite('Panel Collapse', () => {
 	test('접힌 상태에서도 저장된 Panel 크기를 그대로 둔다', () => {
 		const fixture = createCollapseFixture('bottom', 520, 340);
 
-		fixture.collapseButton.click();
+		fixture.toggleButton.click();
 
 		assert.strictEqual(fixture.state.sideSize, 520);
 		assert.strictEqual(fixture.state.verticalSize, 340);
 		assert.strictEqual(fixture.state.preferredDock, 'bottom');
 	});
 
-	test('Sticker를 누르면 같은 Dock과 크기로 Chat Panel을 복원한다', () => {
+	test('같은 Toggle을 다시 누르면 같은 Dock과 크기로 Chat Panel을 복원한다', () => {
 		const fixture = createCollapseFixture('left', 520, 340);
 
-		fixture.collapseButton.click();
-		fixture.stickerOpener.click();
+		fixture.toggleButton.click();
+		fixture.toggleButton.click();
 
 		assert.strictEqual(fixture.state.collapsed, false);
 		assert.strictEqual(fixture.state.preferredDock, 'left');
@@ -117,7 +172,9 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.chatPanel.dataset.collapseState, 'expanded');
 		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'expanded');
 		assert.strictEqual(fixture.chatPanel.inert, false);
-		assert.strictEqual(fixture.stickerOpener.hidden, true);
+		assert.strictEqual(fixture.toggleButton.hidden, false);
+		assert.strictEqual(fixture.toggleButton.dataset.collapseState, 'expanded');
+		assert.strictEqual(fixture.toggleButton.dataset.panelIcon, 'panel-left.svg');
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 2);
 		assert.strictEqual(fixture.getExpandCount(), 1);
 	});
@@ -142,7 +199,7 @@ suite('Panel Collapse', () => {
 	test('Chat transform의 실제 frame마다 Overlay 갱신을 전달하고 종료 시 정리한다', () => {
 		const fixture = createCollapseFixture('right');
 
-		fixture.collapseButton.click();
+		fixture.toggleButton.click();
 		assert.strictEqual(fixture.getTransitionFrameCount(), 1);
 		assert.strictEqual(fixture.scheduler.pendingCount, 1);
 
@@ -162,7 +219,7 @@ suite('Panel Collapse', () => {
 	test('transitionend가 없어도 추적 상한 뒤 frame 예약을 종료한다', () => {
 		const fixture = createCollapseFixture('bottom');
 
-		fixture.collapseButton.click();
+		fixture.toggleButton.click();
 		fixture.scheduler.runNext(10);
 		fixture.scheduler.runNext(10 + PANEL_COLLAPSE_TRACKING_MAX_MS);
 
@@ -170,7 +227,7 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.scheduler.pendingCount, 0);
 	});
 
-	test('접힌 상태로 복원하면 처음부터 Sticker만 표시한다', () => {
+	test('접힌 상태로 복원하면 처음부터 Toggle을 Dock 가장자리 상태로 표시한다', () => {
 		const fixture = createCollapseFixture('top', INITIAL_SIDE_SIZE, 340, true);
 
 		assert.strictEqual(fixture.chatPanel.hidden, false);
@@ -179,29 +236,31 @@ suite('Panel Collapse', () => {
 		assert.strictEqual(fixture.resizeHandle.dataset.collapseState, 'collapsed');
 		assert.strictEqual(fixture.chatPanel.dataset.collapseMotion, undefined);
 		assert.strictEqual(fixture.chatPanel.inert, true);
-		assert.strictEqual(fixture.stickerOpener.hidden, false);
-		assert.strictEqual(fixture.stickerOpener.dataset.dock, 'top');
+		assert.strictEqual(fixture.toggleButton.hidden, false);
+		assert.strictEqual(fixture.toggleButton.dataset.dock, 'top');
+		assert.strictEqual(fixture.toggleButton.dataset.collapseState, 'collapsed');
+		assert.strictEqual(fixture.toggleButton.dataset.panelIcon, 'panel-down.svg');
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 0);
 	});
 
 	test('같은 상태를 다시 요청하면 저장 콜백을 호출하지 않는다', () => {
 		const fixture = createCollapseFixture('right');
 
-		fixture.stickerOpener.click();
+		fixture.refreshCollapse.expand();
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 0);
 
-		fixture.collapseButton.click();
-		fixture.collapseButton.click();
+		fixture.refreshCollapse.collapse();
+		fixture.refreshCollapse.collapse();
 
 		assert.strictEqual(fixture.state.collapsed, true);
 		assert.strictEqual(fixture.getCollapsedChangeCount(), 1);
 	});
 
-	test('Dock이 바뀌면 Sticker와 접기 버튼 아이콘을 다시 맞춘다', () => {
+	test('Dock과 접힘 상태가 바뀌면 단일 Toggle의 위치 상태와 아이콘을 다시 맞춘다', () => {
 		const fixture = createCollapseFixture('right');
 
 		assert.strictEqual(
-			fixture.collapseButton.dataset.panelIcon,
+			fixture.toggleButton.dataset.panelIcon,
 			'panel-right.svg',
 		);
 
@@ -209,12 +268,15 @@ suite('Panel Collapse', () => {
 		fixture.refreshCollapse();
 
 		assert.strictEqual(
-			fixture.collapseButton.dataset.panelIcon,
+			fixture.toggleButton.dataset.panelIcon,
 			'panel-down.svg',
 		);
-		assert.strictEqual(fixture.stickerOpener.dataset.dock, 'bottom');
+		assert.strictEqual(fixture.toggleButton.dataset.dock, 'bottom');
+
+		fixture.toggleButton.click();
+
 		assert.strictEqual(
-			fixture.stickerOpener.dataset.panelIcon,
+			fixture.toggleButton.dataset.panelIcon,
 			'panel-up.svg',
 		);
 	});
@@ -223,8 +285,7 @@ suite('Panel Collapse', () => {
 interface CollapseFixture {
 	chatPanel: FakeElement;
 	resizeHandle: FakeElement;
-	collapseButton: FakeElement;
-	stickerOpener: FakeElement;
+	toggleButton: FakeElement;
 	state: PanelLayoutState;
 	refreshCollapse: PanelCollapseController;
 	getCollapsedChangeCount(): number;
@@ -241,8 +302,7 @@ function createCollapseFixture(
 ): CollapseFixture {
 	const chatPanel = new FakeElement();
 	const resizeHandle = new FakeElement();
-	const collapseButton = new FakeElement();
-	const stickerOpener = new FakeElement();
+	const toggleButton = new FakeElement();
 	const scheduler = new FakeAnimationFrameScheduler();
 	const state: PanelLayoutState = {
 		preferredDock,
@@ -258,8 +318,7 @@ function createCollapseFixture(
 		{
 			chatPanel: chatPanel.asHtmlElement(),
 			resizeHandle: resizeHandle.asHtmlElement(),
-			collapseButton: collapseButton.asHtmlElement(),
-			stickerOpener: stickerOpener.asHtmlElement(),
+			toggleButton: toggleButton.asHtmlElement(),
 		},
 		state,
 		() => collapsedChangeCount++,
@@ -271,8 +330,7 @@ function createCollapseFixture(
 	return {
 		chatPanel,
 		resizeHandle,
-		collapseButton,
-		stickerOpener,
+		toggleButton,
 		state,
 		refreshCollapse,
 		getCollapsedChangeCount: () => collapsedChangeCount,
@@ -318,6 +376,7 @@ class FakeElement {
 	readonly dataset = {} as DOMStringMap;
 	hidden = false;
 	inert = false;
+	private readonly attributes = new Map<string, string>();
 	private readonly listeners = new Map<string, (event?: Event) => void>();
 
 	asHtmlElement(): HTMLElement {
@@ -326,6 +385,14 @@ class FakeElement {
 
 	addEventListener(type: string, listener: (event?: Event) => void): void {
 		this.listeners.set(type, listener);
+	}
+
+	setAttribute(name: string, value: string): void {
+		this.attributes.set(name, value);
+	}
+
+	getAttribute(name: string): string | null {
+		return this.attributes.get(name) ?? null;
 	}
 
 	click(): void {

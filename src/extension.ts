@@ -2341,13 +2341,12 @@ function getWebviewHtml(
 			<body>
 				<main id="app" class="crispy-layout" data-dock="right" data-workspace-presentation="${serializedWorkspacePresentation}">
 					<section id="graph-area"></section>
-					<div id="panel-resize-handle"></div>
-					<section id="agent-chat-area">
+					<div id="panel-resize-handle" data-collapse-state="collapsed"></div>
+					<section id="agent-chat-area" data-collapse-state="collapsed" inert>
 						<div id="agent-panel-header">
 							<div id="agent-tab-strip"></div>
 							<div id="agent-top-bar"></div>
 							<button id="chat-drag-handle" type="button" aria-label="Move Agent Chat" title="Move Agent Chat"></button>
-							<button id="chat-collapse-toggle" type="button" aria-label="Hide Agent Chat" title="Hide Agent Chat" data-panel-icon="panel-right.svg"></button>
 						</div>
 						<div id="agent-terminal-area">
 							<div id="agent-provider-picker-host" hidden></div>
@@ -2357,7 +2356,7 @@ function getWebviewHtml(
 						<div id="agent-dialog-host" hidden></div>
 						<div id="agent-rename-dialog-host" hidden></div>
 					</section>
-					<button id="chat-sticker-opener" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" data-panel-icon="panel-left.svg" hidden></button>
+					<button id="chat-panel-toggle" type="button" aria-label="Show Agent Chat" title="Show Agent Chat" aria-controls="agent-chat-area" aria-expanded="false" data-dock="right" data-collapse-state="collapsed" data-panel-icon="panel-left.svg"></button>
 					<div id="dock-preview" aria-hidden="true" hidden></div>
 				</main>
 				<script src="${scriptUri}" data-webview-state="${serializedWebviewState}" data-workspace-state="${serializedWorkspaceState}" data-workspace-context-generation="${contextGeneration}" data-workspace-revision="${workspaceMutationRevision}" data-monaco-worker-uri="${monacoWorkerUri}"></script>

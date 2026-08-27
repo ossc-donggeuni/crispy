@@ -20,7 +20,7 @@ src/webview/panel/
 
 > 사용자가 배치한 Dock 위치 ( 상하좌우 ), 너비-높이와 접힘 여부 Runtime State를 정의합니다.
 
-- Panel Layout 상태 타입 및 기본값 정의 ( Side `460px`, Vertical `400px`, 접힘 `false` )
+- Panel Layout 상태 타입 및 기본값 정의 ( Side `460px`, Vertical `400px`, 접힘 `true` )
 - Floating Panel의 외곽 여백과 Dock 방향별 최소 크기 정의
 - 저장된 크기를 현재 가용 영역 기준으로 제한하는 공통 clamp 계산
 - 복원 후보의 Panel 상태 검증 및 독립 객체 복사
@@ -51,14 +51,14 @@ src/webview/panel/
 
 ### `panelCollapse.ts`
 
-> Agent Chat 영역의 접기와 Sticker 열기 동작을 관리합니다.
+> Agent Chat 영역의 단일 접기/열기 Toggle 동작을 관리합니다.
 
-- Chat Header 접기 버튼으로 Chat Panel 전체와 Resize Handle을 현재 Dock 바깥까지 Slide
+- Panel 안쪽 경계의 단일 Toggle로 Chat Panel 전체와 Resize Handle을 현재 Dock 바깥까지 Slide
 - 좌·우 Dock은 가로, 상·하 Dock은 세로 방향으로 접고 같은 경로로 다시 펼침
 - 초기 복원 상태는 즉시 반영하고 사용자 접기·열기 동작에만 Transition 적용
 - OS의 모션 감소 설정에서는 Transition 생략
-- 접힘 상태에서 현재 Dock 가장자리에 Sticker 열기 버튼 표시
-- Dock 방향에 맞는 Sticker 위치와 열림 방향 아이콘 적용
+- 펼침 시 Panel의 Graph 방향 경계, 접힘 시 현재 Dock 가장자리에 같은 Toggle 표시
+- Dock과 접힘 상태에 맞는 Toggle 위치와 접기/열기 방향 아이콘 적용
 - 접어도 저장된 Side / Vertical 크기를 그대로 두어 같은 크기로 복원
 - 접힘 여부가 바뀐 경우에만 상위 저장 callback 호출
 - Activity 등 외부 UI가 같은 Transition·저장·layout callback 경로로 Panel을 펼칠 수 있는 제어 경계 제공

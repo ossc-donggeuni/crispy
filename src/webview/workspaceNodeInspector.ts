@@ -37,6 +37,42 @@ interface FocusedWorkspaceNode {
 const INSPECTOR_INSET = 12;
 const INSPECTOR_GAP = 12;
 
+/** Inspector의 document 전역 닫기 입력을 capture 단계에서 관리한다. */
+export function initializeWorkspaceNodeInspectorDismissal(
+	ownerDocument: Document,
+	getInspector: () => HTMLElement | undefined,
+	close: () => void,
+): () => void {
+	const handleKeyDown = (event: KeyboardEvent): void => {
+		if (event.key !== 'Escape' || !getInspector()) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		close();
+	};
+	const handleDocumentPointerDown = (event: PointerEvent): void => {
+		const inspector = getInspector();
+
+		if (
+			!inspector
+			|| event.button !== 0
+			|| event.composedPath().includes(inspector)
+		) {
+			return;
+		}
+		close();
+	};
+
+	ownerDocument.addEventListener('keydown', handleKeyDown, true);
+	ownerDocument.addEventListener('pointerdown', handleDocumentPointerDown, true);
+
+	return () => {
+		ownerDocument.removeEventListener('keydown', handleKeyDown, true);
+		ownerDocument.removeEventListener('pointerdown', handleDocumentPointerDown, true);
+	};
+}
+
 /** Graph DOM의 실제 source 표현에만 event delegation을 적용하는 Inspector다. */
 export function initializeWorkspaceNodeInspector(
 	graphArea: HTMLElement,
@@ -485,15 +521,12 @@ export function initializeWorkspaceNodeInspector(
 		mountLoading();
 		requestDetails();
 	};
-	const handleKeyDown = (event: KeyboardEvent): void => {
-		if (event.key === 'Escape' && inspector) {
-			event.preventDefault();
-			close();
-		}
-	};
-
 	graphArea.addEventListener('contextmenu', handleContextMenu);
-	ownerDocument.addEventListener('keydown', handleKeyDown);
+	const disposeDismissal = initializeWorkspaceNodeInspectorDismissal(
+		ownerDocument,
+		() => inspector,
+		close,
+	);
 
 	return {
 		handleDetailsResult(message): void {
@@ -548,7 +581,7 @@ export function initializeWorkspaceNodeInspector(
 			}
 			disposed = true;
 			graphArea.removeEventListener('contextmenu', handleContextMenu);
-			ownerDocument.removeEventListener('keydown', handleKeyDown);
+			disposeDismissal();
 			themeObserver?.disconnect();
 			monacoApi = undefined;
 			close();

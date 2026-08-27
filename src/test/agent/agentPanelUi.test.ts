@@ -287,6 +287,26 @@ suite('Agent Panel UI', () => {
 		assert.match(claudeLogo, /fill="#D97757"/);
 	});
 
+	test('세션 탭은 헤더 하단에서 Terminal 영역과 공백 없이 맞닿는다', () => {
+		const css = readFileSync(resolve(
+			__dirname,
+			'../../../src/agent/UI/agentPanelUi.css',
+		), 'utf8');
+
+		assert.match(
+			css,
+			/#agent-panel-header\s*\{[^}]*padding:\s*6px 8px 0;/s,
+		);
+		assert.match(
+			css,
+			/#agent-tab-strip\s*\{[^}]*align-self:\s*flex-end;/s,
+		);
+		assert.match(
+			css,
+			/\.agent-tab\[data-active='true'\]\s*\{[^}]*border-color:[^;]+;[^}]*border-bottom:\s*0;/s,
+		);
+	});
+
 	test('Workspace combobox는 카드 내부 listbox와 키보드·바깥 클릭 닫기를 제공한다', () => {
 		const fixture = createFixture({}, [
 			{

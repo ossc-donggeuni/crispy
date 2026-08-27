@@ -1027,7 +1027,7 @@ body.vscode-high-contrast-light .graph-viewport {
 	position: absolute;
 	top: 100%;
 	right: 0;
-	z-index: 3;
+	z-index: 5;
 	display: flex;
 	width: 100%;
 	box-sizing: border-box;
@@ -1928,10 +1928,11 @@ body.vscode-high-contrast-light .graph-viewport {
 }
 
 .graph-agent-activity-notification-panel {
-	display: grid;
+	display: flex;
 	width: min(380px, calc(100vw - 32px));
 	max-height: min(560px, calc(100vh - 80px));
 	box-sizing: border-box;
+	flex-direction: column;
 	margin-top: 8px;
 	overflow: hidden;
 	color: var(--vscode-foreground);
@@ -1948,6 +1949,7 @@ body.vscode-high-contrast-light .graph-viewport {
 	display: flex;
 	min-height: 42px;
 	box-sizing: border-box;
+	flex: none;
 	align-items: center;
 	padding: 10px 14px;
 	border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
@@ -1963,17 +1965,21 @@ body.vscode-high-contrast-light .graph-viewport {
 .graph-agent-activity-notification-list {
 	display: flex;
 	min-height: 0;
+	flex: 1 1 auto;
 	margin: 0;
 	padding: 6px;
 	flex-direction: column;
 	gap: 4px;
-	overflow: auto;
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	list-style: none;
 }
 
 .graph-agent-activity-notification-item {
 	display: flex;
 	min-width: 0;
+	flex: none;
 	align-items: stretch;
 	border-radius: 6px;
 }

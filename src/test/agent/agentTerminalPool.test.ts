@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
 	createAgentTerminalPool,
 	type AgentTerminalPoolDependencies,
@@ -72,6 +74,19 @@ function surfaces(container: FakeAgentElement): FakeAgentElement[] {
 }
 
 suite('Agent 탭별 Terminal 표면 pool', () => {
+	test('Terminal 표면은 Panel 외곽선과 맞닿도록 바깥 padding을 두지 않는다', () => {
+		const webviewCss = readFileSync(resolve(
+			__dirname,
+			'../../../src/webview/webview.css',
+		), 'utf8');
+		const ruleStart = webviewCss.indexOf('.terminal-surface {');
+		const ruleEnd = webviewCss.indexOf('}', ruleStart);
+
+		assert.ok(ruleStart >= 0);
+		assert.ok(ruleEnd > ruleStart);
+		assert.ok(webviewCss.slice(ruleStart, ruleEnd).includes('padding: 0;'));
+	});
+
 	test('탭마다 표면, mount와 덮개를 갖춘 Terminal을 하나만 만든다', () => {
 		const { container, pool, terminals } = createPool();
 

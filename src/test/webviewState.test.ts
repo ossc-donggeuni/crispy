@@ -999,7 +999,7 @@ suite('Webview State Wiring', () => {
 				return generatedTabCount === 1
 					? agentTabId
 					: `${agentTabId}-${generatedTabCount}`;
-			});
+			}, options?.resolveSessionColor);
 			agentPanelModel = model;
 			callbacks?.onTabCreated?.(model.createTab());
 
@@ -1064,8 +1064,7 @@ suite('Webview State Wiring', () => {
 			['#graph-area', {} as HTMLElement],
 			['#agent-chat-area', {} as HTMLElement],
 			['#chat-drag-handle', {} as HTMLElement],
-			['#chat-collapse-toggle', {} as HTMLElement],
-			['#chat-sticker-opener', {} as HTMLElement],
+			['#chat-panel-toggle', {} as HTMLElement],
 			['#panel-resize-handle', {} as HTMLElement],
 			['#dock-preview', {} as HTMLElement],
 			['#agent-terminal-area', {} as HTMLElement],
@@ -1387,6 +1386,21 @@ suite('Webview State Wiring', () => {
 				)?.currentMessage,
 				'Implementing agent bindings',
 			);
+			const sessionActivityColor = graphAgentSessionPresentationStore?.getSession(
+				'session-activity-a',
+			)?.color;
+
+			assert.ok(sessionActivityColor);
+			assert.strictEqual(
+				AGENT_SESSION_COLOR_PALETTE.some(
+					(color) => color === sessionActivityColor,
+				),
+				true,
+			);
+			assert.strictEqual(
+				agentPanelModel?.getSnapshot().tabs[0]?.sessionColor,
+				sessionActivityColor,
+			);
 			hostMessageHandler({
 				data: {
 					type: 'agent.activity.clear',
@@ -1416,10 +1430,10 @@ suite('Webview State Wiring', () => {
 			);
 			assert.deepStrictEqual(agentEffectSets, [{
 				target: activityTarget,
-					effect: {
-						kind: 'pulse',
-						color: AGENT_SESSION_COLOR_PALETTE[0],
-					},
+				effect: {
+					kind: 'pulse',
+					color: sessionActivityColor,
+				},
 			}]);
 			assert.deepStrictEqual(agentEffectClears, [{
 				target: activityTarget,

@@ -51,7 +51,7 @@ src/webview/
 - `left`, `right`, `top`, `bottom` Dock 이동 및 Floating 배치 Preview 처리
 - 좁은 Webview에서도 선호 Dock을 유지하고 표시 크기만 제한
 - Chat Panel 안쪽 경계에서의 가로·세로 Resize 처리
-- Chat 접기와 Dock 가장자리 Sticker 열기 처리
+- Panel 경계와 Dock 가장자리를 오가는 단일 Chat 접기/열기 Toggle 처리
 - 세부 구조와 동작은 `panel/README.md` 참고
 
 ### `webviewState.ts`
@@ -62,7 +62,7 @@ src/webview/
 - Panel Dock, 크기, 접힘 여부와 Camera를 Webview `getState()` / `setState()`로 저장 및 복원
 - `collapsed`가 없는 이전 저장 상태를 Dock과 크기를 유지한 채 호환 복원
 - Extension Host가 HTML로 전달하는 초기 상태 직렬화 및 복원
-- 저장 상태가 없거나 잘못된 경우 Panel 및 Graph 기본값 적용
+- 저장 상태가 없거나 잘못된 경우 접힌 Panel 및 Graph 기본값 적용
 - W-04.3 이전 전체 Webview `setState()` snapshot에서도 Panel/Camera만 호환 복원
 
 ### `webview.ts`
@@ -79,6 +79,6 @@ src/webview/
 - Camera/Panel 변경 시 Session State만 `setState()` 및 `webview.stateChanged`로 전달
 - Node 위치, File Group page, 열린 Folder와 Detached Root 변경 시 `workspace.stateChanged`로 전달
 - Dock, Resize와 Collapse 기능 초기화
-- Dock 변경 시 표시 크기와 Sticker 위치 재계산
+- Dock 변경 시 표시 크기와 Chat Toggle 위치 재계산
 - unload 시 Graph State subscription과 Graph View 정리
 - 로드 후 ready 메시지 전송
