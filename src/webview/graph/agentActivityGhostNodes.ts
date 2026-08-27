@@ -528,8 +528,8 @@ function applyGhostProjection(
 	} else {
 		element.setAttribute('data-graph-root-id', projection.target.rootId);
 	}
-	element.setAttribute('aria-label', `${displayName} 아직 생성되지 않음`);
-	element.title = `${displayName} — 아직 생성되지 않은 대상`;
+	element.setAttribute('aria-label', `${displayName} not created yet`);
+	element.title = `${displayName} — target not created yet`;
 	element.style.width = `${projection.width}px`;
 	element.style.height = `${projection.height}px`;
 	element.style.transform = `translate(${projection.position.x}px, ${projection.position.y}px)`;
