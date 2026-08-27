@@ -24,6 +24,7 @@ import {
 	type McpRandomBytes,
 } from './sessionCredentials';
 import type { TaskToolLease, TaskToolRequested } from './taskToolProtocol';
+import type { TaskTurnLifecycleObserved } from './taskTurnLifecycleProtocol';
 
 export type McpRuntimeLifecycle =
 	| 'starting'
@@ -76,7 +77,8 @@ export type McpSessionRuntimeEvent =
 	| McpRuntimeActivityEvent
 	| McpRuntimePingEvent
 	| AgentActivityRequested
-	| TaskToolRequested;
+	| TaskToolRequested
+	| TaskTurnLifecycleObserved;
 
 export type McpPrepareResult =
 	| {
@@ -579,6 +581,21 @@ export class McpSessionRuntime {
 			return;
 		}
 		if (message.type === 'session.taskToolRequested') {
+			if (
+				message.generation !== this.generation
+				|| message.sessionId !== this.sessionId
+				|| message.executionId !== this.taskLease?.executionId
+				|| message.workNodeId !== this.taskLease.workNodeId
+			) {
+				this.failProtocol();
+				return;
+			}
+			if (this.lifecycleValue === 'running') {
+				this.emit(message);
+			}
+			return;
+		}
+		if (message.type === 'session.taskTurnLifecycleObserved') {
 			if (
 				message.generation !== this.generation
 				|| message.sessionId !== this.sessionId

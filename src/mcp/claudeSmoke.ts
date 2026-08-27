@@ -24,7 +24,11 @@ import {
 	resolveClaudeMcpCompatibility,
 	type ClaudeMcpCompatibilityResolver,
 } from './claudeCompatibility';
-import { CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE } from './claudeConfig';
+import {
+	CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+	createClaudeMcpQualifiedToolName,
+	isValidClaudeMcpServerName,
+} from './claudeConfig';
 import { buildClaudeMcpLaunchPlan } from './claudeLaunchPlan';
 import {
 	MCP_FAILURE_REASONS,
@@ -57,16 +61,13 @@ export function createClaudeMcpSmokeArgs(serverName: string): readonly string[] 
 }
 
 function createClaudeMcpSmokeToolNames(serverName: string): readonly string[] {
-	if (!/^crispy_canvas_[a-f0-9]{32}$/u.test(serverName)) {
+	if (!isValidClaudeMcpServerName(serverName)) {
 		throw new Error('Claude smoke server name is invalid.');
 	}
 	const toolNames = [
 		CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 		CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-	].map((toolName) => `mcp__${serverName}__${toolName}`);
-	if (toolNames.some((toolName) => toolName.length > 64)) {
-		throw new Error('Claude smoke Tool name exceeds the provider limit.');
-	}
+	].map((toolName) => createClaudeMcpQualifiedToolName(serverName, toolName));
 	return Object.freeze(toolNames);
 }
 
@@ -181,6 +182,9 @@ export class ClaudeSmokeEventObserver {
 			return;
 		}
 		if (event.type === 'session.taskToolRequested') {
+			return;
+		}
+		if (event.type === 'session.taskTurnLifecycleObserved') {
 			return;
 		}
 		this.settle({ type: 'failure', reason: event.failure.reason });

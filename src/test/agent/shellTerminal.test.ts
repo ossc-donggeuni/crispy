@@ -1311,6 +1311,62 @@ suite('Shell Terminal Webview', () => {
 		}]);
 	});
 
+	test('Task-owned 탭은 종료·오류 덮개에서 restart를 노출하거나 전송하지 않는다', () => {
+		const messages: unknown[] = [];
+		const overlayView = new FakeOverlayView();
+		const dependencies: ShellTerminalDependencies = {
+			...createDependencies(
+				new FakeTerminal(),
+				createFitAddon(),
+				[],
+				new FakeAnimationFrames(),
+				new FakeTerminalEnvironment(),
+				overlayView,
+			),
+			isRestartAllowed: () => false,
+		};
+		const controller = initializeShellTerminal(
+			...createElementArguments(),
+			(message) => messages.push(message),
+			dependencies,
+		);
+
+		controller.handleHostMessage({
+			type: 'terminal.started',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+		});
+		controller.handleHostMessage({
+			type: 'terminal.exited',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			exitCode: 1,
+		});
+		assert.deepStrictEqual(overlayView.shownStates.at(-1), {
+			kind: 'exited',
+			canRestart: false,
+			exitCode: 1,
+		});
+		overlayView.clickRestart();
+
+		controller.handleHostMessage({
+			type: 'terminal.error',
+			tabId: TAB_ID,
+			sessionId: SESSION_ID,
+			code: 'start_failed',
+			message: 'Terminal process could not be started.',
+			canRestart: true,
+		});
+		assert.deepStrictEqual(overlayView.shownStates.at(-1), {
+			kind: 'error',
+			message: 'Terminal process could not be started.',
+			canRestart: false,
+		});
+		overlayView.clickRestart();
+
+		assert.deepStrictEqual(messages, []);
+	});
+
 	test('새 PTY가 시작된 뒤에만 buffer를 reset하고 덮개를 제거한다', () => {
 		const terminal = new FakeTerminal();
 		const overlayView = new FakeOverlayView();

@@ -3,12 +3,17 @@ import {
 	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
 	CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER,
 	CRISPY_PING_ONLY_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_REQUIRED_MARKER,
 	createCrispyMcpInstructions,
 } from '../../mcp/agentActivityInstructions';
 import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from '../../mcp/toolServer';
 
 suite('Crispy MCP server instructions', () => {
@@ -80,5 +85,60 @@ suite('Crispy MCP server instructions', () => {
 		assert.strictEqual(CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME, 'crispy_saa');
 		assert.strictEqual(CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME, 'crispy_caa');
 		assert.doesNotMatch(instructions, /Claude/u);
+	});
+
+	test('Task lease instructions use the advertised lifecycle tools without a false ping-only claim', () => {
+		const instructions = createCrispyMcpInstructions(false, true);
+		const criticalPrefix = instructions.slice(0, 512);
+
+		assert.strictEqual(instructions, CRISPY_TASK_TOOL_INSTRUCTIONS);
+		for (const required of [
+			CRISPY_TASK_TOOL_REQUIRED_MARKER,
+			CRISPY_TASK_COMPLETE_TOOL_NAME,
+			CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+			CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+			'Host-assigned Crispy Task Work',
+			'lifecycle protocol',
+		]) {
+			assert.strictEqual(criticalPrefix.includes(required), true, required);
+		}
+		for (const required of [
+			'exactly once',
+			'completed only after successful work and verification',
+			'rejected for an intentional scope or user-denial outcome',
+			'A prose response alone does not notify the Host scheduler',
+			'final Tool call',
+			'reference areas are read-only',
+			'only work areas are writable',
+			'does not grant access',
+			'normal permission UI',
+			'retained requestId',
+		]) {
+			assert.strictEqual(instructions.includes(required), true, required);
+		}
+		assert.strictEqual(
+			instructions.includes('exposes only crispy_ping'),
+			false,
+		);
+		assert.doesNotMatch(
+			instructions,
+			/NON-NEGOTIABLE|protocol violation|ignore (?:these|the) instructions/iu,
+		);
+	});
+
+	test('Task and Activity capabilities compose from the same exact contracts', () => {
+		const instructions = createCrispyMcpInstructions(true, true);
+
+		assert.strictEqual(
+			instructions,
+			`${CRISPY_TASK_TOOL_INSTRUCTIONS} ${CRISPY_AGENT_ACTIVITY_INSTRUCTIONS}`,
+		);
+		assert.strictEqual(
+			instructions.indexOf(CRISPY_TASK_TOOL_REQUIRED_MARKER),
+			0,
+		);
+		assert.ok(
+			instructions.indexOf(CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER) > 0,
+		);
 	});
 });

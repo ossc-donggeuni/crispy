@@ -14,6 +14,7 @@ import {
 	type McpChildSpawnRequest,
 	type McpSessionRuntimeEvent,
 } from '../../mcp/sessionRuntime';
+import { createTaskTurnLifecycleObserved } from '../../mcp/taskTurnLifecycleProtocol';
 import {
 	createReadyFakeChild,
 	FakeMcpChild,
@@ -805,6 +806,35 @@ suite('MCP session runtime lifecycle', () => {
 		await runtime.stop();
 		assert.deepStrictEqual(events, []);
 		assert.strictEqual(runtime.lifecycle, 'stopped');
+	});
+
+	test('Task turn lifecycle은 registered lease identity와 일치할 때만 Host로 전달한다', async () => {
+		const events: McpSessionRuntimeEvent[] = [];
+		const child = createReadyFakeChild({
+			generation: 'generation-runtime', port: 42_021,
+		});
+		const runtime = createRuntime({
+			spawnChild: () => child.asChildProcess(),
+			taskLease: {
+				executionId: 'execution-runtime',
+				workNodeId: 'work-runtime',
+			},
+			onEvent: (event) => events.push(event),
+		});
+		assert.strictEqual((await runtime.start()).ok, true);
+
+		const event = createTaskTurnLifecycleObserved({
+			sessionId: 'session-runtime',
+			generation: 'generation-runtime',
+			executionId: 'execution-runtime',
+			workNodeId: 'work-runtime',
+			turnId: 'turn-runtime',
+			outcome: 'reminder-injected',
+		});
+		child.emitMessage(event);
+
+		assert.deepStrictEqual(events, [event]);
+		await runtime.stop();
 	});
 });
 

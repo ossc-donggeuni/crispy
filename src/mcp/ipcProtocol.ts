@@ -18,6 +18,10 @@ import {
 	type TaskToolLease,
 	type TaskToolRequested,
 } from './taskToolProtocol';
+import {
+	parseTaskTurnLifecycleObserved,
+	type TaskTurnLifecycleObserved,
+} from './taskTurnLifecycleProtocol';
 
 export type HostToMcpChildMessage =
 	| {
@@ -92,7 +96,8 @@ export type McpChildControlMessage =
 export type McpChildToHostMessage =
 	| McpChildControlMessage
 	| AgentActivityRequested
-	| TaskToolRequested;
+	| TaskToolRequested
+	| TaskTurnLifecycleObserved;
 
 export type McpIpcValidationErrorCode =
 	| 'invalid_message'
@@ -209,6 +214,16 @@ export function parseMcpChildToHostMessage(
 		const taskRequest = parseTaskToolRequested(value);
 		return taskRequest
 			? { ok: true, value: taskRequest }
+			: failure('invalid_message');
+	}
+	if (
+		isRecord(value)
+		&& Object.hasOwn(value, 'type')
+		&& value.type === 'session.taskTurnLifecycleObserved'
+	) {
+		const lifecycle = parseTaskTurnLifecycleObserved(value);
+		return lifecycle
+			? { ok: true, value: lifecycle }
 			: failure('invalid_message');
 	}
 	return parseMessage(

@@ -69,6 +69,11 @@ export interface AgentTerminalOutputPreviewOptions {
 	onOutputPreview(event: TerminalOutputPreviewEvent): void;
 }
 
+/** 탭 종류에 따라 일반 terminal.restart UI를 허용할지 결정한다. */
+export interface AgentTerminalRestartPolicy {
+	isRestartAllowed(tabId: TabId): boolean;
+}
+
 /**
  * 탭 하나가 소유하는 표면 DOM과 Terminal 제어 객체다.
  */
@@ -249,6 +254,7 @@ export function createDefaultAgentTerminalPool(
 	postMessage: PostTerminalMessage,
 	autoTitle?: AgentTerminalAutoTitleOptions,
 	outputPreview?: AgentTerminalOutputPreviewOptions,
+	restartPolicy?: AgentTerminalRestartPolicy,
 ): AgentTerminalPool {
 	return createAgentTerminalPool(container, {
 		createElement: (tagName) => document.createElement(tagName),
@@ -264,6 +270,11 @@ export function createDefaultAgentTerminalPool(
 				...(outputPreview === undefined
 					? {}
 					: { onOutputPreview: outputPreview.onOutputPreview }),
+				...(restartPolicy === undefined
+					? {}
+					: {
+						isRestartAllowed: () => restartPolicy.isRestartAllowed(tabId),
+					}),
 			}),
 	});
 }

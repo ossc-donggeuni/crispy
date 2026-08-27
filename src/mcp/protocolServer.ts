@@ -70,6 +70,14 @@ import {
 	type TaskToolLease,
 	type TaskToolRequested,
 } from './taskToolProtocol';
+import {
+	createTaskCompletionFollowup,
+	createTaskTurnLifecycleObserved,
+	parseClaudeTaskTurnHookInput,
+	parseClaudeTaskTurnLifecyclePath,
+	TASK_TURN_REMINDER_LIMIT,
+	type TaskTurnLifecycleObserved,
+} from './taskTurnLifecycleProtocol';
 
 export interface McpActivityObservedEvent {
 	readonly type: 'session.mcpActivityObserved';
@@ -90,6 +98,7 @@ export interface McpProtocolServerOptions {
 	readonly monotonicClock?: MonotonicClock;
 	readonly agentActivityTransport?: AgentActivityIpcTransport;
 	readonly taskToolTransport?: TaskToolIpcTransport;
+	readonly taskTurnLifecycleTransport?: TaskTurnLifecycleIpcTransport;
 }
 
 export interface AgentActivityIpcTransport {
@@ -104,6 +113,14 @@ export interface TaskToolIpcTransport {
 	isConnected(): boolean;
 	send(
 		event: TaskToolRequested,
+		callback: (error: Error | null) => void,
+	): boolean;
+}
+
+export interface TaskTurnLifecycleIpcTransport {
+	isConnected(): boolean;
+	send(
+		event: TaskTurnLifecycleObserved,
 		callback: (error: Error | null) => void,
 	): boolean;
 }
@@ -134,6 +151,9 @@ interface ActiveRegistration extends McpSessionCredentials {
 	revoked: boolean;
 	activityObserved: boolean;
 	pingObserved: boolean;
+	taskCompletionObserved: boolean;
+	pendingTaskScopeRequestId: string | undefined;
+	claudeTurnReminders: number;
 }
 
 interface SetActivityInput {
@@ -171,6 +191,10 @@ const CLOSED_TASK_TOOL_TRANSPORT: TaskToolIpcTransport = Object.freeze({
 	isConnected: () => false,
 	send: () => false,
 });
+const CLOSED_TASK_TURN_LIFECYCLE_TRANSPORT: TaskTurnLifecycleIpcTransport = Object.freeze({
+	isConnected: () => false,
+	send: () => false,
+});
 
 /**
  * C1의 in-process protocol core다. C2 child entry가 이 객체를 소유하고 strict IPC를
@@ -185,6 +209,7 @@ export class CrispyMcpProtocolServer {
 	private readonly monotonicClock: MonotonicClock;
 	private readonly agentActivityTransport: AgentActivityIpcTransport;
 	private readonly taskToolTransport: TaskToolIpcTransport;
+	private readonly taskTurnLifecycleTransport: TaskTurnLifecycleIpcTransport;
 	private readonly requestRegistrations = new WeakMap<Request, ActiveRegistration>();
 	private readonly sdkHandler: McpHttpHandler;
 	private lifecycle: ServerLifecycle = 'idle';
@@ -207,6 +232,8 @@ export class CrispyMcpProtocolServer {
 			?? CLOSED_AGENT_ACTIVITY_TRANSPORT;
 		this.taskToolTransport = options.taskToolTransport
 			?? CLOSED_TASK_TOOL_TRANSPORT;
+		this.taskTurnLifecycleTransport = options.taskTurnLifecycleTransport
+			?? CLOSED_TASK_TURN_LIFECYCLE_TRANSPORT;
 		this.sdkHandler = createMcpHandler(
 			(context) => {
 				const registration = context.requestInfo === undefined
@@ -341,6 +368,9 @@ export class CrispyMcpProtocolServer {
 			revoked: false,
 			activityObserved: false,
 			pingObserved: false,
+			taskCompletionObserved: false,
+			pendingTaskScopeRequestId: undefined,
+			claudeTurnReminders: 0,
 		};
 		return Object.freeze({
 			generation: credentials.generation,
@@ -407,10 +437,21 @@ export class CrispyMcpProtocolServer {
 		response: ServerResponse,
 	): Promise<void> {
 		const registration = this.registration;
+		const requestUrl = request.url;
+		const mcpRoute = registration === undefined
+			? false
+			: requestUrl === `/mcp/${registration.routeId}`;
+		const taskTurnRoute = registration?.taskLease === undefined
+			? undefined
+			: parseClaudeTaskTurnLifecyclePath(
+				requestUrl,
+				registration.routeId,
+			);
 		if (
 			this.lifecycle !== 'running'
 			|| registration === undefined
-			|| request.url !== `/mcp/${registration.routeId}`
+			|| requestUrl === undefined
+			|| (!mcpRoute && taskTurnRoute === undefined)
 		) {
 			this.rejectWithoutBodyDrain(request, response, 404, 'Not found.');
 			return;
@@ -426,7 +467,7 @@ export class CrispyMcpProtocolServer {
 			return;
 		}
 
-		const headerRejection = validateLoopbackHeaders(request.headers, request.url);
+		const headerRejection = validateLoopbackHeaders(request.headers, requestUrl);
 		if (headerRejection !== undefined) {
 			request.pause();
 			writeSafeHttpResponse(
@@ -469,6 +510,15 @@ export class CrispyMcpProtocolServer {
 					body.status,
 					body.status === 413 ? 'Request body too large.' : 'Bad request.',
 					body.closeConnection ? { Connection: 'close' } : undefined,
+				);
+				return;
+			}
+			if (taskTurnRoute !== undefined) {
+				this.handleClaudeTaskTurnLifecycle(
+					registration,
+					taskTurnRoute.completionToolName,
+					body.parsedBody,
+					response,
 				);
 				return;
 			}
@@ -692,11 +742,98 @@ export class CrispyMcpProtocolServer {
 				return createTaskToolErrorResult('invalid_input');
 			}
 			this.taskToolTransport.send(parsed, () => undefined);
+			if (parsed.operation === 'complete') {
+				if (registration.pendingTaskScopeRequestId === undefined) {
+					registration.taskCompletionObserved = true;
+				}
+			} else if (parsed.operation === 'scope-request') {
+				registration.pendingTaskScopeRequestId = parsed.requestId;
+			} else if (
+				registration.pendingTaskScopeRequestId === parsed.requestId
+			) {
+				registration.pendingTaskScopeRequestId = undefined;
+			}
 			return createTaskToolSuccessResult(
 				parsed.operation === 'scope-request' ? parsed.requestId : undefined,
 			);
 		} catch {
 			return createTaskToolErrorResult('internal_error');
+		}
+	}
+
+	/** Claude의 provider-native Stop/StopFailure를 Task completion handshake로 변환한다. */
+	private handleClaudeTaskTurnLifecycle(
+		registration: ActiveRegistration,
+		completionToolName: string,
+		body: unknown,
+		response: ServerResponse,
+	): void {
+		const hook = parseClaudeTaskTurnHookInput(body);
+		if (hook === undefined) {
+			writeSafeHttpResponse(response, 400, 'Bad request.');
+			return;
+		}
+		if (
+			registration.revoked
+			|| this.registration !== registration
+			|| this.lifecycle !== 'running'
+			|| registration.taskLease === undefined
+			|| !this.taskTurnLifecycleTransport.isConnected()
+		) {
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+
+		if (registration.taskCompletionObserved) {
+			this.emitTaskTurnLifecycle(registration, 'completion-observed');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+		if (hook.event === 'StopFailure') {
+			this.emitTaskTurnLifecycle(registration, 'provider-failed');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+		if (registration.pendingTaskScopeRequestId !== undefined) {
+			this.emitTaskTurnLifecycle(registration, 'scope-pending');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+		if (registration.claudeTurnReminders >= TASK_TURN_REMINDER_LIMIT) {
+			this.emitTaskTurnLifecycle(registration, 'reminders-exhausted');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+
+		registration.claudeTurnReminders += 1;
+		this.emitTaskTurnLifecycle(registration, 'reminder-injected');
+		writeTaskTurnHookResponse(response, {
+			decision: 'block',
+			reason: createTaskCompletionFollowup(completionToolName),
+		});
+	}
+
+	private emitTaskTurnLifecycle(
+		registration: ActiveRegistration,
+		outcome: TaskTurnLifecycleObserved['outcome'],
+	): void {
+		const lease = registration.taskLease;
+		if (lease === undefined || !this.taskTurnLifecycleTransport.isConnected()) {
+			return;
+		}
+		try {
+			this.taskTurnLifecycleTransport.send(
+				createTaskTurnLifecycleObserved({
+					sessionId: registration.sessionId,
+					generation: registration.generation,
+					executionId: lease.executionId,
+					workNodeId: lease.workNodeId,
+					outcome,
+				}),
+				() => undefined,
+			);
+		} catch {
+			/** Hook 응답은 IPC observer 실패와 독립적으로 bounded하게 끝낸다. */
 		}
 	}
 
@@ -811,6 +948,15 @@ function cancelResponseBody(body: ReadableStream<Uint8Array> | null): void {
 	if (body !== null) {
 		void body.cancel().catch(() => undefined);
 	}
+}
+
+function writeTaskTurnHookResponse(
+	response: ServerResponse,
+	payload: Readonly<Record<string, unknown>>,
+): void {
+	writeSafeHttpResponse(response, 200, JSON.stringify(payload), {
+		'Content-Type': 'application/json; charset=utf-8',
+	});
 }
 
 function listenOnLoopback(server: HttpServer): Promise<void> {

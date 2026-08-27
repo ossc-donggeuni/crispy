@@ -1,4 +1,5 @@
 import type { McpFailureReason } from './failureReason';
+import { isValidClaudeMcpServerName } from './claudeConfig';
 
 export const CLAUDE_MANAGED_MCP_DYNAMIC_CONFIG_REJECTION =
 	'You cannot dynamically configure MCP servers when an enterprise MCP config is present';
@@ -46,7 +47,7 @@ export function classifyClaudeStartupDiagnostic(
 	const expectedServerName = input.expectedMcpServerName;
 	if (
 		expectedServerName !== undefined
-		&& /^crispy_canvas_[a-f0-9]{32}$/u.test(expectedServerName)
+		&& isValidClaudeMcpServerName(expectedServerName)
 		&& lines.length === 2
 		&& lines[0] === 'Error: Invalid MCP configuration:'
 		&& lines[1] === `mcpServers.${expectedServerName}: Does not adhere to MCP server configuration schema`

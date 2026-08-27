@@ -159,6 +159,7 @@ export type TerminalOverlayState =
 		readonly kind: 'exited';
 		readonly exitCode?: number;
 		readonly signal?: number;
+		readonly canRestart?: boolean;
 	}
 	| {
 		readonly kind: 'error';
@@ -198,6 +199,9 @@ export interface ShellTerminalDependencies {
 
 	/** 설정된 경우에만 xterm이 해석한 현재 메시지를 session 표시 Store로 보낸다. */
 	readonly onOutputPreview?: (event: TerminalOutputPreviewEvent) => void;
+
+	/** Task-owned tab처럼 Host가 수동 restart를 허용하지 않는 표면을 구분한다. */
+	readonly isRestartAllowed?: () => boolean;
 }
 
 /** xterm active buffer에서 cursor가 속한 최신 비어 있지 않은 논리 행을 추출한다. */
@@ -720,8 +724,9 @@ function createDefaultOverlayView(
 					: TERMINAL_START_FAILED_OVERLAY_TITLE;
 			detail.textContent = describeTerminalOverlayState(state);
 			detail.hidden = detail.textContent.length === 0;
-			restartButton.hidden = state.kind === 'starting'
-				|| (state.kind === 'error' && !state.canRestart);
+				restartButton.hidden = state.kind === 'starting'
+					|| (state.kind === 'error' && !state.canRestart)
+					|| (state.kind === 'exited' && state.canRestart === false);
 			overlay.replaceChildren(panel);
 			overlay.setAttribute('role', state.kind === 'error' ? 'alert' : 'status');
 			overlay.hidden = false;
@@ -999,7 +1004,11 @@ export function initializeShellTerminal(
 	 * 세션이 만들어지기 전에 실패한 경우에만 최초 시작 경로를 다시 사용한다.
 	 */
 	const requestRestart = (): void => {
-		if (disposed || restartRequested) {
+		if (
+			disposed
+			|| restartRequested
+			|| dependencies.isRestartAllowed?.() === false
+		) {
 			return;
 		}
 
@@ -1199,6 +1208,9 @@ export function initializeShellTerminal(
 						restartRequested = false;
 						showOverlay({
 							kind: 'exited',
+							...(dependencies.isRestartAllowed?.() === false
+								? { canRestart: false }
+								: {}),
 							...(message.exitCode === undefined
 								? {}
 								: { exitCode: message.exitCode }),
@@ -1242,11 +1254,12 @@ export function initializeShellTerminal(
 					}
 					restartSessionId = message.sessionId ?? undefined;
 					restartRequested = false;
-					showOverlay({
-						kind: 'error',
-						message: message.message,
-						canRestart: message.canRestart,
-					});
+						showOverlay({
+							kind: 'error',
+							message: message.message,
+							canRestart: message.canRestart
+								&& dependencies.isRestartAllowed?.() !== false,
+						});
 					break;
 			}
 		},

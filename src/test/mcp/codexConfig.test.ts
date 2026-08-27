@@ -12,7 +12,10 @@ import {
 } from '../../mcp/codexConfig';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 import { serializeCodexTomlString } from '../../mcp/codexConfig';
-import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
+import {
+	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+	createCrispyMcpInstructions,
+} from '../../mcp/agentActivityInstructions';
 
 const routeId = Buffer.alloc(24, 0x23).toString('base64url');
 const bearerToken = Buffer.alloc(32, 0x45).toString('base64url');
@@ -95,6 +98,30 @@ suite('Codex MCP session config serializer', () => {
 
 		assert.strictEqual(config.args.includes(
 			`mcp_servers.${config.serverName}.enabled_tools=["crispy_ping","crispy_saa","crispy_caa","crispy_task_complete","crispy_task_scope_request","crispy_task_scope_result"]`,
+		), true);
+		assert.strictEqual(config.args.includes(
+			`developer_instructions=${serializeCodexTomlString(
+				createCrispyMcpInstructions(true, true),
+			)}`,
+		), true);
+	});
+
+	test('Task-only lease도 Task 규약을 trusted developer instructions로 주입한다', () => {
+		const config = createCodexMcpConfig(
+			createConnection(),
+			(size) => Buffer.alloc(size, 0xed),
+			'keyed-filters',
+			false,
+			true,
+		);
+
+		assert.strictEqual(config.args.includes(
+			`mcp_servers.${config.serverName}.enabled_tools=["crispy_ping","crispy_task_complete","crispy_task_scope_request","crispy_task_scope_result"]`,
+		), true);
+		assert.strictEqual(config.args.includes(
+			`developer_instructions=${serializeCodexTomlString(
+				createCrispyMcpInstructions(false, true),
+			)}`,
 		), true);
 	});
 

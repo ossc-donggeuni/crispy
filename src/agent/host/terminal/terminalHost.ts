@@ -36,11 +36,18 @@ import type {
 	McpSessionRuntime,
 } from '../../../mcp/sessionRuntime';
 import type { SupervisorRuntimeEvent } from '../../../mcp/adapterSupervisor';
+import { createClaudeMcpQualifiedToolName } from '../../../mcp/claudeConfig';
 import {
 	isValidTaskToolLease,
 	type TaskToolLease,
 	type TaskToolRequested,
 } from '../../../mcp/taskToolProtocol';
+import {
+	CodexTaskTurnNotificationParser,
+	createTaskCompletionFollowup,
+	TASK_TURN_REMINDER_LIMIT,
+} from '../../../mcp/taskTurnLifecycleProtocol';
+import { CRISPY_TASK_COMPLETE_TOOL_NAME } from '../../../mcp/toolNames';
 import {
 	normalizeAgentActivityPath,
 	type AgentActivityRequested,
@@ -100,6 +107,7 @@ import { WORKSPACE_ROOT_ID_PREFIX } from '../../../workspace/workspaceRootId';
 import {
 	createClaudeTaskPermissionArgs,
 	createCodexTaskPermissionArgs,
+	createTaskAgentPrompt,
 	type TaskAgentScopePath,
 } from '../../../task/taskAgentLaunchPolicy';
 
@@ -172,6 +180,11 @@ export interface TaskTerminalSessionDescriptor extends TaskToolLease {
 	readonly scope: readonly TaskAgentScopePath[];
 }
 
+export interface TaskTurnReminderScheduler {
+	setTimeout(callback: () => void, delayMs: number): object | number;
+	clearTimeout(handle: object | number): void;
+}
+
 /** Task controller가 exact session lifecycle과 MCP 완료 신호를 받는 Host event다. */
 export type TaskTerminalSessionEvent =
 	| {
@@ -216,6 +229,7 @@ interface ActivityLeaseState {
 
 /** 실행 중 autonomous CLI도 revoke 뒤 오래 남지 않게 하는 polling 상한이다. */
 export const WORKSPACE_TRUST_MONITOR_INTERVAL_MS = 1000;
+export const TASK_TURN_REMINDER_DELAY_MS = 250;
 
 const systemWorkspaceTrustMonitorScheduler: WorkspaceTrustMonitorScheduler = {
 	setInterval: (callback, intervalMs) => {
@@ -227,6 +241,24 @@ const systemWorkspaceTrustMonitorScheduler: WorkspaceTrustMonitorScheduler = {
 		handle as ReturnType<typeof setInterval>,
 	),
 };
+
+const systemTaskTurnReminderScheduler: TaskTurnReminderScheduler = {
+	setTimeout: (callback, delayMs) => {
+		const handle = setTimeout(callback, delayMs);
+		handle.unref();
+		return handle;
+	},
+	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+interface CodexTaskTurnLifecycleState {
+	readonly parser: CodexTaskTurnNotificationParser;
+	awaitingTurnEnd: boolean;
+	completionObserved: boolean;
+	pendingScopeRequestId: string | undefined;
+	reminderCount: number;
+	reminderTimer: object | number | undefined;
+}
 
 export type CodexMcpLaunchPlanBuilder = (
 	options: BuildCodexMcpLaunchPlanOptions,
@@ -370,6 +402,9 @@ export interface TerminalHostOptions {
 
 	/** Task-owned session의 exact lifecycle을 Task execution controller로 넘긴다. */
 	readonly onTaskSessionEvent?: TaskTerminalSessionEventHandler;
+
+	/** Codex turn-end와 completion IPC race의 grace window를 테스트 가능하게 한다. */
+	readonly taskTurnReminderScheduler?: TaskTurnReminderScheduler;
 
 	/** Deterministic allocator test에서만 사용하는 panel-lifetime nonce/counter다. */
 	readonly sessionIdNonce?: string;
@@ -570,6 +605,7 @@ export class TerminalHost {
 	private readonly onActivityLeaseRevoked:
 		ActivityLeaseRevokedHandler | undefined;
 	private readonly onTaskSessionEvent: TaskTerminalSessionEventHandler | undefined;
+	private readonly taskTurnReminderScheduler: TaskTurnReminderScheduler;
 
 	/** Panel lifetime 전체의 session 생성 경로가 공유하는 단일 allocator다. */
 	private readonly sessionIdAllocator: TerminalSessionIdAllocator;
@@ -588,6 +624,11 @@ export class TerminalHost {
 		TaskTerminalSessionDescriptor
 	>();
 	private readonly expectedTaskSessionStops = new Set<SessionId>();
+	private readonly failedTaskTurnSessions = new Set<SessionId>();
+	private readonly codexTaskTurnBySession = new Map<
+		SessionId,
+		CodexTaskTurnLifecycleState
+	>();
 
 	private readonly buildCodexMcpPlan: CodexMcpLaunchPlanBuilder;
 	private readonly buildCodexBarePlan: CodexBareLaunchPlanBuilder;
@@ -689,6 +730,8 @@ export class TerminalHost {
 			? options.onActivityLeaseRevoked
 			: undefined;
 		this.onTaskSessionEvent = options.onTaskSessionEvent;
+		this.taskTurnReminderScheduler = options.taskTurnReminderScheduler
+			?? systemTaskTurnReminderScheduler;
 		this.activityLeaseStateBySession = this.agentActivityCompatible
 			? new Map<SessionId, ActivityLeaseState>()
 			: undefined;
@@ -1495,7 +1538,10 @@ export class TerminalHost {
 							taskDescriptor.scope,
 							preparation.executable.executable,
 						),
-						argsAfterConfig: ['--', createTaskAgentPrompt(taskDescriptor)],
+						argsAfterConfig: [
+							'--',
+							createTaskAgentPrompt(taskDescriptor.prompt),
+						],
 					}),
 			}),
 			buildBarePlan: (preparation) => this.buildCodexBarePlan({
@@ -1525,6 +1571,7 @@ export class TerminalHost {
 				cwd: preparation.cwd,
 				connection,
 				agentActivityCompatible: this.agentActivityCompatible,
+				taskToolCompatible: taskDescriptor !== undefined,
 				...(taskDescriptor === undefined
 					? {}
 					: {
@@ -1532,9 +1579,19 @@ export class TerminalHost {
 							createClaudeTaskPermissionArgs(
 								taskDescriptor.scope,
 								serverName,
+								connection.url,
 							)
 						),
-						argsAfterConfig: ['--', createTaskAgentPrompt(taskDescriptor)],
+						createArgsAfterConfig: (serverName) => [
+							'--',
+							createTaskAgentPrompt(
+								taskDescriptor.prompt,
+								createClaudeMcpQualifiedToolName(
+									serverName,
+									CRISPY_TASK_COMPLETE_TOOL_NAME,
+								),
+							),
+						],
 					}),
 			}),
 			buildBarePlan: (preparation) => this.buildClaudeBarePlan({
@@ -1640,7 +1697,7 @@ export class TerminalHost {
 			}
 			session.markError(preparationResult.error.code);
 			this.updateWorkspaceTrustMonitor();
-			this.publish(preparationResult.error);
+			this.publishTerminalError(session, preparationResult.error);
 			return;
 		}
 
@@ -2332,6 +2389,7 @@ export class TerminalHost {
 		});
 		const taskDescriptor = this.taskDescriptorBySession.get(session.sessionId);
 		if (taskDescriptor !== undefined) {
+			this.getOrCreateCodexTaskTurnState(session);
 			this.emitTaskSessionEvent({
 				type: 'started',
 				tabId: session.tabId,
@@ -2400,6 +2458,7 @@ export class TerminalHost {
 		if (claudeStartup !== undefined) {
 			claudeStartup.interactiveInputObserved = true;
 		}
+		this.markCodexTaskTurnStarted(session.sessionId);
 
 		this.performPtyOperation(
 			session,
@@ -2872,6 +2931,11 @@ export class TerminalHost {
 		this.taskDescriptorByTab.clear();
 		this.taskDescriptorBySession.clear();
 		this.expectedTaskSessionStops.clear();
+		for (const state of this.codexTaskTurnBySession.values()) {
+			this.cancelCodexTaskTurnReminder(state);
+		}
+		this.codexTaskTurnBySession.clear();
+		this.failedTaskTurnSessions.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.assignmentByTab.clear();
@@ -3062,6 +3126,11 @@ export class TerminalHost {
 		this.taskDescriptorByTab.clear();
 		this.taskDescriptorBySession.clear();
 		this.expectedTaskSessionStops.clear();
+		for (const state of this.codexTaskTurnBySession.values()) {
+			this.cancelCodexTaskTurnReminder(state);
+		}
+		this.codexTaskTurnBySession.clear();
+		this.failedTaskTurnSessions.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.assignmentByTab.clear();
@@ -3092,6 +3161,7 @@ export class TerminalHost {
 		) {
 			return;
 		}
+		this.observeCodexTaskTurnNotifications(session, data);
 		this.appendClaudeStartupOutput(session.sessionId, data);
 
 		this.publish({
@@ -3099,6 +3169,151 @@ export class TerminalHost {
 			tabId: session.tabId,
 			sessionId: session.sessionId,
 			data,
+		});
+	}
+
+	private observeCodexTaskTurnNotifications(
+		session: TerminalSession,
+		data: string,
+	): void {
+		const state = this.getOrCreateCodexTaskTurnState(session);
+		if (state === undefined) {
+			return;
+		}
+		const count = state.parser.push(data);
+		for (let index = 0; index < count; index += 1) {
+			this.handleCodexTaskTurnEnded(session, state);
+		}
+	}
+
+	private getOrCreateCodexTaskTurnState(
+		session: TerminalSession,
+	): CodexTaskTurnLifecycleState | undefined {
+		const current = this.codexTaskTurnBySession.get(session.sessionId);
+		if (current !== undefined) {
+			return current;
+		}
+		if (
+			session.state.kind !== 'running'
+			|| this.taskDescriptorBySession.get(session.sessionId) === undefined
+			|| this.assignmentBySession.get(session.sessionId)?.providerId !== 'codex'
+		) {
+			return undefined;
+		}
+		const created: CodexTaskTurnLifecycleState = {
+			parser: new CodexTaskTurnNotificationParser(),
+			awaitingTurnEnd: true,
+			completionObserved: false,
+			pendingScopeRequestId: undefined,
+			reminderCount: 0,
+			reminderTimer: undefined,
+		};
+		this.codexTaskTurnBySession.set(session.sessionId, created);
+		return created;
+	}
+
+	private handleCodexTaskTurnEnded(
+		session: TerminalSession,
+		state: CodexTaskTurnLifecycleState,
+	): void {
+		if (
+			!state.awaitingTurnEnd
+			|| state.completionObserved
+			|| this.failedTaskTurnSessions.has(session.sessionId)
+			|| this.codexTaskTurnBySession.get(session.sessionId) !== state
+		) {
+			return;
+		}
+		state.awaitingTurnEnd = false;
+		if (state.pendingScopeRequestId !== undefined) {
+			return;
+		}
+		this.cancelCodexTaskTurnReminder(state);
+		state.reminderTimer = this.taskTurnReminderScheduler.setTimeout(() => {
+			state.reminderTimer = undefined;
+			const descriptor = this.taskDescriptorBySession.get(session.sessionId);
+			const assignment = this.assignmentBySession.get(session.sessionId);
+			if (
+				descriptor === undefined
+				|| assignment?.providerId !== 'codex'
+				|| !this.isCurrentSession(session)
+				|| session.state.kind !== 'running'
+				|| this.codexTaskTurnBySession.get(session.sessionId) !== state
+				|| state.completionObserved
+				|| state.pendingScopeRequestId !== undefined
+				|| this.failedTaskTurnSessions.has(session.sessionId)
+			) {
+				return;
+			}
+			if (!this.guardWorkspaceTrust(session, assignment)) {
+				return;
+			}
+			if (state.reminderCount >= TASK_TURN_REMINDER_LIMIT) {
+				this.failTaskTurnSession(session, descriptor);
+				return;
+			}
+
+			state.reminderCount += 1;
+			state.awaitingTurnEnd = true;
+			try {
+				session.writeInput(
+					`${createTaskCompletionFollowup(CRISPY_TASK_COMPLETE_TOOL_NAME)}\r`,
+				);
+			} catch {
+				this.failTaskTurnSession(session, descriptor);
+			}
+		}, TASK_TURN_REMINDER_DELAY_MS);
+	}
+
+	private markCodexTaskTurnStarted(sessionId: SessionId): void {
+		const state = this.codexTaskTurnBySession.get(sessionId);
+		if (
+			state === undefined
+			|| state.completionObserved
+			|| this.failedTaskTurnSessions.has(sessionId)
+		) {
+			return;
+		}
+		this.cancelCodexTaskTurnReminder(state);
+		state.awaitingTurnEnd = true;
+	}
+
+	private cancelCodexTaskTurnReminder(state: CodexTaskTurnLifecycleState): void {
+		if (state.reminderTimer === undefined) {
+			return;
+		}
+		this.taskTurnReminderScheduler.clearTimeout(state.reminderTimer);
+		state.reminderTimer = undefined;
+	}
+
+	private clearTaskTurnLifecycleSession(sessionId: SessionId): void {
+		const state = this.codexTaskTurnBySession.get(sessionId);
+		if (state !== undefined) {
+			this.cancelCodexTaskTurnReminder(state);
+			state.parser.reset();
+			this.codexTaskTurnBySession.delete(sessionId);
+		}
+		this.failedTaskTurnSessions.delete(sessionId);
+	}
+
+	private failTaskTurnSession(
+		session: TerminalSession,
+		descriptor: TaskTerminalSessionDescriptor,
+	): void {
+		if (this.failedTaskTurnSessions.has(session.sessionId)) {
+			return;
+		}
+		this.failedTaskTurnSessions.add(session.sessionId);
+		const state = this.codexTaskTurnBySession.get(session.sessionId);
+		if (state !== undefined) {
+			this.cancelCodexTaskTurnReminder(state);
+			state.awaitingTurnEnd = false;
+		}
+		this.emitTaskSessionEvent({
+			type: 'failed',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			descriptor,
 		});
 	}
 
@@ -3118,6 +3333,7 @@ export class TerminalHost {
 		const authenticatedRuntime = this.mcpRuntimeBySession.get(
 			session.sessionId,
 		)?.runtime;
+		this.clearTaskTurnLifecycleSession(session.sessionId);
 		this.revokeExactActivityLease(session, authenticatedRuntime);
 		const taskDescriptor = this.taskDescriptorBySession.get(session.sessionId);
 		const claudeFallback = taskDescriptor === undefined
@@ -3778,6 +3994,26 @@ export class TerminalHost {
 			this.handleAgentActivityRequested(sourceRuntime, event);
 			return;
 		}
+		if (event.type === 'session.taskTurnLifecycleObserved') {
+			const descriptor = this.taskDescriptorBySession.get(session.sessionId);
+			if (
+				ownership.providerId !== event.providerId
+				|| descriptor === undefined
+				|| descriptor !== this.taskDescriptorByTab.get(session.tabId)
+				|| descriptor.executionId !== event.executionId
+				|| descriptor.workNodeId !== event.workNodeId
+				|| !this.guardWorkspaceTrust(session, assignment)
+			) {
+				return;
+			}
+			if (
+				event.outcome === 'reminders-exhausted'
+				|| event.outcome === 'provider-failed'
+			) {
+				this.failTaskTurnSession(session, descriptor);
+			}
+			return;
+		}
 		if (event.type === 'session.taskToolRequested') {
 			const descriptor = this.taskDescriptorBySession.get(session.sessionId);
 			if (
@@ -3790,6 +4026,19 @@ export class TerminalHost {
 			}
 			if (!this.guardWorkspaceTrust(session, assignment)) {
 				return;
+			}
+			const turnState = this.codexTaskTurnBySession.get(session.sessionId);
+			if (turnState !== undefined) {
+				if (event.operation === 'complete') {
+					if (turnState.pendingScopeRequestId === undefined) {
+						turnState.completionObserved = true;
+						this.cancelCodexTaskTurnReminder(turnState);
+					}
+				} else if (event.operation === 'scope-request') {
+					turnState.pendingScopeRequestId = event.requestId;
+				} else if (turnState.pendingScopeRequestId === event.requestId) {
+					turnState.pendingScopeRequestId = undefined;
+				}
 			}
 			this.emitTaskSessionEvent({
 				type: 'tool',
@@ -4013,6 +4262,7 @@ export class TerminalHost {
 		this.assignmentBySession.delete(sessionId);
 		this.taskDescriptorBySession.delete(sessionId);
 		this.expectedTaskSessionStops.delete(sessionId);
+		this.clearTaskTurnLifecycleSession(sessionId);
 		this.workspaceTrustFailedSessions.delete(sessionId);
 		void this.cancelSessionPreparation(sessionId);
 		this.providerAutoRunInputBySession.delete(sessionId);
@@ -4569,7 +4819,7 @@ export class TerminalHost {
 			return;
 		}
 		this.updateWorkspaceTrustMonitor();
-		this.publish(mapWorkspaceFailureToTerminalError(
+		this.publishTerminalError(session, mapWorkspaceFailureToTerminalError(
 			failure,
 			session.tabId,
 			session.sessionId,
@@ -4607,15 +4857,31 @@ export class TerminalHost {
 			canRestart,
 			...(switchAttemptId === undefined ? {} : { switchAttemptId }),
 		} as const;
-		this.publish(error);
-		const taskDescriptor = this.taskDescriptorByTab.get(tabId);
+		this.publishTerminalError(session, error);
+	}
+
+	/**
+	 * Task-owned session 오류는 일반 탭의 수동 restart 계약으로 노출하지 않고 exact Work
+	 * 실패 이벤트로 변환한다. Task controller가 소유 process와 descriptor를 정리하므로
+	 * provider 탐색/호환성/Workspace 준비 단계의 오류도 stranded Task tab을 남기지 않는다.
+	 */
+	private publishTerminalError(
+		session: TerminalSession | null,
+		error: Extract<HostToWebviewMessage, { type: 'terminal.error' }>,
+	): void {
+		const taskDescriptor = this.taskDescriptorByTab.get(error.tabId);
+		this.publish(
+			taskDescriptor !== undefined && error.canRestart
+				? Object.freeze({ ...error, canRestart: false })
+				: error,
+		);
 		if (
 			taskDescriptor !== undefined
 			&& (session === null || session.state.kind === 'error')
 		) {
 			this.emitTaskSessionEvent({
 				type: 'failed',
-				tabId,
+				tabId: error.tabId,
 				...(session === null ? {} : { sessionId: session.sessionId }),
 				descriptor: taskDescriptor,
 			});
@@ -4643,19 +4909,4 @@ function isValidTaskTerminalSessionDescriptor(
 			&& (target.kind === 'file' || target.kind === 'folder')
 			&& (target.access === 'read' || target.access === 'read-write')
 		));
-}
-
-function createTaskAgentPrompt(
-	descriptor: TaskTerminalSessionDescriptor,
-): string {
-	return [
-		descriptor.prompt,
-		'',
-		'CRISPY TASK EXECUTION CONTRACT:',
-		'- Work only within the reference and work areas stated above.',
-		'- Reference areas are read-only. Work areas are the only paths you may modify.',
-		'- Before accessing any other path, call crispy_task_scope_request, retain its requestId, then attempt that exact access so the provider asks the user in this same Agent tab.',
-		'- After the provider prompt resolves, call crispy_task_scope_result with that requestId and approved or rejected before continuing. A rejected result ends this Work.',
-		'- When the work is finished, call crispy_task_complete exactly once with completed and a concise summary.',
-	].join('\n');
 }

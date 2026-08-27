@@ -82,9 +82,12 @@ export function createCodexMcpConfig(
 			: []),
 	];
 	const assignments = [
-		...(agentActivityCompatible
+		...(agentActivityCompatible || taskToolCompatible
 			? [`developer_instructions=${serializeCodexTomlString(
-				createCrispyMcpInstructions(true),
+				createCrispyMcpInstructions(
+					agentActivityCompatible,
+					taskToolCompatible,
+				),
 			)}`]
 			: []),
 		`${serverKey}.url=${serializeCodexTomlString(connection.url)}`,

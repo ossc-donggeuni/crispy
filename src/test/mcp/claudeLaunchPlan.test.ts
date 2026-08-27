@@ -5,7 +5,10 @@ import {
 	buildClaudeMcpLaunchPlan,
 } from '../../mcp/claudeLaunchPlan';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
-import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
+import {
+	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+	createCrispyMcpInstructions,
+} from '../../mcp/agentActivityInstructions';
 
 const token = Buffer.alloc(32, 0x42).toString('base64url');
 const route = Buffer.alloc(24, 0x24).toString('base64url');
@@ -51,7 +54,7 @@ suite('Claude AgentLaunchPlan builder', () => {
 
 		assert.strictEqual(plan.providerId, 'claude');
 		assert.strictEqual(plan.expectsMcp, true);
-		assert.match(plan.mcpServerName ?? '', /^crispy_canvas_[a-f0-9]{32}$/u);
+		assert.match(plan.mcpServerName ?? '', /^crispy_[a-f0-9]{24}$/u);
 		assert.strictEqual(plan.args.includes('--append-system-prompt'), true);
 		assert.deepStrictEqual(plan.args.slice(0, 2), [
 			'-p',
@@ -71,6 +74,45 @@ suite('Claude AgentLaunchPlan builder', () => {
 		assert.strictEqual(environment.CRISPY_MCP_TOKEN, token);
 		assert.strictEqual(environment.crispy_mcp_token, undefined);
 		assert.strictEqual(environment.ELECTRON_RUN_AS_NODE, undefined);
+	});
+
+	test('Task lease carries the shared Task contract before the user prompt', () => {
+		const prompt = 'Task: Verify the feature';
+		const plan = buildClaudeMcpLaunchPlan({
+			executable: { executable: '/opt/claude', launcherKind: 'direct' },
+			cwd: '/workspace',
+			connection: createConnection(),
+			taskToolCompatible: true,
+			argsAfterConfig: ['--', prompt],
+		});
+		const systemPromptIndex = plan.args.indexOf('--append-system-prompt');
+
+		assert.strictEqual(
+			plan.args[systemPromptIndex + 1],
+			createCrispyMcpInstructions(false, true),
+		);
+		assert.deepStrictEqual(plan.args.slice(-2), ['--', prompt]);
+	});
+
+	test('Task prompt factory는 생성된 server name을 config 뒤 prompt에 사용한다', () => {
+		const plan = buildClaudeMcpLaunchPlan({
+			executable: { executable: '/opt/claude', launcherKind: 'direct' },
+			cwd: '/workspace',
+			connection: createConnection(),
+			createArgsAfterConfig: (serverName) => ['--', `complete with ${serverName}`],
+		});
+
+		assert.deepStrictEqual(plan.args.slice(-2), [
+			'--',
+			`complete with ${plan.mcpServerName}`,
+		]);
+		assert.throws(() => buildClaudeMcpLaunchPlan({
+			executable: { executable: '/opt/claude', launcherKind: 'direct' },
+			cwd: '/workspace',
+			connection: createConnection(),
+			argsAfterConfig: ['--', 'static'],
+			createArgsAfterConfig: () => ['--', 'dynamic'],
+		}), /launch arguments are invalid/u);
 	});
 
 	test('static args와 server-name args factory를 함께 받지 않는다', () => {

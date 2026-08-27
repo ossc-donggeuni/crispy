@@ -13,6 +13,7 @@ import {
 	type McpChildControlMessage,
 	type McpIpcParseResult,
 } from '../../mcp/ipcProtocol';
+import { createTaskTurnLifecycleObserved } from '../../mcp/taskTurnLifecycleProtocol';
 
 const generation = 'generation-ipc-test';
 const sessionId = 'session-ipc-test';
@@ -109,6 +110,25 @@ suite('MCP strict IPC validator', () => {
 			assertSuccess(result);
 			assert.deepStrictEqual(result.value, message);
 		}
+	});
+
+	test('Task turn lifecycle은 exact lease identity와 outcome만 통과한다', () => {
+		const event = createTaskTurnLifecycleObserved({
+			sessionId,
+			generation,
+			executionId: 'execution-ipc-test',
+			workNodeId: 'work-ipc-test',
+			turnId: 'turn-ipc-test',
+			outcome: 'reminders-exhausted',
+		});
+		const parsed = parseMcpChildToHostMessage(event);
+
+		assertSuccess(parsed);
+		assert.deepStrictEqual(parsed.value, event);
+		assertFailure(parseMcpChildToHostMessage({
+			...event,
+			outcome: 'unknown',
+		}), 'invalid_message');
 	});
 
 	test('Agent Activity set/clear를 exact frozen clone으로 parsing한다', () => {

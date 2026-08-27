@@ -1,5 +1,17 @@
 import * as nodePath from 'node:path';
+import {
+	CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+	CLAUDE_MCP_TOKEN_PLACEHOLDER,
+	createClaudeMcpQualifiedToolName,
+	isValidClaudeMcpServerName,
+} from '../mcp/claudeConfig';
 import { serializeCodexTomlString } from '../mcp/codexConfig';
+import { createClaudeTaskTurnLifecycleUrl } from '../mcp/taskTurnLifecycleProtocol';
+import {
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+} from '../mcp/toolNames';
 
 export interface TaskAgentScopePath {
 	readonly path: string;
@@ -9,10 +21,30 @@ export interface TaskAgentScopePath {
 
 const CODEX_TASK_PERMISSION_PROFILE = 'crispy-task';
 const CLAUDE_TASK_MCP_TOOL_NAMES = Object.freeze([
-	'crispy_task_complete',
-	'crispy_task_scope_request',
-	'crispy_task_scope_result',
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 ]);
+const TASK_COMPLETION_PROMPT_SUFFIX = [
+	'Task completion requirement:',
+];
+
+/** Keeps the Task content intact and adds one provider-neutral completion reminder last. */
+export function createTaskAgentPrompt(
+	prompt: string,
+	completionToolName = CRISPY_TASK_COMPLETE_TOOL_NAME,
+): string {
+	if (!/^[A-Za-z0-9_-]{1,64}$/u.test(completionToolName)) {
+		throw new Error('Task completion Tool name is invalid.');
+	}
+	const suffix = [
+		...TASK_COMPLETION_PROMPT_SUFFIX,
+		`As the final action after finishing the assigned work, call ${completionToolName} exactly once.`,
+		'Use status completed after success and verification, or rejected only for an intentional scope or user-denial outcome, and include a concise summary.',
+		'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
+	].join(' ');
+	return `${prompt}\n\n${suffix}`;
+}
 
 /** Codex permission profile을 session-only CLI config로 고정한다. */
 export function createCodexTaskPermissionArgs(
@@ -52,6 +84,12 @@ export function createCodexTaskPermissionArgs(
 		`default_permissions=${serializeCodexTomlString(CODEX_TASK_PERMISSION_PROFILE)}`,
 		'--config',
 		`permissions.${CODEX_TASK_PERMISSION_PROFILE}.filesystem={${filesystem}}`,
+		'--config',
+		'tui.notifications=["agent-turn-complete"]',
+		'--config',
+		'tui.notification_method="osc9"',
+		'--config',
+		'tui.notification_condition="always"',
 	]);
 }
 
@@ -64,21 +102,30 @@ export function createCodexTaskPermissionArgs(
 export function createClaudeTaskPermissionArgs(
 	scope: readonly TaskAgentScopePath[],
 	mcpServerName?: string,
+	mcpUrl?: string,
 ): readonly string[] {
 	assertValidTaskAgentScope(scope);
 	if (
 		mcpServerName !== undefined
-		&& !/^crispy_canvas_[a-f0-9]{32}$/u.test(mcpServerName)
+		&& !isValidClaudeMcpServerName(mcpServerName)
 	) {
 		throw new Error('Task Agent MCP server name is invalid.');
+	}
+	if ((mcpServerName === undefined) !== (mcpUrl === undefined)) {
+		throw new Error('Task Agent lifecycle configuration is incomplete.');
 	}
 	const allow = new Set<string>();
 	const additionalDirectories = new Set<string>();
 	const allowRead = new Set<string>();
 	const allowWrite = new Set<string>();
+	let completionToolName: string | undefined;
 	if (mcpServerName !== undefined) {
+		completionToolName = createClaudeMcpQualifiedToolName(
+			mcpServerName,
+			CRISPY_TASK_COMPLETE_TOOL_NAME,
+		);
 		for (const toolName of CLAUDE_TASK_MCP_TOOL_NAMES) {
-			allow.add(`mcp__${mcpServerName}__${toolName}`);
+			allow.add(createClaudeMcpQualifiedToolName(mcpServerName, toolName));
 		}
 	}
 	for (const target of scope) {
@@ -113,6 +160,13 @@ export function createClaudeTaskPermissionArgs(
 				allowWrite: [...allowWrite],
 			},
 		},
+		...(mcpUrl === undefined || completionToolName === undefined
+			? {}
+			: {
+				hooks: createClaudeTaskTurnHooks(
+					createClaudeTaskTurnLifecycleUrl(mcpUrl, completionToolName),
+				),
+			}),
 	};
 	return Object.freeze([
 		'--setting-sources',
@@ -123,6 +177,22 @@ export function createClaudeTaskPermissionArgs(
 		JSON.stringify(settings),
 		...[...additionalDirectories].flatMap((path) => ['--add-dir', path]),
 	]);
+}
+
+function createClaudeTaskTurnHooks(url: string): Readonly<Record<string, unknown>> {
+	const handler = {
+		type: 'http',
+		url,
+		timeout: 10,
+		headers: {
+			Authorization: `Bearer ${CLAUDE_MCP_TOKEN_PLACEHOLDER}`,
+		},
+		allowedEnvVars: [CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE],
+	};
+	return {
+		Stop: [{ hooks: [handler] }],
+		StopFailure: [{ hooks: [handler] }],
+	};
 }
 
 function assertValidTaskAgentScope(scope: readonly TaskAgentScopePath[]): void {

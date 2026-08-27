@@ -312,6 +312,9 @@ const terminalPool = createDefaultAgentTerminalPool(
 			);
 		},
 	},
+	{
+		isRestartAllowed: (tabId) => !taskWorkByTabId.has(tabId),
+	},
 );
 
 /** 현재 Panel과 Camera를 Webview Session snapshot으로 복사한다. */

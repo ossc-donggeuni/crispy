@@ -145,6 +145,8 @@ export function createCrispyToolServer(options: CrispyToolServerOptions): McpSer
 	}, {
 		instructions: createCrispyMcpInstructions(
 			options.agentActivityCompatible,
+			options.taskLease !== undefined
+				&& options.handleTaskTool !== undefined,
 		),
 	});
 

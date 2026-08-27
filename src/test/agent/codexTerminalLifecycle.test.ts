@@ -238,6 +238,9 @@ function createFixture(options: {
 		'prepareCodexLaunch'
 	];
 	readonly onTaskSessionEvent?: (event: TaskTerminalSessionEvent) => void;
+	readonly taskTurnReminderScheduler?: ConstructorParameters<typeof TerminalHost>[0][
+		'taskTurnReminderScheduler'
+	];
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -296,6 +299,7 @@ function createFixture(options: {
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
 		onTaskSessionEvent: options.onTaskSessionEvent,
+		taskTurnReminderScheduler: options.taskTurnReminderScheduler,
 		...(options.buildPlan === undefined
 			? {}
 			: { buildCodexMcpLaunchPlan: options.buildPlan }),
@@ -438,12 +442,43 @@ suite('Codex direct PTY and MCP transaction', () => {
 			'--config',
 			'permissions.crispy-task.filesystem={":minimal"="read","/trusted/workspace/docs"="read","/trusted/workspace/src"="write","/resolved/codex"="read"}',
 		]);
+		assert.ok((spawn.args as string[]).includes(
+			'tui.notifications=["agent-turn-complete"]',
+		));
+		assert.ok((spawn.args as string[]).includes(
+			'tui.notification_method="osc9"',
+		));
+		assert.ok((spawn.args as string[]).includes(
+			'tui.notification_condition="always"',
+		));
 		assert.ok((spawn.args as string[]).some((argument) =>
 			/^mcp_servers\.crispy_canvas_[a-f0-9]{32}\.enabled_tools=\["crispy_ping","crispy_task_complete","crispy_task_scope_request","crispy_task_scope_result"\]$/u.test(argument)
 		));
 		assert.strictEqual((spawn.args as string[]).at(-2), '--');
-		assert.match((spawn.args as string[]).at(-1) ?? '', /CRISPY TASK EXECUTION CONTRACT:/u);
-		assert.match((spawn.args as string[]).at(-1) ?? '', /crispy_task_complete/u);
+		assert.ok(((spawn.args as string[]).at(-1) ?? '').startsWith(
+			`${descriptor.prompt}\n\nTask completion requirement:`,
+		));
+		assert.ok(((spawn.args as string[]).at(-1) ?? '').endsWith(
+			'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
+		));
+		assert.doesNotMatch(
+			(spawn.args as string[]).at(-1) ?? '',
+			/CRISPY TASK EXECUTION CONTRACT/u,
+		);
+		assert.strictEqual(
+			(((spawn.args as string[]).at(-1) ?? '').match(
+				/crispy_task_complete/gu,
+			) ?? []).length,
+			1,
+		);
+		const developerInstructions = (spawn.args as string[]).find(
+			(argument) => argument.startsWith('developer_instructions='),
+		) ?? '';
+		assert.match(
+			developerInstructions,
+			/REQUIRED FOR CRISPY TASK SCHEDULING/u,
+		);
+		assert.match(developerInstructions, /crispy_task_complete/u);
 		assert.deepStrictEqual(events.map(({ type }) => type), ['started']);
 
 		// Task 소유 중 일반 reset/provider switch는 기존 session을 바꾸지 않는다.
@@ -480,6 +515,122 @@ suite('Codex direct PTY and MCP transaction', () => {
 			descriptor.executionId,
 			descriptor.workNodeId,
 		), false);
+	});
+
+	test('Task Codex는 turn 완료마다 completion Tool 후속 입력을 두 번만 보내고 누락을 실패 처리한다', async () => {
+		const events: TaskTerminalSessionEvent[] = [];
+		const scheduled = new Map<number, () => void>();
+		let nextTimer = 0;
+		const fixture = createFixture({
+			onTaskSessionEvent: (event) => events.push(event),
+			taskTurnReminderScheduler: {
+				setTimeout: (callback) => {
+					nextTimer += 1;
+					scheduled.set(nextTimer, callback);
+					return nextTimer;
+				},
+				clearTimeout: (handle) => {
+					scheduled.delete(Number(handle));
+				},
+			},
+		});
+		const descriptor = {
+			executionId: 'execution-codex-turn',
+			workNodeId: 'work-codex-turn',
+			prompt: 'Task: report completion',
+			scope: [],
+		};
+		await fixture.host.createTaskSession(
+			'tab-codex-turn', 'codex', WORKSPACE_ROOT_ID, 1, descriptor,
+		);
+		await fixture.host.handleTerminalReady('tab-codex-turn', 100, 30);
+		const handle = fixture.adapter.handles[0];
+		const runReminder = (): void => {
+			const entry = scheduled.entries().next().value as [number, () => void] | undefined;
+			assert.ok(entry);
+			scheduled.delete(entry[0]);
+			entry[1]();
+		};
+
+		for (let turn = 0; turn < 2; turn += 1) {
+			handle.emitData('\u001b]9;Codex turn complete\u0007');
+			await Promise.resolve();
+			assert.strictEqual(scheduled.size, 1);
+			runReminder();
+			assert.match(handle.writes.at(-1) ?? '', /crispy_task_complete/u);
+			assert.ok((handle.writes.at(-1) ?? '').endsWith('\r'));
+		}
+		handle.emitData('\u001b]9;Codex turn complete\u001b\\');
+		await Promise.resolve();
+		runReminder();
+
+		assert.strictEqual(handle.writes.length, 2);
+		assert.deepStrictEqual(events.map(({ type }) => type), [
+			'started', 'failed',
+		]);
+		assert.strictEqual(await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		), true);
+	});
+
+	test('Task Codex completion IPC가 grace 안에 오면 예약한 후속 입력을 취소한다', async () => {
+		const events: TaskTerminalSessionEvent[] = [];
+		const scheduled = new Map<number, () => void>();
+		let nextTimer = 0;
+		const fixture = createFixture({
+			onTaskSessionEvent: (event) => events.push(event),
+			taskTurnReminderScheduler: {
+				setTimeout: (callback) => {
+					nextTimer += 1;
+					scheduled.set(nextTimer, callback);
+					return nextTimer;
+				},
+				clearTimeout: (handle) => {
+					scheduled.delete(Number(handle));
+				},
+			},
+		});
+		const descriptor = {
+			executionId: 'execution-codex-turn-race',
+			workNodeId: 'work-codex-turn-race',
+			prompt: 'Task: report completion',
+			scope: [],
+		};
+		await fixture.host.createTaskSession(
+			'tab-codex-turn-race', 'codex', WORKSPACE_ROOT_ID, 1, descriptor,
+		);
+		await fixture.host.handleTerminalReady('tab-codex-turn-race', 100, 30);
+		const session = fixture.host.getActiveSession('tab-codex-turn-race');
+		assert.ok(session);
+		const handle = fixture.adapter.handles[0];
+		handle.emitData('\u001b]9;Codex turn complete\u0007');
+		await Promise.resolve();
+		assert.strictEqual(scheduled.size, 1);
+
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime);
+		fixture.host.handleMcpRuntimeEvent({
+			sourceRuntime: runtime,
+			event: {
+				type: 'session.taskToolRequested',
+				sessionId: session.sessionId,
+				generation: runtime.generation,
+				executionId: descriptor.executionId,
+				workNodeId: descriptor.workNodeId,
+				operation: 'complete',
+				status: 'completed',
+				summary: 'Done',
+			},
+		});
+
+		assert.strictEqual(scheduled.size, 0);
+		assert.deepStrictEqual(handle.writes, []);
+		assert.deepStrictEqual(events.map(({ type }) => type), ['started', 'tool']);
+		assert.strictEqual(await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		), true);
 	});
 
 	test('provider switch는 이전 preparation cleanup 완료 전 새 native spawn을 차단한다', async () => {

@@ -21,10 +21,13 @@ export interface BuildClaudeMcpLaunchPlanOptions
 	readonly connection: McpConnectionDescriptor;
 	/** Host-owned immutable VS Code capability; omission is fail-closed. */
 	readonly agentActivityCompatible?: boolean;
+	/** Task lease가 있는 ordinary tab에서만 Task completion/scope tools를 안내한다. */
+	readonly taskToolCompatible?: boolean;
 	readonly randomBytes?: McpRandomBytes;
 	/** Diagnostic callers may derive a prompt from the generated non-secret server name. */
 	readonly createArgs?: (serverName: string) => readonly string[];
 	readonly argsAfterConfig?: readonly string[];
+	readonly createArgsAfterConfig?: (serverName: string) => readonly string[];
 }
 
 /** A compatibility or fail-open launch never receives config or credentials. */
@@ -48,17 +51,27 @@ export function buildClaudeMcpLaunchPlan(
 		options.connection,
 		options.randomBytes,
 		options.agentActivityCompatible === true,
+		options.taskToolCompatible === true,
 	);
 	if (options.args !== undefined && options.createArgs !== undefined) {
 		throw new Error('Claude launch arguments are invalid.');
 	}
+	if (
+		options.argsAfterConfig !== undefined
+		&& options.createArgsAfterConfig !== undefined
+	) {
+		throw new Error('Claude launch arguments are invalid.');
+	}
 	const args = options.createArgs?.(config.serverName) ?? options.args ?? [];
+	const argsAfterConfig = options.createArgsAfterConfig?.(config.serverName)
+		?? options.argsAfterConfig
+		?? [];
 	options.connection.withBearerToken(() => undefined);
 	return freezeClaudePlan({
 		executable: options.executable,
 		cwd: options.cwd,
 		/** Keep MCP-generated config between provider options and an optional prompt. */
-		args: [...args, ...config.args, ...(options.argsAfterConfig ?? [])],
+		args: [...args, ...config.args, ...argsAfterConfig],
 		createEnvOverlay: () => options.connection.withBearerToken((token) =>
 			Object.freeze({
 				[CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE]: token,

@@ -24,6 +24,7 @@ export {
 	type McpProtocolServerOptions,
 	type McpServerReady,
 	type RegisteredMcpSession,
+	type TaskTurnLifecycleIpcTransport,
 } from './protocolServer';
 export {
 	ACTIVITY_IPC_MAX_UTF8_BYTES,
@@ -160,10 +161,13 @@ export {
 	CLAUDE_MCP_CONFIG_ARGUMENT,
 	CLAUDE_MCP_SERVER_NAME_PREFIX,
 	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
+	CLAUDE_MCP_TOOL_NAME_MAX_LENGTH,
 	CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE,
 	CLAUDE_MCP_TOKEN_PLACEHOLDER,
 	createClaudeMcpConfig,
+	createClaudeMcpQualifiedToolName,
 	createClaudeMcpServerName,
+	isValidClaudeMcpServerName,
 	type ClaudeMcpConfig,
 } from './claudeConfig';
 export {
@@ -243,6 +247,19 @@ export {
 	type TaskToolRequested,
 } from './taskToolProtocol';
 export {
+	CodexTaskTurnNotificationParser,
+	createClaudeTaskTurnLifecycleUrl,
+	createTaskCompletionFollowup,
+	createTaskTurnLifecycleObserved,
+	parseClaudeTaskTurnHookInput,
+	parseClaudeTaskTurnLifecyclePath,
+	parseTaskTurnLifecycleObserved,
+	TASK_TURN_REMINDER_LIMIT,
+	type ClaudeTaskTurnHookInput,
+	type TaskTurnLifecycleObserved,
+	type TaskTurnLifecycleOutcome,
+} from './taskTurnLifecycleProtocol';
+export {
 	AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION,
 	isAgentActivityVscodeVersionAllowed,
 	parseStableVscodeVersion,
@@ -251,5 +268,7 @@ export {
 export {
 	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
 	CRISPY_PING_ONLY_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_REQUIRED_MARKER,
 	createCrispyMcpInstructions,
 } from './agentActivityInstructions';

@@ -8,8 +8,9 @@ export const CLAUDE_MCP_CONFIG_ARGUMENT = '--mcp-config';
 export const CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT = '--append-system-prompt';
 export const CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
 export const CLAUDE_MCP_TOKEN_PLACEHOLDER = '${CRISPY_MCP_TOKEN}';
-export const CLAUDE_MCP_SERVER_NAME_PREFIX = 'crispy_canvas_';
-export const CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES = 16;
+export const CLAUDE_MCP_SERVER_NAME_PREFIX = 'crispy_';
+export const CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES = 12;
+export const CLAUDE_MCP_TOOL_NAME_MAX_LENGTH = 64;
 
 export interface ClaudeMcpConfig {
 	readonly serverName: string;
@@ -28,11 +29,39 @@ export function createClaudeMcpServerName(
 	return `${CLAUDE_MCP_SERVER_NAME_PREFIX}${randomValue.toString('hex')}`;
 }
 
+/** Claude API Tool names are limited to 64 characters after MCP qualification. */
+export function isValidClaudeMcpServerName(value: string): boolean {
+	return new RegExp(
+		`^${CLAUDE_MCP_SERVER_NAME_PREFIX}[a-f0-9]{${
+			CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES * 2
+		}}$`,
+		'u',
+	).test(value);
+}
+
+export function createClaudeMcpQualifiedToolName(
+	serverName: string,
+	toolName: string,
+): string {
+	if (
+		!isValidClaudeMcpServerName(serverName)
+		|| !/^[A-Za-z0-9_-]+$/u.test(toolName)
+	) {
+		throw new Error('Claude MCP Tool name is invalid.');
+	}
+	const qualified = `mcp__${serverName}__${toolName}`;
+	if (qualified.length > CLAUDE_MCP_TOOL_NAME_MAX_LENGTH) {
+		throw new Error('Claude MCP Tool name exceeds the provider limit.');
+	}
+	return qualified;
+}
+
 /** Serializes a session-only Claude config whose argv contains only an env placeholder. */
 export function createClaudeMcpConfig(
 	connection: McpConnectionDescriptor,
 	random?: McpRandomBytes,
 	agentActivityCompatible = false,
+	taskToolCompatible = false,
 ): ClaudeMcpConfig {
 	assertValidClaudeMcpUrl(connection.url);
 	const serverName = createClaudeMcpServerName(random);
@@ -53,7 +82,10 @@ export function createClaudeMcpConfig(
 		inlineConfig,
 		args: Object.freeze([
 			CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
-			createCrispyMcpInstructions(agentActivityCompatible),
+			createCrispyMcpInstructions(
+				agentActivityCompatible,
+				taskToolCompatible,
+			),
 			CLAUDE_MCP_CONFIG_ARGUMENT,
 			inlineConfig,
 		]),

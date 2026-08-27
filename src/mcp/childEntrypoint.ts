@@ -37,6 +37,15 @@ function startChild(childGeneration: string): void {
 				return process.send(event, callback);
 			},
 		},
+		taskTurnLifecycleTransport: {
+			isConnected: () => process.connected && typeof process.send === 'function',
+			send: (event, callback) => {
+				if (typeof process.send !== 'function') {
+					throw new Error('MCP child IPC is unavailable.');
+				}
+				return process.send(event, callback);
+			},
+		},
 		onActivityObserved: (event) => {
 			sendSafe({
 				type: event.type,

@@ -458,3 +458,50 @@ workflow run은 commit/push 전이라 아직 수행되지 않았다.
 포함되지 않았다. 이후 2026-08-26 Phase 5에서 VS Code Host capability로 제한한 Codex/Claude
 Agent Activity Tool과 Graph/Store 연결을 추가했으며 현재 계약은 문서 앞부분의
 `Phase 5 production Agent Activity 계약`을 따른다.
+
+## Task Work 공통 Tool 규약 주입 — 2026-08-27
+
+Task lease가 있는 세션만 `crispy_task_complete`, `crispy_task_scope_request`,
+`crispy_task_scope_result`를 `crispy_ping`과 함께 등록한다. 등록 여부와 같은 Host-owned boolean으로
+공통 Task Tool 규약을 생성하며, MCP initialize `instructions`, Codex
+`developer_instructions`, Claude `--append-system-prompt`가 정확히 같은 문자열을 사용한다. Task와
+Agent Activity가 모두 활성인 세션은 Task 규약 뒤에 기존 Activity 규약을 합성한다.
+
+Claude가 모델에 전달하는 MCP Tool 이름은 `mcp__<server>__<tool>`이고 64자 상한을 갖는다. 기존
+46자 `crispy_canvas_<32 hex>` server 이름에서는 Task Tool의 완전한 이름이 73~78자가 되어 Tool
+규약과 permission allowlist가 있어도 모델의 유효 Tool 정의가 될 수 없었다. Claude 전용 server
+이름을 96-bit random을 유지하는 31자 `crispy_<24 hex>`로 제한해 세 Task Tool을 각각
+58·63·62자로 만든다. server 이름은 credential이 아니며 route와 bearer token의 기존 entropy와
+수명은 변경하지 않는다. 생성·검증·permission·smoke·startup diagnostic은 한 validator를 사용하고,
+완전한 Tool 이름이 64자를 넘으면 provider launch 전에 거부한다. Codex server 이름은 변경하지 않는다.
+
+provider-neutral Task prompt에는 작업 제목·prompt와 배정된 참조/작업 영역을 둔다. Codex와 Claude
+launch 경로는 그 원문 뒤에 한 문단의 completion reminder를 추가해 마지막 action으로
+`crispy_task_complete`를 호출하고 accepted 호출 전에는 Work가 끝나지 않는다고 명시한다. 이전의 긴
+별도 실행 계약은 복원하지 않는다. 참조 영역은 read-only, 작업 영역만 read-write이며, 그 밖의 접근은
+scope request의 `requestId`와 provider의 일반 permission UI 결과를 scope result로 연결한다. scope
+request 자체는 권한을 부여하지 않는다.
+
+성공 또는 의도적인 범위/사용자 거절의 terminal outcome에서는 실제 `crispy_task_complete` 호출만
+Host scheduler를 진행시킨다. 자연어 완료 응답은 완료 신호가 아니며, accepted completion이 Task 소유
+process를 종료하므로 필요한 Activity cleanup 뒤 마지막 Tool 호출로 보낸다. Task 도구가 없는 일반
+세션은 이 규약을 받지 않으며 기존 Activity-only 또는 ping-only instructions를 유지한다.
+
+### Provider turn lifecycle adapter
+
+Task 세션은 completion Tool 누락을 provider 응답 종료 경계에서 복구한다. Codex는 Task launch에만
+`agent-turn-complete` OSC 9 TUI 알림을 켜고 Terminal Host가 raw PTY chunk를 파싱한다. 알림 후 250ms
+동안 exact completion IPC를 기다린 다음, 없으면 같은 PTY에 completion 후속 메시지를 최대 두 번 쓴다.
+세 번째 prose-only 종료는 Work 실패다. 이 경로는 별도 프로세스나 app server를 시작하지 않는다.
+
+Claude는 Task session inline settings에 HTTP `Stop`/`StopFailure` hook을 넣는다. URL은 그 세션 MCP
+child의 route에 종속된 sibling loopback route이고 기존 bearer token 환경 변수로 인증한다. child는
+MCP Tool 호출과 hook 요청을 함께 관찰하므로 completion이 이미 수락됐거나 scope request가 미결이면
+Stop을 그대로 통과시킨다. 그렇지 않으면 qualified completion Tool 이름을 provider-native
+`decision: block`의 `reason`으로 최대 두 번 반환한다. `StopFailure` 또는 reminder 소진은 exact child
+IPC로 Host에 전달되어 Work를 실패 처리한다. HTTP hook과 StopFailure가 도입된 버전은 기존 Claude
+최소 호환 버전보다 이전이며, 더 최신 버전에만 있는 Stop additional-context 표면에는 의존하지 않는다.
+
+turn event 자체는 scheduler 완료 근거가 아니다. generation, session, execution, Work identity가 모두
+현재 lease와 일치하는 이벤트만 관찰하며, 실제 scheduler 전이는 기존 Task Tool event만 담당한다.
+scope request가 미결인 동안 받은 completion도 lifecycle completion으로 기록하지 않는다.
