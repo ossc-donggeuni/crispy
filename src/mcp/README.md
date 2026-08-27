@@ -78,7 +78,9 @@ true의 공통 initialize instructions와 Claude additive prompt가 강제하는
 - workspace 작업에서는 어떤 read/search/edit/test보다 먼저, 작업 전체를 포함하는 completion anchor에
   `planned`를 설정해야 한다. 이후 서로 다른 의미 있는 파일/폴더가 실제 작업 target이 될 때마다 그 작업
   전에 `crispy_saa`를 호출한다. 같은 target/state의 반복 command나 access에는 다시 호출하지 않는다.
-  `active`는 읽기·분석·검색·검증·테스트 전에, `editing`은 생성·수정·삭제 전에 사용한다.
+  `planned`는 사용자를 향한 요청이 응답을 기다리는 동안 관련 target을 표시하는 데도 사용할 수 있다.
+  응답을 받아 작업을 재개할 때에는 실제 operation 전에 `active` 또는 `editing`으로 전환한다. `active`는
+  읽기·분석·검색·검증·테스트 전에, `editing`은 생성·수정·삭제 전에 사용한다.
 - `mentioned`는 Codex 또는 Claude가 자신의 자연어 응답에서 workspace 파일이나 폴더를 언급하기 전에
   사용한다. 단, Target×Session에는 한 상태만 저장되므로 같은 대상이 이미 `planned`, `active`,
   `editing`, `completed`, `rejected`이면 단순히 응답에서 이름을 썼다는 이유로 `mentioned`로
@@ -475,10 +477,10 @@ Claude가 모델에 전달하는 MCP Tool 이름은 `mcp__<server>__<tool>`이�
 수명은 변경하지 않는다. 생성·검증·permission·smoke·startup diagnostic은 한 validator를 사용하고,
 완전한 Tool 이름이 64자를 넘으면 provider launch 전에 거부한다. Codex server 이름은 변경하지 않는다.
 
-provider-neutral Task prompt에는 작업 제목·prompt와 배정된 참조/작업 영역을 둔다. Codex와 Claude
-launch 경로는 그 원문 뒤에 한 문단의 completion reminder를 추가해 마지막 action으로
-`crispy_task_complete`를 호출하고 accepted 호출 전에는 Work가 끝나지 않는다고 명시한다. 이전의 긴
-별도 실행 계약은 복원하지 않는다. 참조 영역은 read-only, 작업 영역만 read-write이며, 그 밖의 접근은
+provider-neutral Task prompt에는 작업 제목·prompt와 배정된 참조/작업 영역만 둔다. Codex와 Claude
+launch 경로는 completion reminder나 이전의 긴 별도 실행 계약을 사용자 prompt에 추가하지 않는다.
+마지막 action의 `crispy_task_complete`와 accepted 호출 전 Work가 끝나지 않는다는 안내는 공통 MCP
+지침과 Tool description에만 유지한다. 참조 영역은 read-only, 작업 영역만 read-write이며, 그 밖의 접근은
 scope request의 `requestId`와 provider의 일반 permission UI 결과를 scope result로 연결한다. scope
 request 자체는 권한을 부여하지 않는다.
 

@@ -455,21 +455,10 @@ suite('Codex direct PTY and MCP transaction', () => {
 			/^mcp_servers\.crispy_canvas_[a-f0-9]{32}\.enabled_tools=\["crispy_ping","crispy_task_complete","crispy_task_scope_request","crispy_task_scope_result"\]$/u.test(argument)
 		));
 		assert.strictEqual((spawn.args as string[]).at(-2), '--');
-		assert.ok(((spawn.args as string[]).at(-1) ?? '').startsWith(
-			`${descriptor.prompt}\n\nTask completion requirement:`,
-		));
-		assert.ok(((spawn.args as string[]).at(-1) ?? '').endsWith(
-			'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
-		));
+		assert.strictEqual((spawn.args as string[]).at(-1), descriptor.prompt);
 		assert.doesNotMatch(
 			(spawn.args as string[]).at(-1) ?? '',
-			/CRISPY TASK EXECUTION CONTRACT/u,
-		);
-		assert.strictEqual(
-			(((spawn.args as string[]).at(-1) ?? '').match(
-				/crispy_task_complete/gu,
-			) ?? []).length,
-			1,
+			/Task completion requirement|crispy_task_complete/u,
 		);
 		const developerInstructions = (spawn.args as string[]).find(
 			(argument) => argument.startsWith('developer_instructions='),

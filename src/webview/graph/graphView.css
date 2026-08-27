@@ -344,6 +344,70 @@ body.vscode-high-contrast-light .graph-viewport {
 		box-shadow 180ms ease;
 }
 
+/* 아직 생성되지 않은 Activity target은 저장 Graph를 건드리지 않는 ghost로 표시한다. */
+.graph-agent-activity-ghost-node {
+	--graph-node-background: color-mix(
+		in srgb,
+		var(--graph-node-default-background) 72%,
+		transparent
+	);
+	--graph-node-shadow: 0 6px 18px -12px rgb(0 0 0 / 46%);
+
+	z-index: 2;
+	align-items: center;
+	gap: 10px;
+	padding: 0 12px;
+	color: var(--vscode-descriptionForeground, var(--graph-node-foreground));
+	border: 1px dashed color-mix(
+		in srgb,
+		var(--graph-viewport-accent-color) 58%,
+		transparent
+	);
+	box-shadow: var(--graph-node-shadow);
+	opacity: 0.82;
+	pointer-events: auto;
+	cursor: default;
+}
+
+/* Ghost Card action은 없지만 할당된 Session Event Box는 기존처럼 조작한다. */
+.graph-agent-activity-ghost-node [data-session-id] {
+	pointer-events: auto;
+}
+
+.graph-agent-activity-ghost-icon {
+	display: block;
+	width: 18px;
+	height: 18px;
+	flex: none;
+	background-color: currentcolor;
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: contain;
+	-webkit-mask-position: center;
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+}
+
+.graph-agent-activity-ghost-node[data-target-kind='folder']
+	.graph-agent-activity-ghost-icon {
+	mask-image: url('./assets/file-icons/folder-closed.svg');
+	-webkit-mask-image: url('./assets/file-icons/folder-closed.svg');
+}
+
+.graph-agent-activity-ghost-node[data-target-kind='file']
+	.graph-agent-activity-ghost-icon {
+	mask-image: url('./assets/file-icons/file-unknown.svg');
+	-webkit-mask-image: url('./assets/file-icons/file-unknown.svg');
+}
+
+.graph-agent-activity-ghost-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 /* Binding은 absolute paint를 유지하고 결정적인 footprint/위치는 Layout이 예약한다. */
 .graph-file-item.graph-agent-activity-binding-host {
 	position: relative;

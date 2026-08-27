@@ -50,6 +50,7 @@ suite('Crispy MCP server instructions', () => {
 			'Before any read/search/edit/test',
 			'completion anchor',
 			'with planned',
+			"user-facing request awaits the user's response",
 		]) {
 			assert.strictEqual(criticalPrefix.includes(required), true, required);
 		}
@@ -70,6 +71,8 @@ suite('Crispy MCP server instructions', () => {
 			'not Host, Store, display, or receipt delivery',
 			'root, session, URI, token, runtime, or internal identity',
 			'Before each distinct meaningful target transition',
+			'work resumes after that response',
+			'transition the target to active or editing',
 			'for every non-anchor target used by this request, deepest-first',
 			'on the anchor with completed as the final Activity call',
 			'Leave no child markers below the completed anchor',

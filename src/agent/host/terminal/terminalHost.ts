@@ -36,7 +36,6 @@ import type {
 	McpSessionRuntime,
 } from '../../../mcp/sessionRuntime';
 import type { SupervisorRuntimeEvent } from '../../../mcp/adapterSupervisor';
-import { createClaudeMcpQualifiedToolName } from '../../../mcp/claudeConfig';
 import {
 	isValidTaskToolLease,
 	type TaskToolLease,
@@ -1582,15 +1581,9 @@ export class TerminalHost {
 								connection.url,
 							)
 						),
-						createArgsAfterConfig: (serverName) => [
+						createArgsAfterConfig: () => [
 							'--',
-							createTaskAgentPrompt(
-								taskDescriptor.prompt,
-								createClaudeMcpQualifiedToolName(
-									serverName,
-									CRISPY_TASK_COMPLETE_TOOL_NAME,
-								),
-							),
+							createTaskAgentPrompt(taskDescriptor.prompt),
 						],
 					}),
 			}),

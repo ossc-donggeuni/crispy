@@ -78,6 +78,10 @@ import {
 	getAgentActivityBindingBlockHeight,
 } from './agentActivityBindings';
 import {
+	initializeAgentActivityGhostNodes,
+	type AgentActivityGhostNodes,
+} from './agentActivityGhostNodes';
+import {
 	createAgentActivityTargetRevealState,
 	resolveAgentActivityTargetFocusPoint,
 } from './agentActivityFocus';
@@ -1600,6 +1604,7 @@ export function initializeGraphView(
 		);
 	let renderer: GraphRenderer;
 	let navigator: GraphNavigator;
+	let agentActivityGhostNodes: AgentActivityGhostNodes | undefined;
 	let agentActivityNotificationCenter: AgentActivityNotificationCenter | undefined;
 	let pendingAgentActivityNotificationFocus:
 		| AgentActivityNotificationEntry
@@ -1944,6 +1949,13 @@ export function initializeGraphView(
 				y: taskNode.position.y + taskNode.height / 2,
 			});
 			pendingAgentActivityNotificationFocus = undefined;
+			return true;
+		}
+		const ghostFocusPoint = agentActivityGhostNodes?.getFocusPoint(entry.target);
+
+		if (ghostFocusPoint) {
+			camera.focusOn(ghostFocusPoint);
+			// actual Node가 들어오는 Graph 갱신에서 다시 Focus하도록 pending을 유지한다.
 			return true;
 		}
 		const snapshot = state.getState();
@@ -2397,6 +2409,17 @@ export function initializeGraphView(
 		return nodeIds;
 	};
 	const initialLayout = currentLayout;
+	agentActivityGhostNodes = runtimeOptions.agentActivityStore
+		? initializeAgentActivityGhostNodes(
+			nodeLayer,
+			runtimeOptions.agentActivityStore,
+			() => currentGraph,
+			{
+				nodeEffects,
+				agentActivityBindings,
+			},
+		)
+		: undefined;
 
 	renderer = initializeGraphRenderer(
 		edgeLayer,
@@ -2431,6 +2454,7 @@ export function initializeGraphView(
 		{
 			nodeEffects,
 			agentActivityBindings,
+			agentActivityGhostNodes,
 			gitDecorations: runtimeOptions.gitDecorations,
 		},
 	);
@@ -4607,6 +4631,8 @@ export function initializeGraphView(
 			taskActivityKindsBySessionId.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
+			agentActivityGhostNodes?.dispose();
+			agentActivityGhostNodes = undefined;
 			agentActivityBindings?.dispose();
 			nodeEffects.dispose();
 			camera.dispose();

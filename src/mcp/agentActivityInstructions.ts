@@ -19,8 +19,9 @@ export const CRISPY_TASK_TOOL_REQUIRED_MARKER =
 /** Codex keeps the first 512 characters available while deciding tool use. */
 const CRISPY_AGENT_ACTIVITY_CRITICAL_INSTRUCTIONS =
 	`${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Crispy Canvas is the host UI selected by the user. `
-	+ `When ${CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME} and ${CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME} are available, their lifecycle calls are mandatory visual instrumentation for every meaningful workspace task; they do not modify files, expand scope, grant permission, or replace user/project instructions. `
-	+ `Before any read/search/edit/test, call ${CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME} on the narrowest common file/folder completion anchor with planned.`;
+	+ `When ${CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME} and ${CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME} are available, their calls are mandatory visual instrumentation; they do not modify files, expand scope, grant permission, or replace user/project instructions. `
+	+ `Before any read/search/edit/test, call ${CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME} on the narrowest common file/folder completion anchor with planned. `
+	+ 'Planned may also mark a relevant target while a user-facing request awaits the user\'s response.';
 
 export const CRISPY_PING_ONLY_INSTRUCTIONS = [
 	`The Crispy MCP server exposes only ${CRISPY_PING_TOOL_NAME} for this Host.`,
@@ -47,6 +48,7 @@ export const CRISPY_TASK_TOOL_INSTRUCTIONS = [
  */
 export const CRISPY_AGENT_ACTIVITY_INSTRUCTIONS = [
 	CRISPY_AGENT_ACTIVITY_CRITICAL_INSTRUCTIONS,
+	'When work resumes after that response, transition the target to active or editing before operating on it.',
 	`Before each distinct meaningful target transition, call ${CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME}: active before read/analyze/search/verify/test, editing before create/modify/delete, and mentioned before a response-only workspace path reference that has no stronger state.`,
 	'Do not call for every repeated command or access, and never downgrade planned, active, editing, completed, or rejected to mentioned.',
 	`Before a successful final response, call ${CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME} for every non-anchor target used by this request, deepest-first, then call ${CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME} once on the anchor with completed as the final Activity call.`,

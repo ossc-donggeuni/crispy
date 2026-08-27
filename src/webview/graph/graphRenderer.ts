@@ -235,6 +235,14 @@ export interface GraphRendererOptions {
 	/** Renderer DOM의 생성/제거 및 Layout을 Agent Binding과 연결한다. */
 	agentActivityBindings?: Pick<AgentActivityBindings, 'registerTarget'>
 		& Partial<Pick<AgentActivityBindings, 'syncLayout'>>;
+	/** Renderer 좌표를 저장되지 않는 Agent Activity ghost projection과 연결한다. */
+	agentActivityGhostNodes?: {
+		syncLayout(
+			layout: GraphLayout,
+			positions: ReadonlyMap<string, GraphLayoutPosition>,
+			transitionDuration?: number,
+		): boolean;
+	};
 	/** Git runtime snapshot을 실제 Source file/folder DOM occurrence에만 연결한다. */
 	gitDecorations?: GitDecorationBindings;
 }
@@ -741,6 +749,11 @@ export function initializeGraphRenderer(
 			transitionDuration,
 		);
 		options.agentActivityBindings?.syncLayout?.(
+			currentLayout,
+			currentPositions,
+			transitionDuration,
+		);
+		options.agentActivityGhostNodes?.syncLayout(
 			currentLayout,
 			currentPositions,
 			transitionDuration,
