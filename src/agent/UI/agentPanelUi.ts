@@ -111,6 +111,9 @@ export interface AgentPanelUiController {
 		switchAttemptId: SwitchAttemptId,
 	): AgentTabId | undefined;
 
+	/** 이미 확정된 외부 수명주기 요청으로 탭을 확인창 없이 제거한다. */
+	closeTab(tabId: AgentTabId): boolean;
+
 	/** atomic Workspace refresh의 새 Catalog 전체를 picker에 한 번에 적용한다. */
 	updateWorkspaceRootCatalog(
 		catalog: readonly WorkspaceRootCatalogEntry[],
@@ -646,13 +649,7 @@ export function initializeAgentPanelUi(
 							return;
 						}
 
-						model.closeTab(tabId);
-						assignmentStateByTab.delete(tabId);
-						providerPickerOpenTabs.delete(tabId);
-						lastIssuedSwitchAttemptByTab.delete(tabId);
-						lastAppliedAssignmentRevisionByTab.delete(tabId);
-						resetBarrierAttemptByTab.delete(tabId);
-						notify(() => callbacks.onTabClosed?.(tabId));
+						closeTab(tabId);
 					})
 					.catch(() => {
 						/** 확인 다이얼로그 실패는 탭을 닫지 않은 상태로 그대로 둔다. */
@@ -694,6 +691,23 @@ export function initializeAgentPanelUi(
 		);
 		notify(() => callbacks.onLayoutChange?.());
 	});
+	const closeTab = (tabId: AgentTabId): boolean => {
+		if (
+			disposed
+			|| !model.getSnapshot().tabs.some((tab) => tab.id === tabId)
+		) {
+			return false;
+		}
+
+		assignmentStateByTab.delete(tabId);
+		providerPickerOpenTabs.delete(tabId);
+		lastIssuedSwitchAttemptByTab.delete(tabId);
+		lastAppliedAssignmentRevisionByTab.delete(tabId);
+		resetBarrierAttemptByTab.delete(tabId);
+		model.closeTab(tabId);
+		notify(() => callbacks.onTabClosed?.(tabId));
+		return true;
+	};
 	renderViews = () => {
 		const snapshot = model.getSnapshot();
 		const workspaceState = workspacePickerStateFor(snapshot.activeTabId);
@@ -741,6 +755,7 @@ export function initializeAgentPanelUi(
 			renderViews();
 			return tabId;
 		},
+		closeTab,
 		updateWorkspaceRootCatalog(catalog): void {
 			if (disposed) {
 				return;

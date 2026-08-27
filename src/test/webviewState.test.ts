@@ -566,6 +566,7 @@ suite('Webview State Wiring', () => {
 		const postedMessages: WebviewToExtensionMessage[] = [];
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
+		const closedTerminalTabs: string[] = [];
 		const graphUpdates: Graph[] = [];
 		const workspaceUpdates: Array<{
 			readonly graph: Graph;
@@ -958,7 +959,9 @@ suite('Webview State Wiring', () => {
 				activeTabs.push(tabId);
 			},
 
-			closeTab: () => undefined,
+			closeTab: (tabId) => {
+				closedTerminalTabs.push(tabId);
+			},
 
 			resetTab: () => undefined,
 
@@ -1027,6 +1030,14 @@ suite('Webview State Wiring', () => {
 				getSnapshot: () => model.getSnapshot(),
 				getAssignmentState: () => undefined,
 				createTaskTab: () => model.createTab({ activate: false }),
+				closeTab(tabId): boolean {
+					if (!model.getSnapshot().tabs.some((tab) => tab.id === tabId)) {
+						return false;
+					}
+					model.closeTab(tabId);
+					callbacks?.onTabClosed?.(tabId);
+					return true;
+				},
 				updateWorkspaceRootCatalog: (catalog) => {
 					agentWorkspaceCatalogUpdates.push(catalog);
 				},
@@ -1624,6 +1635,25 @@ suite('Webview State Wiring', () => {
 				),
 				true,
 				'Task Work의 실제 session presentation은 완료 Activity를 위해 보존한다.',
+			);
+			graphViewInteractions?.onTaskAgentSessionCleanupRequest?.([{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+				tabId: taskTabId,
+			}]);
+			assert.deepStrictEqual(closedTerminalTabs, [taskTabId]);
+			assert.strictEqual(
+				agentPanelModel?.getSnapshot().tabs.some(({ id }) => id === taskTabId),
+				false,
+			);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.getSession('session-task-work'),
+				undefined,
+			);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'tab.close').at(-1),
+				{ type: 'tab.close', tabId: taskTabId },
 			);
 			terminalHostMessages.length = 0;
 

@@ -472,8 +472,20 @@ export interface GraphViewInteractions {
 	onTaskJsonCopyFailure?: (reason: TaskTransferSerializeFailureReason) => void;
 	/** Ready Start 실행 요청을 현재 persisted revision과 함께 Host 경계로 전달한다. */
 	onTaskExecutionStart?: (taskId: string, storageRevision: number) => void;
+	/** 완료 알림 삭제로 수명이 끝난 Task-owned 실제 Agent 세션과 탭을 정리한다. */
+	onTaskAgentSessionCleanupRequest?: (
+		targets: readonly TaskAgentSessionCleanupTarget[],
+	) => void;
 	/** Floating Overlay를 제외한 현재 Graph 표시 영역을 Viewport local 좌표로 계산한다. */
 	resolveVisibleGraphArea?: (viewport: HTMLElement) => GraphVisibleArea;
+}
+
+/** 완료 Activity에서 검증한 Work 실행과 실제 Agent 세션·탭의 exact binding이다. */
+export interface TaskAgentSessionCleanupTarget {
+	readonly executionId: string;
+	readonly workNodeId: string;
+	readonly sessionId: string;
+	readonly tabId: string;
 }
 
 /** 상위 Root Instance 아래에서 분리된 Root와 origin chain 깊이다. */
@@ -2462,6 +2474,136 @@ export function initializeGraphView(
 			taskWorkAgentSessions.delete(assignmentKey);
 		}
 	};
+	const createTaskAgentSessionCleanupTarget = (
+		snapshot: TaskExecutionSnapshot,
+		workNodeId: string,
+		actualSessionId: string,
+	): TaskAgentSessionCleanupTarget | undefined => {
+		const presentation = runtimeOptions.agentSessionPresentationStore?.getSession(
+			actualSessionId,
+		);
+
+		return presentation === undefined
+			? undefined
+			: Object.freeze({
+				executionId: snapshot.executionId,
+				workNodeId,
+				sessionId: actualSessionId,
+				tabId: presentation.tabId,
+			});
+	};
+	const requestTaskAgentSessionCleanup = (
+		targets: readonly TaskAgentSessionCleanupTarget[],
+	): void => {
+		if (targets.length === 0) {
+			return;
+		}
+		try {
+			interactions.onTaskAgentSessionCleanupRequest?.(
+				Object.freeze([...targets]),
+			);
+		} catch {
+			/** 탭 UI 정리 실패가 완료 Activity의 로컬 삭제를 막지 않는다. */
+		}
+	};
+	const dismissTaskCompletionActivity = (
+		entry: AgentActivityNotificationEntry,
+	): boolean => {
+		if (entry.activity !== 'completed') {
+			return false;
+		}
+
+		if (entry.dismissalScope === 'session') {
+			const snapshot = [...taskExecutionByTaskId.values()].find((candidate) => (
+				candidate.state === 'completed'
+				&& entry.sessionId === createTaskExecutionActivitySessionId(
+					candidate.executionId,
+					candidate.startNodeId,
+				)
+			));
+			if (!snapshot) {
+				return false;
+			}
+
+			const assignedSessions = snapshot.works.flatMap(({ nodeId }) => {
+				const assignmentKey = createTaskWorkAgentSessionKey(
+					snapshot.executionId,
+					nodeId,
+				);
+				const assignment = taskWorkAgentSessions.get(assignmentKey);
+
+				return assignment === undefined
+					? []
+					: [{ assignmentKey, nodeId, assignment }];
+			});
+			requestTaskAgentSessionCleanup(assignedSessions.flatMap(({
+				nodeId,
+				assignment,
+			}) => {
+				const target = createTaskAgentSessionCleanupTarget(
+					snapshot,
+					nodeId,
+					assignment.actualSessionId,
+				);
+
+				return target === undefined ? [] : [target];
+			}));
+
+			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+				entry.sessionId,
+			);
+			runtimeOptions.agentSessionPresentationStore?.endSession(entry.sessionId);
+			for (const { assignmentKey, assignment } of assignedSessions) {
+				runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+					assignment.actualSessionId,
+				);
+				runtimeOptions.agentSessionPresentationStore?.endSession(
+					assignment.actualSessionId,
+				);
+				taskActivityKindsBySessionId.delete(assignment.actualSessionId);
+				taskWorkAgentSessions.delete(assignmentKey);
+			}
+			return true;
+		}
+
+		if (entry.target.rootId !== undefined) {
+			return false;
+		}
+		for (const snapshot of taskExecutionByTaskId.values()) {
+			const work = snapshot.works.find(({ nodeId, state }) => (
+				nodeId === entry.target.nodeId && state === 'completed'
+			));
+			if (!work) {
+				continue;
+			}
+			const assignmentKey = createTaskWorkAgentSessionKey(
+				snapshot.executionId,
+				work.nodeId,
+			);
+			const assignment = taskWorkAgentSessions.get(assignmentKey);
+			if (assignment?.actualSessionId !== entry.sessionId) {
+				continue;
+			}
+			const target = createTaskAgentSessionCleanupTarget(
+				snapshot,
+				work.nodeId,
+				assignment.actualSessionId,
+			);
+
+			requestTaskAgentSessionCleanup(target === undefined ? [] : [target]);
+			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+				assignment.actualSessionId,
+			);
+			runtimeOptions.agentSessionPresentationStore?.endSession(
+				assignment.actualSessionId,
+			);
+			taskActivityKindsBySessionId.delete(assignment.actualSessionId);
+			taskWorkAgentSessions.delete(assignmentKey);
+			return true;
+		}
+
+		return false;
+	};
 	const publishTaskExecutionActivity = (
 		executionId: string,
 		sessionNodeId: string,
@@ -3889,6 +4031,9 @@ export function initializeGraphView(
 						pendingAgentActivityNotificationFocus?.key === entry.key
 					) {
 						pendingAgentActivityNotificationFocus = undefined;
+					}
+					if (dismissTaskCompletionActivity(entry)) {
+						return;
 					}
 					if (entry.dismissalScope === 'session') {
 						runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(

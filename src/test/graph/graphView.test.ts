@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
 	createDefaultTaskBlueprint,
+	createTaskExecutionActivitySessionId,
 	createTaskState,
 	getTaskFlowStatus,
 	TASK_DEFAULT_WORK_VERTICAL_STRIDE,
@@ -82,6 +83,7 @@ import {
 	AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
 } from '../../webview/graph/agentActivityNotificationCenter';
 import {
+	createAgentActivityNotificationKey,
 	createAgentActivitySessionNotificationKey,
 } from '../../webview/graph/agentActivityNotifications';
 import {
@@ -7457,6 +7459,12 @@ suite('Graph View', () => {
 		));
 		const startRequests: Array<{ taskId: string; storageRevision: number }> = [];
 		const openedSessionIds: string[] = [];
+		const cleanedTaskAgentSessions: Array<readonly {
+			readonly executionId: string;
+			readonly workNodeId: string;
+			readonly sessionId: string;
+			readonly tabId: string;
+		}[]> = [];
 		const graphView = initializeGraphView(
 			root.asHtmlElement(),
 			INITIAL_GRAPH_STATE,
@@ -7467,6 +7475,9 @@ suite('Graph View', () => {
 				},
 				onTaskExecutionStart: (taskId, storageRevision) => {
 					startRequests.push({ taskId, storageRevision });
+				},
+				onTaskAgentSessionCleanupRequest: (targets) => {
+					cleanedTaskAgentSessions.push(targets);
 				},
 			},
 			[task],
@@ -7779,11 +7790,17 @@ suite('Graph View', () => {
 			taskCompletionNotification,
 			'graph-agent-activity-notification-dismiss',
 		).dispatch('click', createClickEvent(taskCompletionNotification));
+		assert.deepStrictEqual(cleanedTaskAgentSessions, [[{
+			executionId: 'execution-ui',
+			workNodeId: workNode.id,
+			sessionId: 'agent-session',
+			tabId: 'agent-tab',
+		}]]);
 		assert.deepStrictEqual(store.getActivities({ nodeId: startNode.id }), []);
-		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }).map(
-			({ sessionId }) => sessionId,
-		), ['agent-session']);
+		assert.deepStrictEqual(store.getActivities({ nodeId: workNode.id }), []);
 		assert.deepStrictEqual(store.getActivities({ nodeId: endNode.id }), []);
+		assert.strictEqual(presentations.isKnownSession('agent-session'), false);
+		assert.strictEqual(notificationList.children.length, 0);
 		assert.strictEqual(
 			findDescendantByAttribute(
 				endElement,
@@ -7805,6 +7822,11 @@ suite('Graph View', () => {
 			store.getActivities({ nodeId: endNode.id }),
 			[],
 			'삭제한 완료 이벤트는 동일 snapshot 재수신으로 되살아나지 않아야 한다.',
+		);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: workNode.id }),
+			[],
+			'삭제한 Work 완료 이벤트도 동일 snapshot으로 되살아나지 않아야 한다.',
 		);
 		graphView.applyTaskExecutionSnapshot?.({
 			executionId: 'execution-ui-next',
@@ -7828,6 +7850,232 @@ suite('Graph View', () => {
 		activityEffects.dispose();
 		graphView.dispose();
 		assert.deepStrictEqual(store.getSnapshot(), []);
+		presentations.dispose();
+	});
+
+	test('Task Work 완료 알림 하나를 삭제하면 그 실제 Agent 세션만 정리한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createRenderingTask({ x: 100, y: 50 });
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const cleanupRequests: unknown[] = [];
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{
+				onTaskAgentSessionCleanupRequest: (targets) => {
+					cleanupRequests.push(targets);
+				},
+			},
+			[task],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const startNode = task.nodes.find((node) => node.kind === 'start');
+		const workNode = task.nodes.find((node) => node.kind === 'work');
+		const endNode = task.nodes.find((node) => node.kind === 'end');
+		const record = graphView.taskState.getWorkspaceTask(task.id);
+
+		assert.ok(startNode && workNode?.kind === 'work' && endNode && record);
+		graphView.applyTaskExecutionSnapshot?.({
+			executionId: 'execution-single-dismiss',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'running',
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'running' }],
+		});
+		presentations.activateSession(
+			'tab-single-dismiss',
+			'session-single-dismiss',
+			'Completed Work',
+		);
+		graphView.assignTaskWorkAgentSession?.(
+			'execution-single-dismiss',
+			workNode.id,
+			'session-single-dismiss',
+		);
+		const completedSnapshot = {
+			executionId: 'execution-single-dismiss',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'completed' as const,
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: [{ nodeId: workNode.id, state: 'completed' as const }],
+		};
+
+		graphView.applyTaskExecutionSnapshot?.(completedSnapshot);
+		const notificationCenter = getDescendantByAttribute(
+			root,
+			AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+			'',
+		);
+		const notificationList = getDescendantByClass(
+			notificationCenter,
+			'graph-agent-activity-notification-list',
+		);
+		const workNotification = getDescendantByAttribute(
+			notificationCenter,
+			AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
+			createAgentActivityNotificationKey(
+				'session-single-dismiss',
+				{ nodeId: workNode.id },
+			),
+		);
+
+		assert.strictEqual(notificationList.children.length, 2);
+		getDescendantByClass(
+			workNotification,
+			'graph-agent-activity-notification-dismiss',
+		).dispatch('click', createClickEvent(workNotification));
+		assert.deepStrictEqual(cleanupRequests, [[{
+			executionId: 'execution-single-dismiss',
+			workNodeId: workNode.id,
+			sessionId: 'session-single-dismiss',
+			tabId: 'tab-single-dismiss',
+		}]]);
+		assert.strictEqual(
+			presentations.isKnownSession('session-single-dismiss'),
+			false,
+		);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: workNode.id }).map(({ sessionId }) => sessionId),
+			[`task:execution-single-dismiss:${startNode.id}`],
+		);
+		assert.strictEqual(notificationList.children.length, 1);
+
+		graphView.applyTaskExecutionSnapshot?.(completedSnapshot);
+		assert.deepStrictEqual(
+			store.getActivities({ nodeId: workNode.id }).map(({ sessionId }) => sessionId),
+			[`task:execution-single-dismiss:${startNode.id}`],
+			'삭제한 단일 Work 완료 이벤트는 같은 snapshot으로 되살아나지 않아야 한다.',
+		);
+		assert.strictEqual(cleanupRequests.length, 1);
+
+		graphView.dispose();
+		presentations.dispose();
+	});
+
+	test('Task 전체 완료 알림을 삭제하면 모든 Work Agent 세션을 함께 정리한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createSerialRenderingTask(
+			'task:all-session-cleanup',
+			{ x: 100, y: 50 },
+			2,
+		);
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const cleanupRequests: unknown[] = [];
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{
+				onTaskAgentSessionCleanupRequest: (targets) => {
+					cleanupRequests.push(targets);
+				},
+			},
+			[task],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const startNode = task.nodes.find((node) => node.kind === 'start');
+		const workNodes = task.nodes.filter((node) => node.kind === 'work');
+		const endNode = task.nodes.find((node) => node.kind === 'end');
+		const record = graphView.taskState.getWorkspaceTask(task.id);
+
+		assert.ok(startNode && workNodes.length === 2 && endNode && record);
+		const runningSnapshot = {
+			executionId: 'execution-all-session-cleanup',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'running' as const,
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: workNodes.map(({ id }) => ({ nodeId: id, state: 'running' as const })),
+		};
+
+		graphView.applyTaskExecutionSnapshot?.(runningSnapshot);
+		workNodes.forEach((work, index) => {
+			const suffix = index + 1;
+
+			presentations.activateSession(
+				`tab-all-${suffix}`,
+				`session-all-${suffix}`,
+				`Work ${suffix}`,
+			);
+			graphView.assignTaskWorkAgentSession?.(
+				runningSnapshot.executionId,
+				work.id,
+				`session-all-${suffix}`,
+			);
+		});
+		graphView.applyTaskExecutionSnapshot?.({
+			...runningSnapshot,
+			state: 'completed',
+			works: workNodes.map(({ id }) => ({
+				nodeId: id,
+				state: 'completed' as const,
+			})),
+		});
+		const taskSessionId = createTaskExecutionActivitySessionId(
+			runningSnapshot.executionId,
+			startNode.id,
+		);
+		const notificationCenter = getDescendantByAttribute(
+			root,
+			AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
+			'',
+		);
+		const taskNotification = getDescendantByAttribute(
+			notificationCenter,
+			AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
+			createAgentActivitySessionNotificationKey(taskSessionId),
+		);
+
+		getDescendantByClass(
+			taskNotification,
+			'graph-agent-activity-notification-dismiss',
+		).dispatch('click', createClickEvent(taskNotification));
+		assert.deepStrictEqual(cleanupRequests, [[
+			{
+				executionId: runningSnapshot.executionId,
+				workNodeId: workNodes[0]!.id,
+				sessionId: 'session-all-1',
+				tabId: 'tab-all-1',
+			},
+			{
+				executionId: runningSnapshot.executionId,
+				workNodeId: workNodes[1]!.id,
+				sessionId: 'session-all-2',
+				tabId: 'tab-all-2',
+			},
+		]]);
+		assert.strictEqual(presentations.isKnownSession('session-all-1'), false);
+		assert.strictEqual(presentations.isKnownSession('session-all-2'), false);
+		for (const node of [startNode, ...workNodes, endNode]) {
+			assert.deepStrictEqual(store.getActivities({ nodeId: node.id }), []);
+		}
+		assert.strictEqual(
+			getDescendantByClass(
+				notificationCenter,
+				'graph-agent-activity-notification-list',
+			).children.length,
+			0,
+		);
+
+		graphView.dispose();
 		presentations.dispose();
 	});
 

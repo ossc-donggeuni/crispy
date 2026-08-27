@@ -35,6 +35,7 @@ import { deserializeWorkspacePresentationFromWebview } from '../workspace/worksp
 import { createAgentActivityEffectReconciler } from './graph/agentActivityEffects';
 import {
 	initializeGraphView,
+	type TaskAgentSessionCleanupTarget,
 	type GraphViewWorkspaceSnapshot,
 } from './graph/graphView';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
@@ -177,6 +178,9 @@ const agentSessionPresentationStore = createAgentSessionPresentationStore(
 	agentSessionColors.resolve,
 );
 let openAgentSessionFromGraph = (_sessionId: string): void => undefined;
+let cleanupTaskAgentSessions = (
+	_targets: readonly TaskAgentSessionCleanupTarget[],
+): void => undefined;
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
@@ -209,6 +213,9 @@ const graphView = initializeGraphView(
 				taskId,
 				storageRevision,
 			});
+		},
+		onTaskAgentSessionCleanupRequest: (targets) => {
+			cleanupTaskAgentSessions(targets);
 		},
 		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
 			viewport,
@@ -476,6 +483,32 @@ if (agentPanelUi !== undefined) {
 		},
 	);
 }
+
+cleanupTaskAgentSessions = (targets): void => {
+	const closedTabIds = new Set<string>();
+
+	for (const target of targets) {
+		if (
+			closedTabIds.has(target.tabId)
+			|| !taskWorkAgentSessionIds.has(target.sessionId)
+		) {
+			continue;
+		}
+		const presentation = agentSessionPresentationStore.getSession(
+			target.sessionId,
+		);
+
+		if (
+			presentation?.tabId !== target.tabId
+			|| agentPanelUi?.closeTab(target.tabId) !== true
+		) {
+			continue;
+		}
+		closedTabIds.add(target.tabId);
+		taskWorkByTabId.delete(target.tabId);
+		taskWorkAgentSessionIds.delete(target.sessionId);
+	}
+};
 
 /** Collapse 초기화 */
 const refreshCollapse = initializePanelCollapse(
