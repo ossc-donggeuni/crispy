@@ -9355,11 +9355,26 @@ suite('Graph View', () => {
 		const triggerRule = graphViewCss.match(
 			/\.graph-agent-activity-notification-trigger\s*\{[^}]*\}/s,
 		);
+		const panelRule = graphViewCss.match(
+			/\.graph-agent-activity-notification-panel\s*\{[^}]*\}/s,
+		);
+		const listRule = graphViewCss.match(
+			/\.graph-agent-activity-notification-list\s*\{[^}]*\}/s,
+		);
 
 		assert.ok(floatingRule);
 		assert.ok(triggerRule);
+		assert.ok(panelRule);
+		assert.ok(listRule);
 		assert.match(floatingRule[0], /height:\s*40px;/);
 		assert.match(triggerRule[0], /height:\s*40px;/);
+		assert.match(panelRule[0], /display:\s*flex;/);
+		assert.match(panelRule[0], /max-height:\s*min\(560px,/);
+		assert.match(panelRule[0], /flex-direction:\s*column;/);
+		assert.match(listRule[0], /min-height:\s*0;/);
+		assert.match(listRule[0], /flex:\s*1 1 auto;/);
+		assert.match(listRule[0], /overflow-y:\s*auto;/);
+		assert.match(listRule[0], /overscroll-behavior:\s*contain;/);
 		assert.match(
 			graphViewCss,
 			/\.graph-agent-activity-floating-notification-stack\s*\{[^}]*flex-direction:\s*row-reverse;/s,
