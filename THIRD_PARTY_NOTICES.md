@@ -1,5 +1,49 @@
 # Third-Party Notices
 
+## OpenAI and Anthropic Provider Marks
+
+Crispy includes the following third-party brand assets:
+
+- `src/webview/assets/provider-logos/openai.svg`
+- `src/webview/assets/provider-logos/claude.svg`
+
+They are used only in the agent provider picker as identification icons beside
+the text `Codex` and `Claude Code`, respectively. The provider names and marks
+are used only for descriptive identification and are not Crispy branding.
+Crispy is an independent project and is not affiliated with, endorsed by,
+sponsored by, or an official product of OpenAI or Anthropic.
+
+The OpenAI logo and the names `OpenAI` and `Codex` are trademarks or other
+protected brand assets of OpenAI. The logo artwork and all associated rights
+are reserved by OpenAI.
+
+The Claude logo and wordmark and the names `Anthropic`, `Claude`, and
+`Claude Code` are trademarks or other protected brand assets of Anthropic,
+PBC and/or its affiliates. The logo artwork and all associated rights are
+reserved by Anthropic.
+
+These assets are not covered by Crispy's MIT license. This notice does not
+grant a trademark or copyright license, establish that separate written
+permission has been obtained, or replace the rights owners' current terms.
+OpenAI conditions use on its current brand guidelines. Anthropic's current
+Consumer Terms require prior written permission for certain uses of its name,
+logos, or trademarks in connection with other products or services and for any
+use implying affiliation, endorsement, or sponsorship. Anthropic's current
+Commercial Terms do not grant intellectual-property rights except where
+expressly stated.
+
+Official references:
+
+- OpenAI Design Guidelines: https://openai.com/brand/
+- OpenAI Codex: https://openai.com/codex/
+- Anthropic Press Kit: https://www.anthropic.com/press-kit
+- Claude Code Overview: https://code.claude.com/docs/en/overview
+- Anthropic Consumer Terms of Service: https://www.anthropic.com/legal/consumer-terms
+- Anthropic Commercial Terms of Service: https://www.anthropic.com/legal/commercial-terms
+
+The primary, asset-local notice and redistribution conditions are in
+`src/webview/assets/provider-logos/README.md`.
+
 ## Material Icon Theme
 
 Crispy includes icon assets derived from the Material Icon Theme project.
