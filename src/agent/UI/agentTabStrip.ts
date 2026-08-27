@@ -47,6 +47,195 @@ export interface AgentTabStripView {
 	dispose(): void;
 }
 
+const TAB_STRIP_DRAG_THRESHOLD_PX = 4;
+const WHEEL_LINE_HEIGHT_PX = 16;
+
+interface TabStripDragState {
+	readonly pointerId: number;
+	readonly startClientX: number;
+	readonly startScrollLeft: number;
+	moved: boolean;
+}
+
+/**
+ * 가로 overflow를 Windows 마우스 휠, 터치패드 가로 제스처와 grab drag로 탐색한다.
+ * deltaX가 있는 터치패드 입력은 그대로 유지하고, 세로 휠만 deltaY를 가로축에 쓴다.
+ */
+function initializeAgentTabStripNavigation(
+	container: HTMLElement,
+	onNavigate: () => void,
+): () => void {
+	let dragState: TabStripDragState | undefined;
+	let suppressNextClick = false;
+	let clickSuppressionTimeout: ReturnType<typeof setTimeout> | undefined;
+
+	const getMaxScrollLeft = (): number => Math.max(
+		0,
+		container.scrollWidth - container.clientWidth,
+	);
+	const clampScrollLeft = (scrollLeft: number): number => Math.min(
+		getMaxScrollLeft(),
+		Math.max(0, scrollLeft),
+	);
+
+	const handleWheel = (event: WheelEvent): void => {
+		/** Ctrl+wheel은 Webview 확대/축소 입력으로 남겨 둔다. */
+		if (event.ctrlKey) {
+			return;
+		}
+
+		const rawDelta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
+		if (rawDelta === 0) {
+			return;
+		}
+
+		const deltaScale = event.deltaMode === 1
+			? WHEEL_LINE_HEIGHT_PX
+			: event.deltaMode === 2
+				? Math.max(1, container.clientWidth)
+				: 1;
+		const nextScrollLeft = clampScrollLeft(
+			container.scrollLeft + rawDelta * deltaScale,
+		);
+		if (nextScrollLeft === container.scrollLeft) {
+			return;
+		}
+
+		container.scrollLeft = nextScrollLeft;
+		event.preventDefault();
+		onNavigate();
+	};
+
+	const releaseDrag = (pointerId: number, releaseCapture: boolean): void => {
+		if (dragState?.pointerId !== pointerId) {
+			return;
+		}
+
+		dragState = undefined;
+		delete container.dataset.scrollDragging;
+		if (!releaseCapture) {
+			return;
+		}
+
+		try {
+			if (container.hasPointerCapture(pointerId)) {
+				container.releasePointerCapture(pointerId);
+			}
+		} catch {
+			/** Webview가 capture를 먼저 잃어도 drag 종료 상태는 유지한다. */
+		}
+	};
+
+	const handlePointerDown = (event: PointerEvent): void => {
+		if (
+			event.button !== 0
+			|| event.isPrimary === false
+			|| getMaxScrollLeft() === 0
+		) {
+			return;
+		}
+
+		dragState = {
+			pointerId: event.pointerId,
+			startClientX: event.clientX,
+			startScrollLeft: container.scrollLeft,
+			moved: false,
+		};
+	};
+
+	const handlePointerMove = (event: PointerEvent): void => {
+		const currentDrag = dragState;
+		if (currentDrag === undefined || currentDrag.pointerId !== event.pointerId) {
+			return;
+		}
+
+		const distance = event.clientX - currentDrag.startClientX;
+		if (!currentDrag.moved && Math.abs(distance) < TAB_STRIP_DRAG_THRESHOLD_PX) {
+			return;
+		}
+
+		if (!currentDrag.moved) {
+			currentDrag.moved = true;
+			container.dataset.scrollDragging = 'true';
+			try {
+				/** 짧은 click의 target을 보존하도록 실제 drag가 시작된 뒤에만 capture한다. */
+				container.setPointerCapture(event.pointerId);
+			} catch {
+				/** capture 미지원 환경에서도 container 안의 drag는 계속 처리한다. */
+			}
+			onNavigate();
+		}
+		container.scrollLeft = clampScrollLeft(
+			currentDrag.startScrollLeft - distance,
+		);
+		event.preventDefault();
+	};
+
+	const handlePointerUp = (event: PointerEvent): void => {
+		const currentDrag = dragState;
+		if (currentDrag === undefined || currentDrag.pointerId !== event.pointerId) {
+			return;
+		}
+
+		if (currentDrag.moved) {
+			suppressNextClick = true;
+			if (clickSuppressionTimeout !== undefined) {
+				clearTimeout(clickSuppressionTimeout);
+			}
+			clickSuppressionTimeout = setTimeout(() => {
+				suppressNextClick = false;
+				clickSuppressionTimeout = undefined;
+			}, 0);
+			event.preventDefault();
+		}
+		releaseDrag(event.pointerId, true);
+	};
+
+	const handlePointerCancel = (event: PointerEvent): void => {
+		releaseDrag(event.pointerId, true);
+	};
+	const handleLostPointerCapture = (event: PointerEvent): void => {
+		releaseDrag(event.pointerId, false);
+	};
+	const handleClickCapture = (event: MouseEvent): void => {
+		if (!suppressNextClick) {
+			return;
+		}
+
+		suppressNextClick = false;
+		if (clickSuppressionTimeout !== undefined) {
+			clearTimeout(clickSuppressionTimeout);
+			clickSuppressionTimeout = undefined;
+		}
+		event.preventDefault();
+		event.stopImmediatePropagation();
+	};
+
+	container.addEventListener('wheel', handleWheel, { passive: false });
+	container.addEventListener('pointerdown', handlePointerDown);
+	container.addEventListener('pointermove', handlePointerMove);
+	container.addEventListener('pointerup', handlePointerUp);
+	container.addEventListener('pointercancel', handlePointerCancel);
+	container.addEventListener('lostpointercapture', handleLostPointerCapture);
+	container.addEventListener('click', handleClickCapture, true);
+
+	return () => {
+		container.removeEventListener('wheel', handleWheel);
+		container.removeEventListener('pointerdown', handlePointerDown);
+		container.removeEventListener('pointermove', handlePointerMove);
+		container.removeEventListener('pointerup', handlePointerUp);
+		container.removeEventListener('pointercancel', handlePointerCancel);
+		container.removeEventListener('lostpointercapture', handleLostPointerCapture);
+		container.removeEventListener('click', handleClickCapture, true);
+		if (clickSuppressionTimeout !== undefined) {
+			clearTimeout(clickSuppressionTimeout);
+		}
+		if (dragState !== undefined) {
+			releaseDrag(dragState.pointerId, true);
+		}
+	};
+}
+
 /** 탭 strip, 마우스/키보드 context menu와 접근성 상태를 함께 관리한다. */
 export function initializeAgentTabStrip(
 	container: HTMLElement,
@@ -83,6 +272,10 @@ export function initializeAgentTabStrip(
 	);
 	const closeMenuOnStripScroll = (): void => contextMenu.close();
 	container.addEventListener('scroll', closeMenuOnStripScroll);
+	const disposeNavigation = initializeAgentTabStripNavigation(
+		container,
+		closeMenuOnStripScroll,
+	);
 
 	return {
 		render(snapshot): void {
@@ -184,6 +377,7 @@ export function initializeAgentTabStrip(
 		focusTab,
 
 		dispose(): void {
+			disposeNavigation();
 			container.removeEventListener('scroll', closeMenuOnStripScroll);
 			contextMenu.dispose();
 			tabButtons.clear();

@@ -14,6 +14,10 @@ export class FakeAgentElement {
 	hidden = false;
 	tabIndex = 0;
 	selectCount = 0;
+	scrollLeft = 0;
+	scrollWidth = 0;
+	clientWidth = 0;
+	private readonly capturedPointerIds = new Set<number>();
 	private readonly styleProperties = new Map<string, string>();
 	readonly style = {
 		left: '',
@@ -109,6 +113,18 @@ export class FakeAgentElement {
 
 	removeAttribute(name: string): void {
 		this.attributes.delete(name);
+	}
+
+	setPointerCapture(pointerId: number): void {
+		this.capturedPointerIds.add(pointerId);
+	}
+
+	hasPointerCapture(pointerId: number): boolean {
+		return this.capturedPointerIds.has(pointerId);
+	}
+
+	releasePointerCapture(pointerId: number): void {
+		this.capturedPointerIds.delete(pointerId);
 	}
 
 	focus(): void {

@@ -548,6 +548,11 @@
 	align-self: flex-end;
 	min-width: 0;
 	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	/* 세로 touch pan은 유지하고 가로 pointer drag는 strip이 직접 처리한다. */
+	touch-action: pan-y;
+	user-select: none;
+	cursor: grab;
 	/* macOS overlay scrollbar가 탭 라벨 위를 덮지 않게 표시만 숨긴다. */
 	scrollbar-width: none;
 	gap: 2px;
@@ -614,7 +619,13 @@
 	font-size: 12px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	cursor: pointer;
+	cursor: grab;
+}
+
+#agent-tab-strip[data-scroll-dragging='true'],
+#agent-tab-strip[data-scroll-dragging='true'] .agent-tab-select,
+#agent-tab-strip[data-scroll-dragging='true'] .agent-tab-close {
+	cursor: grabbing;
 }
 
 .agent-tab[data-active='true'] .agent-tab-select {
