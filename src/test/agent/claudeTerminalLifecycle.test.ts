@@ -375,23 +375,10 @@ suite('Claude direct PTY and MCP transaction', () => {
 		);
 		assert.match(args[systemPromptIndex + 1], /crispy_task_complete/u);
 		assert.strictEqual(args.at(-2), '--');
-		assert.ok((args.at(-1) ?? '').startsWith(
-			`${descriptor.prompt}\n\nTask completion requirement:`,
-		));
-		assert.ok((args.at(-1) ?? '').endsWith(
-			'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
-		));
+		assert.strictEqual(args.at(-1), descriptor.prompt);
 		assert.doesNotMatch(
 			args.at(-1) ?? '',
-			/CRISPY TASK EXECUTION CONTRACT/u,
-		);
-		assert.strictEqual(
-			((args.at(-1) ?? '').match(/crispy_task_complete/gu) ?? []).length,
-			1,
-		);
-		assert.match(
-			args.at(-1) ?? '',
-			/call mcp__crispy_[a-f0-9]{24}__crispy_task_complete exactly once/u,
+			/Task completion requirement|crispy_task_complete/u,
 		);
 		assert.deepStrictEqual(events.map(({ type }) => type), ['started']);
 

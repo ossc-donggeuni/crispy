@@ -477,10 +477,10 @@ Claude가 모델에 전달하는 MCP Tool 이름은 `mcp__<server>__<tool>`이�
 수명은 변경하지 않는다. 생성·검증·permission·smoke·startup diagnostic은 한 validator를 사용하고,
 완전한 Tool 이름이 64자를 넘으면 provider launch 전에 거부한다. Codex server 이름은 변경하지 않는다.
 
-provider-neutral Task prompt에는 작업 제목·prompt와 배정된 참조/작업 영역을 둔다. Codex와 Claude
-launch 경로는 그 원문 뒤에 한 문단의 completion reminder를 추가해 마지막 action으로
-`crispy_task_complete`를 호출하고 accepted 호출 전에는 Work가 끝나지 않는다고 명시한다. 이전의 긴
-별도 실행 계약은 복원하지 않는다. 참조 영역은 read-only, 작업 영역만 read-write이며, 그 밖의 접근은
+provider-neutral Task prompt에는 작업 제목·prompt와 배정된 참조/작업 영역만 둔다. Codex와 Claude
+launch 경로는 completion reminder나 이전의 긴 별도 실행 계약을 사용자 prompt에 추가하지 않는다.
+마지막 action의 `crispy_task_complete`와 accepted 호출 전 Work가 끝나지 않는다는 안내는 공통 MCP
+지침과 Tool description에만 유지한다. 참조 영역은 read-only, 작업 영역만 read-write이며, 그 밖의 접근은
 scope request의 `requestId`와 provider의 일반 permission UI 결과를 scope result로 연결한다. scope
 request 자체는 권한을 부여하지 않는다.
 
