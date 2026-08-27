@@ -54,6 +54,15 @@ export function getEffectiveAgentActivities(
 	return mergeOrderedActivities(inheritedActivities, occurrenceActivities);
 }
 
+/** Effective 정렬을 보존하며 현재 표시 가능한 첫 Activity를 고른다. */
+export function selectRepresentativeAgentActivity(
+	target: Readonly<GraphNodeEffectTarget>,
+	activitiesByTarget: AgentActivitiesByTarget,
+	isEligible: (activity: AgentSessionActivitySnapshot) => boolean = () => true,
+): AgentSessionActivitySnapshot | undefined {
+	return getEffectiveAgentActivities(target, activitiesByTarget).find(isEligible);
+}
+
 export function createAgentActivityTargetKey(
 	target: Readonly<GraphNodeEffectTarget>,
 ): string {

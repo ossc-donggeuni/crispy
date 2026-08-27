@@ -24,6 +24,7 @@ src/webview/graph/
 ├── graphNavigator.ts
 ├── graphNavigatorMinimap.ts
 ├── graphNavigatorRoots.ts
+├── graphPresentationTarget.ts
 ├── graphNodeDrag.ts
 ├── graphRenderer.ts
 ├── graphRootContext.ts
@@ -151,6 +152,7 @@ src/webview/graph/
 - Subtree 높이를 기준으로 Sibling을 세로 배치
 - Folder와 모든 File Group presentation에 동일한 `200px` 폭 적용
 - File Group page에 따라 5개 단위로 표시 Row 수 계산
+- 현재 page의 Row prefix 길이를 `visibleChildCount`로 전달해 Renderer와 Minimap이 같은 File을 표시
 - 표시 Row와 선택적 단일 pagination control을 File Group 높이에 반영
 - `openedFolders`에 포함된 Project/Folder의 children만 Layout에 포함
 - Project/Folder Root 여부와 무관하게 `openedFolders` 상태로 children 포함 여부 결정
@@ -184,8 +186,12 @@ src/webview/graph/
 
 - Zoom Controls 왼쪽에 하단 정렬된 Minimap Container와 고정 SVG Layer를 항상 표시
 - Minimap에 기존 `data-graph-camera-ignore` 규약을 적용해 Pan과 Wheel Zoom 입력 차단
-- Renderer와 공유하는 초기 `GraphLayout`을 즉시 렌더링하고 `setLayout()`으로 Graphic 교체
+- Renderer와 공유하는 초기 `GraphLayout` 및 `TaskGraphLayout`을 즉시 렌더링하고 `setLayout()`/`setTaskLayout()`으로 Graphic 교체
 - Node는 이름/Icon 없는 최소 2px Rounded Rect, Edge는 약한 단순 Line으로 표시
+- Task Start/Work/End Card와 Task Edge를 Graph와 같은 World Projection에 합성
+- Graph Card, grouped File Row와 Task Node의 exact Activity target을 대표 Session 색으로 실시간 갱신
+- Activity/Session lifecycle 변경은 Geometry DOM을 재생성하지 않고 기존 Rect의 fill만 갱신
+- Backlink는 hollow dash, Detached Root는 accent ring, 사용자 미정렬 Node는 warning marker로 독립 표현
 - Edge/Node 위 고정 Viewport Layer의 단일 Rect로 현재 Camera 가시 World 영역 표시
 - Graph State의 `nodePositions` reference 변경 시에만 저장 위치를 반영해 Minimap 재투영
 - Camera-only State 변경은 기존 Projection과 Graphic을 유지하고 Indicator attribute만 갱신
@@ -204,19 +210,20 @@ src/webview/graph/
 - 빈 Root 안내와 제목이 고정된 Scroll 목록 제공
 - Root Item Button 선택을 `rootId` callback으로 상위 계층에 전달하고 재렌더·dispose 시 Listener 정리
 - 기존 Camera Zoom 동작과 완전 입력 차단 규약 재사용
-- `dispose()` 시 Minimap Layout/Projection reference, 활성 Pointer Capture, Viewport ResizeObserver, Minimap/Action/Zoom Listener, 공통 State 구독 및 DOM 정리
+- `dispose()` 시 Minimap Layout/Projection reference, Activity/Session 구독, 활성 Pointer Capture, Viewport ResizeObserver, Minimap/Action/Zoom Listener, 공통 State 구독 및 DOM 정리
 - Root 선택 상태는 포함하지 않음
 
 ### `graphNavigatorMinimap.ts`
 
-> 현재 Layout과 저장 Node 위치를 DOM 없이 Minimap Bounds 및 좌표로 변환합니다.
+> 현재 Graph/Task Layout과 저장 Node 위치를 DOM 없이 Minimap Bounds 및 좌표로 변환합니다.
 
 - Renderer와 공통 `resolveGraphLayoutNodePosition()`을 사용해 저장 위치를 Layout 기본 위치보다 우선
-- 현재 Layout에 포함된 유효 Node의 실제 위치와 width/height로 Multi-Root World Bounds 계산
+- Graph Card/Binding footprint와 Task Scope `visualBounds`를 합쳐 전체 World Bounds 계산
 - Empty 또는 유효 Node가 없는 Layout은 가상 Bounds 없이 `undefined`로 처리
 - 고정 Padding 안에서 `min(scaleX, scaleY)` 단일 scale과 남는 축 중앙 정렬 적용
 - World origin과 Minimap origin 기반 World ↔ Minimap 양방향 Projection 제공
-- Node Rect와 source 오른쪽 중앙 → target 왼쪽 중앙 Edge Line geometry 생성
+- Graph Card, 현재 page의 grouped File Row, Task Card와 각 Edge Line geometry 생성
+- geometry에 exact Activity target과 Backlink/Detached/수동 미정렬 상태를 DOM 독립 metadata로 제공
 - 존재하지 않는 Node를 참조하는 Edge는 전체 계산을 중단하지 않고 제외
 - 기존 `camera.viewportToWorld()`로 실제 Graph Viewport 좌상단/우하단의 World Bounds 계산
 - Camera World Bounds를 기존 Graph Projection으로 변환하고 SVG 영역에 안전하게 Clamp
@@ -224,6 +231,14 @@ src/webview/graph/
 - Client Point를 실제 SVG 크기와 논리 Minimap 크기 차이를 반영해 변환
 - Drag 시작/현재 Minimap Point를 같은 Projection으로 역투영해 World 이동량 제공
 - Pointer session, Camera 상태와 DOM Listener는 소유하지 않음
+
+### `graphPresentationTarget.ts`
+
+> Graph Renderer와 Minimap이 공유하는 Layout 표현 → exact Activity target 변환 경계입니다.
+
+- Project/Folder 및 standalone File Card의 source/occurrence target 계산
+- grouped File Row도 같은 규칙으로 source와 optional detached `rootId` 계산
+- Folder/File Backlink와 grouped File Group 자체는 Activity 대상에서 제외
 
 ### `graphNavigatorRoots.ts`
 

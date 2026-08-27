@@ -12,6 +12,8 @@ import type {
 	GraphLayoutEdge,
 	GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
+import { createGraphLayoutNodeId } from '../../webview/graph/graphLayout';
+import { createDetachedRootId } from '../../webview/graph/graphRootPromotion';
 import type {
 	Graph,
 	Project,
@@ -19,7 +21,12 @@ import type {
 import {
 	initializeGraphNavigator,
 	type GraphNavigatorInteractions,
+	type GraphNavigatorRuntimeOptions,
 } from '../../webview/graph/graphNavigator';
+import { createAgentActivityStore } from '../../agent/webview/agentActivityStore';
+import { createAgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
+import { createTaskGraphLayout } from '../../webview/task/taskLayout';
+import { TASK_BLUEPRINT_VERSION, type TaskBlueprint } from '../../task';
 import { createGraphState } from '../../webview/graph/graphState';
 import {
 	calculateGraphVisibleArea,
@@ -172,6 +179,7 @@ suite('Graph Navigator', () => {
 		assert.deepStrictEqual(fixture.minimapSvg.children, [
 			fixture.minimapEdgeLayer,
 			fixture.minimapNodeLayer,
+			fixture.minimapStatusLayer,
 			fixture.minimapViewportLayer,
 		]);
 		assert.deepStrictEqual(
@@ -257,6 +265,200 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(indicator.getAttribute('visibility'), 'hidden');
 		fixture.navigator.setLayout(nextLayout);
 		assert.strictEqual(indicator.getAttribute('visibility'), null);
+	});
+
+	test('setTaskLayout은 Start/Work/End와 Task Edge를 기존 Minimap에 합성한다', () => {
+		const fixture = createNavigatorFixture();
+		const taskLayout = createTaskGraphLayout([
+			createMinimapTask('task:navigator', { x: -500, y: -200 }),
+		]);
+
+		fixture.navigator.setTaskLayout(taskLayout);
+
+		assert.deepStrictEqual(
+			fixture.minimapNodeLayer.children.map((node) => (
+				node.getAttribute('data-minimap-task-node-kind')
+			)),
+			['start', 'work', 'end'],
+		);
+		assert.strictEqual(fixture.minimapEdgeLayer.children.length, 2);
+		assert.ok(fixture.minimapEdgeLayer.children.every((edge) => (
+			edge.getAttribute('data-minimap-task-edge-id') !== null
+		)));
+	});
+
+	test('Graph와 Task Activity를 exact Session 색으로 갱신하며 geometry DOM을 유지한다', () => {
+		const activities = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore((sessionId) => (
+			sessionId === 'session:graph' ? '#112233' : '#aabbcc'
+		));
+		const taskLayout = createTaskGraphLayout([
+			createMinimapTask('task:activity', { x: 500, y: 200 }),
+		]);
+		const fileGroup: GraphLayoutNode = {
+			kind: 'file-group',
+			id: 'file-group:activity',
+			name: 'files',
+			depth: 1,
+			position: { x: 220, y: 80 },
+			width: 240,
+			height: 52,
+			presentation: 'grouped',
+			visibleChildCount: 1,
+			children: [{
+				kind: 'file',
+				id: 'file:activity',
+				name: 'activity.ts',
+				presentation: 'normal',
+			}],
+		};
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createMinimapLayout([
+				createMinimapNode('node:activity', 0, 0),
+				fileGroup,
+			]),
+			undefined,
+			undefined,
+			{
+				agentActivityStore: activities,
+				agentSessionPresentationStore: presentations,
+				initialTaskLayout: taskLayout,
+			},
+		);
+		const nodes = [...fixture.minimapNodeLayer.children];
+		const edges = [...fixture.minimapEdgeLayer.children];
+		const indicator = fixture.minimapViewportIndicator;
+		const graphRect = getChildByAttribute(
+			fixture.minimapNodeLayer,
+			'data-graph-node-id',
+			'node:activity',
+		);
+		const taskRects = fixture.minimapNodeLayer.children.filter((node) => (
+			node.getAttribute('data-minimap-task-node-id') !== null
+		));
+		const fileRect = getChildByAttribute(
+			fixture.minimapNodeLayer,
+			'data-graph-file-id',
+			'file:activity',
+		);
+
+		presentations.activateSession('tab:graph', 'session:graph', 'Graph Agent');
+		activities.setAgentActivity(
+			'session:graph',
+			{ nodeId: 'node:activity' },
+			'active',
+		);
+		activities.setAgentActivity(
+			'session:graph',
+			{ nodeId: 'file:activity' },
+			'editing',
+		);
+		presentations.activateSession('tab:task', 'session:task', 'Task Agent');
+		for (const node of taskLayout.nodes) {
+			activities.setAgentActivity(
+				'session:task',
+				{ nodeId: node.id },
+				'editing',
+			);
+		}
+
+		assert.strictEqual(graphRect.style.getPropertyValue('fill'), '#112233');
+		assert.strictEqual(fileRect.style.getPropertyValue('fill'), '#112233');
+		assert.ok(taskRects.every((rect) => (
+			rect.style.getPropertyValue('fill') === '#aabbcc'
+		)));
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+		assert.deepStrictEqual(fixture.minimapEdgeLayer.children, edges);
+		assert.strictEqual(fixture.minimapViewportIndicator, indicator);
+
+		activities.clearAgentActivity(
+			'session:graph',
+			{ nodeId: 'node:activity' },
+		);
+		assert.strictEqual(graphRect.style.getPropertyValue('fill'), '');
+		assert.deepStrictEqual(fixture.minimapNodeLayer.children, nodes);
+	});
+
+	test('starting Session Activity는 lifecycle이 running이 될 때만 기존 Node에 표시한다', () => {
+		const activities = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore(() => '#445566');
+		const fixture = createNavigatorFixture(
+			undefined,
+			{},
+			createMinimapLayout([createMinimapNode('node:lifecycle', 0, 0)]),
+			undefined,
+			undefined,
+			{
+				agentActivityStore: activities,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const rect = getChild(fixture.minimapNodeLayer, 0);
+
+		presentations.startSession('tab:lifecycle', 'session:lifecycle', 'Agent');
+		activities.setAgentActivity(
+			'session:lifecycle',
+			{ nodeId: 'node:lifecycle' },
+			'planned',
+		);
+		assert.strictEqual(rect.style.getPropertyValue('fill'), '');
+
+		presentations.activateSession('tab:lifecycle', 'session:lifecycle', 'Agent');
+		assert.strictEqual(rect.style.getPropertyValue('fill'), '#445566');
+		assert.strictEqual(getChild(fixture.minimapNodeLayer, 0), rect);
+
+		fixture.navigator.dispose();
+		activities.clearAgentActivitiesBySession('session:lifecycle');
+		assert.strictEqual(rect.style.getPropertyValue('fill'), '#445566');
+	});
+
+	test('Backlink, Detached Root와 수동 미정렬 상태를 독립 Shape로 함께 표시한다', () => {
+		const detachedRootId = createDetachedRootId('folder:detached', 1);
+		const detachedNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			'folder:detached',
+		);
+		const detachedNode = createMinimapNode(detachedNodeId, 0, 0);
+		const backlinkNode: GraphLayoutNode = {
+			kind: 'folder-backlink',
+			id: 'folder:backlink',
+			name: 'backlink',
+			depth: 1,
+			position: { x: 300, y: 80 },
+			width: 100,
+			height: 40,
+			targetRootId: detachedRootId,
+			targetRootIds: [detachedRootId],
+			targetNodeId: 'folder:detached',
+		};
+		const layout: GraphLayout = {
+			...createMinimapLayout([detachedNode, backlinkNode]),
+			rootNodeIds: new Set([detachedNodeId]),
+			unarrangedNodeIds: new Set([detachedNodeId]),
+			manualUnarrangedNodeIds: new Set([detachedNodeId]),
+		};
+		const fixture = createNavigatorFixture(undefined, {}, layout);
+		const backlinkRect = getChildByAttribute(
+			fixture.minimapNodeLayer,
+			'data-graph-node-id',
+			backlinkNode.id,
+		);
+
+		assert.strictEqual(backlinkRect.hasClass('is-backlink'), true);
+		assert.strictEqual(
+			fixture.minimapStatusLayer.children.filter((shape) => (
+				shape.hasClass('graph-navigator-minimap-detached-root-ring')
+			)).length,
+			1,
+		);
+		assert.strictEqual(
+			fixture.minimapStatusLayer.children.filter((shape) => (
+				shape.hasClass('graph-navigator-minimap-unarranged-marker')
+			)).length,
+			1,
+		);
 	});
 
 	test('nodePositions 변경만으로 기존 Minimap Container를 유지하며 Node와 Edge를 다시 투영한다', () => {
@@ -1947,6 +2149,7 @@ function createNavigatorFixture(
 	initialLayout: GraphLayout = createEmptyLayout(),
 	animationFrameScheduler?: GraphAnimationFrameScheduler,
 	getVisibleGraphArea?: GraphVisibleAreaProvider,
+	runtimeOptions?: GraphNavigatorRuntimeOptions,
 ) {
 	const ownerDocument = new FakeDocument();
 	const viewport = ownerDocument.createSizedElement(800, 600);
@@ -1970,6 +2173,8 @@ function createNavigatorFixture(
 		initialLayout,
 		interactions,
 		getVisibleGraphArea,
+		undefined,
+		runtimeOptions,
 	);
 	const navigatorElement = getChild(overlay, 0);
 	const bottomRow = getChild(navigatorElement, 0);
@@ -1977,7 +2182,8 @@ function createNavigatorFixture(
 	const minimapSvg = getChild(minimap, 0);
 	const minimapEdgeLayer = getChild(minimapSvg, 0);
 	const minimapNodeLayer = getChild(minimapSvg, 1);
-	const minimapViewportLayer = getChild(minimapSvg, 2);
+	const minimapStatusLayer = getChild(minimapSvg, 2);
+	const minimapViewportLayer = getChild(minimapSvg, 3);
 	const minimapViewportIndicator = getChild(minimapViewportLayer, 0);
 	const zoom = getChild(bottomRow, 1);
 	const coordinate = getChild(zoom, 0);
@@ -2015,6 +2221,7 @@ function createNavigatorFixture(
 		minimapSvg,
 		minimapEdgeLayer,
 		minimapNodeLayer,
+		minimapStatusLayer,
 		minimapViewportLayer,
 		minimapViewportIndicator,
 		zoom,
@@ -2367,10 +2574,20 @@ function createEmptyLayout(): GraphLayout {
 
 class FakeElement {
 	readonly children: FakeElement[] = [];
+	private readonly styleProperties = new Map<string, string>();
 	readonly style = {
 		transform: '',
 		backgroundPosition: '',
 		backgroundSize: '',
+		setProperty: (name: string, value: string) => {
+			this.styleProperties.set(name, value);
+		},
+		removeProperty: (name: string) => {
+			const value = this.styleProperties.get(name) ?? '';
+			this.styleProperties.delete(name);
+			return value;
+		},
+		getPropertyValue: (name: string) => this.styleProperties.get(name) ?? '',
 	};
 	readonly classList = {
 		add: (...tokens: string[]) => {
@@ -2564,6 +2781,46 @@ function createLargeMinimapLayout(): GraphLayout {
 		sourceId: 'node:large-a',
 		targetId: 'node:large-b',
 	}]);
+}
+
+function createMinimapTask(
+	taskId: string,
+	origin: { readonly x: number; readonly y: number },
+): TaskBlueprint {
+	const start = { id: `${taskId}:start`, kind: 'start' as const };
+	const work = {
+		id: `${taskId}:work`,
+		kind: 'work' as const,
+		title: 'Work',
+		description: '',
+		prompt: 'Work',
+		agentProviderId: 'codex' as const,
+		graphTargets: { reference: [], work: [] },
+	};
+	const end = { id: `${taskId}:end`, kind: 'end' as const };
+
+	return {
+		version: TASK_BLUEPRINT_VERSION,
+		id: taskId,
+		title: 'Navigator Task',
+		description: '',
+		defaultGraphTargets: { reference: [], work: [] },
+		origin,
+		nodePositions: {
+			[work.id]: { x: 320, y: 0 },
+			[end.id]: { x: 640, y: 0 },
+		},
+		nodes: [start, work, end],
+		edges: [{
+			id: `${taskId}:edge:start-work`,
+			source: start.id,
+			target: work.id,
+		}, {
+			id: `${taskId}:edge:work-end`,
+			source: work.id,
+			target: end.id,
+		}],
+	};
 }
 
 function readRectAttributes(element: FakeElement): Record<string, string | null> {

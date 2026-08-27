@@ -288,6 +288,140 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
+	test('Navigator Minimap은 초기 Task와 updateTasks의 Start/Work/End 및 Edge를 동기화한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createSerialRenderingTask(
+			'task:minimap-layout',
+			{ x: -600, y: -240 },
+			1,
+		);
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+		);
+
+		assert.deepStrictEqual(task.nodes.map((node) => node.kind), [
+			'start',
+			'work',
+			'end',
+		]);
+		for (const node of task.nodes) {
+			assert.strictEqual(
+				getTaskElements(
+					root,
+					'data-minimap-task-node-id',
+					node.id,
+				).length,
+				1,
+			);
+		}
+		for (const edge of task.edges) {
+			assert.strictEqual(
+				getTaskElements(
+					root,
+					'data-minimap-task-edge-id',
+					edge.id,
+				).length,
+				1,
+			);
+		}
+
+		graphView.updateTasks([]);
+		assert.strictEqual(
+			getTaskElements(root, 'data-minimap-task-node-id', task.nodes[0]?.id ?? '')
+				.length,
+			0,
+		);
+		graphView.updateTasks([{ ...task, origin: { x: 1_800, y: 900 } }]);
+		assert.strictEqual(
+			getTaskElements(root, 'data-minimap-task-node-id', task.nodes[0]?.id ?? '')
+				.length,
+			1,
+		);
+
+		graphView.dispose();
+	});
+
+	test('Navigator Minimap은 Graph와 Task 세 노드의 AgentActivity 색을 같은 DOM에 반영한다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createSerialRenderingTask(
+			'task:minimap-activity',
+			{ x: 1_200, y: 480 },
+			1,
+		);
+		const activities = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore((sessionId) => (
+			sessionId === 'session:minimap-graph' ? '#123456' : '#abcdef'
+		));
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{},
+			[task],
+			undefined,
+			{
+				agentActivityStore: activities,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const graphRect = getTaskElements(
+			root,
+			'data-graph-node-id',
+			GRAPH_MOCK_PROJECT.id,
+		).find((element) => element.hasClass('graph-navigator-minimap-node'));
+		const taskRects = task.nodes.map((node) => getTaskElements(
+			root,
+			'data-minimap-task-node-id',
+			node.id,
+		)[0]);
+
+		assert.ok(graphRect);
+		assert.ok(taskRects.every(Boolean));
+		presentations.activateSession(
+			'tab:minimap-graph',
+			'session:minimap-graph',
+			'Graph Agent',
+		);
+		activities.setAgentActivity(
+			'session:minimap-graph',
+			{ nodeId: GRAPH_MOCK_PROJECT.id },
+			'active',
+		);
+		presentations.activateSession(
+			'tab:minimap-task',
+			'session:minimap-task',
+			'Task Agent',
+		);
+		for (const node of task.nodes) {
+			activities.setAgentActivity(
+				'session:minimap-task',
+				{ nodeId: node.id },
+				'editing',
+			);
+		}
+
+		assert.strictEqual(graphRect.style.getPropertyValue('fill'), '#123456');
+		assert.ok(taskRects.every((rect) => (
+			rect?.style.getPropertyValue('fill') === '#abcdef'
+		)));
+		assert.strictEqual(
+			getTaskElements(
+				root,
+				'data-minimap-task-node-id',
+				task.nodes[1]?.id ?? '',
+			)[0],
+			taskRects[1],
+		);
+
+		graphView.dispose();
+	});
+
 	test('멀티 Root 새 Task는 첫 Project owner로 생성되고 START Inspector에서 owner를 바꾼다', () => {
 		const fixture = createPersistenceWorkspaceFixture();
 		const ownerDocument = new FakeDocument();
@@ -13224,7 +13358,7 @@ suite('Graph View', () => {
 		graphView.dispose();
 	});
 
-	test('Node Drag 중 transient 위치는 무시하고 pointerup 저장 뒤 Minimap을 갱신한다', () => {
+	test('Node Drag 중 transient 위치는 무시하고 pointerup 저장 뒤 기존 Minimap Shape를 갱신한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
 		const graphView = initializeGraphView(
@@ -13274,7 +13408,7 @@ suite('Graph View', () => {
 		);
 
 		project.dispatch('pointerup', createPointerEvent(project, 4_000, 2_500));
-		assert.notStrictEqual(
+		assert.strictEqual(
 			getDescendantByAttribute(
 				minimapNodeLayer,
 				'data-graph-node-id',

@@ -55,6 +55,10 @@ import {
 	type AgentActivityBindings,
 } from './agentActivityBindings';
 import type { GitDecorationBindings } from './gitDecorationStore';
+import {
+	getGraphFilePresentationTarget,
+	getGraphLayoutNodePresentationTarget,
+} from './graphPresentationTarget';
 
 interface FileGroupContentRenderer {
 	render(page: number): void;
@@ -1196,7 +1200,7 @@ export function initializeGraphRenderer(
 			ownerDocument,
 		);
 		const bindingSourceId = getGraphBindingSourceId(layoutNode);
-		const presentationTarget = getLayoutNodePresentationTarget(layoutNode);
+		const presentationTarget = getGraphLayoutNodePresentationTarget(layoutNode);
 		const subtreePresentationOptions = layoutNode.kind === 'project'
 			|| layoutNode.kind === 'folder'
 			? { layoutNodeId: layoutNode.id }
@@ -2593,38 +2597,6 @@ function syncAgentActivityBindingLayout(
 	);
 }
 
-/** Backlink과 grouped File Group Card를 제외한 실제 Source 표현의 exact Target이다. */
-function getLayoutNodePresentationTarget(
-	node: GraphLayoutNode,
-): { readonly nodeId: string; readonly rootId?: string } | undefined {
-	if (node.kind === 'folder-backlink') {
-		return undefined;
-	}
-
-	if (node.kind === 'file-group') {
-		const file = node.presentation === 'standalone' ? node.children[0] : undefined;
-
-		if (!file || file.presentation === 'backlink') {
-			return undefined;
-		}
-
-		const rootId = getGraphLayoutRootId(file.id)
-			?? getGraphLayoutRootId(node.id);
-
-		return {
-			nodeId: getGraphLayoutSourceId(file.id),
-			...(rootId ? { rootId } : {}),
-		};
-	}
-
-	const rootId = getGraphLayoutRootId(node.id);
-
-	return {
-		nodeId: getGraphLayoutSourceId(node.id),
-		...(rootId ? { rootId } : {}),
-	};
-}
-
 /** Standalone presentation과 grouped File Row가 공유하는 icon/name content를 추가한다. */
 function appendFileContent(
 	element: HTMLElement,
@@ -2916,13 +2888,7 @@ function createFileRow(
 	applyFileBacklinkAttributes(item, file);
 	appendFileContent(item, file, ownerDocument);
 	const sourceNodeId = getGraphLayoutSourceId(file.id);
-	const rootId = getGraphLayoutRootId(file.id);
-	const presentationTarget = file.presentation === 'normal'
-		? {
-			nodeId: sourceNodeId,
-			...(rootId ? { rootId } : {}),
-		}
-		: undefined;
+	const presentationTarget = getGraphFilePresentationTarget(file, fileGroupId);
 	const disposeNodeEffect = presentationTarget
 		? nodeEffects?.registerNode(presentationTarget, item)
 		: undefined;

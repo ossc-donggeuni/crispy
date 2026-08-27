@@ -98,6 +98,8 @@ export interface GraphFileGroupNode extends GraphLayoutNodeBase {
 	readonly kind: 'file-group';
 	readonly parentId?: string;
 	readonly children: readonly GraphFileNode[];
+	/** 현재 page에서 실제 DOM Row로 표시되는 children prefix의 길이다. */
+	readonly visibleChildCount?: number;
 	readonly presentation: GraphFileGroupPresentation;
 }
 
@@ -129,6 +131,8 @@ export interface GraphLayout {
 	readonly arrangedNodeIds: ReadonlySet<string>;
 	/** 수동 위치를 유지하며 Parent의 자동 sibling flow에서 제외된 Node ID 집합이다. */
 	readonly unarrangedNodeIds: ReadonlySet<string>;
+	/** Task Scope 같은 외부 배치를 제외하고 사용자 배치에서 유래한 Node ID 집합이다. */
+	readonly manualUnarrangedNodeIds?: ReadonlySet<string>;
 }
 
 /** 순수 Layout 계산에 필요한 pagination 및 열린 Folder snapshot이다. */
@@ -138,6 +142,8 @@ export interface GraphLayoutOptions {
 	readonly hiddenNodeIds?: Readonly<Record<string, true>>;
 	/** 수동으로 꺼내 일반 sibling flow의 subtree 높이 계산에서 제외할 Node다. */
 	readonly unarrangedNodeIds?: ReadonlySet<string>;
+	/** unarranged 중 사용자 배치로 분류할 Node다. 생략하면 기존 호출과 동일하게 취급한다. */
+	readonly manualUnarrangedNodeIds?: ReadonlySet<string>;
 	/** 닫힌 ancestor 아래에서도 실제 occurrence와 원래 Edge 경로를 유지할 Node다. */
 	readonly pinnedNodeIds?: ReadonlySet<string>;
 	/** G-12.5와 동일한 effective source/occurrence Binding 개수 resolver다. */
@@ -242,6 +248,7 @@ interface LayoutTreeNode {
 	readonly agentActivityBindingCount?: number;
 	readonly parentId?: string;
 	readonly fileChildren?: readonly GraphFileNode[];
+	readonly visibleFileChildCount?: number;
 	readonly fileGroupPresentation?: GraphFileGroupPresentation;
 	readonly targetRootId?: string;
 	readonly targetRootIds?: readonly string[];
@@ -330,6 +337,13 @@ export function createGraphLayout(
 			.map((node) => node.id)
 			.filter((nodeId) => options.unarrangedNodeIds?.has(nodeId) === true),
 	);
+	const manualUnarrangedNodeIds = new Set(
+		nodes
+			.map((node) => node.id)
+			.filter((nodeId) => (
+				options.manualUnarrangedNodeIds ?? options.unarrangedNodeIds
+			)?.has(nodeId) === true),
+	);
 
 	return {
 		nodes,
@@ -342,6 +356,7 @@ export function createGraphLayout(
 				.filter((nodeId) => !unarrangedNodeIds.has(nodeId)),
 		),
 		unarrangedNodeIds,
+		manualUnarrangedNodeIds,
 	};
 }
 
@@ -646,6 +661,7 @@ function createArrangedFileLayoutTrees(
 		...(graphContentHeight === height ? {} : { graphContentHeight }),
 		parentId: createGraphLayoutNodeId(layoutRoot.id, parent.id),
 		fileChildren,
+		visibleFileChildCount: visibleFileCount,
 		fileGroupPresentation: 'grouped',
 		...(unarrangedNodeIds.has(id) ? { unarranged: true as const } : {}),
 		children: [],
@@ -948,6 +964,9 @@ function toGraphLayoutNode(
 			kind: 'file-group',
 			...(tree.parentId === undefined ? {} : { parentId: tree.parentId }),
 			children: tree.fileChildren ?? [],
+			...(tree.visibleFileChildCount === undefined
+				? {}
+				: { visibleChildCount: tree.visibleFileChildCount }),
 			presentation: tree.fileGroupPresentation ?? 'grouped',
 		};
 	}

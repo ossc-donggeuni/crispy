@@ -5,6 +5,12 @@ import type {
 	GraphLayoutNode,
 } from '../../webview/graph/graphLayout';
 import {
+	createGraphLayoutNodeId,
+} from '../../webview/graph/graphLayout';
+import { createDetachedRootId } from '../../webview/graph/graphRootPromotion';
+import { TASK_BLUEPRINT_VERSION, type TaskBlueprint } from '../../task';
+import { createTaskGraphLayout } from '../../webview/task/taskLayout';
+import {
 	calculateCameraWorldBounds,
 	calculateGraphBounds,
 	calculateMinimapWorldDelta,
@@ -245,6 +251,121 @@ suite('Graph Navigator Minimap Geometry', () => {
 		});
 	});
 
+	test('Graph와 Task Card/Edge를 같은 Projection에 포함하고 Scope visual bounds를 보존한다', () => {
+		const graphNode = createNode('graph:root', 40, 30, 100, 40);
+		const taskLayout = createTaskGraphLayout([
+			createMinimapTask('task:combined', { x: -700, y: -300 }),
+		]);
+		const geometry = createMinimapGraphGeometry(
+			createLayout([graphNode]),
+			{},
+			{ width: 160, height: 96 },
+			undefined,
+			taskLayout,
+		);
+
+		assert.ok(geometry);
+		assert.strictEqual(
+			geometry.nodes.filter((node) => node.sourceKind === 'task-node').length,
+			3,
+		);
+		assert.strictEqual(
+			geometry.edges.filter((edge) => edge.sourceKind === 'task-edge').length,
+			2,
+		);
+		assert.deepStrictEqual(
+			geometry.nodes
+				.filter((node) => node.sourceKind === 'task-node')
+				.map((node) => node.taskKind),
+			['start', 'work', 'end'],
+		);
+		const taskBounds = taskLayout.nodes.map((node) => (
+			'visualBounds' in node
+				? node.visualBounds
+				: { position: node.position, width: node.width, height: node.height }
+		));
+		const expectedLeft = Math.min(
+			graphNode.position.x,
+			...taskBounds.map((bounds) => bounds.position.x),
+		);
+		const expectedTop = Math.min(
+			graphNode.position.y,
+			...taskBounds.map((bounds) => bounds.position.y),
+		);
+
+		assert.strictEqual(geometry.bounds.x, expectedLeft);
+		assert.strictEqual(geometry.bounds.y, expectedTop);
+	});
+
+	test('Grouped File Row와 Backlink/Detached/수동 미정렬 상태를 geometry metadata로 분리한다', () => {
+		const detachedRootId = createDetachedRootId('folder:detached', 1);
+		const detachedNodeId = createGraphLayoutNodeId(
+			detachedRootId,
+			'folder:detached',
+		);
+		const group: GraphLayoutNode = {
+			kind: 'file-group',
+			id: 'file-group:root',
+			name: 'files',
+			depth: 1,
+			position: { x: 300, y: 80 },
+			width: 240,
+			height: 82,
+			presentation: 'grouped',
+			visibleChildCount: 2,
+			children: [{
+				kind: 'file',
+				id: 'file:normal',
+				name: 'normal.ts',
+				presentation: 'normal',
+			}, {
+				kind: 'file',
+				id: 'file:backlink',
+				name: 'backlink.ts',
+				presentation: 'backlink',
+				targetRootId: 'root:target',
+			}],
+		};
+		const detached = {
+			...createNode(detachedNodeId, -200, -100, 100, 40),
+			id: detachedNodeId,
+		};
+		const layout = {
+			...createLayout([detached, group]),
+			rootNodeIds: new Set([detachedNodeId]),
+			unarrangedNodeIds: new Set([detachedNodeId, group.id]),
+			manualUnarrangedNodeIds: new Set([group.id]),
+		};
+		const geometry = createMinimapGraphGeometry(
+			layout,
+			{},
+			{ width: 160, height: 96 },
+		);
+
+		assert.ok(geometry);
+		const detachedGeometry = geometry.nodes.find(
+			(node) => node.id === detachedNodeId,
+		);
+		const normalRow = geometry.nodes.find(
+			(node) => node.sourceKind === 'graph-file-row'
+				&& node.id === 'file:normal',
+		);
+		const backlinkRow = geometry.nodes.find(
+			(node) => node.sourceKind === 'graph-file-row'
+				&& node.id === 'file:backlink',
+		);
+
+		assert.strictEqual(detachedGeometry?.detachedRoot, true);
+		assert.strictEqual(detachedGeometry?.manualUnarranged, undefined);
+		assert.strictEqual(normalRow?.presentationTarget?.nodeId, 'file:normal');
+		assert.strictEqual(backlinkRow?.backlink, true);
+		assert.strictEqual(backlinkRow?.presentationTarget, undefined);
+		assert.strictEqual(
+			geometry.nodes.find((node) => node.id === group.id)?.manualUnarranged,
+			true,
+		);
+	});
+
 	test('렌더 영역이나 Padding이 유효하지 않으면 Projection을 만들지 않는다', () => {
 		const bounds = { x: 0, y: 0, width: 100, height: 50 };
 
@@ -396,6 +517,46 @@ function createLayout(
 		rootNodeIds: new Set(),
 		arrangedNodeIds: new Set(nodes.map((node) => node.id)),
 		unarrangedNodeIds: new Set(),
+	};
+}
+
+function createMinimapTask(
+	taskId: string,
+	origin: { readonly x: number; readonly y: number },
+): TaskBlueprint {
+	const start = { id: `${taskId}:start`, kind: 'start' as const };
+	const work = {
+		id: `${taskId}:work`,
+		kind: 'work' as const,
+		title: 'Work',
+		description: '',
+		prompt: 'Work',
+		agentProviderId: 'codex' as const,
+		graphTargets: { reference: [], work: [] },
+	};
+	const end = { id: `${taskId}:end`, kind: 'end' as const };
+
+	return {
+		version: TASK_BLUEPRINT_VERSION,
+		id: taskId,
+		title: 'Minimap Task',
+		description: '',
+		defaultGraphTargets: { reference: [], work: [] },
+		origin,
+		nodePositions: {
+			[work.id]: { x: 320, y: 0 },
+			[end.id]: { x: 640, y: 0 },
+		},
+		nodes: [start, work, end],
+		edges: [{
+			id: `${taskId}:edge:start-work`,
+			source: start.id,
+			target: work.id,
+		}, {
+			id: `${taskId}:edge:work-end`,
+			source: work.id,
+			target: end.id,
+		}],
 	};
 }
 
