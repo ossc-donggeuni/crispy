@@ -141,11 +141,6 @@ function initializeAgentTabStripNavigation(
 			startScrollLeft: container.scrollLeft,
 			moved: false,
 		};
-		try {
-			container.setPointerCapture(event.pointerId);
-		} catch {
-			/** capture 미지원 환경에서도 container 안의 drag는 계속 처리한다. */
-		}
 	};
 
 	const handlePointerMove = (event: PointerEvent): void => {
@@ -162,6 +157,12 @@ function initializeAgentTabStripNavigation(
 		if (!currentDrag.moved) {
 			currentDrag.moved = true;
 			container.dataset.scrollDragging = 'true';
+			try {
+				/** 짧은 click의 target을 보존하도록 실제 drag가 시작된 뒤에만 capture한다. */
+				container.setPointerCapture(event.pointerId);
+			} catch {
+				/** capture 미지원 환경에서도 container 안의 drag는 계속 처리한다. */
+			}
 			onNavigate();
 		}
 		container.scrollLeft = clampScrollLeft(

@@ -375,13 +375,14 @@ suite('Agent Panel UI', () => {
 			pointerId: 7,
 			clientX: 140,
 		});
-		assert.strictEqual(fixture.tabStrip.hasPointerCapture(7), true);
+		assert.strictEqual(fixture.tabStrip.hasPointerCapture(7), false);
 
 		fixture.tabStrip.dispatch('pointermove', {
 			pointerId: 7,
 			clientX: 100,
 			preventDefault: () => movePrevented = true,
 		});
+		assert.strictEqual(fixture.tabStrip.hasPointerCapture(7), true);
 		assert.strictEqual(fixture.tabStrip.scrollLeft, 220);
 		assert.strictEqual(fixture.tabStrip.dataset.scrollDragging, 'true');
 		assert.strictEqual(movePrevented, true);
@@ -419,6 +420,34 @@ suite('Agent Panel UI', () => {
 			stopImmediatePropagation: () => undefined,
 		});
 		assert.strictEqual(clickPrevented, false, '짧은 click은 기존 탭 선택을 유지한다.');
+	});
+
+	test('세션 탭 단일 click은 pointer capture 없이 탭을 전환한다', () => {
+		const fixture = createFixture();
+		fixture.tabStrip.clientWidth = 200;
+		fixture.tabStrip.scrollWidth = 700;
+		const firstTabId = fixture.controller.getSnapshot().tabs[0].id;
+		requireElement(fixture.topBar, 'agent-create-tab').click();
+		assert.notStrictEqual(fixture.controller.getSnapshot().activeTabId, firstTabId);
+
+		fixture.tabStrip.dispatch('pointerdown', {
+			button: 0,
+			isPrimary: true,
+			pointerId: 9,
+			clientX: 80,
+		});
+		assert.strictEqual(
+			fixture.tabStrip.hasPointerCapture(9),
+			false,
+			'pointerdown만으로 tab button의 click target을 빼앗지 않는다.',
+		);
+		fixture.tabStrip.dispatch('pointerup', {
+			pointerId: 9,
+			preventDefault: () => undefined,
+		});
+		fixture.tabStrip.findAll('agent-tab-select')[0].click();
+
+		assert.strictEqual(fixture.controller.getSnapshot().activeTabId, firstTabId);
 	});
 
 	test('Workspace combobox는 카드 내부 listbox와 키보드·바깥 클릭 닫기를 제공한다', () => {
