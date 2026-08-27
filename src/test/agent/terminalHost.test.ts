@@ -389,7 +389,7 @@ suite('TerminalHost Workspace assignment', () => {
 			tabId: 'tab-preflight-rejected',
 			sessionId: null,
 			code: 'workspace_untrusted',
-			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			message: 'Trust the workspace and try again.',
 			canRestart: false,
 			switchAttemptId: 1,
 		}]);
@@ -436,7 +436,7 @@ suite('TerminalHost Workspace assignment', () => {
 			tabId: 'tab-preserve-on-preflight',
 			sessionId: null,
 			code: 'workspace_root_unavailable',
-			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			message: 'Reopen the selected workspace folder and try again.',
 			canRestart: false,
 			switchAttemptId: 2,
 		});
@@ -756,7 +756,7 @@ suite('TerminalHost start orchestration', () => {
 					tabId,
 					sessionId,
 					code: 'workspace_root_unavailable',
-					message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+					message: 'Reopen the selected workspace folder and try again.',
 					canRestart: true,
 				},
 			}),
@@ -785,7 +785,7 @@ suite('TerminalHost start orchestration', () => {
 			tabId: 'tab-post-assignment-failure',
 			sessionId: session.sessionId,
 			code: 'workspace_root_unavailable',
-			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			message: 'Reopen the selected workspace folder and try again.',
 			canRestart: true,
 		});
 	});
@@ -826,7 +826,7 @@ suite('TerminalHost start orchestration', () => {
 			tabId: 'tab-final-preflight-failure',
 			sessionId: session.sessionId,
 			code: 'workspace_path_invalid',
-			message: '유효한 로컬 작업공간 폴더를 연 후 다시 시도하세요.',
+			message: 'Open a valid local workspace folder and try again.',
 			canRestart: true,
 		});
 	});
@@ -881,7 +881,7 @@ suite('TerminalHost start orchestration', () => {
 			tabId: 'tab-windows-probe-preflight',
 			sessionId: session.sessionId,
 			code: 'workspace_root_unavailable',
-			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			message: 'Reopen the selected workspace folder and try again.',
 			canRestart: true,
 		});
 	});
@@ -1519,7 +1519,7 @@ suite('TerminalHost restart orchestration', () => {
 			tabId: 'tab-restart-preflight',
 			sessionId: session.sessionId,
 			code: 'workspace_root_unavailable',
-			message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+			message: 'Reopen the selected workspace folder and try again.',
 			canRestart: true,
 		});
 	});
@@ -1576,7 +1576,7 @@ suite('TerminalHost restart orchestration', () => {
 			tabId: 'tab-restart-post-cleanup',
 			sessionId: second.sessionId,
 			code: 'workspace_path_invalid',
-			message: '유효한 로컬 작업공간 폴더를 연 후 다시 시도하세요.',
+			message: 'Open a valid local workspace folder and try again.',
 			canRestart: true,
 		});
 	});
@@ -1950,7 +1950,7 @@ suite('TerminalHost Workspace Trust revoke', () => {
 			tabId: session.tabId,
 			sessionId: session.sessionId,
 			code: 'workspace_untrusted',
-			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			message: 'Trust the workspace and try again.',
 			canRestart: true,
 		});
 

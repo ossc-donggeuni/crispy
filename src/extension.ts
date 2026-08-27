@@ -617,17 +617,17 @@ const defaultTaskClipboardHost: TaskClipboardHost = {
 	writeText: (value) => vscode.env.clipboard.writeText(value),
 	reportCopySuccess: () => {
 		vscode.window.setStatusBarMessage(
-			'Crispy: Task JSON을 클립보드에 복사했습니다.',
+			'Crispy: Task JSON copied to the clipboard.',
 			2_000,
 		);
 	},
 	reportCopyFailure: (reason) => {
 		void vscode.window.showErrorMessage(
 			reason === 'transfer_limit'
-				? 'Crispy: Task가 JSON 내보내기 한도를 초과했습니다.'
+				? 'Crispy: The task exceeds the JSON export limit.'
 				: reason === 'invalid_task'
-					? 'Crispy: Task JSON을 생성하지 못했습니다.'
-					: 'Crispy: Task JSON을 복사하지 못했습니다.',
+					? 'Crispy: Could not create the Task JSON.'
+					: 'Crispy: Could not copy the Task JSON.',
 		);
 	},
 };

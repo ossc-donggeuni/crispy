@@ -96,7 +96,7 @@ export function initializeTaskAgentSessionEndNoticeStack(
 
 			notice.className = 'task-agent-session-end-notice';
 			notice.setAttribute(TASK_AGENT_SESSION_END_NOTICE_ATTRIBUTE, '');
-			notice.textContent = `Task 에 해당하는 ${sessionTitle} 이 종료되었습니다.`;
+			notice.textContent = `${sessionTitle}, assigned to this task, has ended.`;
 			stack.append(notice);
 			const registration: TaskAgentSessionEndNoticeRegistration = {
 				element: notice,

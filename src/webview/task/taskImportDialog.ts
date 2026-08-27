@@ -7,9 +7,9 @@ export const TASK_IMPORT_INPUT_ATTRIBUTE = 'data-task-import-input';
 /** Task Import 검증 오류를 식별하는 DOM attribute다. */
 export const TASK_IMPORT_ERROR_ATTRIBUTE = 'data-task-import-error';
 
-export const TASK_IMPORT_DIALOG_TITLE = 'Task JSON 가져오기';
-export const TASK_IMPORT_ACCEPT_LABEL = '가져오기';
-export const TASK_IMPORT_CANCEL_LABEL = '취소';
+export const TASK_IMPORT_DIALOG_TITLE = 'Import Task JSON';
+export const TASK_IMPORT_ACCEPT_LABEL = 'Import';
+export const TASK_IMPORT_CANCEL_LABEL = 'Cancel';
 
 /** 팝업 submit이 Task 상태를 commit했는지 또는 표시할 오류가 있는지 나타낸다. */
 export type TaskImportSubmitResult =
@@ -61,7 +61,7 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 	title.textContent = TASK_IMPORT_DIALOG_TITLE;
 	message.className = 'task-import-dialog-message';
 	input.className = 'task-import-dialog-input';
-	input.placeholder = 'Task JSON을 붙여넣으세요.';
+	input.placeholder = 'Paste Task JSON here.';
 	input.spellcheck = false;
 	input.setAttribute('aria-label', 'Task JSON');
 	input.setAttribute(TASK_IMPORT_INPUT_ATTRIBUTE, '');
@@ -175,7 +175,7 @@ export function createTaskImportDialog(host: HTMLElement): TaskImportDialog {
 			}
 
 			activeRequest = request;
-			message.textContent = `“${request.taskTitle}”의 현재 내용을 입력한 JSON으로 교체합니다.`;
+			message.textContent = `Replace the current contents of “${request.taskTitle}” with the imported JSON.`;
 			overlay.hidden = false;
 			input.focus();
 			return true;

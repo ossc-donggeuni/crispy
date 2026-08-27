@@ -15,6 +15,7 @@ const { version, artifactsByTarget } = nodePtyRuntimeDependency.staging;
 const supportedTargets = Object.freeze(Object.keys(artifactsByTarget));
 const activityIconEntryName = 'extension/resources/crispy-activity.svg';
 const marketplaceIconEntryName = 'extension/resources/crispy-marketplace.png';
+const readmeLogoEntryName = 'extension/resources/crispy-marketplace-trans.png';
 const changelogEntryName = 'extension/changelog.md';
 const securityEntryName = 'extension/SECURITY.md';
 const supportEntryName = 'extension/SUPPORT.md';
@@ -179,6 +180,7 @@ async function collectArchive(target, vsixPath) {
 		'extension/dist/mcp-server.mjs',
 		activityIconEntryName,
 		marketplaceIconEntryName,
+		readmeLogoEntryName,
 		`${nodePtyPrefix}package.json`,
 		...artifactsByTarget[target].map((artifactPath) => `${nodePtyPrefix}${artifactPath}`),
 	]);
@@ -440,6 +442,29 @@ function verifyBrandingAssets(target, vsixPath, entries) {
 			'invalid PNG contract',
 		);
 	}
+
+	const readmeLogo = requireEntry(
+		target,
+		vsixPath,
+		entries,
+		readmeLogoEntryName,
+	).buffer;
+	if (
+		readmeLogo.length < 33
+		|| readmeLogo.subarray(0, 8).toString('hex') !== pngSignature
+		|| readmeLogo.subarray(12, 16).toString('ascii') !== 'IHDR'
+		|| readmeLogo.readUInt32BE(16) !== 256
+		|| readmeLogo.readUInt32BE(20) !== 256
+		|| readmeLogo[25] !== 6
+	) {
+		throw inspectionError(
+			target,
+			'README logo is not the approved RGBA PNG',
+			`${vsixPath}:${readmeLogoEntryName}`,
+			'256x256 RGBA PNG',
+			'invalid PNG contract',
+		);
+	}
 }
 
 function findUnexpectedVsixPayloadEntries(entryNames) {
@@ -458,6 +483,7 @@ function findUnexpectedVsixPayloadEntries(entryNames) {
 		supportEntryName,
 		activityIconEntryName,
 		marketplaceIconEntryName,
+		readmeLogoEntryName,
 		'extension/resources/defaultWorkspaceFilter.json',
 	]);
 

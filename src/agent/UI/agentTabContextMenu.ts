@@ -4,9 +4,9 @@ import {
 	type AgentUiDependencies,
 } from './agentUiDom';
 
-export const AGENT_TAB_RENAME_MENU_LABEL = '이름 변경';
-export const AGENT_TAB_PIN_MENU_LABEL = '고정';
-export const AGENT_TAB_UNPIN_MENU_LABEL = '고정 해제';
+export const AGENT_TAB_RENAME_MENU_LABEL = 'Rename';
+export const AGENT_TAB_PIN_MENU_LABEL = 'Pin';
+export const AGENT_TAB_UNPIN_MENU_LABEL = 'Unpin';
 
 export interface AgentTabContextMenuCallbacks {
 	onRename(tabId: AgentTabId): void;
@@ -142,7 +142,7 @@ export function createAgentTabContextMenu(
 			const menu = dependencies.createElement('div');
 			menu.className = 'agent-tab-context-menu';
 			menu.setAttribute('role', 'menu');
-			menu.setAttribute('aria-label', `${tab.displayName} 탭 메뉴`);
+			menu.setAttribute('aria-label', `${tab.displayName} tab menu`);
 
 			const renameItem = dependencies.createElement('button');
 			renameItem.type = 'button';

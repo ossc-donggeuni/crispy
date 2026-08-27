@@ -1579,7 +1579,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.ok(getText(fileGroup).includes('graphRenderer.ts'));
 		assert.ok(!getText(fileGroup).includes('graphNodeDrag.ts'));
 		assert.ok(!getText(fileGroup).includes('▣'));
-		assert.ok(getText(fileGroup).includes('+ 2개 더보기'));
+		assert.ok(getText(fileGroup).includes('Show 2 more'));
 		assert.strictEqual(
 			fixture.edgeLayer.children.every((edge) => edge.hasClass('graph-edge')),
 			true,
@@ -1643,7 +1643,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds.slice(0, 5));
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 2개 더보기',
+			'Show 2 more',
 		);
 
 		applyRendererHiddenNodeIds(fixture, project, {
@@ -1660,7 +1660,7 @@ suite('Graph Renderer / Node Drag', () => {
 		]);
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 		assert.strictEqual(fileGroup.style.height, initialHeight);
 
@@ -1672,7 +1672,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.deepStrictEqual(getRenderedFileIds(fileGroup), fileIds.slice(0, 5));
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 		assert.strictEqual(fileGroup.style.height, initialHeight);
 		fixture.renderer.dispose();
@@ -1695,7 +1695,7 @@ suite('Graph Renderer / Node Drag', () => {
 
 		assert.strictEqual(
 			getDescendantByClass(initialGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 		let fileGroup = applyHiddenFile(fileIds[2] as string);
 
@@ -1812,7 +1812,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 5);
 		assert.strictEqual(more.tagName, 'button');
 		assert.strictEqual(more.type, 'button');
-		assert.strictEqual(more.textContent, '+ 12개 더보기');
+		assert.strictEqual(more.textContent, 'Show 12 more');
 		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-collapse'), undefined);
 		assert.strictEqual(more.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE), true);
 		assert.strictEqual(more.hasAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE), true);
@@ -1828,10 +1828,10 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(firstMoreClick.propagationStopped, true);
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 2);
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 10);
-		assert.strictEqual(more.textContent, '+ 7개 더보기');
+		assert.strictEqual(more.textContent, 'Show 7 more');
 		assert.strictEqual(collapse.tagName, 'button');
 		assert.strictEqual(collapse.type, 'button');
-		assert.strictEqual(collapse.getAttribute('aria-label'), '파일 목록 접기');
+		assert.strictEqual(collapse.getAttribute('aria-label'), 'Collapse file list');
 		assert.strictEqual(
 			collapse.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
 			true,
@@ -1849,7 +1849,7 @@ suite('Graph Renderer / Node Drag', () => {
 		more = getDescendantByClass(fileGroup, 'graph-file-more');
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 3);
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 15);
-		assert.strictEqual(more.textContent, '+ 2개 더보기');
+		assert.strictEqual(more.textContent, 'Show 2 more');
 
 		more.dispatch('click', createClickEvent(more));
 		collapse = getDescendantByClass(fileGroup, 'graph-file-collapse');
@@ -1866,7 +1866,7 @@ suite('Graph Renderer / Node Drag', () => {
 		assert.strictEqual(collapseClick.propagationStopped, true);
 		assert.strictEqual(fixture.graphState.getFileGroupPage(fileGroupId), 1);
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 5);
-		assert.strictEqual(moreAfterCollapse.textContent, '+ 12개 더보기');
+		assert.strictEqual(moreAfterCollapse.textContent, 'Show 12 more');
 		assert.strictEqual(findDescendantByClass(fileGroup, 'graph-file-collapse'), undefined);
 		assert.deepStrictEqual(fileGroupClicks, []);
 
@@ -2332,7 +2332,7 @@ suite('Graph Renderer / Node Drag', () => {
 		]);
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(5, true)}px`);
 		assert.ok(retainedRows.every((row) => row.getEventListenerCount() === 0));
@@ -2380,7 +2380,7 @@ suite('Graph Renderer / Node Drag', () => {
 		);
 		assert.strictEqual(
 			getDescendantByClass(restoredFileGroup, 'graph-file-more').textContent,
-			'+ 2개 더보기',
+			'Show 2 more',
 		);
 		fixture.renderer.dispose();
 	});

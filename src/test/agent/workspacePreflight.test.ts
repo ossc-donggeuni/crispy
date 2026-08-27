@@ -68,7 +68,7 @@ suite('Workspace preflight contract', () => {
 				tabId: 'tab-start',
 				sessionId: null,
 				code: 'workspace_untrusted',
-				message: '작업공간을 신뢰한 후 다시 시도하세요.',
+				message: 'Trust the workspace and try again.',
 				canRestart: true,
 			});
 			assert.strictEqual(parseHostToWebviewMessage(result.error).ok, true);

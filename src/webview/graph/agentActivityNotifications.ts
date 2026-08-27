@@ -70,8 +70,8 @@ export interface AgentActivityTargetPresentationIndex {
 	readonly scopeRoots: readonly AgentActivityTargetScopeRoot[];
 }
 
-const UNAVAILABLE_TARGET_NAME = '사용할 수 없는 그래프 대상';
-const UNAVAILABLE_TARGET_PATH = 'Workspace에서 대상을 찾을 수 없습니다.';
+const UNAVAILABLE_TARGET_NAME = 'Unavailable graph target';
+const UNAVAILABLE_TARGET_PATH = 'The target could not be found in the Workspace.';
 
 /** Activity kind를 알림에서 읽을 수 있는 짧은 상태명으로 변환한다. */
 export function getAgentActivityNotificationStatusLabel(
@@ -79,17 +79,17 @@ export function getAgentActivityNotificationStatusLabel(
 ): string {
 	switch (activity) {
 		case 'planned':
-			return '계획됨';
+			return 'Planned';
 		case 'active':
-			return '진행 중';
+			return 'Active';
 		case 'editing':
-			return '편집 중';
+			return 'Editing';
 		case 'completed':
-			return '완료';
+			return 'Completed';
 		case 'mentioned':
-			return '언급됨';
+			return 'Mentioned';
 		case 'rejected':
-			return '제외됨';
+			return 'Rejected';
 	}
 }
 
@@ -350,7 +350,7 @@ function createPendingTargetPresentation(
 ): AgentActivityTargetPresentation | undefined {
 	if (target.nodeId.startsWith('task-node:')) {
 		return Object.freeze({
-			name: 'Task Flow 노드',
+			name: 'Task Flow node',
 			path: 'Task Flow',
 			kind: 'folder',
 			availability: 'present',

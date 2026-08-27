@@ -152,10 +152,10 @@ suite('Graph View', () => {
 		const addTaskButton = getDescendantByAttribute(
 			root,
 			'aria-label',
-			'Task 추가',
+			'Add Task',
 		);
 
-		assert.strictEqual(addTaskButton.title, 'Task 추가');
+		assert.strictEqual(addTaskButton.title, 'Add Task');
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
 		const firstTask = graphView.taskState.getSnapshot().tasks[0];
 
@@ -439,7 +439,7 @@ suite('Graph View', () => {
 		const addTaskButton = getDescendantByAttribute(
 			root,
 			'aria-label',
-			'Task 추가',
+			'Add Task',
 		);
 
 		addTaskButton.dispatch('click', createClickEvent(addTaskButton));
@@ -1148,7 +1148,7 @@ suite('Graph View', () => {
 			'remove-task',
 		);
 
-		assert.strictEqual(removeTask.title, 'Task 삭제');
+		assert.strictEqual(removeTask.title, 'Delete Task');
 		assert.strictEqual(
 			getDescendantByClass(
 				removeTask,
@@ -1207,7 +1207,7 @@ suite('Graph View', () => {
 			'export-task',
 		);
 
-		assert.strictEqual(exportButton.title, 'Task JSON 내보내기');
+		assert.strictEqual(exportButton.title, 'Export Task JSON');
 		assert.strictEqual(
 			getDescendantByClass(exportButton, 'task-node-action-symbol').textContent,
 			'↓',
@@ -1353,7 +1353,7 @@ suite('Graph View', () => {
 		);
 
 		assert.strictEqual(targetStartElement.hasClass('is-selected'), true);
-		assert.strictEqual(importButton.title, 'Task JSON 가져오기');
+		assert.strictEqual(importButton.title, 'Import Task JSON');
 		assert.strictEqual(
 			getDescendantByClass(importButton, 'task-node-action-symbol').textContent,
 			'↑',
@@ -1771,19 +1771,19 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(referenceArea.getAttribute('data-task-node-id'), null);
 		assert.strictEqual(workArea.getAttribute('data-task-node-id'), null);
-		assert.strictEqual(getText(referenceArea).includes('참조 영역'), true);
-		assert.strictEqual(getText(defaultReferenceArea).includes('기본 참조 영역'), true);
-		assert.strictEqual(getText(defaultWorkArea).includes('기본 작업 영역'), true);
+		assert.strictEqual(getText(referenceArea).includes('Reference area'), true);
+		assert.strictEqual(getText(defaultReferenceArea).includes('Default Reference area'), true);
+		assert.strictEqual(getText(defaultWorkArea).includes('Default Work area'), true);
 		assert.strictEqual(getText(referenceArea).includes('읽기 대상'), false);
 		assert.strictEqual(
-			getText(referenceArea).includes('폴더 또는 파일을'),
+			getText(referenceArea).includes('Drag a folder or file'),
 			true,
 		);
 		assert.strictEqual(
-			getText(referenceArea).includes('이곳으로 끌어오세요'),
+			getText(referenceArea).includes('here to add it'),
 			true,
 		);
-		assert.strictEqual(getText(workArea).includes('작업 영역'), true);
+		assert.strictEqual(getText(workArea).includes('Work area'), true);
 		assert.strictEqual(getText(workArea).includes('수정 대상'), false);
 		assert.strictEqual(getDescendantsByClass(root, 'task-scope-target').length, 0);
 		assert.strictEqual(referenceArea.style.width, `${TASK_NODE_WIDTH}px`);
@@ -1952,10 +1952,10 @@ suite('Graph View', () => {
 			),
 			undefined,
 		);
-		assert.strictEqual(startReferenceToggle.title, '기본 참조 영역 열기');
-		assert.strictEqual(startWorkToggle.title, '기본 작업 영역 열기');
-		assert.strictEqual(workReferenceToggle.title, '참조 영역 열기');
-		assert.strictEqual(workToggle.title, '작업 영역 열기');
+		assert.strictEqual(startReferenceToggle.title, 'Open Default reference area');
+		assert.strictEqual(startWorkToggle.title, 'Open Default work area');
+		assert.strictEqual(workReferenceToggle.title, 'Open reference area');
+		assert.strictEqual(workToggle.title, 'Open work area');
 		assert.strictEqual(startReferenceToggle.getAttribute('aria-expanded'), 'false');
 		assert.strictEqual(startReferenceToggle.getAttribute('aria-disabled'), 'false');
 		assert.strictEqual(startReferenceToggle.disabled, false);
@@ -1992,7 +1992,7 @@ suite('Graph View', () => {
 		assert.strictEqual(startWorkArea.hasClass('is-scope-slide-a'), true);
 		assert.strictEqual(startReferenceArea.getAttribute('aria-hidden'), 'false');
 		assert.strictEqual(startReferenceArea.style.height, '72px');
-		assert.strictEqual(expandedStartReferenceToggle.title, '기본 참조 영역 접기');
+		assert.strictEqual(expandedStartReferenceToggle.title, 'Collapse Default reference area');
 		assert.strictEqual(
 			expandedStartReferenceToggle.getAttribute('aria-expanded'),
 			'true',
@@ -2307,7 +2307,7 @@ suite('Graph View', () => {
 		assert.strictEqual(lockedStartToggle.getAttribute('aria-disabled'), 'true');
 		assert.strictEqual(
 			lockedStartToggle.title,
-			'기본 참조 영역에 할당된 노드가 있어 접을 수 없음',
+			'Cannot collapse Default reference area while nodes are assigned to it',
 		);
 		assert.strictEqual(
 			defaultReferenceArea.getAttribute(
@@ -3514,7 +3514,7 @@ suite('Graph View', () => {
 			graphView.taskState.getTask(task.id),
 			taskBeforeWorkRedrop,
 		);
-		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
+		assert.strictEqual(getText(referenceArea).includes('Drag a folder or file'), true);
 
 		const fileRow = getDescendantByAttribute(root, 'data-file-id', fileId);
 
@@ -3689,7 +3689,7 @@ suite('Graph View', () => {
 			reference: [],
 			work: [folderId],
 		});
-		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
+		assert.strictEqual(getText(referenceArea).includes('Drag a folder or file'), true);
 		assert.strictEqual(
 			getDescendantByAttribute(root, 'data-graph-node-id', fileOccurrenceId),
 			scopedFile,
@@ -3882,7 +3882,7 @@ suite('Graph View', () => {
 			'data-graph-edge-id',
 			`${project.id}->${file.id}`,
 		), undefined);
-		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
+		assert.strictEqual(getText(referenceArea).includes('Drag a folder or file'), true);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
 		graphView.dispose();
 	});
@@ -4278,7 +4278,7 @@ suite('Graph View', () => {
 			afterPositions[0],
 		);
 		assertElementsDoNotOverlap(siblingElements);
-		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
+		assert.strictEqual(getText(referenceArea).includes('Drag a folder or file'), true);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
 		graphView.dispose();
 	});
@@ -5740,7 +5740,7 @@ suite('Graph View', () => {
 			),
 			parentChildEdge,
 		);
-		assert.strictEqual(getText(referenceArea).includes('끌어오세요'), true);
+		assert.strictEqual(getText(referenceArea).includes('Drag a folder or file'), true);
 		assert.deepStrictEqual(graphView.state.getState().detachedRootNodeIds, {});
 		graphView.dispose();
 	});
@@ -6292,7 +6292,10 @@ suite('Graph View', () => {
 			referenceArea.getAttribute(TASK_GRAPH_TARGET_UNAVAILABLE_COUNT_ATTRIBUTE),
 			'1',
 		);
-		assert.strictEqual(getText(referenceArea).includes('현재 찾을 수 없음'), true);
+		assert.strictEqual(
+			getText(referenceArea).includes('target(s) are currently unavailable'),
+			true,
+		);
 		assert.strictEqual(
 			findDescendantByAttribute(root, 'data-graph-node-id', occurrenceId),
 			undefined,
@@ -7650,7 +7653,7 @@ suite('Graph View', () => {
 		const record = graphView.taskState.getWorkspaceTask(task.id);
 
 		assert.ok(record);
-		assert.strictEqual(startButton.title, 'Task 시작');
+		assert.strictEqual(startButton.title, 'Start Task');
 		assert.strictEqual(startElement.children[0], startButton);
 		assert.strictEqual(
 			getDescendantsByClass(startElement, 'task-start-icon').length,
@@ -7923,14 +7926,14 @@ suite('Graph View', () => {
 				taskCompletionNotification,
 				'graph-agent-activity-notification-target-name',
 			).textContent,
-			'Task 전체',
+			'Entire task',
 		);
 		assert.strictEqual(
 			getDescendantByClass(
 				taskCompletionNotification,
 				'graph-agent-activity-notification-target-path',
 			).textContent,
-			'3개 노드의 완료 이벤트',
+			'Completion events for 3 nodes',
 		);
 		getDescendantByClass(
 			taskCompletionNotification,
@@ -8198,7 +8201,7 @@ suite('Graph View', () => {
 		);
 
 		assert.strictEqual(stopButton.hasClass('task-stop-run-action'), true);
-		assert.strictEqual(stopButton.title, 'Task 강제 종료');
+		assert.strictEqual(stopButton.title, 'Force Stop Task');
 		assert.strictEqual(
 			stopButton.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
 			true,
@@ -8214,7 +8217,7 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(
 			getDescendantByClass(dialog, 'task-stop-confirm-message').textContent,
-			`“${task.title}”에 바인딩된 Agent 작업 2개를 종료하고 세션 탭을 닫습니다.`,
+			`Stop 2 Agent work session(s) assigned to “${task.title}” and close their tabs.`,
 		);
 		const cancel = getDescendantByClass(dialog, 'task-stop-confirm-cancel');
 
@@ -8425,7 +8428,7 @@ suite('Graph View', () => {
 		assert.strictEqual(stack.style.maxWidth, '568px');
 		assert.strictEqual(
 			firstNotice.textContent,
-			'Task 에 해당하는 Claude Code #1 이 종료되었습니다.',
+			'Claude Code #1, assigned to this task, has ended.',
 		);
 		assert.deepStrictEqual(
 			scheduler.pendingDelays,
@@ -8450,7 +8453,7 @@ suite('Graph View', () => {
 		assert.strictEqual(stack.children.length, 1);
 		assert.strictEqual(
 			stack.children[0]?.textContent,
-			'Task 에 해당하는 Codex #2 이 종료되었습니다.',
+			'Codex #2, assigned to this task, has ended.',
 		);
 		scheduler.runNext(TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS);
 		assert.strictEqual(stack.children.length, 0);
@@ -10091,7 +10094,7 @@ suite('Graph View', () => {
 		assert.strictEqual(center.style.top, '760px');
 		visibleArea = resolvedVisibleArea;
 		graphView.refreshVisibleGraphArea();
-		assert.strictEqual(trigger.getAttribute('aria-label'), '알림 2개');
+		assert.strictEqual(trigger.getAttribute('aria-label'), 'Notifications: 2');
 		assert.strictEqual(latestItem.getAttribute('data-activity'), 'editing');
 		assert.ok(latestItem.hasAttribute(AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE));
 		assert.strictEqual(
@@ -10184,7 +10187,7 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(list.children.length, 1);
 		assert.strictEqual(list.children[0], olderItem);
-		assert.strictEqual(trigger.getAttribute('aria-label'), '알림 1개');
+		assert.strictEqual(trigger.getAttribute('aria-label'), 'Notifications: 1');
 		const refreshedFileRow = getDescendantByAttribute(
 			root,
 			'data-file-id',
@@ -10282,7 +10285,7 @@ suite('Graph View', () => {
 				first,
 				'graph-agent-activity-floating-notification-status',
 			).textContent,
-			'진행 중',
+			'Active',
 		);
 		assert.deepStrictEqual(
 			getDirectNodeEffects(first).map((effect) => (
@@ -10705,7 +10708,7 @@ suite('Graph View', () => {
 				item,
 				'graph-agent-activity-notification-target-path',
 			).textContent,
-			'Workspace에서 대상을 찾을 수 없습니다.',
+			'The target could not be found in the Workspace.',
 		);
 		getDescendantByClass(
 			item,
@@ -12063,7 +12066,7 @@ suite('Graph View', () => {
 		assertGroupedFiles(files, true);
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 
 		const fiveAfterVisibleDelete = files.filter((_, index) => index !== 2);
@@ -12479,7 +12482,7 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(5, true)}px`);
 
@@ -12536,7 +12539,7 @@ suite('Graph View', () => {
 		);
 		assert.strictEqual(
 			getDescendantByClass(fileGroup, 'graph-file-more').textContent,
-			'+ 1개 더보기',
+			'Show 1 more',
 		);
 		assert.strictEqual(fileGroup.style.height, `${getFileGroupHeight(5, true)}px`);
 		assert.deepStrictEqual(graphView.state.getState().hiddenNodeIds, {});
@@ -12612,7 +12615,7 @@ suite('Graph View', () => {
 			);
 			assert.strictEqual(
 				more?.textContent,
-				remaining > 0 ? `+ ${remaining}개 더보기` : undefined,
+				remaining > 0 ? `Show ${remaining} more` : undefined,
 			);
 			assert.strictEqual(
 				currentGroup.style.height,
@@ -15399,7 +15402,7 @@ suite('Graph View', () => {
 		assert.strictEqual(warning.hidden, false);
 		assert.strictEqual(
 			getDescendantByClass(warning, 'graph-reattach-confirm-title').textContent,
-			'하위 분리 노드가 있습니다',
+			'This root contains detached descendants',
 		);
 		assert.deepStrictEqual(
 			warningItems.map((item) => item.getAttribute('data-detached-root-id')),
@@ -15598,11 +15601,11 @@ suite('Graph View', () => {
 
 		assert.strictEqual(
 			getDescendantByClass(dialog, 'graph-arrange-all-confirm-title').textContent,
-			'그래프를 전부 정렬하시겠습니까?',
+			'Arrange the entire graph?',
 		);
 		assert.strictEqual(
 			getDescendantByClass(dialog, 'graph-arrange-all-confirm-message').textContent,
-			'분리된 노드와 미정렬 상태의 노드들이 정렬됩니다.',
+			'Detached and manually positioned nodes will be arranged.',
 		);
 		getDescendantByClass(dialog, 'graph-arrange-all-confirm-cancel').dispatch(
 			'click',
@@ -17283,7 +17286,7 @@ suite('Graph View', () => {
 
 		assert.strictEqual(fileGroup.style.height, '348px');
 		assert.strictEqual(getDescendantsByClass(fileGroup, 'graph-file-item').length, 10);
-		assert.ok(getText(fileGroup).includes('+ 7개 더보기'));
+		assert.ok(getText(fileGroup).includes('Show 7 more'));
 		assert.strictEqual(
 			getDescendantsByClass(fileGroup, 'graph-file-collapse').length,
 			1,
@@ -17394,7 +17397,7 @@ suite('Graph View', () => {
 		assert.strictEqual(readTranslateY(sibling.style.transform), initialSiblingY);
 		assert.strictEqual(readTranslateY(fileGroup.style.transform), initialFileGroupY);
 		assert.strictEqual(edge.getAttribute('d'), initialEdgePath);
-		assert.ok(getText(fileGroup).includes('+ 12개 더보기'));
+		assert.ok(getText(fileGroup).includes('Show 12 more'));
 		assert.deepStrictEqual(
 			readMinimapViewportAttributes(minimapViewportIndicator),
 			initialIndicator,
@@ -18131,7 +18134,7 @@ function openArrangeAllDialog(root: FakeElement): FakeElement {
 	const button = getDescendantByAttribute(
 		root,
 		'aria-label',
-		'그래프 전부 정렬하기',
+		'Arrange entire graph',
 	);
 
 	button.dispatch('click', createClickEvent(button));

@@ -207,7 +207,7 @@ suite('Agent Activity Notifications', () => {
 
 		assert.strictEqual(entries.length, 1);
 		assert.strictEqual(entries[0]?.targetKind, 'unavailable');
-		assert.strictEqual(entries[0]?.targetName, '사용할 수 없는 그래프 대상');
+		assert.strictEqual(entries[0]?.targetName, 'Unavailable graph target');
 		assert.strictEqual(
 			entries[0]?.targetPath.includes('file:missing/running.ts'),
 			false,
@@ -246,7 +246,7 @@ suite('Agent Activity Notifications', () => {
 		assert.strictEqual(entry?.targetName, 'new file.ts');
 		assert.strictEqual(entry?.targetPath, 'workspace/src/new file.ts');
 		assert.strictEqual(
-			entry?.targetPath.includes('Workspace에서 대상을 찾을 수 없습니다.'),
+			entry?.targetPath.includes('The target could not be found in the Workspace.'),
 			false,
 		);
 		presentations.dispose();
@@ -281,7 +281,7 @@ suite('Agent Activity Notifications', () => {
 		assert.strictEqual(entry?.targetKind, 'unavailable');
 		assert.strictEqual(
 			entry?.targetPath,
-			'Workspace에서 대상을 찾을 수 없습니다.',
+			'The target could not be found in the Workspace.',
 		);
 		assert.strictEqual(entry?.targetPath.includes('private.ts'), false);
 		presentations.dispose();
@@ -308,12 +308,12 @@ suite('Agent Activity Notifications', () => {
 			entry?.targetPath,
 			'crispy/packages/demo/src/multi-root-demo',
 		);
-		assert.strictEqual(getAgentActivityNotificationStatusLabel('planned'), '계획됨');
-		assert.strictEqual(getAgentActivityNotificationStatusLabel('active'), '진행 중');
-		assert.strictEqual(getAgentActivityNotificationStatusLabel('editing'), '편집 중');
-		assert.strictEqual(getAgentActivityNotificationStatusLabel('completed'), '완료');
-		assert.strictEqual(getAgentActivityNotificationStatusLabel('mentioned'), '언급됨');
-		assert.strictEqual(getAgentActivityNotificationStatusLabel('rejected'), '제외됨');
+		assert.strictEqual(getAgentActivityNotificationStatusLabel('planned'), 'Planned');
+		assert.strictEqual(getAgentActivityNotificationStatusLabel('active'), 'Active');
+		assert.strictEqual(getAgentActivityNotificationStatusLabel('editing'), 'Editing');
+		assert.strictEqual(getAgentActivityNotificationStatusLabel('completed'), 'Completed');
+		assert.strictEqual(getAgentActivityNotificationStatusLabel('mentioned'), 'Mentioned');
+		assert.strictEqual(getAgentActivityNotificationStatusLabel('rejected'), 'Rejected');
 
 		presentations.dispose();
 	});

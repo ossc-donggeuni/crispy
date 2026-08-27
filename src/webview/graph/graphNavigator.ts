@@ -74,18 +74,18 @@ export interface GraphNavigatorRuntimeOptions {
 }
 
 const NAVIGATOR_ZOOM_STEP = 0.1;
-const ROOT_LIST_LABEL = '활성화된 루트 목록';
+const ROOT_LIST_LABEL = 'Active roots';
 const ROOT_LIST_PANEL_ID = 'graph-navigator-root-list-panel';
 const ROOT_LIST_PANEL_TITLE_ID = 'graph-navigator-root-list-title';
 const ROOT_LIST_ICON_ASSET = 'navigator-root.svg';
-const ROOT_LIST_EMPTY_LABEL = '활성화된 루트가 없습니다.';
+const ROOT_LIST_EMPTY_LABEL = 'No active roots.';
 const FILTER_LABEL = 'Workspace Filter';
 const FILTER_PANEL_ID = 'graph-navigator-filter-panel';
 const FILTER_PANEL_TITLE_ID = 'graph-navigator-filter-title';
 const FILTER_ICON_ASSET = 'navigator-filter.svg';
-const ARRANGE_ALL_LABEL = '그래프 전부 정렬하기';
+const ARRANGE_ALL_LABEL = 'Arrange entire graph';
 const ARRANGE_ALL_ICON_ASSET = 'clean.svg';
-const ADD_TASK_LABEL = 'Task 추가';
+const ADD_TASK_LABEL = 'Add Task';
 const ADD_TASK_ICON_ASSET = 'task-add.svg';
 const FILTER_OPENED_ICON_ASSET = 'filter-opened.svg';
 const FILTER_CLOSED_ICON_ASSET = 'filter-closed.svg';
@@ -536,7 +536,7 @@ export function initializeGraphNavigator(
 
 		button.className = 'graph-navigator-filter-toggle';
 		button.type = 'button';
-		button.title = expanded ? `${directory.name} 접기` : `${directory.name} 펼치기`;
+		button.title = expanded ? `Collapse ${directory.name}` : `Expand ${directory.name}`;
 		button.setAttribute('aria-label', button.title);
 		button.setAttribute('aria-expanded', String(expanded));
 		button.setAttribute('data-filter-toggle-id', directory.id);
@@ -571,7 +571,7 @@ export function initializeGraphNavigator(
 		row.className = 'graph-navigator-filter-row';
 		checkbox.className = 'graph-navigator-filter-checkbox';
 		checkbox.type = 'checkbox';
-		checkbox.setAttribute('aria-label', `${entry.name} 표시`);
+		checkbox.setAttribute('aria-label', `Show ${entry.name}`);
 		checkbox.setAttribute('data-filter-checkbox-id', entry.id);
 		checkbox.setAttribute('data-filter-checkbox-kind', entry.kind);
 		name.className = 'graph-navigator-filter-name';

@@ -22,13 +22,13 @@ export interface GraphReattachConfirmDialog {
 }
 
 /** 복구 확인 버튼에 표시하는 고정 문구다. */
-export const GRAPH_REATTACH_ACCEPT_LABEL = '복구';
+export const GRAPH_REATTACH_ACCEPT_LABEL = 'Reattach';
 
 /** 복구 취소 버튼에 표시하는 고정 문구다. */
-export const GRAPH_REATTACH_CANCEL_LABEL = '취소';
+export const GRAPH_REATTACH_CANCEL_LABEL = 'Cancel';
 
 /** 하위 분리 노드가 있는 복구 요청의 경고 제목이다. */
-export const GRAPH_REATTACH_WARNING_TITLE = '하위 분리 노드가 있습니다';
+export const GRAPH_REATTACH_WARNING_TITLE = 'This root contains detached descendants';
 
 /** Context 경로와 Node 이름을 목록 한 줄로 조합한다. */
 function formatDetachedNodeLabel(node: GraphReattachDetachedNode): string {
@@ -109,7 +109,7 @@ export function createGraphReattachConfirmDialog(
 
 			return new Promise<boolean>((resolve) => {
 				resolveActive = resolve;
-				message.textContent = `“${request.targetName}”을(를) 복구하면 다음 하위 분리 노드도 함께 복구됩니다.`;
+				message.textContent = `Reattaching “${request.targetName}” will also reattach these detached descendants.`;
 				list.replaceChildren(...request.detachedNodes.map((node) => {
 					const item = ownerDocument.createElement('li');
 

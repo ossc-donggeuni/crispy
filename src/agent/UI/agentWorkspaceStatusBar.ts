@@ -6,7 +6,7 @@ import {
 
 /** 활성 Agent 세션의 Workspace를 보조 기술에 설명하는 고정 문구다. */
 export const AGENT_WORKSPACE_STATUS_ACCESSIBLE_LABEL = 'Active Workspace';
-export const MCP_CONNECTED_ACCESSIBLE_LABEL = 'MCP 연결됨';
+export const MCP_CONNECTED_ACCESSIBLE_LABEL = 'MCP connected';
 export const MCP_CONNECTED_VISIBLE_LABEL = 'connected';
 export const MCP_FAILED_VISIBLE_LABEL = 'failed';
 

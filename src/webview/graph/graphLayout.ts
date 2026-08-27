@@ -284,7 +284,7 @@ export function createGraphLayout(
 
 		if (!rootNode) {
 			throw new Error(
-				`Graph Root \"${root.id}\"가 참조하는 Node \"${root.nodeId}\"를 찾을 수 없습니다.`,
+				`Could not find Node \"${root.nodeId}\" referenced by Graph Root \"${root.id}\".`,
 			);
 		}
 		if (
@@ -487,7 +487,7 @@ function createFolderBacklinkTree(
 	const targetRoot = targetRoots[0];
 
 	if (!targetRoot) {
-		throw new Error(`Folder Backlink "${folder.id}"의 대상 Root가 없습니다.`);
+		throw new Error(`Folder Backlink "${folder.id}" has no target Root.`);
 	}
 
 	return {
@@ -973,7 +973,7 @@ function toGraphLayoutNode(
 
 	if (tree.kind === 'folder-backlink') {
 		if (!tree.targetRootId || !tree.targetNodeId) {
-			throw new Error(`Folder Backlink \"${tree.id}\"의 대상 정보가 없습니다.`);
+			throw new Error(`Folder Backlink \"${tree.id}\" has no target information.`);
 		}
 
 		return {
@@ -986,7 +986,7 @@ function toGraphLayoutNode(
 	}
 
 	if (!tree.status) {
-		throw new Error(`Directory Layout Node "${tree.id}"의 상태가 없습니다.`);
+		throw new Error(`Directory Layout Node "${tree.id}" has no status.`);
 	}
 
 	if (tree.kind === 'folder') {

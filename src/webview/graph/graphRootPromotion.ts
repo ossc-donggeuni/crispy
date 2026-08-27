@@ -30,7 +30,7 @@ export function createDetachedRootId(
 	originRootId?: string,
 ): string {
 	if (!Number.isSafeInteger(ordinal) || ordinal < 1) {
-		throw new Error(`Detached Root 순번은 1 이상의 정수여야 합니다: ${ordinal}`);
+		throw new Error(`Detached Root ordinal must be an integer greater than or equal to 1: ${ordinal}`);
 	}
 
 	const originScope = originRootId

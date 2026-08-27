@@ -184,6 +184,7 @@ suite('MCP VSIX bundle dependency inspection', () => {
 			'extension/SUPPORT.md',
 			'extension/resources/crispy-activity.svg',
 			'extension/resources/crispy-marketplace.png',
+			'extension/resources/crispy-marketplace-trans.png',
 			'extension/dist/extension.js',
 			'extension/dist/mcp-server.mjs',
 		]), []);

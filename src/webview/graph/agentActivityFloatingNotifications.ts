@@ -221,7 +221,7 @@ function updateRegistration(
 	);
 	registration.element.disabled = entry.availability === 'outside';
 	registration.element.title = entry.availability === 'outside'
-		? '현재 Workspace Graph 범위 밖의 대상입니다.'
+		? 'This target is outside the current Workspace Graph.'
 		: entry.targetPath;
 	registration.sessionTitle.textContent = entry.sessionTitle;
 	registration.status.textContent = getAgentActivityNotificationStatusLabel(

@@ -4,9 +4,9 @@ import {
 	type AgentUiDependencies,
 } from './agentUiDom';
 
-export const AGENT_TAB_RENAME_EMPTY_ERROR = '이름을 입력해주세요.';
-export const AGENT_TAB_RENAME_LENGTH_ERROR = '40자 이하로 입력해주세요.';
-export const AGENT_TAB_RENAME_DUPLICATE_ERROR = '이미 사용 중인 이름입니다.';
+export const AGENT_TAB_RENAME_EMPTY_ERROR = 'Enter a name.';
+export const AGENT_TAB_RENAME_LENGTH_ERROR = 'Use 40 characters or fewer.';
+export const AGENT_TAB_RENAME_DUPLICATE_ERROR = 'This name is already in use.';
 
 export interface AgentTabRenameDialog {
 	open(
@@ -35,12 +35,12 @@ export function createAgentTabRenameDialog(
 
 	const heading = dependencies.createElement('p');
 	heading.className = 'agent-tab-rename-title';
-	heading.textContent = '탭 이름 변경';
+	heading.textContent = 'Rename Tab';
 
 	const input = dependencies.createElement('input');
 	input.type = 'text';
 	input.className = 'agent-tab-rename-input';
-	input.setAttribute('aria-label', '새 탭 이름');
+	input.setAttribute('aria-label', 'New tab name');
 	input.setAttribute('aria-describedby', 'agent-tab-rename-error');
 
 	const error = dependencies.createElement('p');
@@ -54,14 +54,14 @@ export function createAgentTabRenameDialog(
 	const cancelButton = dependencies.createElement('button');
 	cancelButton.type = 'button';
 	cancelButton.className = 'agent-tab-rename-cancel';
-	cancelButton.textContent = '취소';
-	cancelButton.setAttribute('aria-label', '탭 이름 변경 취소');
+	cancelButton.textContent = 'Cancel';
+	cancelButton.setAttribute('aria-label', 'Cancel tab rename');
 
 	const saveButton = dependencies.createElement('button');
 	saveButton.type = 'button';
 	saveButton.className = 'agent-tab-rename-save';
-	saveButton.textContent = '저장';
-	saveButton.setAttribute('aria-label', '탭 이름 저장');
+	saveButton.textContent = 'Save';
+	saveButton.setAttribute('aria-label', 'Save tab name');
 
 	actions.append(cancelButton, saveButton);
 	panel.append(heading, input, error, actions);
@@ -160,7 +160,7 @@ export function createAgentTabRenameDialog(
 			try {
 				host.replaceChildren(panel);
 				host.setAttribute('role', 'dialog');
-				host.setAttribute('aria-label', '탭 이름 변경');
+				host.setAttribute('aria-label', 'Rename tab');
 				host.hidden = false;
 				input.focus();
 				input.select();

@@ -14,9 +14,9 @@ export interface TaskStopConfirmDialog {
 	dispose(): void;
 }
 
-export const TASK_STOP_CONFIRM_TITLE = 'Task를 정말 강제 종료하시겠습니까?';
-export const TASK_STOP_ACCEPT_LABEL = '강제 종료';
-export const TASK_STOP_CANCEL_LABEL = '취소';
+export const TASK_STOP_CONFIRM_TITLE = 'Force stop this task?';
+export const TASK_STOP_ACCEPT_LABEL = 'Force Stop';
+export const TASK_STOP_CANCEL_LABEL = 'Cancel';
 
 /** Graph Overlay 안에 실행 중 Task 전용 강제 종료 확인 팝업을 만든다. */
 export function createTaskStopConfirmDialog(
@@ -85,7 +85,7 @@ export function createTaskStopConfirmDialog(
 
 			return new Promise<boolean>((resolve) => {
 				resolveActive = resolve;
-				message.textContent = `“${request.taskTitle}”에 바인딩된 Agent 작업 ${request.workCount}개를 종료하고 세션 탭을 닫습니다.`;
+				message.textContent = `Stop ${request.workCount} Agent work session(s) assigned to “${request.taskTitle}” and close their tabs.`;
 				overlay.hidden = false;
 				acceptButton.focus?.();
 			});
