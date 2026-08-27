@@ -1642,6 +1642,17 @@ suite('Webview State Wiring', () => {
 				),
 				true,
 			);
+			graphViewInteractions?.onAgentSessionOpenRequest?.('session-task-work');
+			assert.strictEqual(
+				agentPanelModel?.getSnapshot().activeTabId,
+				taskTabId,
+				'Task Work Activity는 실제 소유 Session 탭으로 이동해야 한다.',
+			);
+			assert.strictEqual(activeTabs.at(-1), taskTabId);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'tab.switch').at(-1),
+				{ type: 'tab.switch', tabId: taskTabId },
+			);
 			hostMessageHandler({
 				data: {
 					type: 'terminal.exited',
@@ -1995,6 +2006,7 @@ suite('Webview State Wiring', () => {
 				},
 			} as MessageEvent);
 			const otherTabId = agentPanelModel?.createTab();
+			const expandRequestsBeforeNavigation = collapseExpandRequestCount;
 
 			assert.ok(otherTabId);
 			assert.strictEqual(agentPanelModel?.getSnapshot().activeTabId, otherTabId);
@@ -2002,7 +2014,10 @@ suite('Webview State Wiring', () => {
 			assert.strictEqual(agentPanelModel?.getSnapshot().activeTabId, agentTabId);
 			assert.strictEqual(activeTabs.at(-1), agentTabId);
 			assert.strictEqual(panelState.collapsed, false);
-			assert.strictEqual(collapseExpandRequestCount, 1);
+			assert.strictEqual(
+				collapseExpandRequestCount,
+				expandRequestsBeforeNavigation + 1,
+			);
 			assert.strictEqual(savedStates.length, 5);
 			assert.strictEqual(savedStates[4]?.panel.collapsed, false);
 			assert.deepStrictEqual(

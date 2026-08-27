@@ -357,7 +357,7 @@
 	position: absolute;
 	top: 100%;
 	right: 0;
-	z-index: 5;
+	z-index: 6;
 	display: flex;
 	width: 100%;
 	box-sizing: border-box;
@@ -375,6 +375,25 @@
 .task-work-node:hover > .task-work-actions,
 .task-work-node:focus-within > .task-work-actions {
 	opacity: 1;
+	pointer-events: auto;
+}
+
+/*
+ * Activity 행이 있는 Task에서는 full-width Action wrapper의 투명 영역이
+ * Binding Double Click을 가로막지 않게 한다. 실제 Button만 hit target으로
+ * 남기며, 더 높은 Action stacking은 Activity Effect 위의 표시를 보장한다.
+ */
+.task-node.graph-agent-activity-binding-host > .graph-agent-activity-bindings {
+	z-index: 3;
+}
+
+.task-node.graph-agent-activity-binding-host > .task-node-actions {
+	pointer-events: none;
+}
+
+.task-node.graph-agent-activity-binding-host
+> .task-node-actions
+> .task-node-action {
 	pointer-events: auto;
 }
 

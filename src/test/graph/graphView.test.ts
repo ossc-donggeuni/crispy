@@ -8517,7 +8517,7 @@ suite('Graph View', () => {
 		);
 
 		assert.ok(taskNodeActionsRule);
-		assert.match(taskNodeActionsRule[0], /z-index:\s*5;/);
+		assert.match(taskNodeActionsRule[0], /z-index:\s*6;/);
 		assert.match(
 			taskNodeActionsRule[0],
 			/top:\s*100%;[^}]*width:\s*100%;[^}]*padding-top:\s*12px;[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/s,
@@ -8533,6 +8533,18 @@ suite('Graph View', () => {
 			/opacity:\s*1;[^}]*pointer-events:\s*auto;/s,
 		);
 		assert.doesNotMatch(visibleTaskNodeActionsRule[0], /visibility:\s*visible;/);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.graph-agent-activity-binding-host\s*>\s*\.graph-agent-activity-bindings\s*\{[^}]*z-index:\s*3;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.graph-agent-activity-binding-host\s*>\s*\.task-node-actions\s*\{[^}]*pointer-events:\s*none;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.graph-agent-activity-binding-host\s*>\s*\.task-node-actions\s*>\s*\.task-node-action\s*\{[^}]*pointer-events:\s*auto;/s,
+		);
 		assert.match(
 			taskViewCss,
 			/\.task-node:has\(>\s*\.task-node-actions\):hover,[^{]*\{[^}]*z-index:\s*2;/s,
