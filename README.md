@@ -99,6 +99,12 @@ Workspace content. Completion roll-up is cross-agent behavior.
   `crispy_caa` removes stale state at the next request or scope
   change, when the target is no longer relevant, or after a rename/delete makes
   its marker invalid. Session cleanup is best-effort.
+- While an in-Workspace Activity target is waiting to appear in the Graph, the
+  Canvas projects one non-persistent ghost node only when its direct parent
+  already exists. If intermediate paths are also missing, it keeps the
+  notification without inventing the missing hierarchy. Ghosts are deduplicated
+  per exact target, capped at 64 per panel, and replaced by the actual node on
+  the next Graph snapshot.
 - Use `crispy_ping` only for an explicit startup, restart, or connection diagnostic,
   never as a routine preflight.
 - Both Activity Tools accept `targetKind` as exactly `file` or `folder`. Their
