@@ -47,7 +47,7 @@ suite('Claude MCP L1 dev smoke transaction', () => {
 		assert.strictEqual(fixture.disposeCount(), 1);
 		assert.ok(spawnRequest !== undefined);
 		assert.strictEqual(spawnRequest.executable, '/usr/local/bin/claude');
-		const serverName = `${'crispy_canvas_'}${'ab'.repeat(16)}`;
+		const serverName = `${'crispy_'}${'ab'.repeat(12)}`;
 		assert.deepStrictEqual(
 			spawnRequest.args.slice(0, 4),
 			createClaudeMcpSmokeArgs(serverName),

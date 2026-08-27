@@ -614,3 +614,43 @@ Trust/root/restart lifecycle, unsupported zero-state를 검증한다. 이어서 
 해당 native VSIX smoke를 실행하고 환경과 미실행 항목을 기록한다. minimum 또는 major boundary를
 바꿀 때에는 manifest와 capability constant를 함께 갱신한다. 상세 명령과 진단은
 `../mcp/README.md`, repository `README.md`, `TROUBLESHOOTING.md`를 따른다.
+
+## Task Work provider instructions — 2026-08-27
+
+Task 소유 ordinary Agent tab의 사용자 prompt는 Task 내용과 배정 영역을 그대로 전달하고, Codex와
+Claude 모두 마지막 문단으로 `crispy_task_complete` 호출 reminder를 한 번 덧붙인다. 이전처럼 긴
+`CRISPY TASK EXECUTION CONTRACT`를 사용자 prompt에 합치지 않는다. Terminal Host는 Task lease와
+동일한 조건으로 Codex launch plan의 `taskToolCompatible`, Claude launch plan의
+`taskToolCompatible`을 설정한다. 그 결과 Task 완료·영역 요청·영역 결과 규약이 MCP initialize와
+같은 공통 source에서 Codex `developer_instructions` 및 Claude `--append-system-prompt`로 주입된다.
+
+공통 system 규약은 lifecycle 전체를 소유하고, 사용자 prompt 끝의 짧은 reminder는 Agent가 완료를
+자연어 응답으로만 끝내지 않도록 terminal action을 가까운 위치에서 반복한다. reminder는 성공 시
+`completed`, 의도적인 범위/사용자 거절 시 `rejected`와 요약을 보내고 accepted Tool call 전에는 Work가
+끝나지 않는다고 명시한다. Task가 아닌 tab의 prompt는 바뀌지 않는다.
+
+Claude의 완전한 MCP Tool 이름은 64자 이하여야 한다. 따라서 Claude session server 이름은
+`crispy_<24 hex>`로 생성하고, Task permission allowlist를 만들 때 `mcp__<server>__<tool>` 전체 길이를
+검증한다. 이 경계에서 `crispy_task_complete`, scope request와 scope result는 각각 58, 63, 62자로
+노출된다. 이전 `crispy_canvas_<32 hex>` 이름은 같은 도구를 73~78자로 만들어 Claude가 Task Tool을
+모델에 제공하지 못하는 원인이었다. Codex의 session server naming과 Task 실행 경로에는 영향이 없다.
+
+## Task Work provider turn lifecycle — 2026-08-27
+
+Task 완료는 계속 accepted `crispy_task_complete` Tool 호출만으로 확정한다. 응답 종료 자체를 작업
+완료로 추론하지 않는다. 대신 Task가 소유한 현재 ordinary Agent tab 안에서 provider별 turn 종료를
+관찰해, 자연어 응답만 끝난 경우 같은 세션에 completion 후속 지시를 최대 두 번 전달한다. 세 번째
+누락이나 provider API 실패는 Work 실패로 보고하며 scheduler를 진행시키지 않는다.
+
+Codex Task launch는 session-only TUI config로 `agent-turn-complete` OSC 9 알림을 켠다. Terminal Host는
+해당 PTY 출력만 파싱하고 250ms grace 뒤 같은 PTY에 후속 입력을 쓴다. grace 안에 exact MCP completion
+IPC가 먼저 오면 예약 입력을 취소한다. Claude Task launch는 같은 session MCP child의 bearer 인증
+loopback route를 `Stop`/`StopFailure` HTTP hook으로 설정한다. Stop hook은 child가 이미 관찰한 completion
+또는 pending scope를 존중하고, 그 외에는 provider-native `decision: block`과 `reason`으로 후속 지시를
+반환한다. 이 형식은 기존 Claude 최소 호환 버전에서도 지원된다.
+별도 app server, Agent SDK, background Agent process는 만들지 않는다.
+
+모든 Claude lifecycle IPC는 generation, session, execution, Work identity를 포함하며 Supervisor와
+Terminal Host에서 exact lease와 다시 대조한다. scope request가 미결인 동안 들어온 completion은
+terminal completion으로 인정하지 않는다. 일반 Agent tab에는 OSC 알림 설정과 Claude hook을 주입하지
+않으며 기존 session lifecycle을 그대로 사용한다.

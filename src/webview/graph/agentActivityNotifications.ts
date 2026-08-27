@@ -27,6 +27,8 @@ export type AgentActivityNotificationTargetKind =
 	| GraphRootNode['kind']
 	| 'unavailable';
 
+export type AgentActivityNotificationDismissalScope = 'target' | 'session';
+
 /** 알림 목록 한 행이 표시하고 상호작용에 사용하는 현재 Activity snapshot이다. */
 export interface AgentActivityNotificationEntry {
 	readonly key: string;
@@ -43,6 +45,10 @@ export interface AgentActivityNotificationEntry {
 	readonly targetKind: AgentActivityNotificationTargetKind;
 	/** present는 Graph source 존재, pending은 Workspace 범위 안의 다음 Graph 갱신 대기다. */
 	readonly availability: 'present' | 'pending' | 'outside';
+	/** target은 한 Node만, session은 같은 Session이 가진 모든 Node 이벤트를 지운다. */
+	readonly dismissalScope: AgentActivityNotificationDismissalScope;
+	/** session 단위로 합쳐진 알림이 대표하는 현재 Target 수다. */
+	readonly groupedTargetCount: number;
 }
 
 export interface AgentActivityTargetPresentation {
@@ -164,7 +170,51 @@ function createNotificationEntry(
 		targetPath: presentation?.path ?? UNAVAILABLE_TARGET_PATH,
 		targetKind: presentation?.kind ?? 'unavailable',
 		availability: presentation?.availability ?? 'outside',
+		dismissalScope: 'target',
+		groupedTargetCount: 1,
 	};
+}
+
+/**
+ * 선택된 Session의 Target별 행을 하나의 안정적인 알림으로 합친다.
+ * 최초 Target의 sequence와 표시 대상을 유지해 후속 Target 추가가 새 알림으로 보이지 않게 한다.
+ */
+export function groupAgentActivityNotificationsBySession(
+	entries: readonly AgentActivityNotificationEntry[],
+	shouldGroup: (entry: AgentActivityNotificationEntry) => boolean,
+): readonly AgentActivityNotificationEntry[] {
+	const groupedEntriesBySessionId = new Map<
+		string,
+		AgentActivityNotificationEntry[]
+	>();
+	const result: AgentActivityNotificationEntry[] = [];
+
+	for (const entry of entries) {
+		if (!shouldGroup(entry)) {
+			result.push(entry);
+			continue;
+		}
+		const groupedEntries = groupedEntriesBySessionId.get(entry.sessionId) ?? [];
+
+		groupedEntries.push(entry);
+		groupedEntriesBySessionId.set(entry.sessionId, groupedEntries);
+	}
+
+	for (const [sessionId, groupedEntries] of groupedEntriesBySessionId) {
+		const representative = groupedEntries.reduce((oldest, entry) => (
+			entry.sequence < oldest.sequence ? entry : oldest
+		));
+
+		result.push(Object.freeze({
+			...representative,
+			key: createAgentActivitySessionNotificationKey(sessionId),
+			dismissalScope: 'session',
+			groupedTargetCount: groupedEntries.length,
+		}));
+	}
+
+	result.sort(compareAgentActivityNotifications);
+	return Object.freeze(result);
 }
 
 /** 같은 현재 알림을 상태 전환 뒤에도 재사용하는 안정적인 DOM key다. */
@@ -177,6 +227,13 @@ export function createAgentActivityNotificationKey(
 		target.nodeId,
 		target.rootId ?? null,
 	]);
+}
+
+/** Session 전체를 대표하는 그룹 알림의 안정적인 DOM key다. */
+export function createAgentActivitySessionNotificationKey(
+	sessionId: string,
+): string {
+	return JSON.stringify(['session', sessionId]);
 }
 
 function compareAgentActivityNotifications(
@@ -291,6 +348,14 @@ function createPendingTargetPresentation(
 	target: Readonly<GraphNodeEffectTarget>,
 	scopeRoots: readonly AgentActivityTargetScopeRoot[],
 ): AgentActivityTargetPresentation | undefined {
+	if (target.nodeId.startsWith('task-node:')) {
+		return Object.freeze({
+			name: 'Task Flow 노드',
+			path: 'Task Flow',
+			kind: 'folder',
+			availability: 'present',
+		});
+	}
 	const parsedTarget = parseGraphNodeUri(target.nodeId);
 
 	if (!parsedTarget) {

@@ -5,6 +5,7 @@ import type { PrepareTerminalLaunch } from '../../agent/host/terminal/prepareTer
 import {
 	TerminalHost,
 	type McpSupervisor,
+	type TaskTerminalSessionEvent,
 } from '../../agent/host/terminal/terminalHost';
 import type { ProcessTreeController } from '../../agent/host/terminal/processTreeController';
 import type { SupervisorRuntimeEvent } from '../../mcp/adapterSupervisor';
@@ -20,6 +21,8 @@ import type {
 } from '../../mcp/sessionRuntime';
 import { createCaptureFailureProcessTreeController } from './support/fakeProcessTreeController';
 import { FakePtyAdapter } from './support/fakePtyAdapter';
+import type { TaskToolLease } from '../../mcp/taskToolProtocol';
+import { createTaskTurnLifecycleObserved } from '../../mcp/taskTurnLifecycleProtocol';
 
 const shellPolicy: ShellLaunchPolicy = {
 	executable: '/host/shell',
@@ -66,6 +69,7 @@ type FakeClaudeRuntimeHandle = FakeClaudeRuntime & McpSessionRuntime;
 
 class FakeClaudeSupervisor implements McpSupervisor {
 	readonly prepareCalls: string[] = [];
+	readonly taskLeases: Array<TaskToolLease | undefined> = [];
 	readonly stopCalls: string[] = [];
 	disposeCallCount = 0;
 	prepareFailure: McpPrepareResult | undefined;
@@ -75,8 +79,12 @@ class FakeClaudeSupervisor implements McpSupervisor {
 	private readonly retirements = new Map<McpSessionRuntime, Promise<void>>();
 	private readonly connections = new Map<string, McpConnectionDescriptor>();
 
-	prepareSession(sessionId: string): Promise<McpPrepareResult> {
+	prepareSession(
+		sessionId: string,
+		taskLease?: TaskToolLease,
+	): Promise<McpPrepareResult> {
 		this.prepareCalls.push(sessionId);
+		this.taskLeases.push(taskLease);
 		if (this.prepareFailure !== undefined) {
 			this.createRuntime(sessionId, 'stopped');
 			return Promise.resolve(this.prepareFailure);
@@ -197,6 +205,7 @@ function createFixture(options: {
 	];
 	readonly processTreeController?: ProcessTreeController;
 	readonly agentActivityCompatible?: boolean;
+	readonly onTaskSessionEvent?: (event: TaskTerminalSessionEvent) => void;
 } = {}): {
 	readonly host: TerminalHost;
 	readonly adapter: FakePtyAdapter;
@@ -255,6 +264,7 @@ function createFixture(options: {
 		agentActivityCompatible: options.agentActivityCompatible,
 		processTreeController: options.processTreeController
 			?? createCaptureFailureProcessTreeController(),
+		onTaskSessionEvent: options.onTaskSessionEvent,
 		sessionIdNonce: 'claude-lifecycle-panel',
 		...(options.buildPlan === undefined
 			? {}
@@ -271,6 +281,246 @@ async function beginClaude(host: TerminalHost, tabId: string): Promise<void> {
 }
 
 suite('Claude direct PTY and MCP transaction', () => {
+	test('Task Work는 ordinary Claude tab에 inline scope 설정과 prompt를 결합하고 incompatible MCP에서는 bare fallback하지 않는다', async () => {
+		const events: TaskTerminalSessionEvent[] = [];
+		const fixture = createFixture({
+			onTaskSessionEvent: (event) => events.push(event),
+		});
+		const descriptor = {
+			executionId: 'execution-claude-task',
+			workNodeId: 'work-claude-task',
+			prompt: 'Task: Claude Work\n\nPerform the assigned change.',
+			scope: [
+				{ path: '/trusted/workspace/docs', kind: 'folder' as const, access: 'read' as const },
+				{ path: '/trusted/workspace/src', kind: 'folder' as const, access: 'read-write' as const },
+			],
+		};
+
+		await fixture.host.createTaskSession(
+			'tab-claude-task', 'claude', WORKSPACE_ROOT_ID, 1, descriptor,
+		);
+		await fixture.host.handleTerminalReady('tab-claude-task', 100, 30);
+
+		assert.deepStrictEqual(fixture.supervisor.taskLeases, [{
+			executionId: descriptor.executionId,
+			workNodeId: descriptor.workNodeId,
+		}]);
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 1);
+		const spawn = fixture.adapter.spawnCalls[0];
+		assert.strictEqual(spawn.cwd, workspaceRoot.fsPath);
+		const args = spawn.args as readonly string[];
+		assert.deepStrictEqual(args.slice(0, 5), [
+			'--setting-sources', '', '--permission-mode', 'default', '--settings',
+		]);
+		const settings = JSON.parse(args[5]) as {
+			permissions: { allow: readonly string[]; ask: readonly string[] };
+			sandbox: {
+				enabled: boolean;
+				failIfUnavailable: boolean;
+				filesystem: {
+					denyRead: readonly string[];
+					allowRead: readonly string[];
+				};
+			};
+			hooks: Record<string, Array<{ hooks: Array<{
+				readonly type: string;
+				readonly url: string;
+				readonly headers: Record<string, string>;
+				readonly allowedEnvVars: string[];
+			}> }>>;
+		};
+		assert.ok(settings.permissions.allow.includes(
+			'Read(//trusted/workspace/docs/**)',
+		));
+		assert.ok(settings.permissions.allow.includes(
+			'Edit(//trusted/workspace/src/**)',
+		));
+		assert.ok(settings.permissions.allow.some((rule) => (
+			/^mcp__crispy_[a-f0-9]{24}__crispy_task_complete$/u.test(rule)
+		)));
+		assert.ok(settings.permissions.allow
+			.filter((rule) => rule.startsWith('mcp__'))
+			.every((rule) => rule.length <= 64));
+		assert.deepStrictEqual(settings.permissions.ask, [
+			'Bash(dangerouslyDisableSandbox:true)',
+		]);
+		assert.strictEqual(settings.sandbox.enabled, true);
+		assert.strictEqual(settings.sandbox.failIfUnavailable, true);
+		assert.deepStrictEqual(settings.sandbox.filesystem.denyRead, ['/']);
+		assert.ok(settings.sandbox.filesystem.allowRead.includes(
+			'/trusted/workspace/docs',
+		));
+		assert.strictEqual(
+			settings.sandbox.filesystem.allowRead.includes(workspaceRoot.fsPath),
+			false,
+		);
+		assert.deepStrictEqual(Object.keys(settings.hooks), ['Stop', 'StopFailure']);
+		for (const hookName of ['Stop', 'StopFailure']) {
+			const hook = settings.hooks[hookName][0].hooks[0];
+			assert.strictEqual(hook.type, 'http');
+			assert.match(hook.url, /^http:\/\/127\.0\.0\.1:\d+\/task-turn-lifecycle\//u);
+			assert.deepStrictEqual(hook.headers, {
+				Authorization: 'Bearer ${CRISPY_MCP_TOKEN}',
+			});
+			assert.deepStrictEqual(hook.allowedEnvVars, ['CRISPY_MCP_TOKEN']);
+		}
+		assert.deepStrictEqual(args.filter((arg) => arg === '--add-dir').length, 2);
+		const configIndex = args.indexOf('--mcp-config');
+		assert.ok(configIndex > 5);
+		const systemPromptIndex = args.indexOf('--append-system-prompt');
+		assert.ok(systemPromptIndex > 5);
+		assert.match(
+			args[systemPromptIndex + 1],
+			/REQUIRED FOR CRISPY TASK SCHEDULING/u,
+		);
+		assert.match(args[systemPromptIndex + 1], /crispy_task_complete/u);
+		assert.strictEqual(args.at(-2), '--');
+		assert.ok((args.at(-1) ?? '').startsWith(
+			`${descriptor.prompt}\n\nTask completion requirement:`,
+		));
+		assert.ok((args.at(-1) ?? '').endsWith(
+			'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
+		));
+		assert.doesNotMatch(
+			args.at(-1) ?? '',
+			/CRISPY TASK EXECUTION CONTRACT/u,
+		);
+		assert.strictEqual(
+			((args.at(-1) ?? '').match(/crispy_task_complete/gu) ?? []).length,
+			1,
+		);
+		assert.match(
+			args.at(-1) ?? '',
+			/call mcp__crispy_[a-f0-9]{24}__crispy_task_complete exactly once/u,
+		);
+		assert.deepStrictEqual(events.map(({ type }) => type), ['started']);
+
+		const rejectedEvents: TaskTerminalSessionEvent[] = [];
+		const incompatible = createFixture({
+			mcpCompatible: false,
+			onTaskSessionEvent: (event) => rejectedEvents.push(event),
+		});
+		await incompatible.host.createTaskSession(
+			'tab-claude-task-incompatible',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			1,
+			descriptor,
+		);
+		await incompatible.host.handleTerminalReady(
+			'tab-claude-task-incompatible', 100, 30,
+		);
+		assert.strictEqual(incompatible.adapter.spawnCalls.length, 0);
+		assert.strictEqual(incompatible.supervisor.prepareCalls.length, 0);
+		assert.deepStrictEqual(rejectedEvents.map(({ type }) => type), ['failed']);
+		await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		);
+		await incompatible.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		);
+	});
+
+	test('Task Claude lifecycle은 reminder 관찰만으로 실패하지 않고 exhausted/StopFailure를 한 번만 실패 처리한다', async () => {
+		const events: TaskTerminalSessionEvent[] = [];
+		const fixture = createFixture({
+			onTaskSessionEvent: (event) => events.push(event),
+		});
+		const descriptor = {
+			executionId: 'execution-claude-turn',
+			workNodeId: 'work-claude-turn',
+			prompt: 'Task: lifecycle',
+			scope: [],
+		};
+		await fixture.host.createTaskSession(
+			'tab-claude-turn', 'claude', WORKSPACE_ROOT_ID, 1, descriptor,
+		);
+		await fixture.host.handleTerminalReady('tab-claude-turn', 100, 30);
+		const session = fixture.host.getActiveSession('tab-claude-turn');
+		assert.ok(session);
+		const runtime = fixture.supervisor.getSessionRuntime(session.sessionId);
+		assert.ok(runtime);
+		const lifecycle = (
+			outcome: 'reminder-injected' | 'reminders-exhausted' | 'provider-failed',
+			turnId: string,
+		): SupervisorRuntimeEvent => ({
+			sourceRuntime: runtime,
+			event: createTaskTurnLifecycleObserved({
+				sessionId: session.sessionId,
+				generation: runtime.generation,
+				executionId: descriptor.executionId,
+				workNodeId: descriptor.workNodeId,
+				turnId,
+				outcome,
+			}),
+		});
+
+		fixture.host.handleMcpRuntimeEvent(lifecycle('reminder-injected', 'turn-one'));
+		assert.deepStrictEqual(events.map(({ type }) => type), ['started']);
+		fixture.host.handleMcpRuntimeEvent(lifecycle('reminders-exhausted', 'turn-two'));
+		fixture.host.handleMcpRuntimeEvent(lifecycle('provider-failed', 'turn-three'));
+		assert.deepStrictEqual(events.map(({ type }) => type), ['started', 'failed']);
+		await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		);
+	});
+
+	test('Task Claude 준비 실패는 restart 불가능한 오류와 Work 실패를 함께 발행한다', async () => {
+		const events: TaskTerminalSessionEvent[] = [];
+		const fixture = createFixture({
+			onTaskSessionEvent: (event) => events.push(event),
+			prepareClaudeLaunch: async (tabId, sessionId) => ({
+				ok: false,
+				error: {
+					type: 'terminal.error',
+					tabId,
+					sessionId,
+					code: 'start_failed',
+					message: 'Terminal process could not be started.',
+					canRestart: true,
+				},
+			}),
+		});
+		const descriptor = {
+			executionId: 'execution-claude-prepare-failure',
+			workNodeId: 'work-claude-prepare-failure',
+			prompt: 'Task: start Claude',
+			scope: [],
+		};
+
+		await fixture.host.createTaskSession(
+			'tab-claude-prepare-failure',
+			'claude',
+			WORKSPACE_ROOT_ID,
+			1,
+			descriptor,
+		);
+		await fixture.host.handleTerminalReady(
+			'tab-claude-prepare-failure', 100, 30,
+		);
+
+		assert.strictEqual(fixture.adapter.spawnCalls.length, 0);
+		assert.deepStrictEqual(events.map(({ type }) => type), ['failed']);
+		assert.deepStrictEqual(
+			fixture.messages.filter(({ type }) => type === 'terminal.error'),
+			[{
+				type: 'terminal.error',
+				tabId: 'tab-claude-prepare-failure',
+				sessionId: 'session-claude-lifecycle-panel-1',
+				code: 'start_failed',
+				message: 'Terminal process could not be started.',
+				canRestart: false,
+			}],
+		);
+		assert.strictEqual(await fixture.host.stopTaskSession(
+			descriptor.executionId,
+			descriptor.workNodeId,
+		), true);
+	});
+
 	test('minimum 미만 또는 probe 실패 결과는 MCP 준비 없이 bare Claude를 실행한다', async () => {
 		const fixture = createFixture({ mcpCompatible: false });
 

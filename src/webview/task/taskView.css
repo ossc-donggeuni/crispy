@@ -383,6 +383,71 @@
 	z-index: 2;
 }
 
+.task-start-run-action {
+	position: relative;
+	display: grid;
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	place-items: center;
+	padding: 0;
+	color: var(--vscode-editor-background, #1e1e1e);
+	background: transparent;
+	border: 0;
+	border-radius: 50%;
+	cursor: pointer;
+	transition:
+		background-color 100ms ease,
+		box-shadow 100ms ease,
+		transform 100ms ease;
+}
+
+.task-start-run-action > .task-start-icon,
+.task-start-run-action > .task-start-run-symbol {
+	grid-area: 1 / 1;
+	transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.task-start-run-action > .task-start-run-symbol {
+	font-size: 14px;
+	font-weight: 700;
+	line-height: 1;
+	opacity: 0;
+	transform: translateX(1px) scale(0.72);
+}
+
+.task-start-run-action:hover,
+.task-start-run-action:focus-visible {
+	background: var(--vscode-testing-iconPassed, #73c991);
+	box-shadow:
+		inset 0 0 0 1px color-mix(
+			in srgb,
+			var(--vscode-testing-iconPassed, #73c991) 72%,
+			white
+		),
+		0 4px 12px color-mix(in srgb, black 32%, transparent);
+	transform: scale(1.08);
+	outline: 1px solid var(--vscode-focusBorder, #007fd4);
+	outline-offset: 2px;
+}
+
+.task-start-run-action:hover > .task-start-icon,
+.task-start-run-action:focus-visible > .task-start-icon {
+	opacity: 0;
+	transform: scale(0.72);
+}
+
+.task-start-run-action:hover > .task-start-run-symbol,
+.task-start-run-action:focus-visible > .task-start-run-symbol {
+	opacity: 1;
+	transform: translateX(1px) scale(1);
+}
+
+.task-node[data-task-execution-state='running'] {
+	cursor: default;
+}
+
 .task-scope-area-toggle {
 	--task-scope-outline-color: color-mix(
 		in srgb,

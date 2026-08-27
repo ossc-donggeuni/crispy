@@ -5,7 +5,7 @@ import {
 } from '../../mcp/claudeDiagnostic';
 
 suite('Claude startup diagnostic classifier', () => {
-	const serverName = `${'crispy_canvas_'}${'ab'.repeat(16)}`;
+	const serverName = `${'crispy_'}${'ab'.repeat(12)}`;
 
 	test('공식 managed MCP workstation startup rejection만 분류한다', () => {
 		assert.strictEqual(classifyClaudeStartupDiagnostic({

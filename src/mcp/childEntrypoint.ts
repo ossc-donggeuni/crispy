@@ -3,6 +3,7 @@ import {
 	parseHostToMcpChildMessage,
 	type McpChildOperationFailureReason,
 	type McpChildControlMessage,
+	type McpChildToHostMessage,
 } from './ipcProtocol';
 import { isValidMcpOpaqueId } from './sessionCredentials';
 import { MCP_CHILD_GENERATION_ENV } from './childBootstrap';
@@ -19,6 +20,24 @@ function startChild(childGeneration: string): void {
 	const server = new CrispyMcpProtocolServer({
 		generation: childGeneration,
 		agentActivityTransport: {
+			isConnected: () => process.connected && typeof process.send === 'function',
+			send: (event, callback) => {
+				if (typeof process.send !== 'function') {
+					throw new Error('MCP child IPC is unavailable.');
+				}
+				return process.send(event, callback);
+			},
+		},
+		taskToolTransport: {
+			isConnected: () => process.connected && typeof process.send === 'function',
+			send: (event, callback) => {
+				if (typeof process.send !== 'function') {
+					throw new Error('MCP child IPC is unavailable.');
+				}
+				return process.send(event, callback);
+			},
+		},
+		taskTurnLifecycleTransport: {
 			isConnected: () => process.connected && typeof process.send === 'function',
 			send: (event, callback) => {
 				if (typeof process.send !== 'function') {
@@ -94,7 +113,7 @@ function startChild(childGeneration: string): void {
 						sessionId: message.sessionId,
 						routeId: message.routeId,
 						token: message.token,
-					}, message.agentActivityCompatible);
+					}, message.agentActivityCompatible, message.taskLease);
 					sendSafe({
 						type: 'auth.registered',
 						requestId: message.requestId,
@@ -158,7 +177,7 @@ function startChild(childGeneration: string): void {
 }
 
 /** IPC send 오류와 callback 오류는 payload나 원본 exception을 출력하지 않는다. */
-function sendSafe(message: McpChildControlMessage): void {
+function sendSafe(message: McpChildControlMessage | McpChildToHostMessage): void {
 	if (!process.connected || typeof process.send !== 'function') {
 		return;
 	}

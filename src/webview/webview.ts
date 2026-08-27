@@ -7,6 +7,7 @@ import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
 import { createAgentSessionColorRegistry } from '../agent/agentSessionColor';
 import { createAgentSessionPresentationCoordinator } from '../agent/webview/agentSessionPresentationCoordinator';
 import {
+	AGENT_SESSION_UNTITLED_TITLE,
 	createAgentSessionPresentationStore,
 	type AgentSessionPresentationStore,
 } from '../agent/webview/agentSessionPresentationStore';
@@ -35,6 +36,7 @@ import { deserializeWorkspacePresentationFromWebview } from '../workspace/worksp
 import { createAgentActivityEffectReconciler } from './graph/agentActivityEffects';
 import {
 	initializeGraphView,
+	type TaskAgentSessionCleanupTarget,
 	type GraphViewWorkspaceSnapshot,
 } from './graph/graphView';
 import { resolveGraphVisibleArea } from './graph/graphVisibleArea';
@@ -57,6 +59,10 @@ import {
 	type WebviewSessionState,
 	type WebviewStateApi,
 } from './webviewState';
+import {
+	isTaskExecutionActivityTabId,
+	parseTaskExecutionToWebviewMessage,
+} from '../task';
 
 declare function acquireVsCodeApi(): WebviewStateApi & {
 	postMessage(message: WebviewToExtensionMessage): void;
@@ -172,6 +178,9 @@ const agentSessionPresentationStore = createAgentSessionPresentationStore(
 	agentSessionColors.resolve,
 );
 let openAgentSessionFromGraph = (_sessionId: string): void => undefined;
+let cleanupTaskAgentSessions = (
+	_targets: readonly TaskAgentSessionCleanupTarget[],
+): void => undefined;
 const graphView = initializeGraphView(
 	graphArea,
 	initialState.graph,
@@ -198,6 +207,16 @@ const graphView = initializeGraphView(
 				reason,
 			});
 		},
+		onTaskExecutionStart: (taskId, storageRevision) => {
+			vscodeApi.postMessage({
+				type: 'task.execution.start',
+				taskId,
+				storageRevision,
+			});
+		},
+		onTaskAgentSessionCleanupRequest: (targets) => {
+			cleanupTaskAgentSessions(targets);
+		},
 		resolveVisibleGraphArea: (viewport) => resolveGraphVisibleArea(
 			viewport,
 			chatPanel,
@@ -210,6 +229,22 @@ const graphView = initializeGraphView(
 		agentActivityStore,
 		agentSessionPresentationStore,
 		gitDecorations: gitDecorationStore,
+	},
+);
+const taskWorkByTabId = new Map<string, Readonly<{
+	executionId: string;
+	workNodeId: string;
+}>>();
+/** 종료 뒤에도 완료 Activity와 원래 탭의 실제 session identity를 보존한다. */
+const taskWorkAgentSessionIds = new Set<string>();
+const unsubscribeTaskWorkAgentSessions = agentSessionPresentationStore.subscribe(
+	(change) => {
+		if (
+			change.kind === 'lifecycle'
+			&& !agentSessionPresentationStore.isKnownSession(change.sessionId)
+		) {
+			taskWorkAgentSessionIds.delete(change.sessionId);
+		}
 	},
 );
 const workspaceNodeInspectorFallback: WorkspaceNodeInspector = {
@@ -283,6 +318,9 @@ const terminalPool = createDefaultAgentTerminalPool(
 				message,
 			);
 		},
+	},
+	{
+		isRestartAllowed: (tabId) => !taskWorkByTabId.has(tabId),
 	},
 );
 
@@ -437,8 +475,44 @@ if (agentPanelUi !== undefined) {
 		agentPanelUi.model,
 		agentSessionPresentationStore,
 		agentActivityStore,
+		{
+			isSessionExternallyManaged: ({ tabId, sessionId }) => (
+				isTaskExecutionActivityTabId(tabId)
+				|| taskWorkAgentSessionIds.has(sessionId)
+			),
+		},
 	);
 }
+
+cleanupTaskAgentSessions = (targets): void => {
+	const closedTabIds = new Set<string>();
+
+	for (const target of targets) {
+		if (
+			closedTabIds.has(target.tabId)
+			|| !taskWorkAgentSessionIds.has(target.sessionId)
+		) {
+			continue;
+		}
+		const presentation = agentSessionPresentationStore.getSession(
+			target.sessionId,
+		);
+
+		if (
+			presentation?.tabId !== target.tabId
+			|| agentPanelUi?.closeTab(target.tabId) !== true
+		) {
+			continue;
+		}
+		closedTabIds.add(target.tabId);
+		taskWorkByTabId.delete(target.tabId);
+		taskWorkAgentSessionIds.delete(target.sessionId);
+		graphView.showTaskAgentSessionEndedNotice(
+			target.sessionId,
+			presentation.title || AGENT_SESSION_UNTITLED_TITLE,
+		);
+	}
+};
 
 /** Collapse 초기화 */
 const refreshCollapse = initializePanelCollapse(
@@ -473,7 +547,11 @@ openAgentSessionFromGraph = (sessionId): void => {
 
 	const snapshot = panelUi.getSnapshot();
 	const sessionTab = snapshot.tabs.find((tab) => (
-		tab.id === presentation.tabId && tab.sessionId === sessionId
+		tab.id === presentation.tabId
+		&& (
+			tab.sessionId === sessionId
+			|| taskWorkAgentSessionIds.has(sessionId)
+		)
 	));
 
 	if (!sessionTab) {
@@ -582,6 +660,7 @@ if (
 
 window.addEventListener('unload', () => {
 	document.removeEventListener('visibilitychange', handleWebviewVisibilityChange);
+	unsubscribeTaskWorkAgentSessions();
 	unsubscribeGraphState();
 	unsubscribeWorkspaceSnapshot();
 	agentActivityEffects.dispose();
@@ -604,6 +683,35 @@ window.addEventListener('unload', () => {
  * @param message Extension Host에서 수신한 검증 전 메시지
  */
 function handleHostMessage(message: unknown): void {
+	const taskExecutionMessage = parseTaskExecutionToWebviewMessage(message);
+
+	if (taskExecutionMessage) {
+		if (taskExecutionMessage.type === 'task.session.createRequested') {
+			lastIssuedSwitchAttemptId += 1;
+			const tabId = agentPanelUi?.createTaskTab?.(
+				taskExecutionMessage.providerId,
+				taskExecutionMessage.workspaceRootId,
+				lastIssuedSwitchAttemptId,
+			);
+			if (tabId !== undefined && postAgentMessage({
+				type: 'task.session.create',
+				executionId: taskExecutionMessage.executionId,
+				workNodeId: taskExecutionMessage.workNodeId,
+				tabId,
+				switchAttemptId: lastIssuedSwitchAttemptId,
+			})) {
+				taskWorkByTabId.set(tabId, Object.freeze({
+					executionId: taskExecutionMessage.executionId,
+					workNodeId: taskExecutionMessage.workNodeId,
+				}));
+				terminalPool.ensureTab(tabId);
+			}
+		} else if (taskExecutionMessage.type === 'task.execution.updated') {
+			graphView.applyTaskExecutionSnapshot?.(taskExecutionMessage.snapshot);
+		}
+		return;
+	}
+
 	const gitStatusMessage = parseWorkspaceGitStatusUpdatedMessage(message);
 
 	if (gitStatusMessage) {
@@ -810,11 +918,32 @@ function handleHostMessage(message: unknown): void {
 			console.log('[Crispy] Extension ready');
 			break;
 		default: {
+			const agentMessage = parseResult.value;
 			const shouldForwardToTerminal =
-				agentPanelUi?.handleHostMessage(parseResult.value) ?? true;
+				agentPanelUi?.handleHostMessage(agentMessage) ?? true;
 			if (shouldForwardToTerminal) {
-				agentSessionPresentationCoordinator?.handleHostMessage(parseResult.value);
-				terminalPool.handleHostMessage(parseResult.value);
+				agentSessionPresentationCoordinator?.handleHostMessage(agentMessage);
+				terminalPool.handleHostMessage(agentMessage);
+			}
+			if (
+				agentMessage.type === 'terminal.starting'
+				|| agentMessage.type === 'terminal.started'
+			) {
+				const taskWork = taskWorkByTabId.get(agentMessage.tabId);
+
+				if (taskWork) {
+					taskWorkAgentSessionIds.add(agentMessage.sessionId);
+					graphView.assignTaskWorkAgentSession?.(
+						taskWork.executionId,
+						taskWork.workNodeId,
+						agentMessage.sessionId,
+					);
+				}
+			} else if (
+				agentMessage.type === 'terminal.exited'
+				|| agentMessage.type === 'terminal.error'
+			) {
+				taskWorkByTabId.delete(agentMessage.tabId);
 			}
 			break;
 		}

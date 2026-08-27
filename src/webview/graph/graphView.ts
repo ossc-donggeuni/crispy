@@ -89,9 +89,14 @@ import type {
 	AgentActivityNotificationScheduler,
 } from './agentActivityFloatingNotifications';
 import type { AgentActivityNotificationEntry } from './agentActivityNotifications';
+import { initializeTaskAgentSessionEndNoticeStack } from './taskAgentSessionEndNotices';
 import {
+	createTaskExecutionActivitySessionId,
+	createTaskExecutionActivityTabId,
 	TASK_DEFAULT_END_POSITION,
+	isTaskExecutionActive,
 	type TaskBlueprint,
+	type TaskExecutionSnapshot,
 	type TaskNodePosition,
 	type TaskOrigin,
 } from '../../task';
@@ -152,6 +157,16 @@ export interface GraphView {
 	updateGraph(graph: Graph): void;
 	/** 기존 View와 Workspace Graph를 유지하며 Task Blueprint 목록을 적용한다. */
 	updateTasks(tasks: readonly TaskBlueprint[]): void;
+	/** Host-owned Task 실행 snapshot을 Node runtime presentation에 적용한다. */
+	applyTaskExecutionSnapshot?(snapshot: TaskExecutionSnapshot): void;
+	/** Work용 실제 Agent 세션을 Task Node Activity 표시와 추적에 연결한다. */
+	assignTaskWorkAgentSession?(
+		executionId: string,
+		workNodeId: string,
+		sessionId: string,
+	): void;
+	/** 정리된 Task-owned 실제 Agent 세션의 중앙 하단 안내를 표시한다. */
+	showTaskAgentSessionEndedNotice(sessionId: string, sessionTitle: string): void;
 	/** Root Graph와 해당 Root들에서 복원한 전체 Workspace 상태를 원자적으로 적용한다. */
 	updateWorkspace(
 		graph: Graph,
@@ -458,8 +473,22 @@ export interface GraphViewInteractions {
 	onTaskJsonCopyRequest?: (json: string) => void;
 	/** Task 전송 JSON 생성 실패를 안전한 reason으로 전달한다. */
 	onTaskJsonCopyFailure?: (reason: TaskTransferSerializeFailureReason) => void;
+	/** Ready Start 실행 요청을 현재 persisted revision과 함께 Host 경계로 전달한다. */
+	onTaskExecutionStart?: (taskId: string, storageRevision: number) => void;
+	/** 완료 알림 삭제로 수명이 끝난 Task-owned 실제 Agent 세션과 탭을 정리한다. */
+	onTaskAgentSessionCleanupRequest?: (
+		targets: readonly TaskAgentSessionCleanupTarget[],
+	) => void;
 	/** Floating Overlay를 제외한 현재 Graph 표시 영역을 Viewport local 좌표로 계산한다. */
 	resolveVisibleGraphArea?: (viewport: HTMLElement) => GraphVisibleArea;
+}
+
+/** 완료 Activity에서 검증한 Work 실행과 실제 Agent 세션·탭의 exact binding이다. */
+export interface TaskAgentSessionCleanupTarget {
+	readonly executionId: string;
+	readonly workNodeId: string;
+	readonly sessionId: string;
+	readonly tabId: string;
 }
 
 /** 상위 Root Instance 아래에서 분리된 Root와 origin chain 깊이다. */
@@ -1394,6 +1423,17 @@ export function initializeGraphView(
 		undefined,
 		effectRegionLayer,
 	);
+	const taskWorkAgentSessions = new Map<string, Readonly<{
+		actualSessionId: string;
+	}>>();
+	const createTaskWorkAgentSessionKey = (
+		executionId: string,
+		workNodeId: string,
+	): string => JSON.stringify([executionId, workNodeId]);
+	const taskActivityKindsBySessionId = new Map<
+		string,
+		Map<string, 'planned' | 'active' | 'editing' | 'completed' | 'rejected'>
+	>();
 	const agentActivityBindings = runtimeOptions.agentActivityStore
 		? createAgentActivityBindings(
 			runtimeOptions.agentActivityStore,
@@ -1888,6 +1928,20 @@ export function initializeGraphView(
 	): boolean => {
 		if (disposed) {
 			return false;
+		}
+		if (entry.target.nodeId.startsWith('task-node:')) {
+			const taskNode = currentTaskLayout.nodes.find(
+				(node) => node.id === entry.target.nodeId,
+			);
+			if (!taskNode) {
+				return false;
+			}
+			camera.focusOn({
+				x: taskNode.position.x + taskNode.width / 2,
+				y: taskNode.position.y + taskNode.height / 2,
+			});
+			pendingAgentActivityNotificationFocus = undefined;
+			return true;
 		}
 		const snapshot = state.getState();
 		const reveal = createAgentActivityTargetRevealState(
@@ -2388,6 +2442,309 @@ export function initializeGraphView(
 		taskState.getSnapshot().tasks,
 		{ resolveGraphTargetAreaCollapsed: resolveTaskGraphTargetAreaCollapsed },
 	);
+	const taskExecutionByTaskId = new Map<string, TaskExecutionSnapshot>();
+	const isTaskExecutionRunning = (taskId: string): boolean => {
+		const snapshot = taskExecutionByTaskId.get(taskId);
+		return snapshot !== undefined && isTaskExecutionActive(snapshot);
+	};
+	const clearTaskExecutionActivities = (snapshot: TaskExecutionSnapshot): void => {
+		const taskSessionId = createTaskExecutionActivitySessionId(
+			snapshot.executionId,
+			snapshot.startNodeId,
+		);
+
+		runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+			taskSessionId,
+		);
+		runtimeOptions.agentSessionPresentationStore?.endSession(taskSessionId);
+		taskActivityKindsBySessionId.delete(taskSessionId);
+		for (const { nodeId } of snapshot.works) {
+			const assignmentKey = createTaskWorkAgentSessionKey(
+				snapshot.executionId,
+				nodeId,
+			);
+			const assignedSession = taskWorkAgentSessions.get(assignmentKey);
+
+			if (assignedSession) {
+				runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+					assignedSession.actualSessionId,
+				);
+				runtimeOptions.agentSessionPresentationStore?.endSession(
+					assignedSession.actualSessionId,
+				);
+				taskActivityKindsBySessionId.delete(assignedSession.actualSessionId);
+			}
+			taskWorkAgentSessions.delete(assignmentKey);
+		}
+	};
+	const createTaskAgentSessionCleanupTarget = (
+		snapshot: TaskExecutionSnapshot,
+		workNodeId: string,
+		actualSessionId: string,
+	): TaskAgentSessionCleanupTarget | undefined => {
+		const presentation = runtimeOptions.agentSessionPresentationStore?.getSession(
+			actualSessionId,
+		);
+
+		return presentation === undefined
+			? undefined
+			: Object.freeze({
+				executionId: snapshot.executionId,
+				workNodeId,
+				sessionId: actualSessionId,
+				tabId: presentation.tabId,
+			});
+	};
+	const requestTaskAgentSessionCleanup = (
+		targets: readonly TaskAgentSessionCleanupTarget[],
+	): void => {
+		if (targets.length === 0) {
+			return;
+		}
+		try {
+			interactions.onTaskAgentSessionCleanupRequest?.(
+				Object.freeze([...targets]),
+			);
+		} catch {
+			/** 탭 UI 정리 실패가 완료 Activity의 로컬 삭제를 막지 않는다. */
+		}
+	};
+	const dismissTaskCompletionActivity = (
+		entry: AgentActivityNotificationEntry,
+	): boolean => {
+		if (entry.activity !== 'completed') {
+			return false;
+		}
+
+		if (entry.dismissalScope === 'session') {
+			const snapshot = [...taskExecutionByTaskId.values()].find((candidate) => (
+				candidate.state === 'completed'
+				&& entry.sessionId === createTaskExecutionActivitySessionId(
+					candidate.executionId,
+					candidate.startNodeId,
+				)
+			));
+			if (!snapshot) {
+				return false;
+			}
+
+			const assignedSessions = snapshot.works.flatMap(({ nodeId }) => {
+				const assignmentKey = createTaskWorkAgentSessionKey(
+					snapshot.executionId,
+					nodeId,
+				);
+				const assignment = taskWorkAgentSessions.get(assignmentKey);
+
+				return assignment === undefined
+					? []
+					: [{ assignmentKey, nodeId, assignment }];
+			});
+			requestTaskAgentSessionCleanup(assignedSessions.flatMap(({
+				nodeId,
+				assignment,
+			}) => {
+				const target = createTaskAgentSessionCleanupTarget(
+					snapshot,
+					nodeId,
+					assignment.actualSessionId,
+				);
+
+				return target === undefined ? [] : [target];
+			}));
+
+			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+				entry.sessionId,
+			);
+			runtimeOptions.agentSessionPresentationStore?.endSession(entry.sessionId);
+			for (const { assignmentKey, assignment } of assignedSessions) {
+				runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+					assignment.actualSessionId,
+				);
+				runtimeOptions.agentSessionPresentationStore?.endSession(
+					assignment.actualSessionId,
+				);
+				taskActivityKindsBySessionId.delete(assignment.actualSessionId);
+				taskWorkAgentSessions.delete(assignmentKey);
+			}
+			return true;
+		}
+
+		if (entry.target.rootId !== undefined) {
+			return false;
+		}
+		for (const snapshot of taskExecutionByTaskId.values()) {
+			const work = snapshot.works.find(({ nodeId, state }) => (
+				nodeId === entry.target.nodeId && state === 'completed'
+			));
+			if (!work) {
+				continue;
+			}
+			const assignmentKey = createTaskWorkAgentSessionKey(
+				snapshot.executionId,
+				work.nodeId,
+			);
+			const assignment = taskWorkAgentSessions.get(assignmentKey);
+			if (assignment?.actualSessionId !== entry.sessionId) {
+				continue;
+			}
+			const target = createTaskAgentSessionCleanupTarget(
+				snapshot,
+				work.nodeId,
+				assignment.actualSessionId,
+			);
+
+			requestTaskAgentSessionCleanup(target === undefined ? [] : [target]);
+			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+				assignment.actualSessionId,
+			);
+			runtimeOptions.agentSessionPresentationStore?.endSession(
+				assignment.actualSessionId,
+			);
+			taskActivityKindsBySessionId.delete(assignment.actualSessionId);
+			taskWorkAgentSessions.delete(assignmentKey);
+			return true;
+		}
+
+		return false;
+	};
+	const publishTaskExecutionActivity = (
+		executionId: string,
+		sessionNodeId: string,
+		targetNodeId: string,
+		title: string,
+		activity: 'planned' | 'active' | 'editing' | 'completed' | 'rejected',
+		message: string,
+	): void => {
+		const store = runtimeOptions.agentActivityStore;
+		const presentations = runtimeOptions.agentSessionPresentationStore;
+		if (!store || !presentations) {
+			return;
+		}
+		const sessionId = createTaskExecutionActivitySessionId(
+			executionId,
+			sessionNodeId,
+		);
+		const tabId = createTaskExecutionActivityTabId(
+			executionId,
+			sessionNodeId,
+		);
+		if (!presentations.isKnownSession(sessionId)) {
+			presentations.activateSession(
+				tabId,
+				sessionId,
+				title,
+			);
+		}
+		presentations.updateCurrentMessage(tabId, sessionId, message);
+		const activityKindsByTarget = taskActivityKindsBySessionId.get(sessionId)
+			?? new Map();
+
+		if (activityKindsByTarget.get(targetNodeId) === activity) {
+			return;
+		}
+		activityKindsByTarget.set(targetNodeId, activity);
+		taskActivityKindsBySessionId.set(sessionId, activityKindsByTarget);
+		store.setAgentActivity(sessionId, { nodeId: targetNodeId }, activity);
+	};
+	const publishTaskWorkAgentActivity = (
+		sessionId: string,
+		targetNodeId: string,
+		activity: 'planned' | 'active' | 'completed' | 'rejected',
+	): void => {
+		const store = runtimeOptions.agentActivityStore;
+		const presentations = runtimeOptions.agentSessionPresentationStore;
+
+		if (!store || !presentations?.isRunningSession(sessionId)) {
+			return;
+		}
+		if (activity === 'completed' || activity === 'rejected') {
+			for (const targetSnapshot of store.getSnapshot()) {
+				if (
+					targetSnapshot.target.nodeId === targetNodeId
+					&& targetSnapshot.target.rootId === undefined
+				) {
+					continue;
+				}
+				if (targetSnapshot.activities.some((entry) => (
+					entry.sessionId === sessionId
+				))) {
+					store.clearAgentActivity(sessionId, targetSnapshot.target);
+				}
+			}
+		}
+		const activityKindsByTarget = taskActivityKindsBySessionId.get(sessionId)
+			?? new Map();
+
+		if (activityKindsByTarget.get(targetNodeId) === activity) {
+			return;
+		}
+		activityKindsByTarget.set(targetNodeId, activity);
+		taskActivityKindsBySessionId.set(sessionId, activityKindsByTarget);
+		store.setAgentActivity(sessionId, { nodeId: targetNodeId }, activity);
+	};
+	const syncTaskExecutionActivities = (snapshot: TaskExecutionSnapshot): void => {
+		const record = taskState.getWorkspaceTask(snapshot.taskId);
+		const taskTitle = record?.task.title ?? 'Task';
+		for (const work of snapshot.works) {
+			const assignedSession = taskWorkAgentSessions.get(
+				createTaskWorkAgentSessionKey(
+					snapshot.executionId,
+					work.nodeId,
+				),
+			);
+			if (!assignedSession) {
+				continue;
+			}
+			const activity = work.state === 'starting'
+				? 'planned'
+				: work.state === 'running' || work.state === 'waiting-approval'
+					? 'active'
+					: work.state === 'completed'
+						? 'completed'
+						: work.state === 'rejected'
+							|| work.state === 'failed'
+							|| work.state === 'blocked'
+							? 'rejected'
+							: undefined;
+			if (!activity) {
+				continue;
+			}
+			publishTaskWorkAgentActivity(
+				assignedSession.actualSessionId,
+				work.nodeId,
+				activity,
+			);
+		}
+
+		if (snapshot.state === 'completed') {
+			for (const targetNodeId of [
+				snapshot.startNodeId,
+				...snapshot.works.map(({ nodeId }) => nodeId),
+				snapshot.endNodeId,
+			]) {
+				publishTaskExecutionActivity(
+					snapshot.executionId,
+					snapshot.startNodeId,
+					targetNodeId,
+					taskTitle,
+					'completed',
+					'Task의 모든 Work가 완료되었습니다.',
+				);
+			}
+			return;
+		}
+
+		publishTaskExecutionActivity(
+			snapshot.executionId,
+			snapshot.startNodeId,
+			snapshot.startNodeId,
+			taskTitle,
+			snapshot.state === 'running' ? 'editing' : 'rejected',
+			snapshot.state === 'running'
+				? 'Task 실행을 시작했습니다.'
+				: 'Task 실행이 중단되었습니다.',
+		);
+	};
 	let focusedTaskNode: FocusedTaskNode | undefined;
 	let taskInspector: ReturnType<typeof initializeTaskInspector> | undefined;
 	const findFocusedTaskLayoutNode = (): TaskLayoutNode | undefined => (
@@ -3081,15 +3438,20 @@ export function initializeGraphView(
 		const dropTarget = source
 			? taskRenderer.updateGraphTargetDrag({ x: clientX, y: clientY })
 			: undefined;
+		const existingBinding = findTaskGraphScopeBindingForOccurrence(
+			request.occurrenceNodeId,
+		);
 
 		taskRenderer.clearGraphTargetDrag();
-		if (disposed) {
+		if (
+			disposed
+			|| (existingBinding && isTaskExecutionRunning(existingBinding.taskId))
+			|| (dropTarget && isTaskExecutionRunning(dropTarget.taskId))
+		) {
 			return false;
 		}
 		if (!dropTarget) {
-			const binding = findTaskGraphScopeBindingForOccurrence(
-				request.occurrenceNodeId,
-			);
+			const binding = existingBinding;
 
 			if (binding) {
 				if (
@@ -3225,6 +3587,7 @@ export function initializeGraphView(
 	): void => {
 		if (
 			disposed
+			|| isTaskExecutionRunning(input.taskId)
 			|| input.taskId !== focusedTaskNode?.taskId
 			|| input.nodeId !== focusedTaskNode.nodeId
 		) {
@@ -3288,6 +3651,9 @@ export function initializeGraphView(
 		}
 	};
 	const handleTaskOriginChange = (taskId: string, origin: TaskOrigin): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		const updated = taskState.updateTask(taskId, (task) => ({
 			...task,
 			origin,
@@ -3302,6 +3668,9 @@ export function initializeGraphView(
 		nodeId: string,
 		position: TaskNodePosition,
 	): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		if (taskState.setNodePosition(taskId, nodeId, position)) {
 			applyTaskState({ animateGraphScopeNodes: false });
 		}
@@ -3332,6 +3701,9 @@ export function initializeGraphView(
 		}
 	};
 	const handleTaskWorkAdd = (taskId: string): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		const previousNodeIds = new Set(
 			taskState.getTask(taskId)?.nodes.map((node) => node.id),
 		);
@@ -3380,6 +3752,9 @@ export function initializeGraphView(
 		}
 	};
 	const handleTaskImport = (taskId: string): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		const task = taskState.getTask(taskId);
 		const startNodeId = task?.nodes.find((node) => node.kind === 'start')?.id;
 
@@ -3439,6 +3814,9 @@ export function initializeGraphView(
 		});
 	};
 	const handleTaskRemove = (taskId: string): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		if (taskState.removeTask(taskId)) {
 			applyTaskState();
 		}
@@ -3449,6 +3827,12 @@ export function initializeGraphView(
 		targetTaskId: string,
 		targetNodeId: string,
 	): boolean => {
+		if (
+			isTaskExecutionRunning(sourceTaskId)
+			|| isTaskExecutionRunning(targetTaskId)
+		) {
+			return false;
+		}
 		if (taskState.connect(
 			sourceTaskId,
 			sourceNodeId,
@@ -3461,11 +3845,17 @@ export function initializeGraphView(
 		return false;
 	};
 	const handleTaskEdgeDisconnect = (taskId: string, edgeId: string): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		if (taskState.disconnect(taskId, edgeId)) {
 			applyTaskState();
 		}
 	};
 	const handleTaskWorkRemove = (taskId: string, nodeId: string): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
 		if (taskState.removeWork(taskId, nodeId)) {
 			applyTaskState();
 		}
@@ -3510,6 +3900,15 @@ export function initializeGraphView(
 		});
 		applyTaskState();
 	};
+	const handleTaskExecutionStart = (taskId: string): void => {
+		if (isTaskExecutionRunning(taskId)) {
+			return;
+		}
+		const record = taskState.getWorkspaceTask(taskId);
+		if (record !== undefined) {
+			interactions.onTaskExecutionStart?.(taskId, record.storageRevision);
+		}
+	};
 
 	taskInspector = initializeTaskInspector(
 		overlayLayer,
@@ -3524,6 +3923,21 @@ export function initializeGraphView(
 		currentTaskLayout,
 		{
 			getCameraScale: () => camera.getState().scale,
+			registerNodeActivity: (nodeId, element) => {
+				const unregisterEffects = nodeEffects.registerNode(
+					{ nodeId },
+					element,
+				);
+				const unregisterBindings = agentActivityBindings?.registerTarget(
+					{ nodeId },
+					element,
+				);
+
+				return () => {
+					unregisterBindings?.();
+					unregisterEffects();
+				};
+			},
 			clientToWorld: ({ x, y }) => {
 				const bounds = viewport.getBoundingClientRect();
 
@@ -3537,6 +3951,7 @@ export function initializeGraphView(
 			onNodeFocus: handleTaskNodeFocus,
 			onNodeSelectionChange: handleTaskNodeSelectionChange,
 			onWorkAdd: handleTaskWorkAdd,
+			onTaskStart: handleTaskExecutionStart,
 			onTaskExport: handleTaskExport,
 			onTaskImport: handleTaskImport,
 			onTaskRemove: handleTaskRemove,
@@ -3591,6 +4006,12 @@ export function initializeGraphView(
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
+	const taskAgentSessionEndNotices = initializeTaskAgentSessionEndNoticeStack(
+		overlayLayer,
+		viewport,
+		getVisibleGraphArea,
+		runtimeOptions.agentActivityNotificationScheduler,
+	);
 	if (
 		runtimeOptions.agentActivityStore
 		&& runtimeOptions.agentSessionPresentationStore
@@ -3604,16 +4025,35 @@ export function initializeGraphView(
 			nodeEffects.createLocalEffectHost,
 			{
 				onFocus: handleAgentActivityNotificationFocus,
+				shouldGroupBySession: (entry) => (
+					entry.activity === 'completed'
+					&& [...taskExecutionByTaskId.values()].some((snapshot) => (
+						snapshot.state === 'completed'
+						&& entry.sessionId === createTaskExecutionActivitySessionId(
+							snapshot.executionId,
+							snapshot.startNodeId,
+						)
+					))
+				),
 				onDismiss: (entry) => {
 					if (
 						pendingAgentActivityNotificationFocus?.key === entry.key
 					) {
 						pendingAgentActivityNotificationFocus = undefined;
 					}
-					runtimeOptions.agentActivityStore?.clearAgentActivity(
-						entry.sessionId,
-						entry.target,
-					);
+					if (dismissTaskCompletionActivity(entry)) {
+						return;
+					}
+					if (entry.dismissalScope === 'session') {
+						runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+							entry.sessionId,
+						);
+					} else {
+						runtimeOptions.agentActivityStore?.clearAgentActivity(
+							entry.sessionId,
+							entry.target,
+						);
+					}
 				},
 			},
 			getVisibleGraphArea,
@@ -3759,6 +4199,7 @@ export function initializeGraphView(
 			) {
 				navigator.refreshVisibleGraphArea();
 				agentActivityNotificationCenter?.refreshVisibleGraphArea();
+				taskAgentSessionEndNotices.refreshVisibleGraphArea();
 				taskInspector?.refreshPosition();
 			}
 		},
@@ -3965,6 +4406,68 @@ export function initializeGraphView(
 				applyTaskState();
 			}
 		},
+		applyTaskExecutionSnapshot(snapshot): void {
+			if (!disposed) {
+				const previous = taskExecutionByTaskId.get(snapshot.taskId);
+				if (
+					previous !== undefined
+					&& previous.executionId !== snapshot.executionId
+				) {
+					clearTaskExecutionActivities(previous);
+				}
+				taskExecutionByTaskId.set(snapshot.taskId, snapshot);
+				if (
+					snapshot.state === 'running'
+					&& focusedTaskNode?.taskId === snapshot.taskId
+				) {
+					clearTaskFocus();
+				}
+				taskRenderer.applyExecutionSnapshot(snapshot);
+				syncTaskExecutionActivities(snapshot);
+			}
+		},
+		assignTaskWorkAgentSession(executionId, workNodeId, sessionId): void {
+			if (disposed) {
+				return;
+			}
+			const snapshot = [...taskExecutionByTaskId.values()].find(
+				(candidate) => candidate.executionId === executionId,
+			);
+			const presentation = runtimeOptions.agentSessionPresentationStore
+				?.getSession(sessionId);
+
+			if (
+				!snapshot
+				|| !snapshot.works.some(({ nodeId }) => nodeId === workNodeId)
+				|| !presentation
+			) {
+				return;
+			}
+			const assignmentKey = createTaskWorkAgentSessionKey(
+				executionId,
+				workNodeId,
+			);
+			const previousSession = taskWorkAgentSessions.get(assignmentKey);
+
+			if (
+				previousSession
+				&& previousSession.actualSessionId !== sessionId
+			) {
+				taskActivityKindsBySessionId.delete(previousSession.actualSessionId);
+			}
+			taskWorkAgentSessions.set(
+				assignmentKey,
+				Object.freeze({
+					actualSessionId: sessionId,
+				}),
+			);
+			syncTaskExecutionActivities(snapshot);
+		},
+		showTaskAgentSessionEndedNotice(sessionId, sessionTitle): void {
+			if (!disposed) {
+				taskAgentSessionEndNotices.show(sessionId, sessionTitle);
+			}
+		},
 		updateWorkspace(graph, snapshot, stateIdChanges): void {
 			if (disposed) {
 				return;
@@ -4025,13 +4528,20 @@ export function initializeGraphView(
 			unsubscribeWorkspaceTasks();
 			workspaceSubscribers.clear();
 			navigator.dispose();
+			taskAgentSessionEndNotices.dispose();
 			agentActivityNotificationCenter?.dispose();
 			agentActivityNotificationCenter = undefined;
+			for (const snapshot of taskExecutionByTaskId.values()) {
+				clearTaskExecutionActivities(snapshot);
+			}
+			taskExecutionByTaskId.clear();
 			taskInspector?.dispose();
 			taskInspector = undefined;
 			focusedTaskNode = undefined;
 			taskScopeOccurrencesByBinding.clear();
 			expandedTaskGraphScopeAreaKeys.clear();
+			taskWorkAgentSessions.clear();
+			taskActivityKindsBySessionId.clear();
 			taskRenderer.dispose();
 			renderer.dispose();
 			agentActivityBindings?.dispose();

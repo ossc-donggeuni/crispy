@@ -4,17 +4,24 @@ import {
 	CLAUDE_MCP_CONFIG_ARGUMENT,
 	CLAUDE_MCP_SERVER_NAME_PREFIX,
 	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
+	CLAUDE_MCP_TOOL_NAME_MAX_LENGTH,
 	CLAUDE_MCP_TOKEN_PLACEHOLDER,
 	createClaudeMcpConfig,
+	createClaudeMcpQualifiedToolName,
 	createClaudeMcpServerName,
 } from '../../mcp/claudeConfig';
 import {
 	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
 	CRISPY_PING_ONLY_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_INSTRUCTIONS,
 } from '../../mcp/agentActivityInstructions';
 import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from '../../mcp/toolNames';
 import { McpConnectionDescriptor } from '../../mcp/sessionRuntime';
 
@@ -85,6 +92,25 @@ suite('Claude MCP session config serializer', () => {
 		assert.strictEqual(config.args[1].includes('completion anchor'), true);
 	});
 
+	test('Task lease appends the shared Task tool contract through the same system path', () => {
+		const config = createClaudeMcpConfig(
+			createConnection(),
+			(size) => Buffer.alloc(size, 0xce),
+			false,
+			true,
+		);
+
+		assert.deepStrictEqual(config.args, [
+			CLAUDE_APPEND_SYSTEM_PROMPT_ARGUMENT,
+			CRISPY_TASK_TOOL_INSTRUCTIONS,
+			CLAUDE_MCP_CONFIG_ARGUMENT,
+			config.inlineConfig,
+		]);
+		assert.match(config.args[1], /crispy_task_complete/u);
+		assert.match(config.args[1], /prose response alone does not notify/u);
+		assert.doesNotMatch(config.args[1], /exposes only crispy_ping/u);
+	});
+
 	test('strict, cache, global tool restriction을 config나 argv에 주입하지 않는다', () => {
 		const config = createClaudeMcpConfig(createConnection());
 		const serialized = JSON.stringify(config);
@@ -101,17 +127,32 @@ suite('Claude MCP session config serializer', () => {
 		}
 	});
 
-	test('fully-qualified activity Tool names stay within Claude 64-char limit', () => {
+	test('all fully-qualified Crispy Tool names stay within Claude 64-char limit', () => {
 		const serverName = createClaudeMcpServerName(
 			(size) => Buffer.alloc(size, 0xee),
 		);
 		for (const toolName of [
+			CRISPY_PING_TOOL_NAME,
 			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 			CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+			CRISPY_TASK_COMPLETE_TOOL_NAME,
+			CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+			CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 		]) {
-			const qualified = `mcp__${serverName}__${toolName}`;
-			assert.ok(qualified.length <= 64, qualified);
+			const qualified = createClaudeMcpQualifiedToolName(serverName, toolName);
+			assert.ok(qualified.length <= CLAUDE_MCP_TOOL_NAME_MAX_LENGTH, qualified);
 		}
+		assert.strictEqual(
+			createClaudeMcpQualifiedToolName(
+				serverName,
+				CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+			).length,
+			63,
+		);
+		assert.throws(
+			() => createClaudeMcpQualifiedToolName(serverName, 'x'.repeat(32)),
+			/provider limit/u,
+		);
 	});
 
 	test('server name random contract와 exact loopback URL을 강제한다', () => {

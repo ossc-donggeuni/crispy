@@ -7,6 +7,9 @@ import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from './toolNames';
 
 export const CODEX_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'CRISPY_MCP_TOKEN';
@@ -57,21 +60,34 @@ export function createCodexMcpConfig(
 	random?: McpRandomBytes,
 	shellEnvironmentPolicyStyle: CodexShellEnvironmentPolicyStyle = 'keyed-filters',
 	agentActivityCompatible = false,
+	taskToolCompatible = false,
 ): CodexMcpConfig {
 	assertValidCodexMcpUrl(connection.url);
 	const serverName = createCodexMcpServerName(random);
 	const serverKey = `mcp_servers.${serverName}`;
-	const enabledTools = agentActivityCompatible
-		? [
-			CRISPY_PING_TOOL_NAME,
-			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
-			CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
-		]
-		: [CRISPY_PING_TOOL_NAME];
-	const assignments = [
+	const enabledTools = [
+		CRISPY_PING_TOOL_NAME,
 		...(agentActivityCompatible
+			? [
+				CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+				CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
+			]
+			: []),
+		...(taskToolCompatible
+			? [
+				CRISPY_TASK_COMPLETE_TOOL_NAME,
+				CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+				CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+			]
+			: []),
+	];
+	const assignments = [
+		...(agentActivityCompatible || taskToolCompatible
 			? [`developer_instructions=${serializeCodexTomlString(
-				createCrispyMcpInstructions(true),
+				createCrispyMcpInstructions(
+					agentActivityCompatible,
+					taskToolCompatible,
+				),
 			)}`]
 			: []),
 		`${serverKey}.url=${serializeCodexTomlString(connection.url)}`,

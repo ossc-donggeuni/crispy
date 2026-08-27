@@ -142,6 +142,12 @@ export class CodexSmokeEventObserver {
 			this.activityEvents.push(event);
 			return;
 		}
+		if (event.type === 'session.taskToolRequested') {
+			return;
+		}
+		if (event.type === 'session.taskTurnLifecycleObserved') {
+			return;
+		}
 		this.settle({ type: 'failure', reason: event.failure.reason });
 	}
 

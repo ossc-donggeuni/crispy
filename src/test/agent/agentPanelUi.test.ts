@@ -1398,6 +1398,27 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.providerPicker.hidden, false);
 	});
 
+	test('외부 수명주기 정리는 Task 탭을 확인 없이 exactly once 닫는다', () => {
+		const closed: string[] = [];
+		const fixture = createFixture({ onTabClosed: (tabId) => closed.push(tabId) });
+		const taskTabId = fixture.controller.createTaskTab?.(
+			'claude',
+			DEFAULT_WORKSPACE_CATALOG[0]!.id,
+			1,
+		);
+
+		assert.ok(taskTabId);
+		assert.strictEqual(fixture.controller.closeTab(taskTabId), true);
+		assert.strictEqual(fixture.controller.closeTab(taskTabId), false);
+		assert.deepStrictEqual(fixture.dialog.requests, []);
+		assert.deepStrictEqual(closed, [taskTabId]);
+		assert.strictEqual(
+			fixture.controller.getSnapshot().tabs.some(({ id }) => id === taskTabId),
+			false,
+		);
+		assert.strictEqual(fixture.controller.getAssignmentState(taskTabId), undefined);
+	});
+
 	test('마지막 탭을 닫으면 선택기를 숨기고 재시작을 비활성화한다', async () => {
 		const fixture = createFixture();
 

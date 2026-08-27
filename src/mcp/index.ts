@@ -24,6 +24,7 @@ export {
 	type McpProtocolServerOptions,
 	type McpServerReady,
 	type RegisteredMcpSession,
+	type TaskTurnLifecycleIpcTransport,
 } from './protocolServer';
 export {
 	ACTIVITY_IPC_MAX_UTF8_BYTES,
@@ -160,10 +161,13 @@ export {
 	CLAUDE_MCP_CONFIG_ARGUMENT,
 	CLAUDE_MCP_SERVER_NAME_PREFIX,
 	CLAUDE_MCP_SERVER_NAME_RANDOM_BYTES,
+	CLAUDE_MCP_TOOL_NAME_MAX_LENGTH,
 	CLAUDE_MCP_TOKEN_ENVIRONMENT_VARIABLE,
 	CLAUDE_MCP_TOKEN_PLACEHOLDER,
 	createClaudeMcpConfig,
+	createClaudeMcpQualifiedToolName,
 	createClaudeMcpServerName,
+	isValidClaudeMcpServerName,
 	type ClaudeMcpConfig,
 } from './claudeConfig';
 export {
@@ -209,6 +213,8 @@ export {
 	ACTIVITY_TOOL_ERROR_CODES,
 	createActivityToolErrorResult,
 	createActivityToolSuccessResult,
+	createTaskToolErrorResult,
+	createTaskToolSuccessResult,
 	createCrispyToolServer,
 	CRISPY_CLEAR_AGENT_ACTIVITY_INPUT_SCHEMA,
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
@@ -217,8 +223,42 @@ export {
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_INPUT_SCHEMA,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_INPUT_SCHEMA,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_INPUT_SCHEMA,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_INPUT_SCHEMA,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+	TASK_TOOL_ERROR_CODES,
 	type ActivityToolErrorCode,
+	type TaskToolErrorCode,
+	type TaskToolOperation,
 } from './toolServer';
+export {
+	createTaskScopeRequestId,
+	isValidTaskToolLease,
+	parseTaskToolRequested,
+	TASK_TOOL_IPC_MAX_UTF8_BYTES,
+	TASK_TOOL_PATH_MAX_COUNT,
+	TASK_TOOL_PATH_MAX_UTF8_BYTES,
+	TASK_TOOL_REASON_MAX_UTF8_BYTES,
+	TASK_TOOL_SUMMARY_MAX_UTF8_BYTES,
+	type TaskToolLease,
+	type TaskToolRequested,
+} from './taskToolProtocol';
+export {
+	CodexTaskTurnNotificationParser,
+	createClaudeTaskTurnLifecycleUrl,
+	createTaskCompletionFollowup,
+	createTaskTurnLifecycleObserved,
+	parseClaudeTaskTurnHookInput,
+	parseClaudeTaskTurnLifecyclePath,
+	parseTaskTurnLifecycleObserved,
+	TASK_TURN_REMINDER_LIMIT,
+	type ClaudeTaskTurnHookInput,
+	type TaskTurnLifecycleObserved,
+	type TaskTurnLifecycleOutcome,
+} from './taskTurnLifecycleProtocol';
 export {
 	AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION,
 	isAgentActivityVscodeVersionAllowed,
@@ -228,5 +268,7 @@ export {
 export {
 	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
 	CRISPY_PING_ONLY_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_INSTRUCTIONS,
+	CRISPY_TASK_TOOL_REQUIRED_MARKER,
 	createCrispyMcpInstructions,
 } from './agentActivityInstructions';

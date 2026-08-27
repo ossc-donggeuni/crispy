@@ -11,6 +11,10 @@ import {
 } from './sessionRuntime';
 import { createMcpFailure } from './failureReason';
 import { isValidMcpOpaqueId, type McpRandomBytes } from './sessionCredentials';
+import {
+	isValidTaskToolLease,
+	type TaskToolLease,
+} from './taskToolProtocol';
 
 export type McpSessionRuntimeFactory = (
 	options: McpSessionRuntimeOptions,
@@ -59,6 +63,7 @@ export class McpAdapterSupervisor {
 	private readonly prepares = new Map<string, Promise<McpPrepareResult>>();
 	private readonly restarts = new Map<string, Promise<McpPrepareResult>>();
 	private readonly stops = new Map<string, Promise<void>>();
+	private readonly taskLeaseBySession = new Map<string, TaskToolLease>();
 	private disposed = false;
 	private disposePromise: Promise<void> | undefined;
 	private resolveDispose: (() => void) | undefined;
@@ -76,9 +81,28 @@ export class McpAdapterSupervisor {
 		this.agentActivityCompatible = options.agentActivityCompatible === true;
 	}
 
-	prepareSession(sessionId: string): Promise<McpPrepareResult> {
+	prepareSession(
+		sessionId: string,
+		taskLease?: TaskToolLease,
+	): Promise<McpPrepareResult> {
 		if (this.disposed || !isValidMcpOpaqueId(sessionId)) {
 			return Promise.resolve(supervisorFailure('adapter_start_failed'));
+		}
+		if (taskLease !== undefined) {
+			if (!isValidTaskToolLease(taskLease)) {
+				return Promise.resolve(supervisorFailure('adapter_start_failed'));
+			}
+			const existingLease = this.taskLeaseBySession.get(sessionId);
+			if (
+				existingLease !== undefined
+				&& (
+					existingLease.executionId !== taskLease.executionId
+					|| existingLease.workNodeId !== taskLease.workNodeId
+				)
+			) {
+				return Promise.resolve(supervisorFailure('adapter_start_failed'));
+			}
+			this.taskLeaseBySession.set(sessionId, Object.freeze({ ...taskLease }));
 		}
 		if (this.stops.has(sessionId)) {
 			return Promise.resolve(supervisorFailure('adapter_start_failed'));
@@ -118,6 +142,7 @@ export class McpAdapterSupervisor {
 			if (this.stops.get(sessionId) === stop) {
 				this.stops.delete(sessionId);
 			}
+			this.taskLeaseBySession.delete(sessionId);
 		});
 		this.stops.set(sessionId, stop);
 		return stop;
@@ -155,6 +180,7 @@ export class McpAdapterSupervisor {
 		this.prepares.clear();
 		this.restarts.clear();
 		this.stops.clear();
+		this.taskLeaseBySession.clear();
 		const dispose = new Promise<void>((resolve) => {
 			this.resolveDispose = resolve;
 		});
@@ -189,6 +215,7 @@ export class McpAdapterSupervisor {
 		if (this.runtimes.get(identity.sessionId) === runtime) {
 			this.runtimes.delete(identity.sessionId);
 			this.prepares.delete(identity.sessionId);
+			this.taskLeaseBySession.delete(identity.sessionId);
 		}
 		void this.settleRuntimeRetirement(
 			runtime,
@@ -235,11 +262,15 @@ export class McpAdapterSupervisor {
 		sessionId: string,
 		previous: McpSessionRuntime | undefined,
 	): Promise<McpPrepareResult> {
+		const taskLease = this.taskLeaseBySession.get(sessionId);
 		if (previous !== undefined) {
 			await this.retireExactRuntime(previous);
 		}
 		if (this.disposed) {
 			return supervisorFailure('adapter_start_failed');
+		}
+		if (taskLease !== undefined) {
+			this.taskLeaseBySession.set(sessionId, taskLease);
 		}
 		this.prepares.delete(sessionId);
 		if (this.runtimes.has(sessionId)) {
@@ -282,6 +313,9 @@ export class McpAdapterSupervisor {
 				spawnChild: this.options.spawnChild,
 				createRequestId: this.options.createRequestId,
 				agentActivityCompatible: this.agentActivityCompatible,
+				...(this.taskLeaseBySession.get(sessionId) === undefined
+					? {}
+					: { taskLease: this.taskLeaseBySession.get(sessionId) }),
 				onEvent: (event) => {
 					if (sourceRuntime !== undefined) {
 						this.handleRuntimeEvent(sourceRuntime, event);

@@ -59,7 +59,25 @@ import {
 	isCrispyToolValidationFailure,
 	normalizeCrispyToolCallArguments,
 	type AgentActivityToolOperation,
+	createTaskToolErrorResult,
+	createTaskToolSuccessResult,
+	type TaskToolOperation,
 } from './toolServer';
+import {
+	createTaskScopeRequestId,
+	isValidTaskToolLease,
+	parseTaskToolRequested,
+	type TaskToolLease,
+	type TaskToolRequested,
+} from './taskToolProtocol';
+import {
+	createTaskCompletionFollowup,
+	createTaskTurnLifecycleObserved,
+	parseClaudeTaskTurnHookInput,
+	parseClaudeTaskTurnLifecyclePath,
+	TASK_TURN_REMINDER_LIMIT,
+	type TaskTurnLifecycleObserved,
+} from './taskTurnLifecycleProtocol';
 
 export interface McpActivityObservedEvent {
 	readonly type: 'session.mcpActivityObserved';
@@ -79,12 +97,30 @@ export interface McpProtocolServerOptions {
 	readonly onPingObserved?: (event: McpPingObservedEvent) => void;
 	readonly monotonicClock?: MonotonicClock;
 	readonly agentActivityTransport?: AgentActivityIpcTransport;
+	readonly taskToolTransport?: TaskToolIpcTransport;
+	readonly taskTurnLifecycleTransport?: TaskTurnLifecycleIpcTransport;
 }
 
 export interface AgentActivityIpcTransport {
 	isConnected(): boolean;
 	send(
 		event: AgentActivityRequested,
+		callback: (error: Error | null) => void,
+	): boolean;
+}
+
+export interface TaskToolIpcTransport {
+	isConnected(): boolean;
+	send(
+		event: TaskToolRequested,
+		callback: (error: Error | null) => void,
+	): boolean;
+}
+
+export interface TaskTurnLifecycleIpcTransport {
+	isConnected(): boolean;
+	send(
+		event: TaskTurnLifecycleObserved,
 		callback: (error: Error | null) => void,
 	): boolean;
 }
@@ -108,12 +144,16 @@ interface AuthenticatedRequestSlot {
 
 interface ActiveRegistration extends McpSessionCredentials {
 	readonly agentActivityCompatible: boolean;
+	readonly taskLease: TaskToolLease | undefined;
 	readonly activityAdmission: RegistrationActivityAdmission | undefined;
 	readonly authenticatedRequestSlots: Set<AuthenticatedRequestSlot>;
 	authenticatedInFlight: number;
 	revoked: boolean;
 	activityObserved: boolean;
 	pingObserved: boolean;
+	taskCompletionObserved: boolean;
+	pendingTaskScopeRequestId: string | undefined;
+	claudeTurnReminders: number;
 }
 
 interface SetActivityInput {
@@ -127,7 +167,31 @@ interface ClearActivityInput {
 	readonly targetKind: AgentActivityTargetKind;
 }
 
+interface CompleteTaskInput {
+	readonly status: 'completed' | 'rejected';
+	readonly summary: string;
+}
+
+interface ScopeRequestInput {
+	readonly access: 'read' | 'write';
+	readonly paths: readonly string[];
+	readonly reason: string;
+}
+
+interface ScopeResultInput {
+	readonly requestId: string;
+	readonly result: 'approved' | 'rejected';
+}
+
 const CLOSED_AGENT_ACTIVITY_TRANSPORT: AgentActivityIpcTransport = Object.freeze({
+	isConnected: () => false,
+	send: () => false,
+});
+const CLOSED_TASK_TOOL_TRANSPORT: TaskToolIpcTransport = Object.freeze({
+	isConnected: () => false,
+	send: () => false,
+});
+const CLOSED_TASK_TURN_LIFECYCLE_TRANSPORT: TaskTurnLifecycleIpcTransport = Object.freeze({
 	isConnected: () => false,
 	send: () => false,
 });
@@ -144,6 +208,8 @@ export class CrispyMcpProtocolServer {
 	private readonly onPingObserved: (event: McpPingObservedEvent) => void;
 	private readonly monotonicClock: MonotonicClock;
 	private readonly agentActivityTransport: AgentActivityIpcTransport;
+	private readonly taskToolTransport: TaskToolIpcTransport;
+	private readonly taskTurnLifecycleTransport: TaskTurnLifecycleIpcTransport;
 	private readonly requestRegistrations = new WeakMap<Request, ActiveRegistration>();
 	private readonly sdkHandler: McpHttpHandler;
 	private lifecycle: ServerLifecycle = 'idle';
@@ -164,6 +230,10 @@ export class CrispyMcpProtocolServer {
 		this.monotonicClock = options.monotonicClock ?? (() => performance.now());
 		this.agentActivityTransport = options.agentActivityTransport
 			?? CLOSED_AGENT_ACTIVITY_TRANSPORT;
+		this.taskToolTransport = options.taskToolTransport
+			?? CLOSED_TASK_TOOL_TRANSPORT;
+		this.taskTurnLifecycleTransport = options.taskTurnLifecycleTransport
+			?? CLOSED_TASK_TURN_LIFECYCLE_TRANSPORT;
 		this.sdkHandler = createMcpHandler(
 			(context) => {
 				const registration = context.requestInfo === undefined
@@ -175,6 +245,14 @@ export class CrispyMcpProtocolServer {
 					handleAgentActivity: (operation, input) => registration === undefined
 						? createActivityToolErrorResult('registration_inactive')
 						: this.handleAgentActivity(registration, operation, input),
+					...(registration?.taskLease === undefined
+						? {}
+						: {
+							taskLease: registration.taskLease,
+							handleTaskTool: (operation: TaskToolOperation, input: unknown) => (
+								this.handleTaskTool(registration, operation, input)
+							),
+						}),
 				});
 			},
 			{
@@ -259,6 +337,7 @@ export class CrispyMcpProtocolServer {
 	registerSession(
 		credentials: McpSessionCredentials,
 		agentActivityCompatible: boolean,
+		taskLease?: TaskToolLease,
 	): RegisteredMcpSession {
 		if (
 			this.lifecycle !== 'running'
@@ -266,6 +345,7 @@ export class CrispyMcpProtocolServer {
 			|| this.registrationAttempted
 			|| credentials.generation !== this.generation
 			|| typeof agentActivityCompatible !== 'boolean'
+			|| (taskLease !== undefined && !isValidTaskToolLease(taskLease))
 		) {
 			throw new Error('MCP session registration failed.');
 		}
@@ -277,6 +357,9 @@ export class CrispyMcpProtocolServer {
 			routeId: credentials.routeId,
 			token: credentials.token,
 			agentActivityCompatible,
+			taskLease: taskLease === undefined
+				? undefined
+				: Object.freeze({ ...taskLease }),
 			activityAdmission: agentActivityCompatible
 				? new RegistrationActivityAdmission(this.monotonicClock)
 				: undefined,
@@ -285,6 +368,9 @@ export class CrispyMcpProtocolServer {
 			revoked: false,
 			activityObserved: false,
 			pingObserved: false,
+			taskCompletionObserved: false,
+			pendingTaskScopeRequestId: undefined,
+			claudeTurnReminders: 0,
 		};
 		return Object.freeze({
 			generation: credentials.generation,
@@ -351,10 +437,21 @@ export class CrispyMcpProtocolServer {
 		response: ServerResponse,
 	): Promise<void> {
 		const registration = this.registration;
+		const requestUrl = request.url;
+		const mcpRoute = registration === undefined
+			? false
+			: requestUrl === `/mcp/${registration.routeId}`;
+		const taskTurnRoute = registration?.taskLease === undefined
+			? undefined
+			: parseClaudeTaskTurnLifecyclePath(
+				requestUrl,
+				registration.routeId,
+			);
 		if (
 			this.lifecycle !== 'running'
 			|| registration === undefined
-			|| request.url !== `/mcp/${registration.routeId}`
+			|| requestUrl === undefined
+			|| (!mcpRoute && taskTurnRoute === undefined)
 		) {
 			this.rejectWithoutBodyDrain(request, response, 404, 'Not found.');
 			return;
@@ -370,7 +467,7 @@ export class CrispyMcpProtocolServer {
 			return;
 		}
 
-		const headerRejection = validateLoopbackHeaders(request.headers, request.url);
+		const headerRejection = validateLoopbackHeaders(request.headers, requestUrl);
 		if (headerRejection !== undefined) {
 			request.pause();
 			writeSafeHttpResponse(
@@ -416,9 +513,19 @@ export class CrispyMcpProtocolServer {
 				);
 				return;
 			}
+			if (taskTurnRoute !== undefined) {
+				this.handleClaudeTaskTurnLifecycle(
+					registration,
+					taskTurnRoute.completionToolName,
+					body.parsedBody,
+					response,
+				);
+				return;
+			}
 			const normalizedBody = normalizeCrispyToolCallArguments(
 				body.parsedBody,
 				registration.agentActivityCompatible,
+				registration.taskLease !== undefined,
 			);
 
 			const nodeHandler = toNodeHandler({
@@ -584,6 +691,152 @@ export class CrispyMcpProtocolServer {
 		}
 	}
 
+	/** Session-bound Task tool을 exact registration lease로 IPC에 넘긴다. */
+	private handleTaskTool(
+		registration: ActiveRegistration,
+		operation: TaskToolOperation,
+		input: unknown,
+	): CallToolResult {
+		const lease = registration.taskLease;
+		if (
+			lease === undefined
+			|| registration.revoked
+			|| this.registration !== registration
+			|| this.lifecycle !== 'running'
+			|| !this.taskToolTransport.isConnected()
+		) {
+			return createTaskToolErrorResult('registration_inactive');
+		}
+		try {
+			const base = {
+				type: 'session.taskToolRequested' as const,
+				sessionId: registration.sessionId,
+				generation: registration.generation,
+				executionId: lease.executionId,
+				workNodeId: lease.workNodeId,
+			};
+			const event = operation === 'complete'
+				? {
+					...base,
+					operation,
+					status: (input as CompleteTaskInput).status,
+					summary: (input as CompleteTaskInput).summary,
+				}
+				: operation === 'scope-request'
+					? {
+						...base,
+						operation,
+						requestId: createTaskScopeRequestId(),
+						access: (input as ScopeRequestInput).access,
+						paths: (input as ScopeRequestInput).paths,
+						reason: (input as ScopeRequestInput).reason,
+					}
+					: {
+						...base,
+						operation,
+						requestId: (input as ScopeResultInput).requestId,
+						result: (input as ScopeResultInput).result,
+					};
+			const parsed = parseTaskToolRequested(event);
+			if (!parsed) {
+				return createTaskToolErrorResult('invalid_input');
+			}
+			this.taskToolTransport.send(parsed, () => undefined);
+			if (parsed.operation === 'complete') {
+				if (registration.pendingTaskScopeRequestId === undefined) {
+					registration.taskCompletionObserved = true;
+				}
+			} else if (parsed.operation === 'scope-request') {
+				registration.pendingTaskScopeRequestId = parsed.requestId;
+			} else if (
+				registration.pendingTaskScopeRequestId === parsed.requestId
+			) {
+				registration.pendingTaskScopeRequestId = undefined;
+			}
+			return createTaskToolSuccessResult(
+				parsed.operation === 'scope-request' ? parsed.requestId : undefined,
+			);
+		} catch {
+			return createTaskToolErrorResult('internal_error');
+		}
+	}
+
+	/** Claude의 provider-native Stop/StopFailure를 Task completion handshake로 변환한다. */
+	private handleClaudeTaskTurnLifecycle(
+		registration: ActiveRegistration,
+		completionToolName: string,
+		body: unknown,
+		response: ServerResponse,
+	): void {
+		const hook = parseClaudeTaskTurnHookInput(body);
+		if (hook === undefined) {
+			writeSafeHttpResponse(response, 400, 'Bad request.');
+			return;
+		}
+		if (
+			registration.revoked
+			|| this.registration !== registration
+			|| this.lifecycle !== 'running'
+			|| registration.taskLease === undefined
+			|| !this.taskTurnLifecycleTransport.isConnected()
+		) {
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+
+		if (registration.taskCompletionObserved) {
+			this.emitTaskTurnLifecycle(registration, 'completion-observed');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+		if (hook.event === 'StopFailure') {
+			this.emitTaskTurnLifecycle(registration, 'provider-failed');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+		if (registration.pendingTaskScopeRequestId !== undefined) {
+			this.emitTaskTurnLifecycle(registration, 'scope-pending');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+		if (registration.claudeTurnReminders >= TASK_TURN_REMINDER_LIMIT) {
+			this.emitTaskTurnLifecycle(registration, 'reminders-exhausted');
+			writeTaskTurnHookResponse(response, {});
+			return;
+		}
+
+		registration.claudeTurnReminders += 1;
+		this.emitTaskTurnLifecycle(registration, 'reminder-injected');
+		writeTaskTurnHookResponse(response, {
+			decision: 'block',
+			reason: createTaskCompletionFollowup(completionToolName),
+		});
+	}
+
+	private emitTaskTurnLifecycle(
+		registration: ActiveRegistration,
+		outcome: TaskTurnLifecycleObserved['outcome'],
+	): void {
+		const lease = registration.taskLease;
+		if (lease === undefined || !this.taskTurnLifecycleTransport.isConnected()) {
+			return;
+		}
+		try {
+			this.taskTurnLifecycleTransport.send(
+				createTaskTurnLifecycleObserved({
+					sessionId: registration.sessionId,
+					generation: registration.generation,
+					executionId: lease.executionId,
+					workNodeId: lease.workNodeId,
+					outcome,
+				}),
+				() => undefined,
+			);
+		} catch {
+			/** Hook 응답은 IPC observer 실패와 독립적으로 bounded하게 끝낸다. */
+		}
+	}
+
 	private async observeMcpResponse(
 		registration: ActiveRegistration,
 		requestBody: unknown,
@@ -695,6 +948,15 @@ function cancelResponseBody(body: ReadableStream<Uint8Array> | null): void {
 	if (body !== null) {
 		void body.cancel().catch(() => undefined);
 	}
+}
+
+function writeTaskTurnHookResponse(
+	response: ServerResponse,
+	payload: Readonly<Record<string, unknown>>,
+): void {
+	writeSafeHttpResponse(response, 200, JSON.stringify(payload), {
+		'Content-Type': 'application/json; charset=utf-8',
+	});
 }
 
 function listenOnLoopback(server: HttpServer): Promise<void> {

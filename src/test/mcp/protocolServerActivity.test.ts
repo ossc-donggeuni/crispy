@@ -15,7 +15,10 @@ import {
 	PATH_MAX_UTF8_BYTES,
 	type AgentActivityRequested,
 } from '../../mcp/agentActivityProtocol';
-import { CRISPY_AGENT_ACTIVITY_INSTRUCTIONS } from '../../mcp/agentActivityInstructions';
+import {
+	CRISPY_AGENT_ACTIVITY_INSTRUCTIONS,
+	createCrispyMcpInstructions,
+} from '../../mcp/agentActivityInstructions';
 import {
 	MCP_AUTHENTICATED_IN_FLIGHT_PER_REGISTRATION,
 	MCP_HTTP_MAX_CONNECTIONS,
@@ -26,12 +29,25 @@ import {
 	CrispyMcpProtocolServer,
 	type AgentActivityIpcTransport,
 	type McpPingObservedEvent,
+	type TaskToolIpcTransport,
+	type TaskTurnLifecycleIpcTransport,
 } from '../../mcp/protocolServer';
+import type {
+	TaskToolLease,
+	TaskToolRequested,
+} from '../../mcp/taskToolProtocol';
 import { createMcpSessionCredentials } from '../../mcp/sessionCredentials';
+import {
+	createClaudeTaskTurnLifecycleUrl,
+	type TaskTurnLifecycleObserved,
+} from '../../mcp/taskTurnLifecycleProtocol';
 import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from '../../mcp/toolServer';
 
 interface ProtocolFixture {
@@ -41,6 +57,8 @@ interface ProtocolFixture {
 	readonly generation: string;
 	readonly sessionId: string;
 	readonly transport: FakeActivityTransport;
+	readonly taskTransport: FakeTaskTransport;
+	readonly taskTurnTransport: FakeTaskTurnTransport;
 	readonly ping: McpPingObservedEvent[];
 }
 
@@ -73,6 +91,42 @@ class FakeActivityTransport implements AgentActivityIpcTransport {
 		this.events.push(event);
 		this.callbacks.push(callback);
 		return this.mode === 'true';
+	}
+}
+
+class FakeTaskTransport implements TaskToolIpcTransport {
+	connected = true;
+	readonly events: TaskToolRequested[] = [];
+
+	isConnected(): boolean {
+		return this.connected;
+	}
+
+	send(
+		event: TaskToolRequested,
+		callback: (error: Error | null) => void,
+	): boolean {
+		this.events.push(event);
+		callback(null);
+		return true;
+	}
+}
+
+class FakeTaskTurnTransport implements TaskTurnLifecycleIpcTransport {
+	connected = true;
+	readonly events: TaskTurnLifecycleObserved[] = [];
+
+	isConnected(): boolean {
+		return this.connected;
+	}
+
+	send(
+		event: TaskTurnLifecycleObserved,
+		callback: (error: Error | null) => void,
+	): boolean {
+		this.events.push(event);
+		callback(null);
+		return true;
 	}
 }
 
@@ -135,6 +189,246 @@ suite('Crispy MCP Agent Activity protocol boundary', () => {
 		assert.deepStrictEqual(Object.keys(fixture.transport.events[1]), [
 			'type', 'sessionId', 'generation', 'operation', 'path', 'targetKind',
 		]);
+	});
+
+	test('Task lease가 있는 authenticated session에만 Task 도구를 노출하고 exact IPC event를 보낸다', async () => {
+		const lease: TaskToolLease = {
+			executionId: 'execution-task-one',
+			workNodeId: 'work-task-one',
+		};
+		const fixture = await startFixture(false, () => 1_000, lease);
+		const listed = await postJson(fixture, toolsListRequest(20));
+		const listResponse = singleResponse(await listed.text());
+		const tools = (listResponse.result as unknown as {
+			readonly tools: ReadonlyArray<{ readonly name: string }>;
+		}).tools;
+		assert.deepStrictEqual(tools.map(({ name }) => name), [
+			CRISPY_PING_TOOL_NAME,
+			CRISPY_TASK_COMPLETE_TOOL_NAME,
+			CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+			CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+		]);
+
+		const requested = await callTool(
+			fixture,
+			21,
+			CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+			{
+				access: 'write',
+				paths: ['/outside/generated.json'],
+				reason: 'Update an external generated manifest.',
+			},
+		);
+		const requestResult = JSON.parse(
+			requested.result?.content?.[0]?.text ?? 'null',
+		) as { readonly requestId?: string };
+		assert.match(requestResult.requestId ?? '', /^scope-/u);
+
+		const result = await callTool(
+			fixture,
+			22,
+			CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
+			{ requestId: requestResult.requestId, result: 'approved' },
+		);
+		const complete = await callTool(
+			fixture,
+			23,
+			CRISPY_TASK_COMPLETE_TOOL_NAME,
+			{ status: 'completed', summary: 'Work completed.' },
+		);
+		assertFixedToolResult(result, { ok: true, accepted: true });
+		assertFixedToolResult(complete, { ok: true, accepted: true });
+		assert.deepStrictEqual(
+			fixture.taskTransport.events.map((event) => ({
+				operation: event.operation,
+				executionId: event.executionId,
+				workNodeId: event.workNodeId,
+				...(event.operation === 'scope-request'
+					? { requestId: event.requestId, paths: event.paths }
+					: event.operation === 'scope-result'
+						? { requestId: event.requestId, result: event.result }
+						: { status: event.status, summary: event.summary }),
+			})),
+			[
+				{
+					operation: 'scope-request',
+					...lease,
+					requestId: requestResult.requestId,
+					paths: ['/outside/generated.json'],
+				},
+				{
+					operation: 'scope-result',
+					...lease,
+					requestId: requestResult.requestId,
+					result: 'approved',
+				},
+				{
+					operation: 'complete',
+					...lease,
+					status: 'completed',
+					summary: 'Work completed.',
+				},
+			],
+		);
+
+		fixture.taskTransport.connected = false;
+		const disconnected = await callTool(
+			fixture,
+			24,
+			CRISPY_TASK_COMPLETE_TOOL_NAME,
+			{ status: 'completed', summary: 'must not be accepted' },
+		);
+		assertFixedToolResult(disconnected, {
+			ok: false,
+			accepted: false,
+			error: 'registration_inactive',
+		});
+		assert.strictEqual(fixture.taskTransport.events.length, 3);
+	});
+
+	test('Task lease initialize instructions exactly match the registered Task tools', async () => {
+		const fixture = await startFixture(false, () => 1_000, {
+			executionId: 'execution-task-instructions',
+			workNodeId: 'work-task-instructions',
+		});
+		const client = new Client(
+			{ name: 'crispy-task-instructions-test', version: '1.0.0' },
+			{ versionNegotiation: { mode: 'auto' } },
+		);
+		const transport = new StreamableHTTPClientTransport(new URL(fixture.url), {
+			requestInit: {
+				headers: { Authorization: `Bearer ${fixture.token}` },
+			},
+		});
+
+		try {
+			await client.connect(transport);
+			assert.strictEqual(
+				client.getInstructions(),
+				createCrispyMcpInstructions(false, true),
+			);
+		} finally {
+			await client.close().catch(() => undefined);
+		}
+	});
+
+	test('Claude Stop hook은 completion 누락만 두 번 후속 지시하고 세 번째에 실패를 알린다', async () => {
+		const fixture = await startFixture(false, () => 1_000, {
+			executionId: 'execution-task-turn',
+			workNodeId: 'work-task-turn',
+		});
+		const completionToolName = 'mcp__crispy_0123456789abcdef01234567__crispy_task_complete';
+		const lifecycleUrl = createClaudeTaskTurnLifecycleUrl(
+			fixture.url,
+			completionToolName,
+		);
+
+		const unauthorized = await fetch(lifecycleUrl, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(stopHookBody(false)),
+		});
+		assert.strictEqual(unauthorized.status, 401);
+
+		for (let index = 0; index < 2; index += 1) {
+			const response = await postTaskTurnHook(
+				fixture,
+				lifecycleUrl,
+				stopHookBody(index > 0),
+			);
+			assert.strictEqual(response.status, 200);
+			const payload = await response.json() as {
+				readonly decision?: string;
+				readonly reason?: string;
+			};
+			assert.strictEqual(payload.decision, 'block');
+			assert.match(
+				payload.reason ?? '',
+				new RegExp(completionToolName, 'u'),
+			);
+		}
+
+		const exhausted = await postTaskTurnHook(
+			fixture,
+			lifecycleUrl,
+			stopHookBody(true),
+		);
+		assert.deepStrictEqual(await exhausted.json(), {});
+		assert.deepStrictEqual(
+			fixture.taskTurnTransport.events.map(({ outcome }) => outcome),
+			['reminder-injected', 'reminder-injected', 'reminders-exhausted'],
+		);
+		for (const event of fixture.taskTurnTransport.events) {
+			assert.strictEqual(event.sessionId, fixture.sessionId);
+			assert.strictEqual(event.executionId, 'execution-task-turn');
+			assert.strictEqual(event.workNodeId, 'work-task-turn');
+		}
+	});
+
+	test('Claude Stop hook은 pending scope와 accepted completion을 재촉하지 않고 StopFailure를 실패 처리한다', async () => {
+		const fixture = await startFixture(false, () => 1_000, {
+			executionId: 'execution-task-turn-state',
+			workNodeId: 'work-task-turn-state',
+		});
+		const lifecycleUrl = createClaudeTaskTurnLifecycleUrl(
+			fixture.url,
+			'mcp__crispy_0123456789abcdef01234567__crispy_task_complete',
+		);
+		const requested = await callTool(
+			fixture,
+			30,
+			CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+			{ access: 'read', paths: ['/outside/readme.md'], reason: 'Need context.' },
+		);
+		const requestId = (JSON.parse(
+			requested.result?.content?.[0]?.text ?? 'null',
+		) as { readonly requestId: string }).requestId;
+
+		assert.deepStrictEqual(await (await postTaskTurnHook(
+			fixture,
+			lifecycleUrl,
+			stopHookBody(false),
+		)).json(), {});
+		await callTool(fixture, 31, CRISPY_TASK_COMPLETE_TOOL_NAME, {
+			status: 'completed',
+			summary: 'Must remain pending.',
+		});
+		assert.deepStrictEqual(await (await postTaskTurnHook(
+			fixture,
+			lifecycleUrl,
+			stopHookBody(false),
+		)).json(), {});
+		await callTool(fixture, 32, CRISPY_TASK_SCOPE_RESULT_TOOL_NAME, {
+			requestId,
+			result: 'approved',
+		});
+		assert.deepStrictEqual(await (await postTaskTurnHook(
+			fixture,
+			lifecycleUrl,
+			{
+				session_id: 'claude-provider-session',
+				hook_event_name: 'StopFailure',
+				error: 'rate_limit',
+			},
+		)).json(), {});
+		await callTool(fixture, 33, CRISPY_TASK_COMPLETE_TOOL_NAME, {
+			status: 'completed',
+			summary: 'Done.',
+		});
+		assert.deepStrictEqual(await (await postTaskTurnHook(
+			fixture,
+			lifecycleUrl,
+			stopHookBody(false),
+		)).json(), {});
+		assert.deepStrictEqual(
+			fixture.taskTurnTransport.events.map(({ outcome }) => outcome),
+			[
+				'scope-pending',
+				'scope-pending',
+				'provider-failed',
+				'completion-observed',
+			],
+		);
 	});
 
 	test('official v2 client receives the qualified server-wide instructions', async () => {
@@ -671,21 +965,30 @@ suite('Crispy MCP Agent Activity protocol boundary', () => {
 async function startFixture(
 	agentActivityCompatible: boolean,
 	clock: () => number = () => 1_000,
+	taskLease?: TaskToolLease,
 ): Promise<ProtocolFixture> {
 	const generation = `generation-${randomBytes(8).toString('hex')}`;
 	const sessionId = `session-${randomBytes(8).toString('hex')}`;
 	const transport = new FakeActivityTransport();
+	const taskTransport = new FakeTaskTransport();
+	const taskTurnTransport = new FakeTaskTurnTransport();
 	const ping: McpPingObservedEvent[] = [];
 	const server = new CrispyMcpProtocolServer({
 		generation,
 		monotonicClock: clock,
 		agentActivityTransport: transport,
+		taskToolTransport: taskTransport,
+		taskTurnLifecycleTransport: taskTurnTransport,
 		onPingObserved: (event) => ping.push(event),
 	});
 	runningServers.add(server);
 	await server.start();
 	const credentials = createMcpSessionCredentials(generation, sessionId);
-	const registration = server.registerSession(credentials, agentActivityCompatible);
+	const registration = server.registerSession(
+		credentials,
+		agentActivityCompatible,
+		taskLease,
+	);
 	return {
 		server,
 		url: registration.url,
@@ -693,6 +996,8 @@ async function startFixture(
 		generation,
 		sessionId,
 		transport,
+		taskTransport,
+		taskTurnTransport,
 		ping,
 	};
 }
@@ -727,6 +1032,30 @@ function postJson(fixture: ProtocolFixture, body: unknown): Promise<Response> {
 		},
 		body: JSON.stringify(body),
 	});
+}
+
+function postTaskTurnHook(
+	fixture: ProtocolFixture,
+	url: string,
+	body: unknown,
+): Promise<Response> {
+	return fetch(url, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${fixture.token}`,
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify(body),
+	});
+}
+
+function stopHookBody(stopHookActive: boolean): Record<string, unknown> {
+	return {
+		session_id: 'claude-provider-session',
+		hook_event_name: 'Stop',
+		stop_hook_active: stopHookActive,
+		last_assistant_message: 'Done.',
+	};
 }
 
 function singleResponse(body: string): JsonRpcResponse {

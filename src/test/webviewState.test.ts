@@ -16,7 +16,10 @@ import {
 } from '../webview/graph/graphState';
 import type { Graph } from '../webview/graph/graphModel';
 import type { GraphViewWorkspaceSnapshot } from '../webview/graph/graphView';
-import { createDefaultTaskBlueprint } from '../task';
+import {
+	createDefaultTaskBlueprint,
+	type TaskExecutionSnapshot,
+} from '../task';
 import type { WorkspaceTaskRecord } from '../task/workspaceTaskState';
 import {
 	WORKSPACE_PERSISTENT_STATE_VERSION,
@@ -563,6 +566,7 @@ suite('Webview State Wiring', () => {
 		const postedMessages: WebviewToExtensionMessage[] = [];
 		const ensuredTabs: string[] = [];
 		const activeTabs: string[] = [];
+		const closedTerminalTabs: string[] = [];
 		const graphUpdates: Graph[] = [];
 		const workspaceUpdates: Array<{
 			readonly graph: Graph;
@@ -575,6 +579,16 @@ suite('Webview State Wiring', () => {
 		const graphEffectClears: Array<{
 			readonly target: GraphNodeEffectTarget;
 			readonly kind?: GraphNodeEffectKind;
+		}> = [];
+		const taskExecutionSnapshots: TaskExecutionSnapshot[] = [];
+		const taskWorkAgentSessionAssignments: Array<{
+			readonly executionId: string;
+			readonly workNodeId: string;
+			readonly sessionId: string;
+		}> = [];
+		const taskAgentSessionEndedNotices: Array<{
+			readonly sessionId: string;
+			readonly sessionTitle: string;
 		}> = [];
 		const agentEffectSets: Array<{
 			readonly target: GraphNodeEffectTarget;
@@ -817,6 +831,19 @@ suite('Webview State Wiring', () => {
 					graphUpdates.push(nextGraph);
 				},
 				updateTasks: () => undefined,
+				applyTaskExecutionSnapshot: (snapshot) => {
+					taskExecutionSnapshots.push(snapshot);
+				},
+				assignTaskWorkAgentSession: (executionId, workNodeId, sessionId) => {
+					taskWorkAgentSessionAssignments.push({
+						executionId,
+						workNodeId,
+						sessionId,
+					});
+				},
+				showTaskAgentSessionEndedNotice: (sessionId, sessionTitle) => {
+					taskAgentSessionEndedNotices.push({ sessionId, sessionTitle });
+				},
 				updateWorkspace: (nextGraph, snapshot) => {
 					workspaceUpdates.push({ graph: nextGraph, snapshot });
 					currentGraphState = {
@@ -939,7 +966,9 @@ suite('Webview State Wiring', () => {
 				activeTabs.push(tabId);
 			},
 
-			closeTab: () => undefined,
+			closeTab: (tabId) => {
+				closedTerminalTabs.push(tabId);
+			},
 
 			resetTab: () => undefined,
 
@@ -1007,6 +1036,15 @@ suite('Webview State Wiring', () => {
 				model,
 				getSnapshot: () => model.getSnapshot(),
 				getAssignmentState: () => undefined,
+				createTaskTab: () => model.createTab({ activate: false }),
+				closeTab(tabId): boolean {
+					if (!model.getSnapshot().tabs.some((tab) => tab.id === tabId)) {
+						return false;
+					}
+					model.closeTab(tabId);
+					callbacks?.onTabClosed?.(tabId);
+					return true;
+				},
 				updateWorkspaceRootCatalog: (catalog) => {
 					agentWorkspaceCatalogUpdates.push(catalog);
 				},
@@ -1522,6 +1560,139 @@ suite('Webview State Wiring', () => {
 				agentActivitySessionClears.at(-1),
 				'session-activity-a',
 			);
+			terminalHostMessages.length = 0;
+
+			const taskExecutionSnapshot: TaskExecutionSnapshot = {
+				executionId: 'execution-webview',
+				taskId: refreshedTask.id,
+				storageRevision: 4,
+				state: 'running',
+				startNodeId: 'task-start-webview',
+				endNodeId: 'task-end-webview',
+				works: [{ nodeId: 'task-work-webview', state: 'starting' }],
+			};
+
+			hostMessageHandler({
+				data: {
+					type: 'task.execution.updated',
+					snapshot: taskExecutionSnapshot,
+				},
+			} as MessageEvent);
+			hostMessageHandler({
+				data: {
+					type: 'task.session.createRequested',
+					executionId: taskExecutionSnapshot.executionId,
+					taskId: taskExecutionSnapshot.taskId,
+					workNodeId: 'task-work-webview',
+					providerId: 'codex',
+					workspaceRootId: 'workspace-root:project:refreshed',
+				},
+			} as MessageEvent);
+			const taskTabId = `${agentTabId}-2`;
+
+			assert.deepStrictEqual(taskExecutionSnapshots, [taskExecutionSnapshot]);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'task.session.create'),
+				[{
+					type: 'task.session.create',
+					executionId: taskExecutionSnapshot.executionId,
+					workNodeId: 'task-work-webview',
+					tabId: taskTabId,
+					switchAttemptId: 3,
+				}],
+			);
+			assert.strictEqual(ensuredTabs.at(-1), taskTabId);
+
+			const taskTerminalStartingMessage = {
+				type: 'terminal.starting',
+				tabId: taskTabId,
+				sessionId: 'session-task-work',
+			} as const;
+
+			hostMessageHandler({ data: taskTerminalStartingMessage } as MessageEvent);
+			assert.deepStrictEqual(taskWorkAgentSessionAssignments, [{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+			}]);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.getSession('session-task-work')
+					?.tabId,
+				taskTabId,
+			);
+			hostMessageHandler({
+				data: {
+					type: 'terminal.started',
+					tabId: taskTabId,
+					sessionId: 'session-task-work',
+				},
+			} as MessageEvent);
+			assert.deepStrictEqual(taskWorkAgentSessionAssignments, [{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+			}, {
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+			}]);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.isRunningSession(
+					'session-task-work',
+				),
+				true,
+			);
+			hostMessageHandler({
+				data: {
+					type: 'terminal.exited',
+					tabId: taskTabId,
+					sessionId: 'session-task-work',
+					exitCode: 0,
+				},
+			} as MessageEvent);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.isRunningSession(
+					'session-task-work',
+				),
+				true,
+				'Task Work의 실제 session presentation은 완료 Activity를 위해 보존한다.',
+			);
+			graphViewInteractions?.onTaskAgentSessionCleanupRequest?.([{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+				tabId: taskTabId,
+			}]);
+			assert.deepStrictEqual(closedTerminalTabs, [taskTabId]);
+			assert.strictEqual(
+				agentPanelModel?.getSnapshot().tabs.some(({ id }) => id === taskTabId),
+				false,
+			);
+			assert.strictEqual(
+				graphAgentSessionPresentationStore?.getSession('session-task-work'),
+				undefined,
+			);
+			assert.deepStrictEqual(
+				postedMessages.filter(({ type }) => type === 'tab.close').at(-1),
+				{ type: 'tab.close', tabId: taskTabId },
+			);
+			assert.deepStrictEqual(taskAgentSessionEndedNotices, [{
+				sessionId: 'session-task-work',
+				sessionTitle: 'New tab',
+			}]);
+			graphViewInteractions?.onTaskAgentSessionCleanupRequest?.([{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+				tabId: taskTabId,
+			}, {
+				executionId: 'foreign-execution',
+				workNodeId: 'foreign-work',
+				sessionId: 'foreign-session',
+				tabId: agentTabId,
+			}]);
+			assert.deepStrictEqual(closedTerminalTabs, [taskTabId]);
+			assert.strictEqual(taskAgentSessionEndedNotices.length, 1);
 			terminalHostMessages.length = 0;
 
 			const terminalStartingMessage = {

@@ -35,6 +35,22 @@ suite('Codex AgentLaunchPlan builder', () => {
 		assert.strictEqual(JSON.stringify(plan).includes(token), false);
 	});
 
+	test('Task-only lease puts its shared lifecycle contract in developer instructions', () => {
+		const plan = buildCodexMcpLaunchPlan({
+			executable: { executable: '/opt/codex', launcherKind: 'direct' },
+			cwd: '/workspace',
+			connection: createConnection(),
+			taskToolCompatible: true,
+			shellEnvironmentPolicyStyle: 'keyed-filters',
+		});
+		const instructions = plan.args.find(
+			(argument) => argument.startsWith('developer_instructions='),
+		) ?? '';
+
+		assert.match(instructions, /REQUIRED FOR CRISPY TASK SCHEDULING/u);
+		assert.match(instructions, /crispy_task_complete/u);
+	});
+
 	test('registered connection만 MCP config와 canonical token overlay를 만든다', () => {
 		const connection = createConnection();
 		const plan = buildCodexMcpLaunchPlan({

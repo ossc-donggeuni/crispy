@@ -1,3 +1,4 @@
+import * as nodePath from 'node:path';
 import type {
 	AgentAssignment,
 	HostToWebviewMessage,
@@ -35,6 +36,18 @@ import type {
 	McpSessionRuntime,
 } from '../../../mcp/sessionRuntime';
 import type { SupervisorRuntimeEvent } from '../../../mcp/adapterSupervisor';
+import { createClaudeMcpQualifiedToolName } from '../../../mcp/claudeConfig';
+import {
+	isValidTaskToolLease,
+	type TaskToolLease,
+	type TaskToolRequested,
+} from '../../../mcp/taskToolProtocol';
+import {
+	CodexTaskTurnNotificationParser,
+	createTaskCompletionFollowup,
+	TASK_TURN_REMINDER_LIMIT,
+} from '../../../mcp/taskTurnLifecycleProtocol';
+import { CRISPY_TASK_COMPLETE_TOOL_NAME } from '../../../mcp/toolNames';
 import {
 	normalizeAgentActivityPath,
 	type AgentActivityRequested,
@@ -91,6 +104,12 @@ import type { ProcessTreeController } from './processTreeController';
 import { createHostProcessTreeController } from './processTreeControllerFactory';
 import { TerminalSessionIdAllocator } from './terminalSessionIdAllocator';
 import { WORKSPACE_ROOT_ID_PREFIX } from '../../../workspace/workspaceRootId';
+import {
+	createClaudeTaskPermissionArgs,
+	createCodexTaskPermissionArgs,
+	createTaskAgentPrompt,
+	type TaskAgentScopePath,
+} from '../../../task/taskAgentLaunchPolicy';
 
 /**
  * `TerminalHost`가 생성한 생명주기 메시지를 Webview 전송 계층에 전달하는 함수다.
@@ -103,7 +122,10 @@ export type TerminalHostMessageEmitter = (
 
 /** TerminalHost가 session별 MCP ownership에 사용하는 Panel-owned supervisor 계약이다. */
 export interface McpSupervisor {
-	prepareSession(sessionId: string): Promise<McpPrepareResult>;
+	prepareSession(
+		sessionId: string,
+		taskLease?: TaskToolLease,
+	): Promise<McpPrepareResult>;
 	getSessionRuntime(sessionId: string): McpSessionRuntime | undefined;
 	retireExactRuntime(runtime: McpSessionRuntime): Promise<void>;
 	dispose(): Promise<void>;
@@ -152,6 +174,52 @@ export type HostAgentActivityRequestHandler = (
 /** Phase 4 cleanup을 runtime/process teardown 전에 삽입하는 synchronous Host seam이다. */
 export type ActivityLeaseRevokedHandler = (lease: ActivityLease) => void;
 
+/** Task-owned Agent tab 하나에 Host가 고정하는 실행 입력이다. */
+export interface TaskTerminalSessionDescriptor extends TaskToolLease {
+	readonly prompt: string;
+	readonly scope: readonly TaskAgentScopePath[];
+}
+
+export interface TaskTurnReminderScheduler {
+	setTimeout(callback: () => void, delayMs: number): object | number;
+	clearTimeout(handle: object | number): void;
+}
+
+/** Task controller가 exact session lifecycle과 MCP 완료 신호를 받는 Host event다. */
+export type TaskTerminalSessionEvent =
+	| {
+		readonly type: 'started';
+		readonly tabId: TabId;
+		readonly sessionId: SessionId;
+		readonly descriptor: TaskTerminalSessionDescriptor;
+	}
+	| {
+		readonly type: 'failed';
+		readonly tabId: TabId;
+		readonly sessionId?: SessionId;
+		readonly descriptor: TaskTerminalSessionDescriptor;
+	}
+	| {
+		readonly type: 'exited';
+		readonly tabId: TabId;
+		readonly sessionId: SessionId;
+		readonly descriptor: TaskTerminalSessionDescriptor;
+		readonly exitCode: number;
+		readonly signal: number | null;
+		readonly expected: boolean;
+	}
+	| {
+		readonly type: 'tool';
+		readonly tabId: TabId;
+		readonly sessionId: SessionId;
+		readonly descriptor: TaskTerminalSessionDescriptor;
+		readonly event: TaskToolRequested;
+	};
+
+export type TaskTerminalSessionEventHandler = (
+	event: TaskTerminalSessionEvent,
+) => void;
+
 interface ActivityLeaseState {
 	readonly session: TerminalSession;
 	readonly assignment: AgentAssignment;
@@ -161,6 +229,7 @@ interface ActivityLeaseState {
 
 /** 실행 중 autonomous CLI도 revoke 뒤 오래 남지 않게 하는 polling 상한이다. */
 export const WORKSPACE_TRUST_MONITOR_INTERVAL_MS = 1000;
+export const TASK_TURN_REMINDER_DELAY_MS = 250;
 
 const systemWorkspaceTrustMonitorScheduler: WorkspaceTrustMonitorScheduler = {
 	setInterval: (callback, intervalMs) => {
@@ -172,6 +241,24 @@ const systemWorkspaceTrustMonitorScheduler: WorkspaceTrustMonitorScheduler = {
 		handle as ReturnType<typeof setInterval>,
 	),
 };
+
+const systemTaskTurnReminderScheduler: TaskTurnReminderScheduler = {
+	setTimeout: (callback, delayMs) => {
+		const handle = setTimeout(callback, delayMs);
+		handle.unref();
+		return handle;
+	},
+	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+interface CodexTaskTurnLifecycleState {
+	readonly parser: CodexTaskTurnNotificationParser;
+	awaitingTurnEnd: boolean;
+	completionObserved: boolean;
+	pendingScopeRequestId: string | undefined;
+	reminderCount: number;
+	reminderTimer: object | number | undefined;
+}
 
 export type CodexMcpLaunchPlanBuilder = (
 	options: BuildCodexMcpLaunchPlanOptions,
@@ -313,6 +400,12 @@ export interface TerminalHostOptions {
 	/** Exact lease revoke 뒤 resource teardown 전에 Phase 4 cleanup을 연결하는 seam이다. */
 	readonly onActivityLeaseRevoked?: ActivityLeaseRevokedHandler;
 
+	/** Task-owned session의 exact lifecycle을 Task execution controller로 넘긴다. */
+	readonly onTaskSessionEvent?: TaskTerminalSessionEventHandler;
+
+	/** Codex turn-end와 completion IPC race의 grace window를 테스트 가능하게 한다. */
+	readonly taskTurnReminderScheduler?: TaskTurnReminderScheduler;
+
 	/** Deterministic allocator test에서만 사용하는 panel-lifetime nonce/counter다. */
 	readonly sessionIdNonce?: string;
 	readonly initialSessionIdCounter?: number;
@@ -352,6 +445,7 @@ const RESTART_FALLBACK_DIMENSIONS = Object.freeze({ cols: 80, rows: 24 });
 const workspaceExecutionErrorCodes = new Set<string>(
 	WORKSPACE_EXECUTION_ERROR_CODES,
 );
+const TASK_TERMINAL_PROMPT_MAX_UTF8_BYTES = 256 * 1024;
 /** 3초 deactivate budget에서 2초 process-tree cleanup을 남기는 PID 준비 상한이다. */
 export const DETACHED_PID_READY_TIMEOUT_MS = 500;
 
@@ -510,6 +604,8 @@ export class TerminalHost {
 		HostAgentActivityRequestHandler | undefined;
 	private readonly onActivityLeaseRevoked:
 		ActivityLeaseRevokedHandler | undefined;
+	private readonly onTaskSessionEvent: TaskTerminalSessionEventHandler | undefined;
+	private readonly taskTurnReminderScheduler: TaskTurnReminderScheduler;
 
 	/** Panel lifetime 전체의 session 생성 경로가 공유하는 단일 allocator다. */
 	private readonly sessionIdAllocator: TerminalSessionIdAllocator;
@@ -517,6 +613,22 @@ export class TerminalHost {
 	/** Gate=true일 때만 존재하고 live session 범위에서 lease epoch/current만 보존한다. */
 	private readonly activityLeaseStateBySession:
 		Map<SessionId, ActivityLeaseState> | undefined;
+
+	/** 일반 Agent tab과 섞이지 않는 Task-owned tab/session의 불변 실행 lease다. */
+	private readonly taskDescriptorByTab = new Map<
+		TabId,
+		TaskTerminalSessionDescriptor
+	>();
+	private readonly taskDescriptorBySession = new Map<
+		SessionId,
+		TaskTerminalSessionDescriptor
+	>();
+	private readonly expectedTaskSessionStops = new Set<SessionId>();
+	private readonly failedTaskTurnSessions = new Set<SessionId>();
+	private readonly codexTaskTurnBySession = new Map<
+		SessionId,
+		CodexTaskTurnLifecycleState
+	>();
 
 	private readonly buildCodexMcpPlan: CodexMcpLaunchPlanBuilder;
 	private readonly buildCodexBarePlan: CodexBareLaunchPlanBuilder;
@@ -617,6 +729,9 @@ export class TerminalHost {
 		this.onActivityLeaseRevoked = this.agentActivityCompatible
 			? options.onActivityLeaseRevoked
 			: undefined;
+		this.onTaskSessionEvent = options.onTaskSessionEvent;
+		this.taskTurnReminderScheduler = options.taskTurnReminderScheduler
+			?? systemTaskTurnReminderScheduler;
 		this.activityLeaseStateBySession = this.agentActivityCompatible
 			? new Map<SessionId, ActivityLeaseState>()
 			: undefined;
@@ -660,6 +775,71 @@ export class TerminalHost {
 	}
 
 	/**
+	 * Task controller가 요청한 ordinary Agent tab을 기존 switch/start transaction으로 연다.
+	 * Task descriptor는 Webview payload에서 받지 않고 Host가 고정하며, 같은 tab은 일반
+	 * reset/reselect/restart 경로로 바뀔 수 없다. 실행 cwd는 임시 디렉터리로 분리하지
+	 * 않고 `workspaceRootId`를 fresh 검증한 Task 소유 Workspace root로 고정한다.
+	 */
+	async createTaskSession(
+		tabId: TabId,
+		providerId: ProviderId,
+		workspaceRootId: WorkspaceRootId,
+		switchAttemptId: SwitchAttemptId,
+		descriptor: TaskTerminalSessionDescriptor,
+	): Promise<void> {
+		if (!this.lifecycleActive) {
+			throw new Error('Task Agent host is inactive.');
+		}
+		if (this.registeredTabs.has(tabId)) {
+			throw new Error('Task Agent tab is already registered.');
+		}
+		if (!isValidTaskTerminalSessionDescriptor(descriptor)) {
+			throw new Error('Task Agent descriptor is invalid.');
+		}
+
+		const frozenDescriptor = Object.freeze({
+			...descriptor,
+			scope: Object.freeze(descriptor.scope.map((entry) => Object.freeze({
+				...entry,
+			}))),
+		});
+		this.registeredTabs.add(tabId);
+		this.taskDescriptorByTab.set(tabId, frozenDescriptor);
+		await this.switchAgentForRequest(
+			tabId,
+			providerId,
+			workspaceRootId,
+			switchAttemptId,
+			frozenDescriptor,
+		);
+	}
+
+	/** Task 완료/reject 수락 뒤 exact process tree를 종료하되 tab 표면은 보존한다. */
+	async stopTaskSession(
+		executionId: string,
+		workNodeId: string,
+	): Promise<boolean> {
+		const entry = [...this.taskDescriptorByTab.entries()].find(([, descriptor]) => (
+			descriptor.executionId === executionId
+			&& descriptor.workNodeId === workNodeId
+		));
+		if (!entry) {
+			return false;
+		}
+		const [tabId] = entry;
+		const session = this.getActiveSession(tabId);
+		if (session === undefined) {
+			this.taskDescriptorByTab.delete(tabId);
+			return true;
+		}
+		this.expectedTaskSessionStops.add(session.sessionId);
+		await this.cleanupSessionProcessTree(session);
+		this.removeSession(session.sessionId);
+		this.taskDescriptorByTab.delete(tabId);
+		return true;
+	}
+
+	/**
 	 * 검증된 `tab.switch`로 현재 활성 탭을 기록한다.
 	 * 등록되지 않은 탭은 활성 탭으로 받아들이지 않으며 세션 상태는 바꾸지 않는다.
 	 *
@@ -695,6 +875,19 @@ export class TerminalHost {
 			return;
 		}
 		const session = this.getActiveSession(tabId);
+		const taskDescriptor = this.taskDescriptorByTab.get(tabId);
+		if (
+			taskDescriptor !== undefined
+			&& session !== undefined
+			&& !this.expectedTaskSessionStops.has(session.sessionId)
+		) {
+			this.emitTaskSessionEvent({
+				type: 'failed',
+				tabId,
+				sessionId: session.sessionId,
+				descriptor: taskDescriptor,
+			});
+		}
 		if (session !== undefined) {
 			void this.cleanupSessionProcessTree(session);
 			this.removeSession(session.sessionId);
@@ -706,6 +899,7 @@ export class TerminalHost {
 		this.resettingTabs.delete(tabId);
 		this.lastDimensionsByTab.delete(tabId);
 		this.activeSessionByTab.delete(tabId);
+		this.taskDescriptorByTab.delete(tabId);
 		if (this.activeTabId === tabId) {
 			this.activeTabId = undefined;
 		}
@@ -728,6 +922,16 @@ export class TerminalHost {
 				null,
 				'session_not_found',
 				START_ERROR_MESSAGES.unknownTab,
+				false,
+			);
+			return;
+		}
+		if (this.taskDescriptorByTab.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				this.getActiveSession(tabId) ?? null,
+				'invalid_session_state',
+				'Task-owned Agent tabs cannot be reset while the Task owns them.',
 				false,
 			);
 			return;
@@ -774,6 +978,22 @@ export class TerminalHost {
 		workspaceRootId: WorkspaceRootId,
 		switchAttemptId: SwitchAttemptId,
 	): Promise<void> {
+		return this.switchAgentForRequest(
+			tabId,
+			providerId,
+			workspaceRootId,
+			switchAttemptId,
+			undefined,
+		);
+	}
+
+	private async switchAgentForRequest(
+		tabId: TabId,
+		providerId: ProviderId,
+		workspaceRootId: WorkspaceRootId,
+		switchAttemptId: SwitchAttemptId,
+		taskDescriptor: TaskTerminalSessionDescriptor | undefined,
+	): Promise<void> {
 		if (!this.lifecycleActive) {
 			return;
 		}
@@ -784,6 +1004,21 @@ export class TerminalHost {
 				'session_not_found',
 				START_ERROR_MESSAGES.unknownTab,
 				false,
+			);
+			return;
+		}
+		const ownedTaskDescriptor = this.taskDescriptorByTab.get(tabId);
+		if (
+			ownedTaskDescriptor !== undefined
+			&& ownedTaskDescriptor !== taskDescriptor
+		) {
+			this.failWithoutTransition(
+				tabId,
+				this.getActiveSession(tabId) ?? null,
+				'invalid_session_state',
+				'Task-owned Agent tabs cannot change provider or Workspace.',
+				false,
+				switchAttemptId,
 			);
 			return;
 		}
@@ -1282,6 +1517,7 @@ export class TerminalHost {
 		if (prepare === undefined) {
 			return Promise.resolve();
 		}
+		const taskDescriptor = this.taskDescriptorBySession.get(session.sessionId);
 		return this.startStructuredMcpProviderSession(session, cols, rows, {
 			providerId: 'codex',
 			prepare,
@@ -1292,8 +1528,21 @@ export class TerminalHost {
 				cwd: preparation.cwd,
 				connection,
 				agentActivityCompatible: this.agentActivityCompatible,
+				taskToolCompatible: taskDescriptor !== undefined,
 				shellEnvironmentPolicyStyle:
 					preparation.shellEnvironmentPolicyStyle!,
+				...(taskDescriptor === undefined
+					? {}
+					: {
+						argsBeforeConfig: createCodexTaskPermissionArgs(
+							taskDescriptor.scope,
+							preparation.executable.executable,
+						),
+						argsAfterConfig: [
+							'--',
+							createTaskAgentPrompt(taskDescriptor.prompt),
+						],
+					}),
 			}),
 			buildBarePlan: (preparation) => this.buildCodexBarePlan({
 				executable: preparation.executable,
@@ -1312,6 +1561,7 @@ export class TerminalHost {
 		if (prepare === undefined) {
 			return Promise.resolve();
 		}
+		const taskDescriptor = this.taskDescriptorBySession.get(session.sessionId);
 		return this.startStructuredMcpProviderSession(session, cols, rows, {
 			providerId: 'claude',
 			prepare,
@@ -1321,6 +1571,28 @@ export class TerminalHost {
 				cwd: preparation.cwd,
 				connection,
 				agentActivityCompatible: this.agentActivityCompatible,
+				taskToolCompatible: taskDescriptor !== undefined,
+				...(taskDescriptor === undefined
+					? {}
+					: {
+						createArgs: (serverName) => (
+							createClaudeTaskPermissionArgs(
+								taskDescriptor.scope,
+								serverName,
+								connection.url,
+							)
+						),
+						createArgsAfterConfig: (serverName) => [
+							'--',
+							createTaskAgentPrompt(
+								taskDescriptor.prompt,
+								createClaudeMcpQualifiedToolName(
+									serverName,
+									CRISPY_TASK_COMPLETE_TOOL_NAME,
+								),
+							),
+						],
+					}),
 			}),
 			buildBarePlan: (preparation) => this.buildClaudeBarePlan({
 				executable: preparation.executable,
@@ -1425,19 +1697,40 @@ export class TerminalHost {
 			}
 			session.markError(preparationResult.error.code);
 			this.updateWorkspaceTrustMonitor();
-			this.publish(preparationResult.error);
+			this.publishTerminalError(session, preparationResult.error);
 			return;
 		}
 
 		const preparation = preparationResult.preparation;
 		const canUseMcp = options.canUseMcp(preparation);
+		const taskOwned = this.taskDescriptorBySession.has(session.sessionId);
+		if (taskOwned && !canUseMcp) {
+			this.failSession(
+				session,
+				'start_failed',
+				'Task Agent requires the authenticated MCP session boundary.',
+				false,
+			);
+			return;
+		}
 		let prepared: McpPrepareResult | undefined;
 		if (canUseMcp) {
 			if (!this.guardWorkspaceTrust(session, assignment)) {
 				return;
 			}
 			try {
-				const pendingPrepare = supervisor.prepareSession(session.sessionId);
+				const taskDescriptor = this.taskDescriptorBySession.get(
+					session.sessionId,
+				);
+				const pendingPrepare = supervisor.prepareSession(
+					session.sessionId,
+					taskDescriptor === undefined
+						? undefined
+						: Object.freeze({
+							executionId: taskDescriptor.executionId,
+							workNodeId: taskDescriptor.workNodeId,
+						}),
+				);
 				preparedRuntime = supervisor.getSessionRuntime(session.sessionId);
 				prepared = await pendingPrepare;
 			} catch {
@@ -1530,6 +1823,15 @@ export class TerminalHost {
 				!this.isCurrentProviderSession(session, options.providerId)
 				|| hasPreparedRuntimeReplacement()
 			) {
+				return;
+			}
+			if (taskOwned) {
+				this.failSession(
+					session,
+					'start_failed',
+					'Task Agent MCP registration failed.',
+					false,
+				);
 				return;
 			}
 			generation = undefined;
@@ -1635,6 +1937,15 @@ export class TerminalHost {
 				!this.isCurrentProviderSession(session, options.providerId)
 				|| hasPreparedRuntimeReplacement()
 			) {
+				return;
+			}
+			if (taskOwned) {
+				this.failSession(
+					session,
+					'start_failed',
+					'Task Agent authenticated launch was rejected.',
+					false,
+				);
 				return;
 			}
 			generation = undefined;
@@ -1779,6 +2090,8 @@ export class TerminalHost {
 			return;
 		}
 		this.observeWorkspaceTrustGranted();
+		// 준비 단계의 cwd나 Task 전용 임시 경로가 아니라, spawn 직전 다시 검증한
+		// assignment root를 사용해야 multi-root에서도 Task 소유 Workspace가 유지된다.
 		const finalRequest = Object.freeze({
 			...request,
 			cwd: launchIdentity.fsPath,
@@ -1888,6 +2201,15 @@ export class TerminalHost {
 			}
 
 			if (authenticatedSpawnFailed) {
+				if (taskOwned) {
+					this.failSession(
+						session,
+						'start_failed',
+						'Task Agent process could not start safely.',
+						false,
+					);
+					return;
+				}
 				let bareRequest: AgentProcessSpawnRequest | undefined;
 				try {
 					const barePlan = await options.buildBarePlan(preparation);
@@ -2065,6 +2387,16 @@ export class TerminalHost {
 			tabId: session.tabId,
 			sessionId: session.sessionId,
 		});
+		const taskDescriptor = this.taskDescriptorBySession.get(session.sessionId);
+		if (taskDescriptor !== undefined) {
+			this.getOrCreateCodexTaskTurnState(session);
+			this.emitTaskSessionEvent({
+				type: 'started',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				descriptor: taskDescriptor,
+			});
+		}
 		this.publishCurrentMcpStatus(session);
 		this.runProviderAutoStart(session);
 	}
@@ -2126,6 +2458,7 @@ export class TerminalHost {
 		if (claudeStartup !== undefined) {
 			claudeStartup.interactiveInputObserved = true;
 		}
+		this.markCodexTaskTurnStarted(session.sessionId);
 
 		this.performPtyOperation(
 			session,
@@ -2178,6 +2511,16 @@ export class TerminalHost {
 	 */
 	async restartSession(tabId: TabId, sessionId: SessionId): Promise<void> {
 		if (!this.lifecycleActive) {
+			return;
+		}
+		if (this.taskDescriptorByTab.has(tabId)) {
+			this.failWithoutTransition(
+				tabId,
+				this.sessionsById.get(sessionId) ?? null,
+				'invalid_session_state',
+				'Task-owned Agent tabs cannot be restarted.',
+				false,
+			);
 			return;
 		}
 		const session = this.sessionsById.get(sessionId);
@@ -2285,6 +2628,10 @@ export class TerminalHost {
 	 * 같은 탭의 동시 요청은 최초 transaction Promise를 공유하며 다른 탭과는 독립적이다.
 	 */
 	restartMcpSession(tabId: TabId, sessionId: SessionId): Promise<void> {
+		if (this.taskDescriptorByTab.has(tabId)) {
+			this.rejectMcpRestartForInvalidState(tabId, sessionId);
+			return Promise.resolve();
+		}
 		const existing = this.mcpRestartByTab.get(tabId);
 		if (existing !== undefined) {
 			if (existing.sessionId !== sessionId) {
@@ -2506,6 +2853,10 @@ export class TerminalHost {
 		if (assignment !== undefined) {
 			this.assignmentBySession.set(generatedSessionId, assignment);
 		}
+		const taskDescriptor = this.taskDescriptorByTab.get(tabId);
+		if (taskDescriptor !== undefined) {
+			this.taskDescriptorBySession.set(generatedSessionId, taskDescriptor);
+		}
 		return session;
 	}
 
@@ -2577,6 +2928,14 @@ export class TerminalHost {
 		this.claudeStartupBySession.clear();
 		this.mcpStatusBySession.clear();
 		this.mcpRestartByTab.clear();
+		this.taskDescriptorByTab.clear();
+		this.taskDescriptorBySession.clear();
+		this.expectedTaskSessionStops.clear();
+		for (const state of this.codexTaskTurnBySession.values()) {
+			this.cancelCodexTaskTurnReminder(state);
+		}
+		this.codexTaskTurnBySession.clear();
+		this.failedTaskTurnSessions.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.assignmentByTab.clear();
@@ -2764,6 +3123,14 @@ export class TerminalHost {
 		this.claudeStartupBySession.clear();
 		this.mcpStatusBySession.clear();
 		this.mcpRestartByTab.clear();
+		this.taskDescriptorByTab.clear();
+		this.taskDescriptorBySession.clear();
+		this.expectedTaskSessionStops.clear();
+		for (const state of this.codexTaskTurnBySession.values()) {
+			this.cancelCodexTaskTurnReminder(state);
+		}
+		this.codexTaskTurnBySession.clear();
+		this.failedTaskTurnSessions.clear();
 		this.lastDimensionsByTab.clear();
 		this.registeredTabs.clear();
 		this.assignmentByTab.clear();
@@ -2794,6 +3161,7 @@ export class TerminalHost {
 		) {
 			return;
 		}
+		this.observeCodexTaskTurnNotifications(session, data);
 		this.appendClaudeStartupOutput(session.sessionId, data);
 
 		this.publish({
@@ -2801,6 +3169,151 @@ export class TerminalHost {
 			tabId: session.tabId,
 			sessionId: session.sessionId,
 			data,
+		});
+	}
+
+	private observeCodexTaskTurnNotifications(
+		session: TerminalSession,
+		data: string,
+	): void {
+		const state = this.getOrCreateCodexTaskTurnState(session);
+		if (state === undefined) {
+			return;
+		}
+		const count = state.parser.push(data);
+		for (let index = 0; index < count; index += 1) {
+			this.handleCodexTaskTurnEnded(session, state);
+		}
+	}
+
+	private getOrCreateCodexTaskTurnState(
+		session: TerminalSession,
+	): CodexTaskTurnLifecycleState | undefined {
+		const current = this.codexTaskTurnBySession.get(session.sessionId);
+		if (current !== undefined) {
+			return current;
+		}
+		if (
+			session.state.kind !== 'running'
+			|| this.taskDescriptorBySession.get(session.sessionId) === undefined
+			|| this.assignmentBySession.get(session.sessionId)?.providerId !== 'codex'
+		) {
+			return undefined;
+		}
+		const created: CodexTaskTurnLifecycleState = {
+			parser: new CodexTaskTurnNotificationParser(),
+			awaitingTurnEnd: true,
+			completionObserved: false,
+			pendingScopeRequestId: undefined,
+			reminderCount: 0,
+			reminderTimer: undefined,
+		};
+		this.codexTaskTurnBySession.set(session.sessionId, created);
+		return created;
+	}
+
+	private handleCodexTaskTurnEnded(
+		session: TerminalSession,
+		state: CodexTaskTurnLifecycleState,
+	): void {
+		if (
+			!state.awaitingTurnEnd
+			|| state.completionObserved
+			|| this.failedTaskTurnSessions.has(session.sessionId)
+			|| this.codexTaskTurnBySession.get(session.sessionId) !== state
+		) {
+			return;
+		}
+		state.awaitingTurnEnd = false;
+		if (state.pendingScopeRequestId !== undefined) {
+			return;
+		}
+		this.cancelCodexTaskTurnReminder(state);
+		state.reminderTimer = this.taskTurnReminderScheduler.setTimeout(() => {
+			state.reminderTimer = undefined;
+			const descriptor = this.taskDescriptorBySession.get(session.sessionId);
+			const assignment = this.assignmentBySession.get(session.sessionId);
+			if (
+				descriptor === undefined
+				|| assignment?.providerId !== 'codex'
+				|| !this.isCurrentSession(session)
+				|| session.state.kind !== 'running'
+				|| this.codexTaskTurnBySession.get(session.sessionId) !== state
+				|| state.completionObserved
+				|| state.pendingScopeRequestId !== undefined
+				|| this.failedTaskTurnSessions.has(session.sessionId)
+			) {
+				return;
+			}
+			if (!this.guardWorkspaceTrust(session, assignment)) {
+				return;
+			}
+			if (state.reminderCount >= TASK_TURN_REMINDER_LIMIT) {
+				this.failTaskTurnSession(session, descriptor);
+				return;
+			}
+
+			state.reminderCount += 1;
+			state.awaitingTurnEnd = true;
+			try {
+				session.writeInput(
+					`${createTaskCompletionFollowup(CRISPY_TASK_COMPLETE_TOOL_NAME)}\r`,
+				);
+			} catch {
+				this.failTaskTurnSession(session, descriptor);
+			}
+		}, TASK_TURN_REMINDER_DELAY_MS);
+	}
+
+	private markCodexTaskTurnStarted(sessionId: SessionId): void {
+		const state = this.codexTaskTurnBySession.get(sessionId);
+		if (
+			state === undefined
+			|| state.completionObserved
+			|| this.failedTaskTurnSessions.has(sessionId)
+		) {
+			return;
+		}
+		this.cancelCodexTaskTurnReminder(state);
+		state.awaitingTurnEnd = true;
+	}
+
+	private cancelCodexTaskTurnReminder(state: CodexTaskTurnLifecycleState): void {
+		if (state.reminderTimer === undefined) {
+			return;
+		}
+		this.taskTurnReminderScheduler.clearTimeout(state.reminderTimer);
+		state.reminderTimer = undefined;
+	}
+
+	private clearTaskTurnLifecycleSession(sessionId: SessionId): void {
+		const state = this.codexTaskTurnBySession.get(sessionId);
+		if (state !== undefined) {
+			this.cancelCodexTaskTurnReminder(state);
+			state.parser.reset();
+			this.codexTaskTurnBySession.delete(sessionId);
+		}
+		this.failedTaskTurnSessions.delete(sessionId);
+	}
+
+	private failTaskTurnSession(
+		session: TerminalSession,
+		descriptor: TaskTerminalSessionDescriptor,
+	): void {
+		if (this.failedTaskTurnSessions.has(session.sessionId)) {
+			return;
+		}
+		this.failedTaskTurnSessions.add(session.sessionId);
+		const state = this.codexTaskTurnBySession.get(session.sessionId);
+		if (state !== undefined) {
+			this.cancelCodexTaskTurnReminder(state);
+			state.awaitingTurnEnd = false;
+		}
+		this.emitTaskSessionEvent({
+			type: 'failed',
+			tabId: session.tabId,
+			sessionId: session.sessionId,
+			descriptor,
 		});
 	}
 
@@ -2820,11 +3333,12 @@ export class TerminalHost {
 		const authenticatedRuntime = this.mcpRuntimeBySession.get(
 			session.sessionId,
 		)?.runtime;
+		this.clearTaskTurnLifecycleSession(session.sessionId);
 		this.revokeExactActivityLease(session, authenticatedRuntime);
-		const claudeFallback = this.getClaudeStartupFallback(
-			session,
-			event,
-		);
+		const taskDescriptor = this.taskDescriptorBySession.get(session.sessionId);
+		const claudeFallback = taskDescriptor === undefined
+			? this.getClaudeStartupFallback(session, event)
+			: undefined;
 		session.markExited(event.exitCode, signal);
 		this.updateWorkspaceTrustMonitor();
 		if (claudeFallback !== undefined && authenticatedRuntime !== undefined) {
@@ -2847,6 +3361,17 @@ export class TerminalHost {
 		this.clearMcpStatus(session);
 		void this.cleanupMcpSession(session.sessionId);
 		this.publishTerminalExited(session, event);
+		if (taskDescriptor !== undefined) {
+			this.emitTaskSessionEvent({
+				type: 'exited',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				descriptor: taskDescriptor,
+				exitCode: event.exitCode,
+				signal,
+				expected: this.expectedTaskSessionStops.has(session.sessionId),
+			});
+		}
 	}
 
 	/** Captured PTY exit payload를 credential-free public message로 한 번 전달한다. */
@@ -3469,6 +3994,61 @@ export class TerminalHost {
 			this.handleAgentActivityRequested(sourceRuntime, event);
 			return;
 		}
+		if (event.type === 'session.taskTurnLifecycleObserved') {
+			const descriptor = this.taskDescriptorBySession.get(session.sessionId);
+			if (
+				ownership.providerId !== event.providerId
+				|| descriptor === undefined
+				|| descriptor !== this.taskDescriptorByTab.get(session.tabId)
+				|| descriptor.executionId !== event.executionId
+				|| descriptor.workNodeId !== event.workNodeId
+				|| !this.guardWorkspaceTrust(session, assignment)
+			) {
+				return;
+			}
+			if (
+				event.outcome === 'reminders-exhausted'
+				|| event.outcome === 'provider-failed'
+			) {
+				this.failTaskTurnSession(session, descriptor);
+			}
+			return;
+		}
+		if (event.type === 'session.taskToolRequested') {
+			const descriptor = this.taskDescriptorBySession.get(session.sessionId);
+			if (
+				descriptor === undefined
+				|| descriptor !== this.taskDescriptorByTab.get(session.tabId)
+				|| descriptor.executionId !== event.executionId
+				|| descriptor.workNodeId !== event.workNodeId
+			) {
+				return;
+			}
+			if (!this.guardWorkspaceTrust(session, assignment)) {
+				return;
+			}
+			const turnState = this.codexTaskTurnBySession.get(session.sessionId);
+			if (turnState !== undefined) {
+				if (event.operation === 'complete') {
+					if (turnState.pendingScopeRequestId === undefined) {
+						turnState.completionObserved = true;
+						this.cancelCodexTaskTurnReminder(turnState);
+					}
+				} else if (event.operation === 'scope-request') {
+					turnState.pendingScopeRequestId = event.requestId;
+				} else if (turnState.pendingScopeRequestId === event.requestId) {
+					turnState.pendingScopeRequestId = undefined;
+				}
+			}
+			this.emitTaskSessionEvent({
+				type: 'tool',
+				tabId: session.tabId,
+				sessionId: session.sessionId,
+				descriptor,
+				event,
+			});
+			return;
+		}
 		if (!this.guardWorkspaceTrust(session, assignment)) {
 			return;
 		}
@@ -3680,6 +4260,9 @@ export class TerminalHost {
 		this.clearMcpStatus(session);
 		this.sessionsById.delete(sessionId);
 		this.assignmentBySession.delete(sessionId);
+		this.taskDescriptorBySession.delete(sessionId);
+		this.expectedTaskSessionStops.delete(sessionId);
+		this.clearTaskTurnLifecycleSession(sessionId);
 		this.workspaceTrustFailedSessions.delete(sessionId);
 		void this.cancelSessionPreparation(sessionId);
 		this.providerAutoRunInputBySession.delete(sessionId);
@@ -4101,6 +4684,14 @@ export class TerminalHost {
 		}
 	}
 
+	private emitTaskSessionEvent(event: TaskTerminalSessionEvent): void {
+		try {
+			this.onTaskSessionEvent?.(Object.freeze(event));
+		} catch {
+			/** Task controller 실패는 TerminalHost resource lifecycle을 변경하지 않는다. */
+		}
+	}
+
 	/**
 	 * 시작 중인 세션을 안전한 오류 상태로 전환하고 고정 프로토콜 메시지를 만든다.
 	 *
@@ -4228,7 +4819,7 @@ export class TerminalHost {
 			return;
 		}
 		this.updateWorkspaceTrustMonitor();
-		this.publish(mapWorkspaceFailureToTerminalError(
+		this.publishTerminalError(session, mapWorkspaceFailureToTerminalError(
 			failure,
 			session.tabId,
 			session.sessionId,
@@ -4266,6 +4857,56 @@ export class TerminalHost {
 			canRestart,
 			...(switchAttemptId === undefined ? {} : { switchAttemptId }),
 		} as const;
-		this.publish(error);
+		this.publishTerminalError(session, error);
 	}
+
+	/**
+	 * Task-owned session 오류는 일반 탭의 수동 restart 계약으로 노출하지 않고 exact Work
+	 * 실패 이벤트로 변환한다. Task controller가 소유 process와 descriptor를 정리하므로
+	 * provider 탐색/호환성/Workspace 준비 단계의 오류도 stranded Task tab을 남기지 않는다.
+	 */
+	private publishTerminalError(
+		session: TerminalSession | null,
+		error: Extract<HostToWebviewMessage, { type: 'terminal.error' }>,
+	): void {
+		const taskDescriptor = this.taskDescriptorByTab.get(error.tabId);
+		this.publish(
+			taskDescriptor !== undefined && error.canRestart
+				? Object.freeze({ ...error, canRestart: false })
+				: error,
+		);
+		if (
+			taskDescriptor !== undefined
+			&& (session === null || session.state.kind === 'error')
+		) {
+			this.emitTaskSessionEvent({
+				type: 'failed',
+				tabId: error.tabId,
+				...(session === null ? {} : { sessionId: session.sessionId }),
+				descriptor: taskDescriptor,
+			});
+		}
+	}
+}
+
+function isValidTaskTerminalSessionDescriptor(
+	value: TaskTerminalSessionDescriptor,
+): boolean {
+	return isValidTaskToolLease({
+		executionId: value.executionId,
+		workNodeId: value.workNodeId,
+	})
+		&& typeof value.prompt === 'string'
+		&& value.prompt.trim().length > 0
+		&& Buffer.byteLength(value.prompt, 'utf8')
+			<= TASK_TERMINAL_PROMPT_MAX_UTF8_BYTES
+		&& Array.isArray(value.scope)
+		&& value.scope.length <= 256
+		&& new Set(value.scope.map(({ path }) => path)).size === value.scope.length
+		&& value.scope.every((target) => (
+			nodePath.isAbsolute(target.path)
+			&& !target.path.includes('\0')
+			&& (target.kind === 'file' || target.kind === 'folder')
+			&& (target.access === 'read' || target.access === 'read-write')
+		));
 }

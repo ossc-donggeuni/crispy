@@ -6,10 +6,15 @@ import {
 	CRISPY_CLEAR_AGENT_ACTIVITY_TOOL_NAME,
 	CRISPY_PING_TOOL_NAME,
 	CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
+	CRISPY_TASK_COMPLETE_TOOL_NAME,
+	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
+	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 } from './toolNames';
 
 export const CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER =
 	'[REQUIRED FOR USER-VISIBLE GRAPH]';
+export const CRISPY_TASK_TOOL_REQUIRED_MARKER =
+	'[REQUIRED FOR CRISPY TASK SCHEDULING]';
 
 /** Codex keeps the first 512 characters available while deciding tool use. */
 const CRISPY_AGENT_ACTIVITY_CRITICAL_INSTRUCTIONS =
@@ -21,6 +26,19 @@ export const CRISPY_PING_ONLY_INSTRUCTIONS = [
 	`The Crispy MCP server exposes only ${CRISPY_PING_TOOL_NAME} for this Host.`,
 	`Use ${CRISPY_PING_TOOL_NAME} only for an explicit startup, restart, or reachability diagnostic; do not call it during normal work.`,
 	'The legacy mode value in its result applies only to that ping compatibility response and does not characterize the whole MCP server.',
+].join(' ');
+
+/**
+ * Host-owned workflow for an Agent tab launched by one Task Work node. Keep the
+ * terminal signal near the front so providers can select it before finalizing.
+ */
+export const CRISPY_TASK_TOOL_INSTRUCTIONS = [
+	`${CRISPY_TASK_TOOL_REQUIRED_MARKER} This Agent tab is running one Host-assigned Crispy Task Work. When ${CRISPY_TASK_COMPLETE_TOOL_NAME}, ${CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME}, and ${CRISPY_TASK_SCOPE_RESULT_TOOL_NAME} are available, use them as the lifecycle protocol for that Work.`,
+	`At a terminal outcome, call ${CRISPY_TASK_COMPLETE_TOOL_NAME} exactly once: completed only after successful work and verification, or rejected for an intentional scope or user-denial outcome. Include a concise summary. A prose response alone does not notify the Host scheduler.`,
+	`Make ${CRISPY_TASK_COMPLETE_TOOL_NAME} the final Tool call after any required Activity cleanup because an accepted call ends the Task-owned Agent process. Do not call it for a generic Tool or execution error that may still be recoverable.`,
+	`Use only the reference and work areas assigned in the Task prompt: reference areas are read-only, and only work areas are writable. Before any access outside those areas, call ${CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME} with the exact paths and required access, and retain its requestId.`,
+	`The scope request Tool does not grant access. Attempt the exact access so the provider can show its normal permission UI in this Agent tab, then immediately call ${CRISPY_TASK_SCOPE_RESULT_TOOL_NAME} with the retained requestId and the user's approved or rejected decision before continuing. A rejected decision is a rejected terminal outcome.`,
+	`Use ${CRISPY_PING_TOOL_NAME} only for explicit startup, restart, or connection diagnostics, never as a routine preflight. Never supply or select a root, session, URI, token, runtime, lease, execution, Work node, or internal identity.`
 ].join(' ');
 
 /**
@@ -46,7 +64,13 @@ export const CRISPY_AGENT_ACTIVITY_INSTRUCTIONS = [
 /** Server-wide MCP instructions are selected only from the Host-owned capability. */
 export function createCrispyMcpInstructions(
 	agentActivityCompatible: boolean,
+	taskToolCompatible = false,
 ): string {
+	if (taskToolCompatible) {
+		return agentActivityCompatible
+			? `${CRISPY_TASK_TOOL_INSTRUCTIONS} ${CRISPY_AGENT_ACTIVITY_INSTRUCTIONS}`
+			: CRISPY_TASK_TOOL_INSTRUCTIONS;
+	}
 	return agentActivityCompatible
 		? CRISPY_AGENT_ACTIVITY_INSTRUCTIONS
 		: CRISPY_PING_ONLY_INSTRUCTIONS;
