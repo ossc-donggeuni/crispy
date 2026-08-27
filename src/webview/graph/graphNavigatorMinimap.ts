@@ -1,11 +1,27 @@
+import type { GraphNodeEffectTarget } from '../../messages';
+import {
+	getAgentActivityBindingBlockHeight,
+} from './agentActivityBindings';
 import type { GraphCamera } from './graphCamera';
 import type { GraphVisibleArea } from './graphVisibleArea';
 import {
+	GRAPH_FILE_GROUP_PADDING,
+	GRAPH_FILE_GROUP_ROW_HEIGHT,
+	getGraphLayoutRootId,
 	resolveGraphLayoutNodePosition,
 	type GraphLayout,
 	type GraphLayoutNode,
 	type GraphLayoutPosition,
 } from './graphLayout';
+import {
+	getGraphFilePresentationTarget,
+	getGraphLayoutNodePresentationTarget,
+} from './graphPresentationTarget';
+import { isDetachedRootId } from './graphRootPromotion';
+import type {
+	TaskGraphLayout,
+	TaskLayoutNode,
+} from '../task/taskLayout';
 
 /** Minimap이 포함할 Graph World의 축 정렬 Bounds다. */
 export interface GraphBounds {
@@ -45,11 +61,20 @@ export interface MinimapProjection {
 /** Minimap Rect로 표현할 Layout Node geometry다. */
 export interface MinimapNodeGeometry extends GraphBounds {
 	readonly id: string;
+	readonly renderKey: string;
+	readonly sourceKind: 'graph-node' | 'graph-file-row' | 'task-node';
+	readonly presentationTarget?: Readonly<GraphNodeEffectTarget>;
+	readonly backlink?: true;
+	readonly detachedRoot?: true;
+	readonly manualUnarranged?: true;
+	readonly taskKind?: TaskLayoutNode['kind'];
 }
 
 /** Minimap Line으로 표현할 Layout Edge geometry다. */
 export interface MinimapEdgeGeometry {
 	readonly id: string;
+	readonly renderKey: string;
+	readonly sourceKind: 'graph-edge' | 'task-edge';
 	readonly source: MinimapPoint;
 	readonly target: MinimapPoint;
 }
@@ -353,13 +378,11 @@ export function createMinimapGraphGeometry(
 	nodePositions: Readonly<Record<string, GraphLayoutPosition | undefined>>,
 	size: MinimapSize,
 	padding = GRAPH_NAVIGATOR_MINIMAP_PADDING,
+	taskLayout?: TaskGraphLayout,
 ): MinimapGraphGeometry | undefined {
 	const visibleNodes = layout.nodes.filter((node) => node.hidden !== true);
 	const positionedNodes = resolvePositionedNodes(visibleNodes, nodePositions);
-	const bounds = calculateGraphBounds(
-		positionedNodes.map(({ node }) => node),
-		nodePositions,
-	);
+	const bounds = calculateMinimapContentBounds(positionedNodes, taskLayout);
 	const projection = bounds
 		? createMinimapProjection(bounds, size, padding)
 		: undefined;
@@ -371,17 +394,70 @@ export function createMinimapGraphGeometry(
 	const positionsById = new Map(
 		positionedNodes.map(({ node, position }) => [node.id, { node, position }]),
 	);
-	const nodes = positionedNodes.map(({ node, position }) => {
-		const topLeft = projection.worldToMinimap(position);
+	const manualUnarrangedNodeIds = layout.manualUnarrangedNodeIds
+		?? layout.unarrangedNodeIds;
+	const graphNodes = positionedNodes.flatMap(({ node, position }) => {
+		const result: MinimapNodeGeometry[] = [projectNodeBounds(
+			{
+				id: node.id,
+				renderKey: `graph-node:${node.id}`,
+				sourceKind: 'graph-node',
+				position,
+				width: node.width,
+				height: node.height,
+				presentationTarget: getGraphLayoutNodePresentationTarget(node),
+				...(isGraphNodeBacklink(node) ? { backlink: true } : {}),
+				...(isDetachedGraphRoot(node, layout.rootNodeIds)
+					? { detachedRoot: true }
+					: {}),
+				...(manualUnarrangedNodeIds.has(node.id)
+					? { manualUnarranged: true }
+					: {}),
+			},
+			projection,
+		)];
 
-		return {
-			id: node.id,
-			x: topLeft.x,
-			y: topLeft.y,
-			width: node.width * projection.scale,
-			height: node.height * projection.scale,
-		};
+		if (node.kind !== 'file-group' || node.presentation !== 'grouped') {
+			return result;
+		}
+
+		let rowTop = position.y + GRAPH_FILE_GROUP_PADDING;
+		const visibleChildCount = node.visibleChildCount ?? node.children.length;
+		for (const file of node.children.slice(0, visibleChildCount)) {
+			if (file.hidden !== true) {
+				result.push(projectNodeBounds({
+					id: file.id,
+					renderKey: `graph-file-row:${node.id}:${file.id}`,
+					sourceKind: 'graph-file-row',
+					position: {
+						x: position.x + GRAPH_FILE_GROUP_PADDING,
+						y: rowTop,
+					},
+					width: Math.max(0, node.width - GRAPH_FILE_GROUP_PADDING * 2),
+					height: GRAPH_FILE_GROUP_ROW_HEIGHT,
+					presentationTarget: getGraphFilePresentationTarget(file, node.id),
+					...(file.presentation === 'backlink' ? { backlink: true } : {}),
+				}, projection));
+			}
+
+			rowTop += GRAPH_FILE_GROUP_ROW_HEIGHT
+				+ getAgentActivityBindingBlockHeight(
+					file.agentActivityBindingCount ?? 0,
+				);
+		}
+
+		return result;
 	});
+	const taskNodes = (taskLayout?.nodes ?? []).map((node) => projectNodeBounds({
+		id: node.id,
+		renderKey: `task-node:${node.taskId}:${node.id}`,
+		sourceKind: 'task-node',
+		position: node.position,
+		width: node.width,
+		height: node.height,
+		presentationTarget: { nodeId: node.id },
+		taskKind: node.kind,
+	}, projection));
 	const edges = layout.edges.flatMap((edge): MinimapEdgeGeometry[] => {
 		if (edge.hidden === true) {
 			return [];
@@ -396,6 +472,8 @@ export function createMinimapGraphGeometry(
 
 		return [{
 			id: edge.id,
+			renderKey: `graph-edge:${edge.id}`,
+			sourceKind: 'graph-edge',
 			source: projection.worldToMinimap({
 				x: source.position.x + source.node.width,
 				y: source.position.y + source.node.height / 2,
@@ -405,9 +483,120 @@ export function createMinimapGraphGeometry(
 				y: target.position.y + target.node.height / 2,
 			}),
 		}];
-	});
+	}).concat((taskLayout?.edges ?? []).map((edge): MinimapEdgeGeometry => ({
+		id: edge.id,
+		renderKey: `task-edge:${edge.taskId}:${edge.id}`,
+		sourceKind: 'task-edge',
+		source: projection.worldToMinimap(edge.geometry.start),
+		target: projection.worldToMinimap(edge.geometry.end),
+	})));
 
-	return { bounds, projection, nodes, edges };
+	return { bounds, projection, nodes: [...graphNodes, ...taskNodes], edges };
+}
+
+interface WorldNodeBounds {
+	readonly id: string;
+	readonly renderKey: string;
+	readonly sourceKind: MinimapNodeGeometry['sourceKind'];
+	readonly position: MinimapPoint;
+	readonly width: number;
+	readonly height: number;
+	readonly presentationTarget?: Readonly<GraphNodeEffectTarget>;
+	readonly backlink?: true;
+	readonly detachedRoot?: true;
+	readonly manualUnarranged?: true;
+	readonly taskKind?: TaskLayoutNode['kind'];
+}
+
+function projectNodeBounds(
+	node: WorldNodeBounds,
+	projection: MinimapProjection,
+): MinimapNodeGeometry {
+	const topLeft = projection.worldToMinimap(node.position);
+
+	return {
+		id: node.id,
+		renderKey: node.renderKey,
+		sourceKind: node.sourceKind,
+		x: topLeft.x,
+		y: topLeft.y,
+		width: node.width * projection.scale,
+		height: node.height * projection.scale,
+		...(node.presentationTarget
+			? { presentationTarget: node.presentationTarget }
+			: {}),
+		...(node.backlink ? { backlink: true } : {}),
+		...(node.detachedRoot ? { detachedRoot: true } : {}),
+		...(node.manualUnarranged ? { manualUnarranged: true } : {}),
+		...(node.taskKind ? { taskKind: node.taskKind } : {}),
+	};
+}
+
+/** Graph 표시 footprint와 Task Scope footprint를 하나의 World bounds로 합친다. */
+function calculateMinimapContentBounds(
+	graphNodes: readonly PositionedNode[],
+	taskLayout?: TaskGraphLayout,
+): GraphBounds | undefined {
+	const contentBounds: GraphBounds[] = graphNodes.map(({ node, position }) => ({
+		x: position.x,
+		y: position.y,
+		width: node.width,
+		height: Math.max(
+			node.height,
+			node.renderedHeight ?? 0,
+			node.graphContentHeight ?? 0,
+		),
+	}));
+
+	for (const node of taskLayout?.nodes ?? []) {
+		const bounds = 'visualBounds' in node
+			? node.visualBounds
+			: { position: node.position, width: node.width, height: node.height };
+
+		contentBounds.push({
+			x: bounds.position.x,
+			y: bounds.position.y,
+			width: bounds.width,
+			height: bounds.height,
+		});
+	}
+
+	if (contentBounds.length === 0) {
+		return undefined;
+	}
+
+	const left = Math.min(...contentBounds.map((bounds) => bounds.x));
+	const top = Math.min(...contentBounds.map((bounds) => bounds.y));
+	const right = Math.max(...contentBounds.map((bounds) => (
+		bounds.x + bounds.width
+	)));
+	const bottom = Math.max(...contentBounds.map((bounds) => (
+		bounds.y + bounds.height
+	)));
+
+	return areFiniteNumbers(left, top, right, bottom)
+		? { x: left, y: top, width: right - left, height: bottom - top }
+		: undefined;
+}
+
+function isGraphNodeBacklink(node: GraphLayoutNode): boolean {
+	return node.kind === 'folder-backlink'
+		|| (
+			node.kind === 'file-group'
+			&& node.presentation === 'standalone'
+			&& node.children[0]?.presentation === 'backlink'
+		);
+}
+
+function isDetachedGraphRoot(
+	node: GraphLayoutNode,
+	rootNodeIds: ReadonlySet<string>,
+): boolean {
+	const rootId = getGraphLayoutRootId(node.id);
+
+	return rootNodeIds.has(node.id)
+		&& rootId !== undefined
+		&& isDetachedRootId(rootId);
 }
 
 /** 유효한 좌표와 크기를 가진 Layout Node만 Minimap 계산에 포함한다. */

@@ -2354,6 +2354,7 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 
 .graph-navigator-minimap-edge-layer,
 .graph-navigator-minimap-node-layer,
+.graph-navigator-minimap-status-layer,
 .graph-navigator-minimap-viewport-layer {
 	pointer-events: none;
 }
@@ -2365,9 +2366,54 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 	opacity: 0.25;
 }
 
+.graph-navigator-minimap-edge.is-task-edge {
+	stroke: var(--vscode-foreground);
+	stroke-dasharray: 2 1.5;
+	opacity: 0.38;
+}
+
 .graph-navigator-minimap-node {
 	fill: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
 	opacity: 0.55;
+}
+
+.graph-navigator-minimap-node.is-graph-file-row {
+	opacity: 0.75;
+}
+
+.graph-navigator-minimap-node.is-task-node {
+	fill: var(--vscode-foreground);
+	opacity: 0.62;
+}
+
+.graph-navigator-minimap-node.is-task-node[data-minimap-task-node-kind='start'],
+.graph-navigator-minimap-node.is-task-node[data-minimap-task-node-kind='end'] {
+	opacity: 0.78;
+}
+
+.graph-navigator-minimap-node.is-backlink {
+	fill: transparent;
+	stroke: var(--vscode-descriptionForeground, var(--vscode-disabledForeground));
+	stroke-width: 1;
+	stroke-dasharray: 2 1.5;
+	opacity: 0.9;
+}
+
+.graph-navigator-minimap-node.has-agent-activity {
+	opacity: 1;
+}
+
+.graph-navigator-minimap-detached-root-ring {
+	fill: none;
+	stroke: var(--graph-viewport-accent-color);
+	stroke-width: 1.5;
+	stroke-opacity: 0.95;
+}
+
+.graph-navigator-minimap-unarranged-marker {
+	fill: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+	stroke: var(--vscode-editor-background);
+	stroke-width: 0.6;
 }
 
 .graph-navigator-minimap-viewport-indicator {

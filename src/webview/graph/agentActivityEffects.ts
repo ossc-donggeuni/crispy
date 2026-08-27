@@ -11,8 +11,8 @@ import type { GraphNodeEffectOwner } from './graphNodeEffects';
 import { getAgentActivityEffects } from './agentActivityPresentation';
 import {
 	createAgentActivityTargetKey,
-	getEffectiveAgentActivities,
 	indexAgentActivitiesByTarget,
+	selectRepresentativeAgentActivity,
 } from './agentActivityProjection';
 
 /** Target별 대표 Agent Activity Effect 구독과 소유 Effect의 수명주기다. */
@@ -46,15 +46,12 @@ export function createAgentActivityEffectReconciler(
 
 		for (const targetSnapshot of snapshot) {
 			const target = targetSnapshot.target;
-			const effectiveActivities = getEffectiveAgentActivities(
+			const representative = selectRepresentativeAgentActivity(
 				target,
 				activitiesByTarget,
+				({ sessionId }) => presentationStore === undefined
+					|| presentationStore.isRunningSession(sessionId),
 			);
-			const representative = presentationStore === undefined
-				? effectiveActivities[0]
-				: effectiveActivities.find(({ sessionId }) => (
-					presentationStore.isRunningSession(sessionId)
-				));
 
 			if (!representative) {
 				continue;

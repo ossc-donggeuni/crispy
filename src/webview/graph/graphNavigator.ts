@@ -19,6 +19,7 @@ import {
 	createMinimapGraphGeometry,
 	createMinimapViewportGeometry,
 	type MinimapPoint,
+	type MinimapNodeGeometry,
 	type MinimapProjection,
 	type MinimapSize,
 	type MinimapViewportGeometry,
@@ -35,12 +36,22 @@ import type {
 	GraphStateStore,
 } from './graphState';
 import type { GraphNodeEffects } from './graphNodeEffects';
+import type { AgentActivityStore } from '../../agent/webview/agentActivityStore';
+import type { AgentSessionPresentationStore } from '../../agent/webview/agentSessionPresentationStore';
+import type { TaskGraphLayout } from '../task/taskLayout';
+import {
+	indexAgentActivitiesByTarget,
+	selectRepresentativeAgentActivity,
+} from './agentActivityProjection';
+import { resolveAgentActivityColor } from './agentActivityPresentation';
 
 export interface GraphNavigator {
 	/** Floating Panel 또는 Viewport 변화 뒤 Navigator와 Minimap 표시 기준을 갱신한다. */
 	refreshVisibleGraphArea(): void;
 	/** Minimap이 사용할 최신 Renderer Layout reference를 교체한다. */
 	setLayout(layout: GraphLayout): void;
+	/** Minimap이 사용할 최신 Task Renderer Layout reference를 교체한다. */
+	setTaskLayout(layout: TaskGraphLayout): void;
 	/** 전달받은 표시 데이터 순서대로 Root List Panel 내용을 교체한다. */
 	setRoots(roots: readonly GraphNavigatorRoot[]): void;
 	/** Filter Panel이 사용할 최신 원본 Workspace Graph를 교체한다. */
@@ -53,6 +64,13 @@ export interface GraphNavigatorInteractions {
 	onRootSelect?: (rootId: string) => void;
 	onArrangeAll?: () => void;
 	onTaskCreate?: () => void;
+}
+
+/** Minimap의 실시간 Activity 표시를 기존 Webview store에 연결하는 선택 경계다. */
+export interface GraphNavigatorRuntimeOptions {
+	readonly agentActivityStore?: AgentActivityStore;
+	readonly agentSessionPresentationStore?: AgentSessionPresentationStore;
+	readonly initialTaskLayout?: TaskGraphLayout;
 }
 
 const NAVIGATOR_ZOOM_STEP = 0.1;
@@ -267,6 +285,7 @@ function createRootListItem(
  * @param interactions Root 선택을 상위 계층에 전달할 callback
  * @param getVisibleGraphArea Floating Panel을 제외한 Navigator 표시 영역
  * @param nodeEffects Root 목록 occurrence를 기존 transient Effect에 연결하는 등록 경계
+ * @param runtimeOptions Minimap Activity에 필요한 기존 runtime store
  * @returns Listener, State 구독 및 DOM을 정리할 lifecycle 핸들
  */
 export function initializeGraphNavigator(
@@ -283,6 +302,7 @@ export function initializeGraphNavigator(
 		})
 	),
 	nodeEffects?: Pick<GraphNodeEffects, 'registerNode'>,
+	runtimeOptions: GraphNavigatorRuntimeOptions = {},
 ): GraphNavigator {
 	const ownerDocument = overlayLayer.ownerDocument;
 	const navigator = ownerDocument.createElement('div');
@@ -300,6 +320,7 @@ export function initializeGraphNavigator(
 	const minimapSvg = ownerDocument.createElementNS(SVG_NAMESPACE, 'svg');
 	const minimapEdgeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
 	const minimapNodeLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
+	const minimapStatusLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
 	const minimapViewportLayer = ownerDocument.createElementNS(SVG_NAMESPACE, 'g');
 	const minimapViewportIndicator = ownerDocument.createElementNS(
 		SVG_NAMESPACE,
@@ -355,6 +376,8 @@ export function initializeGraphNavigator(
 	minimapEdgeLayer.setAttribute('aria-hidden', 'true');
 	minimapNodeLayer.classList.add('graph-navigator-minimap-node-layer');
 	minimapNodeLayer.setAttribute('aria-hidden', 'true');
+	minimapStatusLayer.classList.add('graph-navigator-minimap-status-layer');
+	minimapStatusLayer.setAttribute('aria-hidden', 'true');
 	minimapViewportLayer.classList.add('graph-navigator-minimap-viewport-layer');
 	minimapViewportIndicator.classList.add(
 		'graph-navigator-minimap-viewport-indicator',
@@ -367,7 +390,12 @@ export function initializeGraphNavigator(
 	minimapViewportIndicator.setAttribute('visibility', 'hidden');
 	minimapViewportIndicator.setAttribute('rx', '2');
 	minimapViewportLayer.append(minimapViewportIndicator);
-	minimapSvg.append(minimapEdgeLayer, minimapNodeLayer, minimapViewportLayer);
+	minimapSvg.append(
+		minimapEdgeLayer,
+		minimapNodeLayer,
+		minimapStatusLayer,
+		minimapViewportLayer,
+	);
 	minimap.append(minimapSvg);
 	zoom.className = 'graph-navigator-zoom';
 	coordinate.className = 'graph-navigator-coordinate';
@@ -716,6 +744,7 @@ export function initializeGraphNavigator(
 	filterTree.addEventListener('click', handleFilterTreeClick);
 	filterTree.addEventListener('change', handleFilterTreeChange);
 	let currentLayout: GraphLayout | undefined = initialLayout;
+	let currentTaskLayout = runtimeOptions.initialTaskLayout;
 	const initialGraphState = graphState.getState();
 	let renderedNodePositions = initialGraphState.nodePositions;
 	let renderedCamera = initialGraphState.camera;
@@ -726,6 +755,64 @@ export function initializeGraphNavigator(
 	let viewportDrag: MinimapViewportDragSession | undefined;
 	let suppressNextMinimapClick = false;
 	let disposed = false;
+	let minimapNodesByRenderKey = new Map<string, SVGRectElement>();
+	let minimapEdgesByRenderKey = new Map<string, SVGLineElement>();
+	let currentMinimapNodeGeometry: readonly MinimapNodeGeometry[] | undefined;
+
+	/** Geometry를 재생성하지 않고 현재 Activity 대표 색만 기존 Rect에 반영한다. */
+	const renderMinimapActivities = (): void => {
+		if (
+			disposed
+			|| !runtimeOptions.agentActivityStore
+			|| !currentMinimapNodeGeometry
+		) {
+			return;
+		}
+
+		const activitiesByTarget = indexAgentActivitiesByTarget(
+			runtimeOptions.agentActivityStore.getSnapshot(),
+		);
+
+		for (const node of currentMinimapNodeGeometry) {
+			const rect = minimapNodesByRenderKey.get(node.renderKey);
+
+			if (!rect) {
+				continue;
+			}
+
+			const representative = node.presentationTarget
+				? selectRepresentativeAgentActivity(
+					node.presentationTarget,
+					activitiesByTarget,
+					({ sessionId }) => (
+						runtimeOptions.agentSessionPresentationStore === undefined
+						|| runtimeOptions.agentSessionPresentationStore
+							.isRunningSession(sessionId)
+					),
+				)
+				: undefined;
+
+			if (!representative) {
+				rect.classList.remove('has-agent-activity');
+				rect.style.removeProperty('fill');
+				rect.removeAttribute('data-agent-activity');
+				rect.removeAttribute('data-agent-session-id');
+				continue;
+			}
+
+			const color = runtimeOptions.agentSessionPresentationStore
+				?.getSession(representative.sessionId)?.color
+				?? resolveAgentActivityColor(
+					representative.sessionId,
+					representative.activity,
+				);
+
+			rect.classList.add('has-agent-activity');
+			rect.style.setProperty('fill', color);
+			rect.setAttribute('data-agent-activity', representative.activity);
+			rect.setAttribute('data-agent-session-id', representative.sessionId);
+		}
+	};
 
 	/** 캐시된 Graph Projection만 사용해 현재 Camera Viewport Rect attribute를 갱신한다. */
 	const renderMinimapViewportIndicator = (): void => {
@@ -795,13 +882,17 @@ export function initializeGraphNavigator(
 	const renderMinimapGraph = (
 		state: GraphStateSnapshot = graphState.getState(),
 	): void => {
-		minimapEdgeLayer.replaceChildren();
-		minimapNodeLayer.replaceChildren();
+		minimapStatusLayer.replaceChildren();
+		currentMinimapNodeGeometry = undefined;
 		currentMinimapProjection = undefined;
 		currentMinimapSize = undefined;
 		currentMinimapViewportGeometry = undefined;
 
 		if (!currentLayout || minimap.clientWidth <= 0 || minimap.clientHeight <= 0) {
+			minimapEdgeLayer.replaceChildren();
+			minimapNodeLayer.replaceChildren();
+			minimapEdgesByRenderKey.clear();
+			minimapNodesByRenderKey.clear();
 			renderMinimapViewportIndicator();
 			return;
 		}
@@ -818,43 +909,109 @@ export function initializeGraphNavigator(
 			currentLayout,
 			state.nodePositions,
 			minimapSize,
+			undefined,
+			currentTaskLayout,
 		);
 
 		if (!geometry) {
+			minimapEdgeLayer.replaceChildren();
+			minimapNodeLayer.replaceChildren();
+			minimapEdgesByRenderKey.clear();
+			minimapNodesByRenderKey.clear();
 			renderMinimapViewportIndicator();
 			return;
 		}
 
 		currentMinimapProjection = geometry.projection;
 		currentMinimapSize = minimapSize;
+		currentMinimapNodeGeometry = geometry.nodes;
 
-		for (const edge of geometry.edges) {
-			const line = ownerDocument.createElementNS(SVG_NAMESPACE, 'line');
+		const nextEdgesByRenderKey = new Map<string, SVGLineElement>();
+		const edgeElements = geometry.edges.map((edge) => {
+			const line = minimapEdgesByRenderKey.get(edge.renderKey)
+				?? ownerDocument.createElementNS(SVG_NAMESPACE, 'line');
 
 			line.classList.add('graph-navigator-minimap-edge');
-			line.setAttribute('data-graph-edge-id', edge.id);
+			line.classList.add(`is-${edge.sourceKind}`);
+			line.setAttribute('data-minimap-render-key', edge.renderKey);
+			if (edge.sourceKind === 'graph-edge') {
+				line.setAttribute('data-graph-edge-id', edge.id);
+			} else {
+				line.setAttribute('data-minimap-task-edge-id', edge.id);
+			}
 			line.setAttribute('x1', String(edge.source.x));
 			line.setAttribute('y1', String(edge.source.y));
 			line.setAttribute('x2', String(edge.target.x));
 			line.setAttribute('y2', String(edge.target.y));
-			minimapEdgeLayer.append(line);
-		}
+			nextEdgesByRenderKey.set(edge.renderKey, line);
+			return line;
+		});
 
-		for (const node of geometry.nodes) {
-			const rect = ownerDocument.createElementNS(SVG_NAMESPACE, 'rect');
+		minimapEdgeLayer.replaceChildren(...edgeElements);
+		minimapEdgesByRenderKey = nextEdgesByRenderKey;
+
+		const nextNodesByRenderKey = new Map<string, SVGRectElement>();
+		const nodeElements = geometry.nodes.map((node) => {
+			const rect = minimapNodesByRenderKey.get(node.renderKey)
+				?? ownerDocument.createElementNS(SVG_NAMESPACE, 'rect');
 			const width = Math.max(MINIMAP_NODE_MIN_SIZE, node.width);
 			const height = Math.max(MINIMAP_NODE_MIN_SIZE, node.height);
 
 			rect.classList.add('graph-navigator-minimap-node');
-			rect.setAttribute('data-graph-node-id', node.id);
+			rect.classList.add(`is-${node.sourceKind}`);
+			rect.setAttribute('data-minimap-render-key', node.renderKey);
+			if (node.sourceKind === 'graph-node') {
+				rect.setAttribute('data-graph-node-id', node.id);
+			} else if (node.sourceKind === 'graph-file-row') {
+				rect.setAttribute('data-graph-file-id', node.id);
+			} else {
+				rect.setAttribute('data-minimap-task-node-id', node.id);
+			}
+			if (node.taskKind) {
+				rect.setAttribute('data-minimap-task-node-kind', node.taskKind);
+			}
+			if (node.backlink) {
+				rect.classList.add('is-backlink');
+			} else {
+				rect.classList.remove('is-backlink');
+			}
 			rect.setAttribute('x', String(node.x - (width - node.width) / 2));
 			rect.setAttribute('y', String(node.y - (height - node.height) / 2));
 			rect.setAttribute('width', String(width));
 			rect.setAttribute('height', String(height));
 			rect.setAttribute('rx', String(Math.min(1.5, width / 2, height / 2)));
-			minimapNodeLayer.append(rect);
-		}
+			nextNodesByRenderKey.set(node.renderKey, rect);
 
+			if (node.detachedRoot) {
+				const ring = ownerDocument.createElementNS(SVG_NAMESPACE, 'rect');
+
+				ring.classList.add('graph-navigator-minimap-detached-root-ring');
+				ring.setAttribute('data-minimap-status-for', node.renderKey);
+				ring.setAttribute('x', rect.getAttribute('x') ?? String(node.x));
+				ring.setAttribute('y', rect.getAttribute('y') ?? String(node.y));
+				ring.setAttribute('width', String(width));
+				ring.setAttribute('height', String(height));
+				ring.setAttribute('rx', rect.getAttribute('rx') ?? '1.5');
+				minimapStatusLayer.append(ring);
+			}
+
+			if (node.manualUnarranged) {
+				const marker = ownerDocument.createElementNS(SVG_NAMESPACE, 'circle');
+
+				marker.classList.add('graph-navigator-minimap-unarranged-marker');
+				marker.setAttribute('data-minimap-status-for', node.renderKey);
+				marker.setAttribute('cx', String(node.x + node.width));
+				marker.setAttribute('cy', String(node.y));
+				marker.setAttribute('r', '1.75');
+				minimapStatusLayer.append(marker);
+			}
+			return rect;
+		});
+
+		minimapNodeLayer.replaceChildren(...nodeElements);
+		minimapNodesByRenderKey = nextNodesByRenderKey;
+
+		renderMinimapActivities();
 		renderMinimapViewportIndicator();
 	};
 
@@ -1167,6 +1324,15 @@ export function initializeGraphNavigator(
 	);
 	minimapViewportIndicator.addEventListener('click', handleViewportClick);
 	const unsubscribeState = graphState.subscribe(render);
+	const unsubscribeActivities = runtimeOptions.agentActivityStore?.subscribe(() => {
+		renderMinimapActivities();
+	});
+	const unsubscribePresentation = runtimeOptions.agentSessionPresentationStore
+		?.subscribe((change) => {
+			if (change.kind === 'lifecycle') {
+				renderMinimapActivities();
+			}
+		});
 	const resizeObserver = typeof ResizeObserver === 'function'
 		? new ResizeObserver(() => {
 			if (!disposed) {
@@ -1189,6 +1355,14 @@ export function initializeGraphNavigator(
 			}
 
 			currentLayout = layout;
+			renderMinimapGraph();
+		},
+		setTaskLayout(layout): void {
+			if (disposed) {
+				return;
+			}
+
+			currentTaskLayout = layout;
 			renderMinimapGraph();
 		},
 		setRoots(roots): void {
@@ -1224,12 +1398,18 @@ export function initializeGraphNavigator(
 
 			disposed = true;
 			currentLayout = undefined;
+			currentTaskLayout = undefined;
+			currentMinimapNodeGeometry = undefined;
+			minimapNodesByRenderKey.clear();
+			minimapEdgesByRenderKey.clear();
 			currentMinimapProjection = undefined;
 			currentMinimapSize = undefined;
 			currentMinimapViewportGeometry = undefined;
 			suppressNextMinimapClick = false;
 			resizeObserver?.disconnect();
 			unsubscribeState();
+			unsubscribeActivities?.();
+			unsubscribePresentation?.();
 			filterTree.removeEventListener('click', handleFilterTreeClick);
 			filterTree.removeEventListener('change', handleFilterTreeChange);
 			disposeRootItems();

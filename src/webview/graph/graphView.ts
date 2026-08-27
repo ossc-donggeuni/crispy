@@ -1542,6 +1542,7 @@ export function initializeGraphView(
 			...manualUnarrangedNodeIds,
 			...currentTaskScopeBoundaryNodeIds,
 		]),
+		manualUnarrangedNodeIds,
 		pinnedNodeIds: currentTaskScopeBoundaryNodeIds,
 		getAgentActivityBindingCount: agentActivityBindings?.getBindingCount,
 	});
@@ -3165,6 +3166,7 @@ export function initializeGraphView(
 
 		currentTaskLayout = nextLayout;
 		taskRenderer.applyLayout(currentTaskLayout);
+		navigator.setTaskLayout(currentTaskLayout);
 		if (focusedTaskNode && !findFocusedTaskLayoutNode()) {
 			focusedTaskNode = undefined;
 		}
@@ -4003,6 +4005,12 @@ export function initializeGraphView(
 		},
 		getVisibleGraphArea,
 		nodeEffects,
+		{
+			agentActivityStore: runtimeOptions.agentActivityStore,
+			agentSessionPresentationStore:
+				runtimeOptions.agentSessionPresentationStore,
+			initialTaskLayout: currentTaskLayout,
+		},
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
