@@ -2199,7 +2199,8 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 }
 
 .graph-reattach-confirm-overlay,
-.graph-arrange-all-confirm-overlay {
+.graph-arrange-all-confirm-overlay,
+.task-stop-confirm-overlay {
 	position: absolute;
 	inset: 0;
 	z-index: 10;
@@ -2212,12 +2213,14 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 }
 
 .graph-reattach-confirm-overlay[hidden],
-.graph-arrange-all-confirm-overlay[hidden] {
+.graph-arrange-all-confirm-overlay[hidden],
+.task-stop-confirm-overlay[hidden] {
 	display: none;
 }
 
 .graph-reattach-confirm-panel,
-.graph-arrange-all-confirm-panel {
+.graph-arrange-all-confirm-panel,
+.task-stop-confirm-panel {
 	display: grid;
 	width: min(420px, 100%);
 	max-height: min(520px, 100%);
@@ -2234,18 +2237,22 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 .graph-reattach-confirm-title,
 .graph-reattach-confirm-message,
 .graph-arrange-all-confirm-title,
-.graph-arrange-all-confirm-message {
+.graph-arrange-all-confirm-message,
+.task-stop-confirm-title,
+.task-stop-confirm-message {
 	margin: 0;
 }
 
 .graph-reattach-confirm-title,
-.graph-arrange-all-confirm-title {
+.graph-arrange-all-confirm-title,
+.task-stop-confirm-title {
 	font-size: 15px;
 	font-weight: 600;
 }
 
 .graph-reattach-confirm-message,
-.graph-arrange-all-confirm-message {
+.graph-arrange-all-confirm-message,
+.task-stop-confirm-message {
 	color: var(--vscode-descriptionForeground);
 	line-height: 1.45;
 }
@@ -2267,7 +2274,8 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 }
 
 .graph-reattach-confirm-actions,
-.graph-arrange-all-confirm-actions {
+.graph-arrange-all-confirm-actions,
+.task-stop-confirm-actions {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
@@ -2276,7 +2284,9 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 .graph-reattach-confirm-accept,
 .graph-reattach-confirm-cancel,
 .graph-arrange-all-confirm-accept,
-.graph-arrange-all-confirm-cancel {
+.graph-arrange-all-confirm-cancel,
+.task-stop-confirm-accept,
+.task-stop-confirm-cancel {
 	padding: 5px 14px;
 	border: 1px solid var(--vscode-button-border, transparent);
 	border-radius: 2px;
@@ -2285,24 +2295,28 @@ body.vscode-high-contrast-light .graph-agent-activity-notification-panel {
 }
 
 .graph-reattach-confirm-accept,
-.graph-arrange-all-confirm-accept {
+.graph-arrange-all-confirm-accept,
+.task-stop-confirm-accept {
 	color: var(--vscode-button-foreground);
 	background: var(--vscode-button-background);
 }
 
 .graph-reattach-confirm-accept:hover,
-.graph-arrange-all-confirm-accept:hover {
+.graph-arrange-all-confirm-accept:hover,
+.task-stop-confirm-accept:hover {
 	background: var(--vscode-button-hoverBackground);
 }
 
 .graph-reattach-confirm-cancel,
-.graph-arrange-all-confirm-cancel {
+.graph-arrange-all-confirm-cancel,
+.task-stop-confirm-cancel {
 	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
 	background: var(--vscode-button-secondaryBackground, transparent);
 }
 
 .graph-reattach-confirm-cancel:hover,
-.graph-arrange-all-confirm-cancel:hover {
+.graph-arrange-all-confirm-cancel:hover,
+.task-stop-confirm-cancel:hover {
 	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
 }
 

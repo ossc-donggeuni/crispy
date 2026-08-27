@@ -134,6 +134,11 @@ import {
 	TASK_IMPORT_ERROR_ATTRIBUTE,
 	TASK_IMPORT_INPUT_ATTRIBUTE,
 } from '../../webview/task/taskImportDialog';
+import {
+	TASK_STOP_CONFIRM_TITLE,
+	TASK_STOP_ACCEPT_LABEL,
+	TASK_STOP_CANCEL_LABEL,
+} from '../../webview/task/taskStopConfirmDialog';
 
 suite('Graph View', () => {
 	test('Navigator Task 추가는 viewport 중심에 식별 가능한 incomplete Start/End를 생성한다', () => {
@@ -8104,6 +8109,158 @@ suite('Graph View', () => {
 		presentations.dispose();
 	});
 
+	test('실행 중 Stop 아이콘은 확인 후 바인딩된 모든 Work Agent 세션을 정리한다', async () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const task = createSerialRenderingTask(
+			'task:force-stop',
+			{ x: 100, y: 50 },
+			2,
+		);
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const cleanupRequests: unknown[] = [];
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{
+				onTaskAgentSessionCleanupRequest: (targets) => {
+					cleanupRequests.push(targets);
+				},
+			},
+			[task],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const startNode = task.nodes.find((node) => node.kind === 'start');
+		const workNodes = task.nodes.filter((node) => node.kind === 'work');
+		const endNode = task.nodes.find((node) => node.kind === 'end');
+		const record = graphView.taskState.getWorkspaceTask(task.id);
+
+		assert.ok(startNode && workNodes.length === 2 && endNode && record);
+		const endBeforeExecution = getTaskElement(
+			root,
+			'data-task-node-id',
+			endNode.id,
+			task.id,
+		);
+
+		assert.strictEqual(
+			findDescendantByAttribute(
+				endBeforeExecution,
+				TASK_NODE_ACTION_ATTRIBUTE,
+				'stop-task',
+			),
+			undefined,
+		);
+		const runningSnapshot = {
+			executionId: 'execution-force-stop',
+			taskId: task.id,
+			storageRevision: record.storageRevision,
+			state: 'running' as const,
+			startNodeId: startNode.id,
+			endNodeId: endNode.id,
+			works: workNodes.map(({ id }) => ({
+				nodeId: id,
+				state: 'running' as const,
+			})),
+		};
+
+		graphView.applyTaskExecutionSnapshot?.(runningSnapshot);
+		workNodes.forEach((work, index) => {
+			const suffix = index + 1;
+
+			presentations.activateSession(
+				`tab-force-stop-${suffix}`,
+				`session-force-stop-${suffix}`,
+				`Work ${suffix}`,
+			);
+			graphView.assignTaskWorkAgentSession?.(
+				runningSnapshot.executionId,
+				work.id,
+				`session-force-stop-${suffix}`,
+			);
+		});
+		const endElement = getTaskElement(
+			root,
+			'data-task-node-id',
+			endNode.id,
+			task.id,
+		);
+		const stopButton = getDescendantByAttribute(
+			endElement,
+			TASK_NODE_ACTION_ATTRIBUTE,
+			'stop-task',
+		);
+
+		assert.strictEqual(stopButton.hasClass('task-stop-run-action'), true);
+		assert.strictEqual(stopButton.title, 'Task 강제 종료');
+		assert.strictEqual(
+			stopButton.hasAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE),
+			true,
+		);
+		assert.ok(getDescendantByClass(stopButton, 'task-end-icon'));
+		stopButton.dispatch('click', createClickEvent(stopButton));
+		const dialog = getDescendantByClass(root, 'task-stop-confirm-overlay');
+
+		assert.strictEqual(dialog.hidden, false);
+		assert.strictEqual(
+			getDescendantByClass(dialog, 'task-stop-confirm-title').textContent,
+			TASK_STOP_CONFIRM_TITLE,
+		);
+		assert.strictEqual(
+			getDescendantByClass(dialog, 'task-stop-confirm-message').textContent,
+			`“${task.title}”에 바인딩된 Agent 작업 2개를 종료하고 세션 탭을 닫습니다.`,
+		);
+		const cancel = getDescendantByClass(dialog, 'task-stop-confirm-cancel');
+
+		assert.strictEqual(cancel.textContent, TASK_STOP_CANCEL_LABEL);
+		cancel.dispatch('click', createClickEvent(cancel));
+		await Promise.resolve();
+		assert.strictEqual(dialog.hidden, true);
+		assert.deepStrictEqual(cleanupRequests, []);
+		assert.strictEqual(presentations.isKnownSession('session-force-stop-1'), true);
+
+		stopButton.dispatch('click', createClickEvent(stopButton));
+		const accept = getDescendantByClass(dialog, 'task-stop-confirm-accept');
+
+		assert.strictEqual(accept.textContent, TASK_STOP_ACCEPT_LABEL);
+		accept.dispatch('click', createClickEvent(accept));
+		await Promise.resolve();
+		assert.deepStrictEqual(cleanupRequests, [[
+			{
+				executionId: runningSnapshot.executionId,
+				workNodeId: workNodes[0]!.id,
+				sessionId: 'session-force-stop-1',
+				tabId: 'tab-force-stop-1',
+			},
+			{
+				executionId: runningSnapshot.executionId,
+				workNodeId: workNodes[1]!.id,
+				sessionId: 'session-force-stop-2',
+				tabId: 'tab-force-stop-2',
+			},
+		]]);
+		assert.strictEqual(presentations.isKnownSession('session-force-stop-1'), false);
+		assert.strictEqual(presentations.isKnownSession('session-force-stop-2'), false);
+		for (const node of [startNode, ...workNodes, endNode]) {
+			assert.deepStrictEqual(store.getActivities({ nodeId: node.id }), []);
+		}
+
+		stopButton.dispatch('click', createClickEvent(stopButton));
+		assert.strictEqual(dialog.hidden, true);
+		graphView.dispose();
+		assert.strictEqual(
+			findDescendantByClass(root, 'task-stop-confirm-overlay'),
+			undefined,
+		);
+		presentations.dispose();
+	});
+
 	test('Task 전체 완료 알림을 삭제하면 모든 Work Agent 세션을 함께 정리한다', () => {
 		const ownerDocument = new FakeDocument();
 		const root = ownerDocument.createElement('section');
@@ -8483,6 +8640,10 @@ suite('Graph View', () => {
 		);
 		assert.match(
 			taskViewCss,
+			/\.task-stop-run-action\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;[^}]*background:\s*transparent;[^}]*border:\s*0;/s,
+		);
+		assert.match(
+			taskViewCss,
 			/\.task-remove-task-action\s*\{[^}]*--vscode-errorForeground[^}]*14%[^}]*--graph-floating-control-background/s,
 		);
 		const taskNodeActionsRule = taskViewCss.match(
@@ -8490,7 +8651,7 @@ suite('Graph View', () => {
 		);
 
 		assert.ok(taskNodeActionsRule);
-		assert.match(taskNodeActionsRule[0], /z-index:\s*5;/);
+		assert.match(taskNodeActionsRule[0], /z-index:\s*6;/);
 		assert.match(
 			taskNodeActionsRule[0],
 			/top:\s*100%;[^}]*width:\s*100%;[^}]*padding-top:\s*12px;[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/s,
@@ -8506,6 +8667,18 @@ suite('Graph View', () => {
 			/opacity:\s*1;[^}]*pointer-events:\s*auto;/s,
 		);
 		assert.doesNotMatch(visibleTaskNodeActionsRule[0], /visibility:\s*visible;/);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.graph-agent-activity-binding-host\s*>\s*\.graph-agent-activity-bindings\s*\{[^}]*z-index:\s*3;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.graph-agent-activity-binding-host\s*>\s*\.task-node-actions\s*\{[^}]*pointer-events:\s*none;/s,
+		);
+		assert.match(
+			taskViewCss,
+			/\.task-node\.graph-agent-activity-binding-host\s*>\s*\.task-node-actions\s*>\s*\.task-node-action\s*\{[^}]*pointer-events:\s*auto;/s,
+		);
 		assert.match(
 			taskViewCss,
 			/\.task-node:has\(>\s*\.task-node-actions\):hover,[^{]*\{[^}]*z-index:\s*2;/s,
@@ -8550,7 +8723,7 @@ suite('Graph View', () => {
 		assert.match(taskViewCss, /body\.vscode-high-contrast \.task-inspector/s);
 		assert.match(
 			graphViewCss,
-			/\.graph-reattach-confirm-overlay,[^{]*\.graph-arrange-all-confirm-overlay\s*\{[^}]*z-index:\s*10;/s,
+			/\.graph-reattach-confirm-overlay,[^{]*\.graph-arrange-all-confirm-overlay,[^{]*\.task-stop-confirm-overlay\s*\{[^}]*z-index:\s*10;/s,
 		);
 		assert.match(
 			graphViewCss,

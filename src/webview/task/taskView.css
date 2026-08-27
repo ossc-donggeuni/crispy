@@ -357,7 +357,7 @@
 	position: absolute;
 	top: 100%;
 	right: 0;
-	z-index: 5;
+	z-index: 6;
 	display: flex;
 	width: 100%;
 	box-sizing: border-box;
@@ -375,6 +375,25 @@
 .task-work-node:hover > .task-work-actions,
 .task-work-node:focus-within > .task-work-actions {
 	opacity: 1;
+	pointer-events: auto;
+}
+
+/*
+ * Activity 행이 있는 Task에서는 full-width Action wrapper의 투명 영역이
+ * Binding Double Click을 가로막지 않게 한다. 실제 Button만 hit target으로
+ * 남기며, 더 높은 Action stacking은 Activity Effect 위의 표시를 보장한다.
+ */
+.task-node.graph-agent-activity-binding-host > .graph-agent-activity-bindings {
+	z-index: 3;
+}
+
+.task-node.graph-agent-activity-binding-host > .task-node-actions {
+	pointer-events: none;
+}
+
+.task-node.graph-agent-activity-binding-host
+> .task-node-actions
+> .task-node-action {
 	pointer-events: auto;
 }
 
@@ -401,6 +420,44 @@
 		background-color 100ms ease,
 		box-shadow 100ms ease,
 		transform 100ms ease;
+}
+
+.task-stop-run-action {
+	display: grid;
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	place-items: center;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 50%;
+	cursor: pointer;
+	transition:
+		background-color 100ms ease,
+		box-shadow 100ms ease,
+		transform 100ms ease;
+}
+
+.task-stop-run-action:hover,
+.task-stop-run-action:focus-visible {
+	background: var(--vscode-testing-iconFailed, #f14c4c);
+	box-shadow:
+		inset 0 0 0 1px color-mix(
+			in srgb,
+			var(--vscode-testing-iconFailed, #f14c4c) 72%,
+			white
+		),
+		0 4px 12px color-mix(in srgb, black 32%, transparent);
+	transform: scale(1.08);
+	outline: 1px solid var(--vscode-focusBorder, #007fd4);
+	outline-offset: 2px;
+}
+
+.task-stop-run-action:hover > .task-end-icon,
+.task-stop-run-action:focus-visible > .task-end-icon {
+	background-color: var(--vscode-editor-background, #1e1e1e);
 }
 
 .task-start-run-action > .task-start-icon,
