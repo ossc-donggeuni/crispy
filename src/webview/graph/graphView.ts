@@ -2771,7 +2771,7 @@ export function initializeGraphView(
 					targetNodeId,
 					taskTitle,
 					'completed',
-					'Task의 모든 Work가 완료되었습니다.',
+					'All Work nodes in the task are complete.',
 				);
 			}
 			return;
@@ -2784,8 +2784,8 @@ export function initializeGraphView(
 			taskTitle,
 			snapshot.state === 'running' ? 'editing' : 'rejected',
 			snapshot.state === 'running'
-				? 'Task 실행을 시작했습니다.'
-				: 'Task 실행이 중단되었습니다.',
+				? 'Task execution started.'
+				: 'Task execution stopped.',
 		);
 	};
 	let focusedTaskNode: FocusedTaskNode | undefined;
@@ -3821,7 +3821,7 @@ export function initializeGraphView(
 						ok: false,
 						message: issue
 							? `${issue.path}: ${issue.message}`
-							: 'Task JSON을 확인할 수 없습니다.',
+							: 'The Task JSON could not be validated.',
 					};
 				}
 
@@ -3830,7 +3830,7 @@ export function initializeGraphView(
 				if (!current) {
 					return {
 						ok: false,
-						message: '가져올 대상 Task가 더 이상 존재하지 않습니다.',
+						message: 'The target task no longer exists.',
 					};
 				}
 
@@ -3841,7 +3841,7 @@ export function initializeGraphView(
 					if (!updated) {
 						return {
 							ok: false,
-							message: 'Task를 가져오지 못했습니다.',
+							message: 'Could not import the task.',
 						};
 					}
 
@@ -3851,7 +3851,7 @@ export function initializeGraphView(
 				} catch {
 					return {
 						ok: false,
-						message: 'Task 구조가 올바르지 않아 가져오지 못했습니다.',
+						message: 'Could not import the task because its structure is invalid.',
 					};
 				}
 			},

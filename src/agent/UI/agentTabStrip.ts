@@ -19,12 +19,12 @@ export function formatTabCloseTitle(tabLabel: string): string {
 /** provider와 위치 고정 상태를 색상 없이도 전달하는 탭 접근성 이름이다. */
 export function formatAgentTabAccessibleName(tab: AgentTabSnapshot): string {
 	const providerLabel = tab.providerId === undefined
-		? 'provider 미선택'
+		? 'No provider selected'
 		: AGENT_PROVIDER_LABELS[tab.providerId];
 	const workspace = tab.workspaceDescription === undefined
 		? ''
 		: `, Workspace ${tab.workspaceDescription}`;
-	return `${providerLabel}, ${tab.displayName}${workspace}${tab.isPinned ? ', 고정됨' : ''}`;
+	return `${providerLabel}, ${tab.displayName}${workspace}${tab.isPinned ? ', pinned' : ''}`;
 }
 
 /** 짧은 visible label은 유지하되 hover title에서는 중복 Workspace 이름을 구별한다. */

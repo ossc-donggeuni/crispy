@@ -8,10 +8,10 @@ export interface GraphArrangeAllConfirmDialog {
 	dispose(): void;
 }
 
-export const GRAPH_ARRANGE_ALL_CONFIRM_TITLE = '그래프를 전부 정렬하시겠습니까?';
-export const GRAPH_ARRANGE_ALL_CONFIRM_MESSAGE = '분리된 노드와 미정렬 상태의 노드들이 정렬됩니다.';
-export const GRAPH_ARRANGE_ALL_ACCEPT_LABEL = '확인';
-export const GRAPH_ARRANGE_ALL_CANCEL_LABEL = '취소';
+export const GRAPH_ARRANGE_ALL_CONFIRM_TITLE = 'Arrange the entire graph?';
+export const GRAPH_ARRANGE_ALL_CONFIRM_MESSAGE = 'Detached and manually positioned nodes will be arranged.';
+export const GRAPH_ARRANGE_ALL_ACCEPT_LABEL = 'Arrange';
+export const GRAPH_ARRANGE_ALL_CANCEL_LABEL = 'Cancel';
 
 /** Graph Overlay 안에 전체 정렬 전용 확인 팝업을 만든다. */
 export function createGraphArrangeAllConfirmDialog(

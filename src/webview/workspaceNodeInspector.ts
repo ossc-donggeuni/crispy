@@ -228,7 +228,7 @@ export function initializeWorkspaceNodeInspector(
 		root.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
 		root.setAttribute('aria-live', 'polite');
 		loading.className = 'workspace-node-inspector-status';
-		loading.textContent = '상세 정보를 불러오는 중…';
+		loading.textContent = 'Loading details…';
 		root.append(loading);
 		overlayLayer.append(root);
 		inspector = root;
@@ -275,44 +275,44 @@ export function initializeWorkspaceNodeInspector(
 		root.className = `workspace-node-inspector is-${nextDetails.kind}`;
 		root.setAttribute(GRAPH_CAMERA_IGNORE_ATTRIBUTE, '');
 		root.setAttribute('role', 'dialog');
-		root.setAttribute('aria-label', `${nextDetails.name} 상세 정보`);
+		root.setAttribute('aria-label', `${nextDetails.name} details`);
 		header.className = 'workspace-node-inspector-header';
 		heading.textContent = nextDetails.kind === 'file' ? 'FILE' : 'FOLDER';
 		closeButton.type = 'button';
 		closeButton.className = 'workspace-node-inspector-close';
 		closeButton.textContent = '×';
-		closeButton.setAttribute('aria-label', '상세 보기 닫기');
+		closeButton.setAttribute('aria-label', 'Close details');
 		closeButton.addEventListener('click', close);
 		header.append(heading, closeButton);
 		body.className = 'workspace-node-inspector-body';
 		metadata.className = 'workspace-node-metadata';
-		appendMetadata(metadata, '경로', nextDetails.relativePath);
+		appendMetadata(metadata, 'Path', nextDetails.relativePath);
 		if (nextDetails.size !== undefined) {
-			appendMetadata(metadata, '크기', formatBytes(nextDetails.size));
+			appendMetadata(metadata, 'Size', formatBytes(nextDetails.size));
 		}
 		if (nextDetails.modifiedAt !== undefined) {
-			appendMetadata(metadata, '수정', formatTimestamp(nextDetails.modifiedAt));
+			appendMetadata(metadata, 'Modified', formatTimestamp(nextDetails.modifiedAt));
 		}
 		if (nextDetails.createdAt !== undefined) {
-			appendMetadata(metadata, '생성', formatTimestamp(nextDetails.createdAt));
+			appendMetadata(metadata, 'Created', formatTimestamp(nextDetails.createdAt));
 		}
 		if (nextDetails.childFolderCount !== undefined) {
-			appendMetadata(metadata, '하위 폴더', String(nextDetails.childFolderCount));
+			appendMetadata(metadata, 'Subfolders', String(nextDetails.childFolderCount));
 		}
 		if (nextDetails.childFileCount !== undefined) {
-			appendMetadata(metadata, '하위 파일', String(nextDetails.childFileCount));
+			appendMetadata(metadata, 'Files', String(nextDetails.childFileCount));
 		}
-		appendMetadata(metadata, '권한', nextDetails.readonly ? '읽기 전용' : '읽기/쓰기');
+		appendMetadata(metadata, 'Access', nextDetails.readonly ? 'Read-only' : 'Read/write');
 		controls.className = 'workspace-node-inspector-controls';
 		nameField.className = 'workspace-node-name-field';
-		nameLabel.textContent = nextDetails.kind === 'file' ? '파일 이름' : '폴더 이름';
+		nameLabel.textContent = nextDetails.kind === 'file' ? 'File name' : 'Folder name';
 		nameRow.className = 'workspace-node-name-row';
 		nameInput.type = 'text';
 		nameInput.value = nextDetails.name;
 		nameInput.disabled = !mutable;
 		nameInput.setAttribute('aria-label', nameLabel.textContent);
 		renameButton.type = 'button';
-		renameButton.textContent = '변경';
+		renameButton.textContent = 'Rename';
 		renameButton.disabled = !mutable;
 		renameButton.addEventListener('click', () => {
 			if (!focused || !details || pendingMutationRequestId !== undefined) {
@@ -334,7 +334,7 @@ export function initializeWorkspaceNodeInspector(
 		nameField.append(nameLabel, nameRow);
 		deleteButton.type = 'button';
 		deleteButton.className = 'workspace-node-delete';
-		deleteButton.textContent = nextDetails.kind === 'file' ? '파일 삭제' : '폴더 삭제';
+		deleteButton.textContent = nextDetails.kind === 'file' ? 'Delete File' : 'Delete Folder';
 		deleteButton.disabled = !mutable;
 		deleteButton.addEventListener('click', () => {
 			showDeleteConfirmation(root);
@@ -345,8 +345,8 @@ export function initializeWorkspaceNodeInspector(
 
 			notice.className = 'workspace-node-mutation-notice';
 			notice.textContent = nextDetails.readonly
-				? '읽기 전용 항목은 변경하거나 삭제할 수 없습니다.'
-				: '제한된 Workspace 또는 가상 파일 시스템에서는 변경할 수 없습니다.';
+				? 'Read-only items cannot be renamed or deleted.'
+				: 'Items cannot be changed in a restricted Workspace or virtual file system.';
 			controls.append(notice);
 		}
 		controls.append(deleteButton);
@@ -373,16 +373,16 @@ export function initializeWorkspaceNodeInspector(
 		if (!preview || preview.status !== 'ready') {
 			container.classList.add('is-unavailable');
 			container.textContent = preview?.status === 'too-large'
-				? '1 MiB를 초과한 파일은 미리 볼 수 없습니다.'
+				? 'Files larger than 1 MiB cannot be previewed.'
 				: preview?.status === 'binary'
-					? '바이너리 파일은 미리 볼 수 없습니다.'
-					: '파일 미리 보기를 불러올 수 없습니다.';
+					? 'Binary files cannot be previewed.'
+					: 'The file preview could not be loaded.';
 			return;
 		}
 		const generation = previewGeneration;
 
 		container.classList.add('is-loading');
-		container.textContent = '코드 미리 보기를 준비하는 중…';
+		container.textContent = 'Preparing code preview…';
 
 		void Promise.all([
 			import('monaco-editor/esm/vs/editor/editor.api.js'),
@@ -414,8 +414,8 @@ export function initializeWorkspaceNodeInspector(
 					automaticLayout: true,
 					renderSideBySide: false,
 					useInlineViewWhenSpaceIsLimited: true,
-					originalAriaLabel: `${nodeDetails.name} Git HEAD 원본`,
-					modifiedAriaLabel: `${nodeDetails.name} 현재 파일 변경 내용`,
+					originalAriaLabel: `${nodeDetails.name} Git HEAD original`,
+					modifiedAriaLabel: `${nodeDetails.name} current file changes`,
 					minimap: { enabled: false },
 					lineNumbersMinChars: 3,
 					scrollBeyondLastLine: false,
@@ -444,7 +444,7 @@ export function initializeWorkspaceNodeInspector(
 					readOnly: true,
 					domReadOnly: true,
 					automaticLayout: true,
-					ariaLabel: `${nodeDetails.name} 읽기 전용 코드 미리 보기`,
+					ariaLabel: `${nodeDetails.name} read-only code preview`,
 					minimap: { enabled: false },
 					lineNumbersMinChars: 3,
 					scrollBeyondLastLine: false,
@@ -458,7 +458,7 @@ export function initializeWorkspaceNodeInspector(
 			if (generation === previewGeneration && container.isConnected) {
 				container.classList.remove('is-loading');
 				container.classList.add('is-unavailable');
-				container.textContent = '코드 미리 보기를 초기화할 수 없습니다.';
+				container.textContent = 'The code preview could not be initialized.';
 			}
 		});
 	};
@@ -475,16 +475,16 @@ export function initializeWorkspaceNodeInspector(
 		dialog.className = 'workspace-node-confirm';
 		dialog.setAttribute('role', 'alertdialog');
 		message.textContent = focused.kind === 'folder'
-			? '이 폴더와 모든 하위 항목을 휴지통으로 이동합니다. 연결된 그래프 상태와 Task 참조도 제거됩니다.'
-			: '이 파일을 휴지통으로 이동합니다. 연결된 그래프 상태와 Task 참조도 제거됩니다.';
+			? 'Move this folder and all of its contents to Trash? Related graph state and Task references will also be removed.'
+			: 'Move this file to Trash? Related graph state and Task references will also be removed.';
 		actions.className = 'workspace-node-confirm-actions';
 		cancel.type = 'button';
 		cancel.className = 'workspace-node-confirm-cancel';
-		cancel.textContent = '취소';
+		cancel.textContent = 'Cancel';
 		cancel.addEventListener('click', () => dialog.remove());
 		confirm.type = 'button';
 		confirm.className = 'workspace-node-confirm-delete';
-		confirm.textContent = '삭제';
+		confirm.textContent = 'Delete';
 		confirm.addEventListener('click', () => {
 			if (!focused || pendingMutationRequestId !== undefined) {
 				return;
@@ -702,14 +702,14 @@ function resolveMonacoTheme(body: HTMLElement): string {
 
 function formatFailure(reason: string): string {
 	const messages: Readonly<Record<string, string>> = {
-		stale: 'Workspace가 변경되었습니다. 노드를 다시 선택해 주세요.',
-		'not-found': '파일 또는 폴더를 찾을 수 없습니다.',
-		'not-allowed': '현재 Workspace에서는 이 작업을 수행할 수 없습니다.',
-		'read-only': '읽기 전용 항목은 변경할 수 없습니다.',
-		conflict: '같은 이름의 항목이 이미 있습니다.',
-		'invalid-name': '사용할 수 없는 이름입니다.',
-		unsupported: '현재 파일 시스템이 이 작업을 지원하지 않습니다.',
-		failed: '작업을 완료하지 못했습니다.',
+		stale: 'The Workspace has changed. Select the node again.',
+		'not-found': 'The file or folder could not be found.',
+		'not-allowed': 'This operation is not available in the current Workspace.',
+		'read-only': 'Read-only items cannot be changed.',
+		conflict: 'An item with the same name already exists.',
+		'invalid-name': 'This name cannot be used.',
+		unsupported: 'The current file system does not support this operation.',
+		failed: 'The operation could not be completed.',
 	};
 
 	return messages[reason] ?? messages.failed;

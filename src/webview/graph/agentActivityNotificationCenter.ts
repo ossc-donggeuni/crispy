@@ -61,7 +61,7 @@ type GraphNodeLocalEffectHostFactory = (
 	element: HTMLElement,
 ) => GraphNodeLocalEffectHost;
 
-const CENTER_TITLE = '알림';
+const CENTER_TITLE = 'Notifications';
 const CENTER_PANEL_ID = 'graph-agent-activity-notification-panel';
 const CENTER_TITLE_ID = 'graph-agent-activity-notification-title';
 const CENTER_VIEWPORT_MARGIN = 16;
@@ -135,7 +135,7 @@ export function initializeAgentActivityNotificationCenter(
 	list.className = 'graph-agent-activity-notification-list';
 	list.setAttribute('role', 'list');
 	empty.className = 'graph-agent-activity-notification-empty';
-	empty.textContent = '새 알림이 없습니다.';
+	empty.textContent = 'No new notifications.';
 	panel.append(header, list, empty);
 	controlRow.append(trigger);
 	center.append(controlRow, panel);
@@ -258,8 +258,8 @@ export function initializeAgentActivityNotificationCenter(
 		badge.textContent = count > 99 ? '99+' : String(count);
 		empty.hidden = count !== 0;
 		list.hidden = count === 0;
-		trigger.setAttribute('aria-label', `${CENTER_TITLE} ${count}개`);
-		trigger.title = `${CENTER_TITLE} ${count}개`;
+		trigger.setAttribute('aria-label', `${CENTER_TITLE}: ${count}`);
+		trigger.title = `${CENTER_TITLE}: ${count}`;
 	};
 
 	const unsubscribeStore = store.subscribe(() => reconcile());
@@ -373,8 +373,8 @@ function createNotificationRegistration(
 	focusButton.append(summary, target, currentMessage);
 	dismissButton.className = 'graph-agent-activity-notification-dismiss';
 	dismissButton.type = 'button';
-	dismissButton.setAttribute('aria-label', '알림 삭제');
-	dismissButton.title = '알림 삭제';
+	dismissButton.setAttribute('aria-label', 'Dismiss notification');
+	dismissButton.title = 'Dismiss notification';
 	dismissIcon.className = 'graph-agent-activity-notification-dismiss-icon';
 	dismissIcon.setAttribute('aria-hidden', 'true');
 	dismissButton.append(dismissIcon);
@@ -400,10 +400,10 @@ function updateNotificationRegistration(
 	entry: AgentActivityNotificationEntry,
 ): void {
 	const targetName = entry.dismissalScope === 'session'
-		? 'Task 전체'
+		? 'Entire task'
 		: entry.targetName;
 	const targetPath = entry.dismissalScope === 'session'
-		? `${entry.groupedTargetCount}개 노드의 완료 이벤트`
+		? `Completion events for ${entry.groupedTargetCount} nodes`
 		: entry.targetPath;
 
 	registration.entry = entry;
@@ -417,7 +417,7 @@ function updateNotificationRegistration(
 	);
 	registration.focusButton.disabled = entry.availability === 'outside';
 	registration.focusButton.title = entry.availability === 'outside'
-		? '현재 Workspace Graph 범위 밖의 대상입니다.'
+		? 'This target is outside the current Workspace Graph.'
 		: targetPath;
 	registration.sessionTitle.textContent = entry.sessionTitle;
 	registration.status.textContent = getAgentActivityNotificationStatusLabel(

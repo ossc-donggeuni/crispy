@@ -1409,8 +1409,8 @@ function syncTaskScopeAreaElement(
 	slideFrom?: TaskScopeSlideFrame,
 ): void {
 	const isReference = area.kind === 'reference';
-	const areaTitle = isReference ? '참조 영역' : '작업 영역';
-	const titleText = node.kind === 'start' ? `기본 ${areaTitle}` : areaTitle;
+	const areaTitle = isReference ? 'Reference area' : 'Work area';
+	const titleText = node.kind === 'start' ? `Default ${areaTitle}` : areaTitle;
 	const header = ownerDocument.createElement('header');
 	const title = ownerDocument.createElement('strong');
 	const body = ownerDocument.createElement('div');
@@ -1461,7 +1461,7 @@ function syncTaskScopeAreaElement(
 	header.append(title);
 	body.className = 'task-scope-body';
 	dropHint.className = 'task-scope-drop-hint';
-	dropHint.textContent = '여기에 놓아 추가';
+	dropHint.textContent = 'Drop to add';
 	dropHint.setAttribute('aria-hidden', 'true');
 
 	if (area.sourceIds.length === 0) {
@@ -1470,15 +1470,15 @@ function syncTaskScopeAreaElement(
 		const detail = ownerDocument.createElement('span');
 
 		empty.className = 'task-scope-empty';
-		instruction.textContent = '폴더 또는 파일을';
-		detail.textContent = '이곳으로 끌어오세요';
+		instruction.textContent = 'Drag a folder or file';
+		detail.textContent = 'here to add it';
 		empty.append(instruction, detail);
 		body.append(empty);
 	} else if (status.unavailableCount > 0) {
 		const unavailable = ownerDocument.createElement('span');
 
 		unavailable.className = 'task-scope-unavailable-summary';
-		unavailable.textContent = `${status.unavailableCount}개의 대상을 현재 찾을 수 없음`;
+		unavailable.textContent = `${status.unavailableCount} target(s) are currently unavailable`;
 		body.append(unavailable);
 	}
 
@@ -1665,7 +1665,7 @@ function createTaskPort(
 	disabled: boolean,
 ): HTMLButtonElement {
 	const port = ownerDocument.createElement('button');
-	const directionLabel = direction === 'input' ? '입력 연결' : '출력 연결';
+	const directionLabel = direction === 'input' ? 'Input connection' : 'Output connection';
 
 	port.className = `task-node-port task-${direction}-port`;
 	port.type = 'button';
@@ -1696,21 +1696,21 @@ function createTaskNodeActions(
 		const scopeArea = resolveTaskGraphTargetToggleArea(action);
 		const scopeAreaLayout = scopeArea ? node.scopeAreas[scopeArea] : undefined;
 		const scopeAreaLabel = scopeArea
-			? `${node.kind === 'start' ? '기본 ' : ''}${
-				scopeArea === 'reference' ? '참조 영역' : '작업 영역'
+			? `${node.kind === 'start' ? 'Default ' : ''}${
+				scopeArea === 'reference' ? 'reference area' : 'work area'
 			}`
 			: '';
 		const label = scopeAreaLayout
-			? `${scopeAreaLabel} ${scopeAreaLayout.collapsed ? '열기' : '접기'}`
+			? `${scopeAreaLayout.collapsed ? 'Open' : 'Collapse'} ${scopeAreaLabel}`
 			: action === 'start-task'
-				? 'Task 시작'
+				? 'Start Task'
 				: action === 'add-work'
-				? 'Work 추가'
+				? 'Add Work'
 				: action === 'import-task'
-					? 'Task JSON 가져오기'
+					? 'Import Task JSON'
 					: action === 'export-task'
-						? 'Task JSON 내보내기'
-						: action === 'remove-work' ? 'Work 삭제' : 'Task 삭제';
+						? 'Export Task JSON'
+						: action === 'remove-work' ? 'Delete Work' : 'Delete Task';
 		const isScopeToggleLocked = (scopeAreaLayout?.sourceIds.length ?? 0) > 0;
 
 		button.className = [
@@ -1725,7 +1725,7 @@ function createTaskNodeActions(
 		].join(' ');
 		button.type = 'button';
 		button.title = isScopeToggleLocked
-			? `${scopeAreaLabel}에 할당된 노드가 있어 접을 수 없음`
+			? `Cannot collapse ${scopeAreaLabel} while nodes are assigned to it`
 			: label;
 		button.setAttribute('aria-label', label);
 		button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, action);
@@ -1767,8 +1767,8 @@ function createTaskStartButton(
 
 	button.className = 'task-start-run-action';
 	button.type = 'button';
-	button.title = 'Task 시작';
-	button.setAttribute('aria-label', `${createTaskNodeAriaLabel(node)} 시작`);
+	button.title = 'Start Task';
+	button.setAttribute('aria-label', `Start ${createTaskNodeAriaLabel(node)}`);
 	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'start-task');
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
@@ -1790,8 +1790,8 @@ function createTaskStopButton(
 
 	button.className = 'task-stop-run-action';
 	button.type = 'button';
-	button.title = 'Task 강제 종료';
-	button.setAttribute('aria-label', `${createTaskNodeAriaLabel(node)} 강제 종료`);
+	button.title = 'Force Stop Task';
+	button.setAttribute('aria-label', `Force stop ${createTaskNodeAriaLabel(node)}`);
 	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'stop-task');
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
@@ -1874,8 +1874,8 @@ function syncTaskEdgeActionElement(
 	actionList.className = 'task-edge-action-list';
 	button.className = 'graph-detached-root-action task-edge-action';
 	button.type = 'button';
-	button.title = '연결 해제';
-	button.setAttribute('aria-label', '연결 해제');
+	button.title = 'Disconnect';
+	button.setAttribute('aria-label', 'Disconnect');
 	button.setAttribute(TASK_EDGE_ACTION_ATTRIBUTE, 'disconnect-edge');
 	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');

@@ -2363,13 +2363,13 @@ function initializeDetachedRootActions(
 	const actions = ownerDocument.createElement('div');
 	const duplicate = createDetachedRootActionButton(
 		ownerDocument,
-		'복사',
+		'Duplicate',
 		DUPLICATE_ICON_ASSET,
 		'duplicate',
 	);
 	const remove = createDetachedRootActionButton(
 		ownerDocument,
-		'삭제',
+		'Delete',
 		DELETE_ICON_ASSET,
 		'delete',
 	);
@@ -2780,7 +2780,7 @@ function initializeFileGroupContent(
 
 					more.className = 'graph-file-control graph-file-more';
 					more.type = 'button';
-					more.textContent = `+ ${remainingCount}개 더보기`;
+					more.textContent = `Show ${remainingCount} more`;
 					more.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 					more.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 					more.addEventListener('click', handleMoreClick);
@@ -2801,7 +2801,7 @@ function initializeFileGroupContent(
 
 					collapse.className = 'graph-file-control graph-file-collapse';
 					collapse.type = 'button';
-					collapse.setAttribute('aria-label', '파일 목록 접기');
+					collapse.setAttribute('aria-label', 'Collapse file list');
 					collapse.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 					collapse.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 					collapse.append(createCollapseIcon(ownerDocument));
@@ -3208,7 +3208,7 @@ function createDetachHandle(ownerDocument: Document): HTMLButtonElement {
 
 	handle.className = 'graph-detach-handle';
 	handle.type = 'button';
-	handle.setAttribute('aria-label', 'Graph Root로 분리');
+	handle.setAttribute('aria-label', 'Detach as Graph Root');
 	handle.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
 	handle.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
 	icon.classList.add('graph-detach-icon');

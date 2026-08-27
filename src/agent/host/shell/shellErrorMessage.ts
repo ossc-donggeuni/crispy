@@ -26,27 +26,27 @@ interface ShellErrorMessagePolicy {
  */
 const SHELL_ERROR_MESSAGE_POLICIES = {
 	unsupported_platform: {
-		message: '현재 운영체제에서는 Shell terminal을 지원하지 않습니다.',
+		message: 'Shell terminals are not supported on this operating system.',
 		canRestart: false,
 	},
 	shell_environment_missing: {
-		message: 'Shell 환경 설정을 찾을 수 없습니다.',
+		message: 'The shell environment configuration could not be found.',
 		canRestart: true,
 	},
 	shell_path_invalid: {
-		message: 'Shell 경로 설정이 올바르지 않습니다.',
+		message: 'The configured shell path is invalid.',
 		canRestart: true,
 	},
 	shell_executable_not_found: {
-		message: '설정된 Shell 실행 파일을 찾을 수 없습니다.',
+		message: 'The configured shell executable could not be found.',
 		canRestart: true,
 	},
 	shell_path_not_file: {
-		message: '설정된 Shell 경로가 실행 파일이 아닙니다.',
+		message: 'The configured shell path is not a file.',
 		canRestart: true,
 	},
 	shell_not_executable: {
-		message: '설정된 Shell을 실행할 권한이 없습니다.',
+		message: 'The configured shell is not executable.',
 		canRestart: true,
 	},
 } as const satisfies Record<ShellLaunchErrorCode, ShellErrorMessagePolicy>;

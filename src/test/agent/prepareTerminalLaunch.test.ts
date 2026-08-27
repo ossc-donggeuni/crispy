@@ -240,7 +240,7 @@ suite('Terminal launch Host preparation', () => {
 				tabId: 'tab-shell-failure',
 				sessionId: 'session-existing',
 				code: 'shell_unavailable',
-				message: 'Shell 경로 설정이 올바르지 않습니다.',
+				message: 'The configured shell path is invalid.',
 				canRestart: true,
 			});
 			const serialized = JSON.stringify(result.error);

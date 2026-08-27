@@ -955,7 +955,7 @@ suite('Shell Terminal Webview', () => {
 			tabId: TAB_ID,
 			sessionId: null,
 			code: 'workspace_untrusted',
-			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			message: 'Trust the workspace and try again.',
 			canRestart: false,
 			switchAttemptId: 1,
 		});

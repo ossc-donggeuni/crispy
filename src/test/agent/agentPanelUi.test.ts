@@ -1241,7 +1241,7 @@ suite('Agent Panel UI', () => {
 			tabId,
 			sessionId: null,
 			code: 'workspace_untrusted',
-			message: '작업공간을 신뢰한 후 다시 시도하세요.',
+			message: 'Trust the workspace and try again.',
 			canRestart: false,
 			switchAttemptId: 1,
 		});
@@ -1617,7 +1617,7 @@ suite('Agent Panel UI', () => {
 			).textContent,
 			'connected',
 		);
-		assert.strictEqual(connectionStatus.getAttribute('aria-label'), 'MCP 연결됨');
+		assert.strictEqual(connectionStatus.getAttribute('aria-label'), 'MCP connected');
 		assert.deepStrictEqual(fixture.tabStrip.findAll('agent-tab-mcp-indicator'), []);
 		assert.strictEqual(failureDetail.hidden, true);
 		assert.strictEqual(restart.hidden, true);
@@ -1682,8 +1682,8 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(restart.disabled, true);
 		assert.strictEqual(fixture.dialog.requests.length, 1);
 		assert.deepStrictEqual(fixture.dialog.requests[0], {
-			message: 'MCP와 Agent를 다시 시작하면 이 탭에서 실행 중인 Agent와 현재 CLI 대화가 종료됩니다. 새 MCP 연결과 새 Agent 세션으로 다시 시작하시겠습니까?',
-			acceptLabel: 'MCP와 Agent 다시 시작',
+			message: 'Restarting MCP and the Agent will end the running Agent and current CLI conversation in this tab. Restart with a new MCP connection and Agent session?',
+			acceptLabel: 'Restart MCP and Agent',
 		});
 
 		fixture.dialog.answer(false);
@@ -1871,12 +1871,12 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.tabMenuHost.hidden, false);
 		const menu = requireElement(fixture.tabMenuHost, 'agent-tab-context-menu');
 		assert.strictEqual(menu.getAttribute('role'), 'menu');
-		assert.strictEqual(menu.getAttribute('aria-label'), 'Codex #1 탭 메뉴');
+		assert.strictEqual(menu.getAttribute('aria-label'), 'Codex #1 tab menu');
 		assert.deepStrictEqual(
 			fixture.tabMenuHost.findAll('agent-tab-context-menu-item').map(
 				(item) => item.textContent,
 			),
-			['이름 변경', '고정'],
+			['Rename', 'Pin'],
 		);
 		assert.strictEqual(first === second, false);
 	});
@@ -1931,7 +1931,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(fixture.renameDialogHost.hidden, false);
 		assert.strictEqual(
 			requireElement(fixture.renameDialogHost, 'agent-tab-rename-error').textContent,
-			'이름을 입력해주세요.',
+			'Enter a name.',
 		);
 
 		input.value = '인증 오류 조사';
@@ -1963,7 +1963,7 @@ suite('Agent Panel UI', () => {
 		assert.strictEqual(snapshot.activeTabId, second);
 		assert.strictEqual(
 			fixture.tabStrip.findAll('agent-tab-select')[0].getAttribute('aria-label'),
-			'Codex, Codex #1, Workspace file:///workspace, 고정됨',
+			'Codex, Codex #1, Workspace file:///workspace, pinned',
 		);
 		assert.strictEqual(
 			fixture.tabStrip.findAll('agent-tab')[1].dataset.pinnedBoundary,
@@ -1977,7 +1977,7 @@ suite('Agent Panel UI', () => {
 		});
 		assert.strictEqual(
 			fixture.tabMenuHost.findAll('agent-tab-context-menu-item')[1].textContent,
-			'고정 해제',
+			'Unpin',
 		);
 		fixture.tabMenuHost.findAll('agent-tab-context-menu-item')[1].click();
 		snapshot = fixture.controller.getSnapshot();

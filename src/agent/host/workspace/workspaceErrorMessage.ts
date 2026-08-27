@@ -32,19 +32,19 @@ interface WorkspaceErrorMessagePolicy {
  */
 const WORKSPACE_ERROR_MESSAGE_POLICIES = {
 	workspace_untrusted: {
-		message: '작업공간을 신뢰한 후 다시 시도하세요.',
+		message: 'Trust the workspace and try again.',
 		canRestart: true,
 	},
 	workspace_root_unavailable: {
-		message: '선택한 작업공간 폴더를 다시 연 후 시도하세요.',
+		message: 'Reopen the selected workspace folder and try again.',
 		canRestart: true,
 	},
 	workspace_virtual_unsupported: {
-		message: '로컬 파일 작업공간을 연 후 다시 시도하세요.',
+		message: 'Open a local file workspace and try again.',
 		canRestart: true,
 	},
 	workspace_path_invalid: {
-		message: '유효한 로컬 작업공간 폴더를 연 후 다시 시도하세요.',
+		message: 'Open a valid local workspace folder and try again.',
 		canRestart: true,
 	},
 } as const satisfies Record<

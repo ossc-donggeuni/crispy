@@ -983,9 +983,9 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.rootListButton.type, 'button');
 		assert.strictEqual(
 			fixture.rootListButton.getAttribute('aria-label'),
-			'활성화된 루트 목록',
+			'Active roots',
 		);
-		assert.strictEqual(fixture.rootListButton.title, '활성화된 루트 목록');
+		assert.strictEqual(fixture.rootListButton.title, 'Active roots');
 		assert.strictEqual(
 			fixture.rootListButton.getAttribute('aria-controls'),
 			fixture.rootListPanel.id,
@@ -1024,9 +1024,9 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.arrangeAllButton.type, 'button');
 		assert.strictEqual(
 			fixture.arrangeAllButton.getAttribute('aria-label'),
-			'그래프 전부 정렬하기',
+			'Arrange entire graph',
 		);
-		assert.strictEqual(fixture.arrangeAllButton.title, '그래프 전부 정렬하기');
+		assert.strictEqual(fixture.arrangeAllButton.title, 'Arrange entire graph');
 		assert.strictEqual(fixture.arrangeAllButton.hasAttribute('aria-controls'), false);
 		assert.strictEqual(fixture.arrangeAllButton.hasAttribute('aria-expanded'), false);
 		assert.strictEqual(
@@ -1036,9 +1036,9 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.addTaskButton.type, 'button');
 		assert.strictEqual(
 			fixture.addTaskButton.getAttribute('aria-label'),
-			'Task 추가',
+			'Add Task',
 		);
-		assert.strictEqual(fixture.addTaskButton.title, 'Task 추가');
+		assert.strictEqual(fixture.addTaskButton.title, 'Add Task');
 		assert.strictEqual(fixture.addTaskButton.hasAttribute('aria-controls'), false);
 		assert.strictEqual(fixture.addTaskButton.hasAttribute('aria-expanded'), false);
 		assert.strictEqual(
@@ -1330,7 +1330,7 @@ suite('Graph Navigator', () => {
 		assert.strictEqual(fixture.rootListEmpty.hidden, false);
 		assert.strictEqual(
 			fixture.rootListEmpty.textContent,
-			'활성화된 루트가 없습니다.',
+			'No active roots.',
 		);
 	});
 
@@ -1378,7 +1378,7 @@ suite('Graph Navigator', () => {
 			'false',
 		);
 		assert.strictEqual(fixture.rootListButton.hasClass('is-active'), false);
-		assert.strictEqual(fixture.rootListTitle.textContent, '활성화된 루트 목록');
+		assert.strictEqual(fixture.rootListTitle.textContent, 'Active roots');
 
 		fixture.rootListButton.dispatch('click', {} as Event);
 

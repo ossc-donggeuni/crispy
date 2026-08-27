@@ -167,6 +167,9 @@ let activeWorkspacePersistence: WorkspacePersistenceCoordinator | undefined;
 const pendingWorkspaceWrites = new Set<Promise<void>>();
 
 export const OPEN_CANVAS_COMMAND_ID = 'crispy.openCanvas';
+export const OPEN_CANVAS_FROM_OVERVIEW_COMMAND_ID = 'crispy.openCanvasFromOverview';
+export const CRISPY_VIEW_CONTAINER_ID = 'ossc-donggeuni-crispy';
+export const CRISPY_OVERVIEW_VIEW_ID = 'ossc-donggeuni.crispy.overview';
 export const DEBUG_NODE_EFFECTS_COMMAND_ID = 'crispy.debugNodeEffects';
 export const CLEAR_NODE_EFFECTS_COMMAND_ID = 'crispy.clearNodeEffects';
 export const DEBUG_AGENT_ACTIVITIES_COMMAND_ID = 'crispy.debugAgentActivities';
@@ -614,17 +617,17 @@ const defaultTaskClipboardHost: TaskClipboardHost = {
 	writeText: (value) => vscode.env.clipboard.writeText(value),
 	reportCopySuccess: () => {
 		vscode.window.setStatusBarMessage(
-			'Crispy: Task JSON을 클립보드에 복사했습니다.',
+			'Crispy: Task JSON copied to the clipboard.',
 			2_000,
 		);
 	},
 	reportCopyFailure: (reason) => {
 		void vscode.window.showErrorMessage(
 			reason === 'transfer_limit'
-				? 'Crispy: Task가 JSON 내보내기 한도를 초과했습니다.'
+				? 'Crispy: The task exceeds the JSON export limit.'
 				: reason === 'invalid_task'
-					? 'Crispy: Task JSON을 생성하지 못했습니다.'
-					: 'Crispy: Task JSON을 복사하지 못했습니다.',
+					? 'Crispy: Could not create the Task JSON.'
+					: 'Crispy: Could not copy the Task JSON.',
 		);
 	},
 };
@@ -646,6 +649,19 @@ export interface CrispyExtensionApi {
 /** Reads the production Host version without accepting provider or environment input. */
 export function readAgentActivityCompatibilityFromHost(): boolean {
 	return isAgentActivityVscodeVersionAllowed(vscode.version);
+}
+
+/**
+ * Overview의 primary action에서 Canvas를 연 뒤 해당 Sidebar를 닫는다.
+ * 일반 Canvas command는 사용자가 열어 둔 다른 Sidebar를 보존한다.
+ */
+export async function openCanvasFromOverview<T>(
+	openCanvas: () => Promise<T>,
+	closeSidebar: () => Thenable<unknown>,
+): Promise<T> {
+	const canvas = await openCanvas();
+	await closeSidebar();
+	return canvas;
 }
 
 /**
@@ -1144,6 +1160,20 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 		OPEN_CANVAS_COMMAND_ID,
 		openCanvas,
 	);
+	const openCanvasFromOverviewDisposable = vscode.commands.registerCommand(
+		OPEN_CANVAS_FROM_OVERVIEW_COMMAND_ID,
+		() => openCanvasFromOverview(
+			openCanvas,
+			() => vscode.commands.executeCommand('workbench.action.closeSidebar'),
+		),
+	);
+	const overviewViewDisposable = vscode.window.registerTreeDataProvider(
+		CRISPY_OVERVIEW_VIEW_ID,
+		{
+			getTreeItem: (item: vscode.TreeItem): vscode.TreeItem => item,
+			getChildren: (): vscode.TreeItem[] => [],
+		},
+	);
 	const debugNodeEffectsDisposable = vscode.commands.registerCommand(
 		DEBUG_NODE_EFFECTS_COMMAND_ID,
 		debugNodeEffects,
@@ -1163,6 +1193,8 @@ export function activate(context: vscode.ExtensionContext): CrispyExtensionApi {
 
 	context.subscriptions.push(
 		openCanvasDisposable,
+		openCanvasFromOverviewDisposable,
+		overviewViewDisposable,
 		debugNodeEffectsDisposable,
 		clearNodeEffectsDisposable,
 		debugAgentActivitiesDisposable,

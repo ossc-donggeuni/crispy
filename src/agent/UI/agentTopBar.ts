@@ -12,7 +12,7 @@ export const AGENT_RESTART_TITLE = 'Restart and choose an agent';
 
 export const AGENT_CHANGE_PROVIDER_TITLE = 'Choose another agent';
 
-export const MCP_RESTART_LABEL = 'MCP와 Agent 다시 시작';
+export const MCP_RESTART_LABEL = 'Restart MCP and Agent';
 
 /**
  * 상단 bar가 상위 계층으로 전달하는 사용자 동작이다.

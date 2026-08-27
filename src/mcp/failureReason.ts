@@ -28,17 +28,17 @@ export const retryabilityByFailureReason = Object.freeze({
 
 /** Webview에 raw reason이나 provider 출력을 반사하지 않는 고정 사용자 문구다. */
 export const messageByMcpFailureReason = Object.freeze({
-	adapter_start_failed: 'Crispy MCP를 시작하지 못했습니다.',
-	adapter_ready_timeout: 'Crispy MCP가 준비되지 않았습니다.',
-	adapter_exited: 'Crispy MCP 연결이 종료되었습니다.',
-	auth_registration_failed: 'Crispy MCP 인증 연결을 준비하지 못했습니다.',
-	provider_config_rejected: 'Agent가 Crispy MCP 구성을 사용할 수 없습니다.',
-	provider_policy_blocked: 'Agent 정책이 Crispy MCP 연결을 허용하지 않습니다.',
-	provider_update_required: 'Agent 업데이트 후 Crispy MCP를 사용할 수 있습니다.',
+	adapter_start_failed: 'Could not start Crispy MCP.',
+	adapter_ready_timeout: 'Crispy MCP did not become ready in time.',
+	adapter_exited: 'The Crispy MCP connection ended.',
+	auth_registration_failed: 'Could not prepare the authenticated Crispy MCP connection.',
+	provider_config_rejected: 'The Agent cannot use the Crispy MCP configuration.',
+	provider_policy_blocked: 'The Agent policy does not allow the Crispy MCP connection.',
+	provider_update_required: 'Update the Agent to use Crispy MCP.',
 	safe_session_injection_unavailable:
-		'현재 Agent 세션에 Crispy MCP를 안전하게 연결할 수 없습니다.',
-	unsupported_platform: '이 플랫폼에서는 Crispy MCP 자동 연결을 지원하지 않습니다.',
-	unsupported_runtime: '이 Extension Host runtime에서는 Crispy MCP를 지원하지 않습니다.',
+		'Crispy MCP cannot be connected safely to the current Agent session.',
+	unsupported_platform: 'Automatic Crispy MCP connection is not supported on this platform.',
+	unsupported_runtime: 'Crispy MCP is not supported by this Extension Host runtime.',
 } satisfies Readonly<Record<McpFailureReason, string>>);
 
 export interface McpFailure {
