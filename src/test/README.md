@@ -4,7 +4,8 @@
 
 ## `extension.test.ts`
 
-- Extension을 활성화하고 manifest의 Canvas command를 등록한다
+- Extension을 활성화하고 manifest의 Activity Bar와 Canvas command를 등록한다
+- Overview primary action이 Canvas를 연 뒤 Sidebar를 닫는다
 - Canvas command가 실제 설정으로 WebviewPanel을 최초 생성한다
 - 열린 Canvas command를 다시 실행하면 같은 Panel을 재사용한다
 - Panel을 dispose한 뒤 Canvas command가 새 Panel을 생성한다

@@ -34,6 +34,7 @@ src/
 > Extension의 활성화와 비활성화 및 WebviewPanel의 생명 주기를 관리합니다.
 
 - `crispy.openCanvas` Command 등록
+- Activity Bar의 Crispy Overview View와 Canvas 진입 후 Sidebar를 닫는 전용 Command 등록
 - 기존 `WebviewPanel` 표시 또는 새 Panel 생성
 - Webview HTML 구성
 - 빌드된 CSS와 JavaScript 리소스 연결

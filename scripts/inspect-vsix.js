@@ -13,6 +13,26 @@ const { nodePtyRuntimeDependency } = require('./runtime-dependencies');
 const repositoryRoot = path.resolve(__dirname, '..');
 const { version, artifactsByTarget } = nodePtyRuntimeDependency.staging;
 const supportedTargets = Object.freeze(Object.keys(artifactsByTarget));
+const activityIconEntryName = 'extension/resources/crispy-activity.svg';
+const marketplaceIconEntryName = 'extension/resources/crispy-marketplace.png';
+const changelogEntryName = 'extension/changelog.md';
+const securityEntryName = 'extension/SECURITY.md';
+const supportEntryName = 'extension/SUPPORT.md';
+const requiredCategories = Object.freeze([
+	'Visualization',
+	'Machine Learning',
+	'Other',
+]);
+const requiredKeywords = Object.freeze([
+	'project visualization',
+	'code graph',
+	'workspace',
+	'codex',
+	'claude',
+	'ai agent',
+	'agent activity',
+	'terminal',
+]);
 
 function inspectionError(target, reason, problemPath, expected, actual, cause) {
 	const details = [
@@ -157,6 +177,8 @@ async function collectArchive(target, vsixPath) {
 	const bufferedEntries = new Set([
 		'extension/package.json',
 		'extension/dist/mcp-server.mjs',
+		activityIconEntryName,
+		marketplaceIconEntryName,
 		`${nodePtyPrefix}package.json`,
 		...artifactsByTarget[target].map((artifactPath) => `${nodePtyPrefix}${artifactPath}`),
 	]);
@@ -216,10 +238,63 @@ const requiredCrispyMcpToolNames = Object.freeze([
 	'crispy_caa',
 ]);
 
+function matchesExactStringArray(actual, expected) {
+	return Array.isArray(actual)
+		&& actual.length === expected.length
+		&& actual.every((value, index) => value === expected[index]);
+}
+
 function findExtensionManifestCapabilityProblems(manifest) {
 	const problems = [];
 	if (manifest?.main !== './dist/extension.js') {
 		problems.push('main');
+	}
+	if (manifest?.publisher !== 'ossc-donggeuni') {
+		problems.push('publisher');
+	}
+	if (manifest?.icon !== 'resources/crispy-marketplace.png') {
+		problems.push('icon');
+	}
+	if (
+		manifest?.description !== (
+			'Visualize project structure and run Codex or Claude agents '
+			+ 'in workspace-scoped terminals.'
+		)
+	) {
+		problems.push('description');
+	}
+	if (manifest?.pricing !== 'Free') {
+		problems.push('pricing');
+	}
+	if (
+		manifest?.repository?.type !== 'git'
+		|| manifest?.repository?.url !== 'https://github.com/ossc-donggeuni/crispy.git'
+	) {
+		problems.push('repository');
+	}
+	if (manifest?.homepage !== 'https://github.com/ossc-donggeuni/crispy') {
+		problems.push('homepage');
+	}
+	if (manifest?.bugs?.url !== 'https://github.com/ossc-donggeuni/crispy/issues') {
+		problems.push('bugs');
+	}
+	if (
+		manifest?.galleryBanner?.color !== '#0D5FFB'
+		|| manifest?.galleryBanner?.theme !== 'dark'
+	) {
+		problems.push('galleryBanner');
+	}
+	if (manifest?.qna !== false) {
+		problems.push('qna');
+	}
+	if (!matchesExactStringArray(manifest?.extensionKind, ['workspace'])) {
+		problems.push('extensionKind');
+	}
+	if (!matchesExactStringArray(manifest?.categories, requiredCategories)) {
+		problems.push('categories');
+	}
+	if (!matchesExactStringArray(manifest?.keywords, requiredKeywords)) {
+		problems.push('keywords');
 	}
 	if (manifest?.engines?.node !== '24.x') {
 		problems.push('engines.node');
@@ -243,6 +318,41 @@ function findExtensionManifestCapabilityProblems(manifest) {
 	}
 	if (manifest?.capabilities?.virtualWorkspaces?.supported !== 'limited') {
 		problems.push('capabilities.virtualWorkspaces.supported');
+	}
+	const activityBarContainers = manifest?.contributes
+		?.viewsContainers?.activitybar;
+	if (
+		!Array.isArray(activityBarContainers)
+		|| activityBarContainers.length !== 1
+		|| activityBarContainers[0]?.id !== 'ossc-donggeuni-crispy'
+		|| activityBarContainers[0]?.title !== 'Crispy'
+		|| activityBarContainers[0]?.icon !== 'resources/crispy-activity.svg'
+	) {
+		problems.push('contributes.viewsContainers.activitybar');
+	}
+	const overviewViews = manifest?.contributes
+		?.views?.['ossc-donggeuni-crispy'];
+	if (
+		!Array.isArray(overviewViews)
+		|| overviewViews.length !== 1
+		|| overviewViews[0]?.id !== 'ossc-donggeuni.crispy.overview'
+		|| overviewViews[0]?.name !== 'Overview'
+		|| overviewViews[0]?.icon !== 'resources/crispy-activity.svg'
+		|| overviewViews[0]?.contextualTitle !== 'Crispy Overview'
+	) {
+		problems.push('contributes.views.ossc-donggeuni-crispy');
+	}
+	const viewsWelcome = manifest?.contributes?.viewsWelcome;
+	if (
+		!Array.isArray(viewsWelcome)
+		|| viewsWelcome.length !== 1
+		|| viewsWelcome[0]?.view !== 'ossc-donggeuni.crispy.overview'
+		|| viewsWelcome[0]?.contents !== (
+			'Visualize your project structure and work with AI agents.\n'
+			+ '[Open Canvas](command:crispy.openCanvasFromOverview)'
+		)
+	) {
+		problems.push('contributes.viewsWelcome');
 	}
 	return Object.freeze(problems);
 }
@@ -268,9 +378,10 @@ function verifyExtensionManifest(target, vsixPath, entries) {
 	if (problems.length > 0) {
 		throw inspectionError(
 			target,
-			'extension manifest execution capabilities are incomplete',
+			'extension manifest release contract is incomplete',
 			`${vsixPath}:${entryName}`,
-			'host-owned entrypoint, Node 24, VS Code ^1.125.0 and limited Workspace capabilities',
+			'Marketplace metadata, Activity Bar, host entrypoint, Node 24, '
+				+ 'VS Code ^1.125.0 and limited Workspace capabilities',
 			problems.join(', '),
 		);
 	}
@@ -284,6 +395,53 @@ function requireEntry(target, vsixPath, entries, entryName) {
 	return record;
 }
 
+function verifyBrandingAssets(target, vsixPath, entries) {
+	const activityIcon = requireEntry(
+		target,
+		vsixPath,
+		entries,
+		activityIconEntryName,
+	).buffer.toString('utf8');
+	if (
+		!activityIcon.includes('<svg width="24" height="24"')
+		|| !activityIcon.includes('viewBox="-61 -111 2500 2500"')
+		|| (activityIcon.match(/fill="currentColor"/gu) ?? []).length !== 3
+		|| /<(?:script|image|foreignObject)\b|(?:href|xlink:href)\s*=/iu.test(activityIcon)
+	) {
+		throw inspectionError(
+			target,
+			'Activity Bar icon is not the approved centered monochrome SVG',
+			`${vsixPath}:${activityIconEntryName}`,
+			'24x24 centered SVG with three currentColor paths and no external content',
+			'invalid SVG contract',
+		);
+	}
+
+	const marketplaceIcon = requireEntry(
+		target,
+		vsixPath,
+		entries,
+		marketplaceIconEntryName,
+	).buffer;
+	const pngSignature = '89504e470d0a1a0a';
+	if (
+		marketplaceIcon.length < 33
+		|| marketplaceIcon.subarray(0, 8).toString('hex') !== pngSignature
+		|| marketplaceIcon.subarray(12, 16).toString('ascii') !== 'IHDR'
+		|| marketplaceIcon.readUInt32BE(16) !== 256
+		|| marketplaceIcon.readUInt32BE(20) !== 256
+		|| marketplaceIcon[25] !== 6
+	) {
+		throw inspectionError(
+			target,
+			'Marketplace icon is not the approved RGBA PNG',
+			`${vsixPath}:${marketplaceIconEntryName}`,
+			'256x256 RGBA PNG',
+			'invalid PNG contract',
+		);
+	}
+}
+
 function findUnexpectedVsixPayloadEntries(entryNames) {
 	const allowedRootEntries = new Set([
 		'[Content_Types].xml',
@@ -295,6 +453,11 @@ function findUnexpectedVsixPayloadEntries(entryNames) {
 		'extension/THIRD_PARTY_NOTICES.md',
 		'extension/package.json',
 		'extension/readme.md',
+		changelogEntryName,
+		securityEntryName,
+		supportEntryName,
+		activityIconEntryName,
+		marketplaceIconEntryName,
 		'extension/resources/defaultWorkspaceFilter.json',
 	]);
 
@@ -505,7 +668,11 @@ async function inspectVsix(target, vsixPath) {
 		);
 	}
 	requireEntry(target, vsixPath, entries, 'extension/dist/extension.js');
+	requireEntry(target, vsixPath, entries, changelogEntryName);
+	requireEntry(target, vsixPath, entries, securityEntryName);
+	requireEntry(target, vsixPath, entries, supportEntryName);
 	verifyExtensionManifest(target, vsixPath, entries);
+	verifyBrandingAssets(target, vsixPath, entries);
 	verifyMcpChildBundle(target, vsixPath, entries);
 	requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/LICENSE');
 	const packageRecord = requireEntry(target, vsixPath, entries, 'extension/dist/node_modules/node-pty/package.json');

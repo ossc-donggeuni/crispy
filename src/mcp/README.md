@@ -130,7 +130,7 @@ multi-root 및 Trust/root/restart lifecycle, unsupported zero-state, 실제 prov
 smoke를 검증한다. provider smoke의 prompt는 Tool 이름을 직접 지정하지 않고 `package.json` 읽기를 요청하며
 `session.agentActivityRequested`가 실제 발생해야 통과한다. minimum 또는 major boundary를 바꿀 때에는 manifest와
 `AGENT_ACTIVITY_MINIMUM_VSCODE_VERSION`을 함께 qualification한다. 상세 순서와 문제 해결은
-repository `README.md`와 `TROUBLESHOOTING.md`를 따른다.
+repository `README.md`와 `SUPPORT.md`를 따른다.
 
 ## 상태 UI의 의미
 

@@ -613,7 +613,7 @@ Graph→Webview Store→receipt/quota full chain, settlement 역전/FIFO, multi-
 Trust/root/restart lifecycle, unsupported zero-state를 검증한다. 이어서 실제 Codex/Claude smoke와
 해당 native VSIX smoke를 실행하고 환경과 미실행 항목을 기록한다. minimum 또는 major boundary를
 바꿀 때에는 manifest와 capability constant를 함께 갱신한다. 상세 명령과 진단은
-`../mcp/README.md`, repository `README.md`, `TROUBLESHOOTING.md`를 따른다.
+`../mcp/README.md`, repository `README.md`, `SUPPORT.md`를 따른다.
 
 ## Task Work provider instructions — 2026-08-27
 

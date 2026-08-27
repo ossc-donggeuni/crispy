@@ -1,8 +1,27 @@
 {
   "name": "crispy",
   "displayName": "Crispy",
-  "description": "Project structure visualization & Working with AI agents",
+  "publisher": "ossc-donggeuni",
+  "description": "Visualize project structure and run Codex or Claude agents in workspace-scoped terminals.",
   "version": "0.0.1",
+  "icon": "resources/crispy-marketplace.png",
+  "pricing": "Free",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ossc-donggeuni/crispy.git"
+  },
+  "homepage": "https://github.com/ossc-donggeuni/crispy",
+  "bugs": {
+    "url": "https://github.com/ossc-donggeuni/crispy/issues"
+  },
+  "galleryBanner": {
+    "color": "#0D5FFB",
+    "theme": "dark"
+  },
+  "qna": false,
+  "extensionKind": [
+    "workspace"
+  ],
   "packageManager": "pnpm@11.18.0",
   "license": "MIT",
   "engines": {
@@ -10,7 +29,19 @@
     "vscode": "^1.125.0"
   },
   "categories": [
+    "Visualization",
+    "Machine Learning",
     "Other"
+  ],
+  "keywords": [
+    "project visualization",
+    "code graph",
+    "workspace",
+    "codex",
+    "claude",
+    "ai agent",
+    "agent activity",
+    "terminal"
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -27,6 +58,31 @@
     }
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ossc-donggeuni-crispy",
+          "title": "Crispy",
+          "icon": "resources/crispy-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "ossc-donggeuni-crispy": [
+        {
+          "id": "ossc-donggeuni.crispy.overview",
+          "name": "Overview",
+          "icon": "resources/crispy-activity.svg",
+          "contextualTitle": "Crispy Overview"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "ossc-donggeuni.crispy.overview",
+        "contents": "Visualize your project structure and work with AI agents.\n[Open Canvas](command:crispy.openCanvasFromOverview)"
+      }
+    ],
     "commands": [
       {
         "command": "crispy.openCanvas",

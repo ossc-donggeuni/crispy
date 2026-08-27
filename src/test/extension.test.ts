@@ -3,10 +3,13 @@ import {
 	AGENT_ACTIVITY_DEBUG_SESSION_IDS,
 	CLEAR_AGENT_ACTIVITIES_COMMAND_ID,
 	CLEAR_NODE_EFFECTS_COMMAND_ID,
+	CRISPY_OVERVIEW_VIEW_ID,
+	CRISPY_VIEW_CONTAINER_ID,
 	CrispyExtensionApi,
 	DEBUG_AGENT_ACTIVITIES_COMMAND_ID,
 	DEBUG_NODE_EFFECTS_COMMAND_ID,
 	OPEN_CANVAS_COMMAND_ID,
+	OPEN_CANVAS_FROM_OVERVIEW_COMMAND_ID,
 	TaskClipboardHost,
 	TerminalMessageHost,
 	WorkspaceFileHost,
@@ -28,6 +31,7 @@ import {
 	postAgentActivityDebugClearMessages,
 	postAgentActivityDebugMessages,
 	readAgentActivityCompatibilityFromHost,
+	openCanvasFromOverview,
 } from '../extension';
 import type {
 	ExtensionToWebviewMessage,
@@ -172,8 +176,73 @@ suite('Crispy Extension Host', () => {
 		await extensionModule.deactivate();
 	});
 
-	test('Extension을 활성화하고 manifest의 Canvas command를 등록한다', async () => {
+	test('Extension을 활성화하고 manifest의 Activity Bar와 Canvas command를 등록한다', async () => {
 		assert.strictEqual(extension.isActive, true);
+		assert.strictEqual(extension.packageJSON.publisher, 'ossc-donggeuni');
+		assert.strictEqual(extension.packageJSON.icon, 'resources/crispy-marketplace.png');
+		assert.strictEqual(
+			extension.packageJSON.description,
+			'Visualize project structure and run Codex or Claude agents '
+				+ 'in workspace-scoped terminals.',
+		);
+		assert.strictEqual(extension.packageJSON.pricing, 'Free');
+		assert.deepStrictEqual(extension.packageJSON.repository, {
+			type: 'git',
+			url: 'https://github.com/ossc-donggeuni/crispy.git',
+		});
+		assert.strictEqual(
+			extension.packageJSON.homepage,
+			'https://github.com/ossc-donggeuni/crispy',
+		);
+		assert.deepStrictEqual(extension.packageJSON.bugs, {
+			url: 'https://github.com/ossc-donggeuni/crispy/issues',
+		});
+		assert.deepStrictEqual(extension.packageJSON.galleryBanner, {
+			color: '#0D5FFB',
+			theme: 'dark',
+		});
+		assert.strictEqual(extension.packageJSON.qna, false);
+		assert.deepStrictEqual(extension.packageJSON.extensionKind, ['workspace']);
+		assert.deepStrictEqual(extension.packageJSON.categories, [
+			'Visualization',
+			'Machine Learning',
+			'Other',
+		]);
+		assert.deepStrictEqual(extension.packageJSON.keywords, [
+			'project visualization',
+			'code graph',
+			'workspace',
+			'codex',
+			'claude',
+			'ai agent',
+			'agent activity',
+			'terminal',
+		]);
+		assert.deepStrictEqual(
+			extension.packageJSON.contributes.viewsContainers.activitybar,
+			[{
+				id: CRISPY_VIEW_CONTAINER_ID,
+				title: 'Crispy',
+				icon: 'resources/crispy-activity.svg',
+			}],
+		);
+		assert.deepStrictEqual(
+			extension.packageJSON.contributes.views[CRISPY_VIEW_CONTAINER_ID],
+			[{
+				id: CRISPY_OVERVIEW_VIEW_ID,
+				name: 'Overview',
+				icon: 'resources/crispy-activity.svg',
+				contextualTitle: 'Crispy Overview',
+			}],
+		);
+		assert.deepStrictEqual(
+			extension.packageJSON.contributes.viewsWelcome,
+			[{
+				view: CRISPY_OVERVIEW_VIEW_ID,
+				contents: 'Visualize your project structure and work with AI agents.\n'
+					+ '[Open Canvas](command:crispy.openCanvasFromOverview)',
+			}],
+		);
 
 		const manifestCommands = extension.packageJSON.contributes.commands as Array<{
 			command: string;
@@ -196,10 +265,28 @@ suite('Crispy Extension Host', () => {
 
 		const registeredCommands = await vscode.commands.getCommands(true);
 		assert.ok(registeredCommands.includes(COMMAND_ID));
+		assert.ok(registeredCommands.includes(OPEN_CANVAS_FROM_OVERVIEW_COMMAND_ID));
 		assert.ok(registeredCommands.includes(DEBUG_NODE_EFFECTS_COMMAND_ID));
 		assert.ok(registeredCommands.includes(CLEAR_NODE_EFFECTS_COMMAND_ID));
 		assert.ok(registeredCommands.includes(DEBUG_AGENT_ACTIVITIES_COMMAND_ID));
 		assert.ok(registeredCommands.includes(CLEAR_AGENT_ACTIVITIES_COMMAND_ID));
+	});
+
+	test('Overview primary action은 Canvas를 연 뒤 Sidebar를 닫는다', async () => {
+		const calls: string[] = [];
+		const canvas = { id: 'canvas' };
+		const result = await openCanvasFromOverview(
+			async () => {
+				calls.push('openCanvas');
+				return canvas;
+			},
+			async () => {
+				calls.push('closeSidebar');
+			},
+		);
+
+		assert.strictEqual(result, canvas);
+		assert.deepStrictEqual(calls, ['openCanvas', 'closeSidebar']);
 	});
 
 	test('production activation은 현재 supported VS Code Host capability를 읽는다', () => {

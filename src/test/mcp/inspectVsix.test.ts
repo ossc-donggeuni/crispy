@@ -21,7 +21,7 @@ const {
 ) as InspectVsixModule;
 
 suite('MCP VSIX bundle dependency inspection', () => {
-	test('extension manifest는 limited Workspace capability와 restricted CLI 설정을 선언한다', () => {
+	test('extension manifest는 Marketplace metadata와 limited Workspace capability를 선언한다', () => {
 		const manifest = JSON.parse(
 			readFileSync(join(__dirname, '../../../package.json'), 'utf8'),
 		) as {
@@ -36,6 +36,14 @@ suite('MCP VSIX bundle dependency inspection', () => {
 			node: '24.x',
 			vscode: '^1.125.0',
 		});
+		assert.strictEqual(
+			(manifest as { readonly publisher?: unknown }).publisher,
+			'ossc-donggeuni',
+		);
+		assert.strictEqual(
+			(manifest as { readonly icon?: unknown }).icon,
+			'resources/crispy-marketplace.png',
+		);
 		assert.deepStrictEqual(manifest.capabilities, {
 			untrustedWorkspaces: {
 				supported: 'limited',
@@ -69,30 +77,35 @@ suite('MCP VSIX bundle dependency inspection', () => {
 			}),
 			[
 				'main',
+				'publisher',
+				'icon',
+				'description',
+				'pricing',
+				'repository',
+				'homepage',
+				'bugs',
+				'galleryBanner',
+				'qna',
+				'extensionKind',
+				'categories',
+				'keywords',
 				'engines.node',
 				'engines.vscode',
 				'capabilities.untrustedWorkspaces.supported',
 				'capabilities.untrustedWorkspaces.restrictedConfigurations',
 				'capabilities.virtualWorkspaces.supported',
+				'contributes.viewsContainers.activitybar',
+				'contributes.views.ossc-donggeuni-crispy',
+				'contributes.viewsWelcome',
 			],
 		);
 	});
 
 	test('VSIX manifest 검사기는 VS Code engines range 변경을 exact mismatch로 거부한다', () => {
-		const manifest = {
-			main: './dist/extension.js',
-			engines: { node: '24.x', vscode: '^1.125.1' },
-			capabilities: {
-				untrustedWorkspaces: {
-					supported: 'limited',
-					restrictedConfigurations: [
-						'crispy.codexCliPath',
-						'crispy.claudeCliPath',
-					],
-				},
-				virtualWorkspaces: { supported: 'limited' },
-			},
-		};
+		const manifest = JSON.parse(
+			readFileSync(join(__dirname, '../../../package.json'), 'utf8'),
+		) as Record<string, unknown>;
+		manifest.engines = { node: '24.x', vscode: '^1.125.1' };
 
 		assert.deepStrictEqual(
 			findExtensionManifestCapabilityProblems(manifest),
@@ -166,6 +179,11 @@ suite('MCP VSIX bundle dependency inspection', () => {
 			'extension/LICENSE.md',
 			'extension/THIRD_PARTY_NOTICES.md',
 			'extension/readme.md',
+			'extension/changelog.md',
+			'extension/SECURITY.md',
+			'extension/SUPPORT.md',
+			'extension/resources/crispy-activity.svg',
+			'extension/resources/crispy-marketplace.png',
 			'extension/dist/extension.js',
 			'extension/dist/mcp-server.mjs',
 		]), []);
