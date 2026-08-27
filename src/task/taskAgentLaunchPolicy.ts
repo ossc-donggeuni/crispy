@@ -25,25 +25,9 @@ const CLAUDE_TASK_MCP_TOOL_NAMES = Object.freeze([
 	CRISPY_TASK_SCOPE_REQUEST_TOOL_NAME,
 	CRISPY_TASK_SCOPE_RESULT_TOOL_NAME,
 ]);
-const TASK_COMPLETION_PROMPT_SUFFIX = [
-	'Task completion requirement:',
-];
-
-/** Keeps the Task content intact and adds one provider-neutral completion reminder last. */
-export function createTaskAgentPrompt(
-	prompt: string,
-	completionToolName = CRISPY_TASK_COMPLETE_TOOL_NAME,
-): string {
-	if (!/^[A-Za-z0-9_-]{1,64}$/u.test(completionToolName)) {
-		throw new Error('Task completion Tool name is invalid.');
-	}
-	const suffix = [
-		...TASK_COMPLETION_PROMPT_SUFFIX,
-		`As the final action after finishing the assigned work, call ${completionToolName} exactly once.`,
-		'Use status completed after success and verification, or rejected only for an intentional scope or user-denial outcome, and include a concise summary.',
-		'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
-	].join(' ');
-	return `${prompt}\n\n${suffix}`;
+/** Provider 공통 MCP 지침을 중복하지 않고 Task의 실제 사용자 prompt만 보존한다. */
+export function createTaskAgentPrompt(prompt: string): string {
+	return prompt;
 }
 
 /** Codex permission profile을 session-only CLI config로 고정한다. */

@@ -112,8 +112,9 @@ suite('Crispy MCP Tool / SDK activity boundary', () => {
 						'[REQUIRED FOR USER-VISIBLE GRAPH]',
 						'user-selected Crispy Canvas activity graph',
 						'without changing workspace content or scope',
-						'completion anchor with planned before workspace work',
-						'each meaningful target with active',
+						'planned on the completion anchor before workspace work',
+						"user-facing request awaits the user's response",
+						'each meaningful target active',
 						'clearing child targets with crispy_caa',
 						'anchor with completed as the final Activity call',
 					]) {

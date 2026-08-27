@@ -8,29 +8,13 @@ import {
 const taskMcpUrl = `http://127.0.0.1:43123/mcp/${Buffer.alloc(24, 0x24).toString('base64url')}`;
 
 suite('Task Agent launch permission policy', () => {
-	test('Task Agent prompt는 원문을 보존하고 completion Tool reminder로 끝난다', () => {
+	test('Task Agent prompt는 공통 MCP 지침을 덧붙이지 않고 원문만 보존한다', () => {
 		const prompt = 'Task: Update the feature\n\nReference areas: /workspace/docs';
 		const result = createTaskAgentPrompt(prompt);
 
-		assert.ok(result.startsWith(`${prompt}\n\nTask completion requirement:`));
-		assert.ok(result.endsWith(
-			'Do not end with only a prose response; the Host considers this Work unfinished until the Tool call is accepted.',
-		));
-		assert.strictEqual(
-			(result.match(/crispy_task_complete/gu) ?? []).length,
-			1,
-		);
-		assert.match(result, /call crispy_task_complete exactly once/u);
-		assert.match(result, /status completed/u);
-		assert.match(result, /rejected only for an intentional scope or user-denial outcome/u);
-		assert.doesNotMatch(result, /CRISPY TASK EXECUTION CONTRACT/u);
-		assert.match(
-			createTaskAgentPrompt(
-				prompt,
-				'mcp__crispy_0123456789abcdef01234567__crispy_task_complete',
-			),
-			/call mcp__crispy_0123456789abcdef01234567__crispy_task_complete exactly once/u,
-		);
+		assert.strictEqual(result, prompt);
+		assert.doesNotMatch(result, /Task completion requirement/u);
+		assert.doesNotMatch(result, /crispy_task_complete/u);
 	});
 
 	test('Codex session permission profile은 최소 read와 exact scope 권한만 추가한다', () => {

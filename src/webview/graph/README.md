@@ -11,6 +11,7 @@ src/webview/graph/
 ├── assets/
 ├── agentActivityFocus.ts
 ├── agentActivityBindings.ts
+├── agentActivityGhostNodes.ts
 ├── agentActivityFloatingNotifications.ts
 ├── agentActivityNotificationCenter.ts
 ├── agentActivityNotifications.ts
@@ -63,6 +64,17 @@ src/webview/graph/
 - Target×Session Activity를 우선순위대로 표시하고 제목, 현재 메시지와 세션 색을 동기화
 - Animation 행 Double Click은 해당 행의 exact `sessionId`를 상위에 전달하고 File Double Click으로의 전파를 차단
 - Binding 제거, Target remount와 Graph View dispose 시 Effect DOM과 Double Click listener를 같이 정리
+
+### `agentActivityGhostNodes.ts`
+
+> 아직 Graph snapshot에 없는 Activity Target을 저장되지 않는 World Node로 투영합니다.
+
+- Target의 direct parent URI가 현재 actual Project/Folder와 일치하고 그 occurrence가 보일 때만 ghost 생성
+- 중간 path부터 모두 존재하지 않는 Target, Workspace 밖 Target과 이미 actual Graph에 들어온 Target은 생성하지 않고 기존 알림 경로만 유지
+- 같은 exact Target의 여러 Session을 ghost 하나와 기존 Session Binding들로 합치며 panel당 64개로 제한
+- 점선·반투명 Card를 direct parent의 arranged child flow에 고정하고 Card 자체의 rename/delete/open/drag 및 persistence는 제외하되, 할당된 Session Activity Event Box의 Double Click은 실제 Agent session 열기로 연결
+- Activity clear·Session 종료·View dispose에서 즉시 정리하고, Graph 갱신에서 actual Target이 나타나면 같은 turn에 ghost를 제거
+- pending 알림 Focus는 ghost를 즉시 비추되 pending 상태를 유지해 actual Node가 나타났을 때 실제 대상에 다시 Focus
 
 ### `graphNodeUri.ts`
 
@@ -379,7 +391,7 @@ src/webview/graph/
 - Root Focus는 현재 Camera scale과 기존 ease-out Animation 정책을 유지
 - Activity/Session runtime Store가 함께 주입되면 Overlay 우측 상단 알림 Center 초기화
 - 알림 Focus에서 Target 자신은 열지 않고 표시에 필요한 ancestor, Filter와 File pagination만 복원한 최신 Layout 중심으로 Camera 이동
-- Workspace 범위 안이지만 snapshot에 아직 없는 알림 Focus는 보류하고 Graph 갱신에서 Target이 나타나는 즉시 reveal/Focus 재시도
+- Workspace 범위 안이지만 snapshot에 아직 없는 알림 Focus는 direct-parent ghost가 있으면 즉시 이동하고, 아니면 보류한 뒤 Graph 갱신에서 Target이 나타나는 즉시 reveal/Focus 재시도
 - 현재 Workspace URI 경계 밖의 unavailable 알림은 Focus를 비활성화하고 삭제만 허용
 - 알림 삭제를 기존 `AgentActivityStore.clearAgentActivity()`에 연결해 알림, Graph Binding과 Effect를 같은 경로로 정리
 - Graph 교체와 가시 영역 변경을 알림 Target 표시 index와 Overlay 위치에 동기화

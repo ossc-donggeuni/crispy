@@ -81,6 +81,9 @@ import {
 	getAgentActivityBindingBlockHeight,
 } from '../../webview/graph/agentActivityBindings';
 import {
+	AGENT_ACTIVITY_GHOST_NODE_ATTRIBUTE,
+} from '../../webview/graph/agentActivityGhostNodes';
+import {
 	AGENT_ACTIVITY_NOTIFICATION_CENTER_ATTRIBUTE,
 	AGENT_ACTIVITY_NOTIFICATION_KEY_ATTRIBUTE,
 } from '../../webview/graph/agentActivityNotificationCenter';
@@ -10655,6 +10658,158 @@ suite('Graph View', () => {
 		assert.strictEqual(focusedState.hiddenNodeIds[folderId], undefined);
 		assert.strictEqual(focusedState.hiddenNodeIds[fileId], undefined);
 		assert.ok(getDescendantByAttribute(root, 'data-graph-node-id', fileId));
+
+		graphView.dispose();
+		presentations.dispose();
+	});
+
+	test('direct parent가 있는 pending Target만 ghost로 표시하고 actual Node로 교체한다', () => {
+		const projectId = 'workspace-root:file:///workspace';
+		const folderId = 'folder:file:///workspace/src';
+		const fileId = 'file:file:///workspace/src/new.ts';
+		const nestedFileId = 'file:file:///workspace/src/missing/deep.ts';
+		const clearedFileId = 'file:file:///workspace/src/cleared.ts';
+		const rootId = `root:${projectId}`;
+		const folder = {
+			kind: 'folder' as const,
+			id: folderId,
+			name: 'src',
+			status: 'loaded' as const,
+			children: [],
+		};
+		const project: Project = {
+			kind: 'project',
+			id: projectId,
+			name: 'workspace',
+			status: 'loaded',
+			children: [folder],
+		};
+		const graph: Graph = {
+			roots: [{ id: rootId, nodeId: projectId }],
+			rootNodes: { [projectId]: project },
+		};
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const store = createAgentActivityStore();
+		const presentations = createAgentSessionPresentationStore();
+		const sessionOpenRequests: string[] = [];
+
+		presentations.activateSession('tab-one', 'session-one', 'One');
+		presentations.activateSession('tab-two', 'session-two', 'Two');
+		presentations.activateSession('tab-three', 'session-three', 'Three');
+		store.setAgentActivity('session-one', { nodeId: fileId }, 'planned');
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			{
+				...INITIAL_GRAPH_STATE,
+				openedFolders: { [projectId]: true, [folderId]: true },
+			},
+			graph,
+			{
+				onAgentSessionOpenRequest: (sessionId) => {
+					sessionOpenRequests.push(sessionId);
+				},
+			},
+			[],
+			undefined,
+			{
+				agentActivityStore: store,
+				agentSessionPresentationStore: presentations,
+			},
+		);
+		const ghost = getDescendantByAttribute(
+			root,
+			AGENT_ACTIVITY_GHOST_NODE_ATTRIBUTE,
+			'',
+		);
+
+		assert.strictEqual(ghost.getAttribute('data-graph-node-id'), fileId);
+		assert.strictEqual(
+			ghost.getAttribute('data-parent-layout-node-id'),
+			folderId,
+		);
+		assert.strictEqual(
+			ghost.getAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE),
+			'',
+		);
+		assert.strictEqual(
+			findDescendantByClass(ghost, 'graph-agent-activity-ghost-badge'),
+			undefined,
+		);
+		let focusCount = 0;
+
+		graphView.camera.focusOn = () => {
+			focusCount += 1;
+		};
+		const notification = getDescendantByClass(
+			root,
+			'graph-agent-activity-notification-item',
+		);
+
+		getDescendantByClass(
+			notification,
+			'graph-agent-activity-notification-focus',
+		).dispatch('click', createClickEvent(notification));
+		assert.strictEqual(focusCount, 1);
+
+		store.setAgentActivity('session-two', { nodeId: fileId }, 'active');
+		assert.strictEqual(
+			getDescendantsByClass(root, 'graph-agent-activity-ghost-node').length,
+			1,
+		);
+		assert.strictEqual(
+			getDescendantsByClass(ghost, 'graph-agent-activity-binding').length,
+			2,
+		);
+		getDescendantByAttribute(
+			ghost,
+			'data-session-id',
+			'session-two',
+		).dispatch('dblclick', createClickEvent(ghost));
+		assert.deepStrictEqual(sessionOpenRequests, ['session-two']);
+
+		store.setAgentActivity(
+			'session-three',
+			{ nodeId: nestedFileId },
+			'editing',
+		);
+		assert.strictEqual(
+			getDescendantsByClass(root, 'graph-agent-activity-ghost-node').length,
+			1,
+			'중간 경로부터 없는 Target은 ghost를 만들지 않아야 한다.',
+		);
+
+		const file = { kind: 'file' as const, id: fileId, name: 'new.ts' };
+		const fullProject: Project = {
+			...project,
+			children: [{ ...folder, children: [file] }],
+		};
+
+		graphView.updateGraph({
+			roots: graph.roots,
+			rootNodes: { [projectId]: fullProject },
+		});
+		assert.strictEqual(
+			getDescendantsByClass(root, 'graph-agent-activity-ghost-node').length,
+			0,
+		);
+		assert.ok(getDescendantByAttribute(root, 'data-graph-node-id', fileId));
+		assert.strictEqual(focusCount, 2);
+
+		store.setAgentActivity(
+			'session-one',
+			{ nodeId: clearedFileId },
+			'planned',
+		);
+		assert.strictEqual(
+			getDescendantsByClass(root, 'graph-agent-activity-ghost-node').length,
+			1,
+		);
+		store.clearAgentActivity('session-one', { nodeId: clearedFileId });
+		assert.strictEqual(
+			getDescendantsByClass(root, 'graph-agent-activity-ghost-node').length,
+			0,
+		);
 
 		graphView.dispose();
 		presentations.dispose();

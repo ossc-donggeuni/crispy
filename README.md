@@ -75,9 +75,11 @@ Workspace content. Completion roll-up is cross-agent behavior.
   but repeated commands or accesses with no target/state change need no extra call.
   Its `activity` is exactly one of `planned`, `active`,
   `editing`, `completed`, `mentioned`, or `rejected`.
-- Call `planned` after committing to a target but before work starts; `active` before
-  non-editing reads, analysis, search, verification, or tests; and `editing` while
-  creating, modifying, or deleting it.
+- Call `planned` after committing to a target but before work starts. It may also
+  mark a relevant target while a user-facing request is waiting for the user's
+  response; transition it to `active` or `editing` before work resumes. Call
+  `active` before non-editing reads, analysis, search, verification, or tests, and
+  `editing` while creating, modifying, or deleting the target.
 - Call `mentioned` before Codex or Claude names a Workspace file or folder in its own
   natural-language response. Because one session stores one state per target, keep
   an existing `planned`, `active`, `editing`, `completed`, or `rejected` state
@@ -97,6 +99,12 @@ Workspace content. Completion roll-up is cross-agent behavior.
   `crispy_caa` removes stale state at the next request or scope
   change, when the target is no longer relevant, or after a rename/delete makes
   its marker invalid. Session cleanup is best-effort.
+- While an in-Workspace Activity target is waiting to appear in the Graph, the
+  Canvas projects one non-persistent ghost node only when its direct parent
+  already exists. If intermediate paths are also missing, it keeps the
+  notification without inventing the missing hierarchy. Ghosts are deduplicated
+  per exact target, capped at 64 per panel, and replaced by the actual node on
+  the next Graph snapshot.
 - Use `crispy_ping` only for an explicit startup, restart, or connection diagnostic,
   never as a routine preflight.
 - Both Activity Tools accept `targetKind` as exactly `file` or `folder`. Their

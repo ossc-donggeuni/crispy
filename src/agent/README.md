@@ -561,7 +561,9 @@ true의 initialize instructions는 assigned root 상대 path만 사용하게 한
 `targetKind: "folder"`로 나타내고 target kind는 `file`/`folder`, activity는 `planned`, `active`,
 `editing`, `completed`, `mentioned`, `rejected` 중 하나다. Agent가 반드시 보고하는 lifecycle은 다음과 같다.
 
-- `planned`: workspace operation 전에 작업 전체를 포함하는 completion anchor에 가장 먼저 설정하는 상태
+- `planned`: workspace operation 전에 작업 전체를 포함하는 completion anchor에 가장 먼저 설정하거나,
+  사용자를 향한 요청이 응답을 기다리는 동안 관련 target을 나타내는 상태. 응답 후 작업을 재개할 때에는
+  실제 operation 전에 `active` 또는 `editing`으로 전환한다.
 - `active`: 읽기·분석·검색·검증·테스트를 시작하기 전에 보고하는 상태
 - `editing`: 파일이나 폴더를 실제로 생성·수정·삭제하기 전에 보고하는 상태
 - `mentioned`: Codex 또는 Claude가 자신의 자연어 응답에서 workspace 파일이나 폴더를 언급하기 전에 보고하는 상태.
@@ -617,17 +619,16 @@ Trust/root/restart lifecycle, unsupported zero-state를 검증한다. 이어서 
 
 ## Task Work provider instructions — 2026-08-27
 
-Task 소유 ordinary Agent tab의 사용자 prompt는 Task 내용과 배정 영역을 그대로 전달하고, Codex와
-Claude 모두 마지막 문단으로 `crispy_task_complete` 호출 reminder를 한 번 덧붙인다. 이전처럼 긴
-`CRISPY TASK EXECUTION CONTRACT`를 사용자 prompt에 합치지 않는다. Terminal Host는 Task lease와
+Task 소유 ordinary Agent tab의 사용자 prompt는 Task 내용과 배정 영역만 그대로 전달하며,
+`crispy_task_complete` reminder나 이전 `CRISPY TASK EXECUTION CONTRACT`를 사용자 prompt에
+덧붙이지 않는다. Terminal Host는 Task lease와
 동일한 조건으로 Codex launch plan의 `taskToolCompatible`, Claude launch plan의
 `taskToolCompatible`을 설정한다. 그 결과 Task 완료·영역 요청·영역 결과 규약이 MCP initialize와
 같은 공통 source에서 Codex `developer_instructions` 및 Claude `--append-system-prompt`로 주입된다.
 
-공통 system 규약은 lifecycle 전체를 소유하고, 사용자 prompt 끝의 짧은 reminder는 Agent가 완료를
-자연어 응답으로만 끝내지 않도록 terminal action을 가까운 위치에서 반복한다. reminder는 성공 시
-`completed`, 의도적인 범위/사용자 거절 시 `rejected`와 요약을 보내고 accepted Tool call 전에는 Work가
-끝나지 않는다고 명시한다. Task가 아닌 tab의 prompt는 바뀌지 않는다.
+공통 system 규약과 MCP initialize instructions가 lifecycle 전체를 소유한다. 성공 시 `completed`,
+의도적인 범위/사용자 거절 시 `rejected`와 요약을 보내고 accepted Tool call 전에는 Work가 끝나지
+않는다는 안내도 이 공통 지침에만 둔다. Task가 아닌 tab의 prompt도 바뀌지 않는다.
 
 Claude의 완전한 MCP Tool 이름은 64자 이하여야 한다. 따라서 Claude session server 이름은
 `crispy_<24 hex>`로 생성하고, Task permission allowlist를 만들 때 `mcp__<server>__<tool>` 전체 길이를

@@ -166,7 +166,7 @@ export function createCrispyToolServer(options: CrispyToolServerOptions): McpSer
 		server.registerTool(
 			CRISPY_SET_AGENT_ACTIVITY_TOOL_NAME,
 			{
-				description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Updates the user-selected Crispy Canvas activity graph without changing workspace content or scope. Call on the completion anchor with planned before workspace work; call on each meaningful target with active before read/analyze/verify or editing before modification. Use mentioned only for a response-only path and rejected only for an intentional skip. After clearing child targets with crispy_caa, call on the anchor with completed as the final Activity call before a successful response.`,
+				description: `${CRISPY_AGENT_ACTIVITY_REQUIRED_MARKER} Updates the user-selected Crispy Canvas activity graph without changing workspace content or scope. Use planned on the completion anchor before workspace work, or on a relevant target while a user-facing request awaits the user's response. Mark each meaningful target active before read/analyze/verify or editing before modification; use mentioned only for response-only paths and rejected only for intentional skips. After clearing child targets with crispy_caa, call on the anchor with completed as the final Activity call before success.`,
 				inputSchema: SET_ACTIVITY_INPUT_SCHEMA,
 				annotations: ACTIVITY_ANNOTATIONS,
 			},
