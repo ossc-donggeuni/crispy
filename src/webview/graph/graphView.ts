@@ -48,6 +48,7 @@ import {
 	type GraphSourceDropResult,
 } from './graphRenderer';
 import { createGraphReattachConfirmDialog } from './graphReattachConfirmDialog';
+import { createTaskStopConfirmDialog } from '../task/taskStopConfirmDialog';
 import type { GraphDetachDropRequest } from './graphDetachDrag';
 import {
 	createFullGraphVisibleArea,
@@ -475,7 +476,7 @@ export interface GraphViewInteractions {
 	onTaskJsonCopyFailure?: (reason: TaskTransferSerializeFailureReason) => void;
 	/** Ready Start 실행 요청을 현재 persisted revision과 함께 Host 경계로 전달한다. */
 	onTaskExecutionStart?: (taskId: string, storageRevision: number) => void;
-	/** 완료 알림 삭제로 수명이 끝난 Task-owned 실제 Agent 세션과 탭을 정리한다. */
+	/** 완료 알림 삭제나 강제 종료로 수명이 끝난 Task-owned Agent 세션과 탭을 정리한다. */
 	onTaskAgentSessionCleanupRequest?: (
 		targets: readonly TaskAgentSessionCleanupTarget[],
 	) => void;
@@ -1417,6 +1418,7 @@ export function initializeGraphView(
 	root.append(viewport);
 	const reattachConfirmDialog = createGraphReattachConfirmDialog(overlayLayer);
 	const arrangeAllConfirmDialog = createGraphArrangeAllConfirmDialog(overlayLayer);
+	const taskStopConfirmDialog = createTaskStopConfirmDialog(overlayLayer);
 	const taskImportDialog = createTaskImportDialog(overlayLayer);
 	const nodeEffects = createGraphNodeEffects(
 		ownerDocument,
@@ -2506,7 +2508,60 @@ export function initializeGraphView(
 				Object.freeze([...targets]),
 			);
 		} catch {
-			/** 탭 UI 정리 실패가 완료 Activity의 로컬 삭제를 막지 않는다. */
+			/** 탭 UI 정리 실패가 Task-owned runtime 표시의 로컬 삭제를 막지 않는다. */
+		}
+	};
+	const collectTaskWorkAgentSessionAssignments = (
+		snapshot: TaskExecutionSnapshot,
+	) => snapshot.works.flatMap(({ nodeId }) => {
+		const assignmentKey = createTaskWorkAgentSessionKey(
+			snapshot.executionId,
+			nodeId,
+		);
+		const assignment = taskWorkAgentSessions.get(assignmentKey);
+
+		return assignment === undefined
+			? []
+			: [{ assignmentKey, nodeId, assignment }];
+	});
+	/**
+	 * Task 전체 완료 알림 삭제와 실행 중 Stop이 공유하는 exact session 정리다.
+	 * 상위 callback을 먼저 호출해 실제 탭/프로세스 정리를 시작한 뒤 로컬 표시를 해제한다.
+	 */
+	const cleanupTaskExecutionAgentSessions = (
+		snapshot: TaskExecutionSnapshot,
+	): void => {
+		const assignedSessions = collectTaskWorkAgentSessionAssignments(snapshot);
+
+		requestTaskAgentSessionCleanup(assignedSessions.flatMap(({
+			nodeId,
+			assignment,
+		}) => {
+			const target = createTaskAgentSessionCleanupTarget(
+				snapshot,
+				nodeId,
+				assignment.actualSessionId,
+			);
+
+			return target === undefined ? [] : [target];
+		}));
+
+		const taskSessionId = createTaskExecutionActivitySessionId(
+			snapshot.executionId,
+			snapshot.startNodeId,
+		);
+
+		runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(taskSessionId);
+		runtimeOptions.agentSessionPresentationStore?.endSession(taskSessionId);
+		for (const { assignmentKey, assignment } of assignedSessions) {
+			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
+				assignment.actualSessionId,
+			);
+			runtimeOptions.agentSessionPresentationStore?.endSession(
+				assignment.actualSessionId,
+			);
+			taskActivityKindsBySessionId.delete(assignment.actualSessionId);
+			taskWorkAgentSessions.delete(assignmentKey);
 		}
 	};
 	const dismissTaskCompletionActivity = (
@@ -2528,44 +2583,7 @@ export function initializeGraphView(
 				return false;
 			}
 
-			const assignedSessions = snapshot.works.flatMap(({ nodeId }) => {
-				const assignmentKey = createTaskWorkAgentSessionKey(
-					snapshot.executionId,
-					nodeId,
-				);
-				const assignment = taskWorkAgentSessions.get(assignmentKey);
-
-				return assignment === undefined
-					? []
-					: [{ assignmentKey, nodeId, assignment }];
-			});
-			requestTaskAgentSessionCleanup(assignedSessions.flatMap(({
-				nodeId,
-				assignment,
-			}) => {
-				const target = createTaskAgentSessionCleanupTarget(
-					snapshot,
-					nodeId,
-					assignment.actualSessionId,
-				);
-
-				return target === undefined ? [] : [target];
-			}));
-
-			runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
-				entry.sessionId,
-			);
-			runtimeOptions.agentSessionPresentationStore?.endSession(entry.sessionId);
-			for (const { assignmentKey, assignment } of assignedSessions) {
-				runtimeOptions.agentActivityStore?.clearAgentActivitiesBySession(
-					assignment.actualSessionId,
-				);
-				runtimeOptions.agentSessionPresentationStore?.endSession(
-					assignment.actualSessionId,
-				);
-				taskActivityKindsBySessionId.delete(assignment.actualSessionId);
-				taskWorkAgentSessions.delete(assignmentKey);
-			}
+			cleanupTaskExecutionAgentSessions(snapshot);
 			return true;
 		}
 
@@ -3909,6 +3927,41 @@ export function initializeGraphView(
 			interactions.onTaskExecutionStart?.(taskId, record.storageRevision);
 		}
 	};
+	const handleTaskExecutionStop = (taskId: string): void => {
+		const snapshot = taskExecutionByTaskId.get(taskId);
+		const task = taskState.getTask(taskId);
+		const assignedSessions = snapshot
+			? collectTaskWorkAgentSessionAssignments(snapshot)
+			: [];
+
+		if (
+			!snapshot
+			|| !task
+			|| !isTaskExecutionActive(snapshot)
+			|| assignedSessions.length === 0
+		) {
+			return;
+		}
+		const executionId = snapshot.executionId;
+
+		void taskStopConfirmDialog.confirm({
+			taskTitle: task.title,
+			workCount: assignedSessions.length,
+		}).then((confirmed) => {
+			const current = taskExecutionByTaskId.get(taskId);
+
+			if (
+				!confirmed
+				|| disposed
+				|| !current
+				|| current.executionId !== executionId
+				|| !isTaskExecutionActive(current)
+			) {
+				return;
+			}
+			cleanupTaskExecutionAgentSessions(current);
+		});
+	};
 
 	taskInspector = initializeTaskInspector(
 		overlayLayer,
@@ -3952,6 +4005,7 @@ export function initializeGraphView(
 			onNodeSelectionChange: handleTaskNodeSelectionChange,
 			onWorkAdd: handleTaskWorkAdd,
 			onTaskStart: handleTaskExecutionStart,
+			onTaskStop: handleTaskExecutionStop,
 			onTaskExport: handleTaskExport,
 			onTaskImport: handleTaskImport,
 			onTaskRemove: handleTaskRemove,
@@ -4519,6 +4573,7 @@ export function initializeGraphView(
 			pendingAgentActivityNotificationFocus = undefined;
 			reattachConfirmDialog.dispose();
 			arrangeAllConfirmDialog.dispose();
+			taskStopConfirmDialog.dispose();
 			taskImportDialog.dispose();
 			unsubscribeTaskGraphScope();
 			unsubscribeLayout();

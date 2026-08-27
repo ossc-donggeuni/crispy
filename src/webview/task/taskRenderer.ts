@@ -101,6 +101,8 @@ export interface TaskRendererInteractions {
 	onWorkAdd?: (taskId: string) => void;
 	/** Ready Start의 아이콘 실행 버튼을 Host start 요청으로 전달한다. */
 	onTaskStart?: (taskId: string) => void;
+	/** 실행 중 End의 정지 아이콘을 Task 강제 종료 확인 경계로 전달한다. */
+	onTaskStop?: (taskId: string) => void;
 	/** Task Node DOM을 공용 AgentActivity effect와 Binding lifecycle에 등록한다. */
 	registerNodeActivity?: (
 		nodeId: string,
@@ -172,6 +174,7 @@ type TaskDragSession = TaskOriginDragSession | TaskNodePositionDragSession;
 type TaskPortDirection = 'input' | 'output';
 type TaskNodeAction =
 	| 'start-task'
+	| 'stop-task'
 	| 'toggle-reference-area'
 	| 'toggle-work-area'
 	| 'add-work'
@@ -906,6 +909,12 @@ export function initializeTaskRenderer(
 				&& !executionLocked
 			) {
 				interactions.onTaskStart?.(node.taskId);
+			} else if (
+				node?.kind === 'end'
+				&& action === 'stop-task'
+				&& executionLocked
+			) {
+				interactions.onTaskStop?.(node.taskId);
 			} else if (executionLocked) {
 				return;
 			} else if (node?.kind === 'start' && action === 'add-work') {
@@ -1616,7 +1625,7 @@ function createTaskNodeContents(
 	}
 	if (node.kind === 'end') {
 		return [
-			icon,
+			executionLocked ? createTaskStopButton(ownerDocument, node) : icon,
 			content,
 			createTaskPort(ownerDocument, node, 'input', executionLocked),
 		];
@@ -1769,6 +1778,26 @@ function createTaskStartButton(
 	runSymbol.setAttribute('aria-hidden', 'true');
 	runSymbol.textContent = '▶';
 	button.append(icon, runSymbol);
+	return button;
+}
+
+function createTaskStopButton(
+	ownerDocument: Document,
+	node: Extract<TaskLayoutNode, { readonly kind: 'end' }>,
+): HTMLButtonElement {
+	const button = ownerDocument.createElement('button');
+	const icon = ownerDocument.createElement('span');
+
+	button.className = 'task-stop-run-action';
+	button.type = 'button';
+	button.title = 'Task 강제 종료';
+	button.setAttribute('aria-label', `${createTaskNodeAriaLabel(node)} 강제 종료`);
+	button.setAttribute(TASK_NODE_ACTION_ATTRIBUTE, 'stop-task');
+	button.setAttribute(GRAPH_CAMERA_PAN_IGNORE_ATTRIBUTE, '');
+	button.setAttribute(GRAPH_NODE_DRAG_IGNORE_ATTRIBUTE, '');
+	icon.className = 'task-node-icon task-end-icon';
+	icon.setAttribute('aria-hidden', 'true');
+	button.append(icon);
 	return button;
 }
 

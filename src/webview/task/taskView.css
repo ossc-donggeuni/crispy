@@ -403,6 +403,44 @@
 		transform 100ms ease;
 }
 
+.task-stop-run-action {
+	display: grid;
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	place-items: center;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 50%;
+	cursor: pointer;
+	transition:
+		background-color 100ms ease,
+		box-shadow 100ms ease,
+		transform 100ms ease;
+}
+
+.task-stop-run-action:hover,
+.task-stop-run-action:focus-visible {
+	background: var(--vscode-testing-iconFailed, #f14c4c);
+	box-shadow:
+		inset 0 0 0 1px color-mix(
+			in srgb,
+			var(--vscode-testing-iconFailed, #f14c4c) 72%,
+			white
+		),
+		0 4px 12px color-mix(in srgb, black 32%, transparent);
+	transform: scale(1.08);
+	outline: 1px solid var(--vscode-focusBorder, #007fd4);
+	outline-offset: 2px;
+}
+
+.task-stop-run-action:hover > .task-end-icon,
+.task-stop-run-action:focus-visible > .task-end-icon {
+	background-color: var(--vscode-editor-background, #1e1e1e);
+}
+
 .task-start-run-action > .task-start-icon,
 .task-start-run-action > .task-start-run-symbol {
 	grid-area: 1 / 1;
