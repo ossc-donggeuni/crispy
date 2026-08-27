@@ -78,7 +78,9 @@ true의 공통 initialize instructions와 Claude additive prompt가 강제하는
 - workspace 작업에서는 어떤 read/search/edit/test보다 먼저, 작업 전체를 포함하는 completion anchor에
   `planned`를 설정해야 한다. 이후 서로 다른 의미 있는 파일/폴더가 실제 작업 target이 될 때마다 그 작업
   전에 `crispy_saa`를 호출한다. 같은 target/state의 반복 command나 access에는 다시 호출하지 않는다.
-  `active`는 읽기·분석·검색·검증·테스트 전에, `editing`은 생성·수정·삭제 전에 사용한다.
+  `planned`는 사용자를 향한 요청이 응답을 기다리는 동안 관련 target을 표시하는 데도 사용할 수 있다.
+  응답을 받아 작업을 재개할 때에는 실제 operation 전에 `active` 또는 `editing`으로 전환한다. `active`는
+  읽기·분석·검색·검증·테스트 전에, `editing`은 생성·수정·삭제 전에 사용한다.
 - `mentioned`는 Codex 또는 Claude가 자신의 자연어 응답에서 workspace 파일이나 폴더를 언급하기 전에
   사용한다. 단, Target×Session에는 한 상태만 저장되므로 같은 대상이 이미 `planned`, `active`,
   `editing`, `completed`, `rejected`이면 단순히 응답에서 이름을 썼다는 이유로 `mentioned`로

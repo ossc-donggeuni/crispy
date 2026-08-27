@@ -561,7 +561,9 @@ true의 initialize instructions는 assigned root 상대 path만 사용하게 한
 `targetKind: "folder"`로 나타내고 target kind는 `file`/`folder`, activity는 `planned`, `active`,
 `editing`, `completed`, `mentioned`, `rejected` 중 하나다. Agent가 반드시 보고하는 lifecycle은 다음과 같다.
 
-- `planned`: workspace operation 전에 작업 전체를 포함하는 completion anchor에 가장 먼저 설정하는 상태
+- `planned`: workspace operation 전에 작업 전체를 포함하는 completion anchor에 가장 먼저 설정하거나,
+  사용자를 향한 요청이 응답을 기다리는 동안 관련 target을 나타내는 상태. 응답 후 작업을 재개할 때에는
+  실제 operation 전에 `active` 또는 `editing`으로 전환한다.
 - `active`: 읽기·분석·검색·검증·테스트를 시작하기 전에 보고하는 상태
 - `editing`: 파일이나 폴더를 실제로 생성·수정·삭제하기 전에 보고하는 상태
 - `mentioned`: Codex 또는 Claude가 자신의 자연어 응답에서 workspace 파일이나 폴더를 언급하기 전에 보고하는 상태.
