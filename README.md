@@ -12,6 +12,8 @@ activity into one Canvas.
 
 ## Key features
 
+<img width="3248" height="1990" alt="image" src="https://github.com/user-attachments/assets/0d17eeba-a079-4bdf-8fc6-3ca1fad67380" />
+
 - **Project Graph** — Browse projects, folders, and files in single-root or
   multi-root workspaces.
 - **Agent Workspace** — Run Codex and Claude Code in independent terminal tabs,
