@@ -89,6 +89,7 @@ import type {
 	AgentActivityNotificationScheduler,
 } from './agentActivityFloatingNotifications';
 import type { AgentActivityNotificationEntry } from './agentActivityNotifications';
+import { initializeTaskAgentSessionEndNoticeStack } from './taskAgentSessionEndNotices';
 import {
 	createTaskExecutionActivitySessionId,
 	createTaskExecutionActivityTabId,
@@ -164,6 +165,8 @@ export interface GraphView {
 		workNodeId: string,
 		sessionId: string,
 	): void;
+	/** 정리된 Task-owned 실제 Agent 세션의 중앙 하단 안내를 표시한다. */
+	showTaskAgentSessionEndedNotice(sessionId: string, sessionTitle: string): void;
 	/** Root Graph와 해당 Root들에서 복원한 전체 Workspace 상태를 원자적으로 적용한다. */
 	updateWorkspace(
 		graph: Graph,
@@ -4003,6 +4006,12 @@ export function initializeGraphView(
 	);
 	syncNavigatorRoots();
 	navigator.setWorkspaceGraph(workspaceGraph);
+	const taskAgentSessionEndNotices = initializeTaskAgentSessionEndNoticeStack(
+		overlayLayer,
+		viewport,
+		getVisibleGraphArea,
+		runtimeOptions.agentActivityNotificationScheduler,
+	);
 	if (
 		runtimeOptions.agentActivityStore
 		&& runtimeOptions.agentSessionPresentationStore
@@ -4190,6 +4199,7 @@ export function initializeGraphView(
 			) {
 				navigator.refreshVisibleGraphArea();
 				agentActivityNotificationCenter?.refreshVisibleGraphArea();
+				taskAgentSessionEndNotices.refreshVisibleGraphArea();
 				taskInspector?.refreshPosition();
 			}
 		},
@@ -4453,6 +4463,11 @@ export function initializeGraphView(
 			);
 			syncTaskExecutionActivities(snapshot);
 		},
+		showTaskAgentSessionEndedNotice(sessionId, sessionTitle): void {
+			if (!disposed) {
+				taskAgentSessionEndNotices.show(sessionId, sessionTitle);
+			}
+		},
 		updateWorkspace(graph, snapshot, stateIdChanges): void {
 			if (disposed) {
 				return;
@@ -4513,6 +4528,7 @@ export function initializeGraphView(
 			unsubscribeWorkspaceTasks();
 			workspaceSubscribers.clear();
 			navigator.dispose();
+			taskAgentSessionEndNotices.dispose();
 			agentActivityNotificationCenter?.dispose();
 			agentActivityNotificationCenter = undefined;
 			for (const snapshot of taskExecutionByTaskId.values()) {

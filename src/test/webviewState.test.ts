@@ -586,6 +586,10 @@ suite('Webview State Wiring', () => {
 			readonly workNodeId: string;
 			readonly sessionId: string;
 		}> = [];
+		const taskAgentSessionEndedNotices: Array<{
+			readonly sessionId: string;
+			readonly sessionTitle: string;
+		}> = [];
 		const agentEffectSets: Array<{
 			readonly target: GraphNodeEffectTarget;
 			readonly effect: GraphNodeEffect;
@@ -836,6 +840,9 @@ suite('Webview State Wiring', () => {
 						workNodeId,
 						sessionId,
 					});
+				},
+				showTaskAgentSessionEndedNotice: (sessionId, sessionTitle) => {
+					taskAgentSessionEndedNotices.push({ sessionId, sessionTitle });
 				},
 				updateWorkspace: (nextGraph, snapshot) => {
 					workspaceUpdates.push({ graph: nextGraph, snapshot });
@@ -1655,6 +1662,23 @@ suite('Webview State Wiring', () => {
 				postedMessages.filter(({ type }) => type === 'tab.close').at(-1),
 				{ type: 'tab.close', tabId: taskTabId },
 			);
+			assert.deepStrictEqual(taskAgentSessionEndedNotices, [{
+				sessionId: 'session-task-work',
+				sessionTitle: 'New tab',
+			}]);
+			graphViewInteractions?.onTaskAgentSessionCleanupRequest?.([{
+				executionId: taskExecutionSnapshot.executionId,
+				workNodeId: 'task-work-webview',
+				sessionId: 'session-task-work',
+				tabId: taskTabId,
+			}, {
+				executionId: 'foreign-execution',
+				workNodeId: 'foreign-work',
+				sessionId: 'foreign-session',
+				tabId: agentTabId,
+			}]);
+			assert.deepStrictEqual(closedTerminalTabs, [taskTabId]);
+			assert.strictEqual(taskAgentSessionEndedNotices.length, 1);
 			terminalHostMessages.length = 0;
 
 			const terminalStartingMessage = {

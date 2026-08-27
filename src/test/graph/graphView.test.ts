@@ -95,6 +95,11 @@ import {
 	type AgentActivityNotificationScheduler,
 } from '../../webview/graph/agentActivityFloatingNotifications';
 import {
+	TASK_AGENT_SESSION_END_NOTICE_ATTRIBUTE,
+	TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS,
+	TASK_AGENT_SESSION_END_NOTICE_STACK_ATTRIBUTE,
+} from '../../webview/graph/taskAgentSessionEndNotices';
+import {
 	calculateGraphVisibleArea,
 	createFullGraphVisibleArea,
 } from '../../webview/graph/graphVisibleArea';
@@ -8079,6 +8084,95 @@ suite('Graph View', () => {
 		presentations.dispose();
 	});
 
+	test('Task Agent 세션 종료 notice는 표시 영역 중앙 하단에서 4초 뒤 정리된다', () => {
+		const ownerDocument = new FakeDocument();
+		const root = ownerDocument.createElement('section');
+		const scheduler = new FakeTimeoutScheduler();
+		const visibleArea = {
+			left: 100,
+			top: 50,
+			right: 700,
+			bottom: 500,
+			width: 600,
+			height: 450,
+			center: { x: 400, y: 275 },
+		};
+		const graphView = initializeGraphView(
+			root.asHtmlElement(),
+			INITIAL_GRAPH_STATE,
+			GRAPH_MOCK,
+			{ resolveVisibleGraphArea: () => visibleArea },
+			[],
+			undefined,
+			{ agentActivityNotificationScheduler: scheduler },
+		);
+		const viewport = getDescendantByClass(root, 'graph-viewport');
+
+		viewport.clientWidth = 800;
+		viewport.clientHeight = 600;
+		graphView.refreshVisibleGraphArea();
+		graphView.showTaskAgentSessionEndedNotice(
+			'session-ended-first',
+			'Claude Code #1',
+		);
+		const stack = getDescendantByAttribute(
+			root,
+			TASK_AGENT_SESSION_END_NOTICE_STACK_ATTRIBUTE,
+			'',
+		);
+		const firstNotice = getDescendantByAttribute(
+			stack,
+			TASK_AGENT_SESSION_END_NOTICE_ATTRIBUTE,
+			'',
+		);
+
+		assert.strictEqual(stack.getAttribute('aria-live'), 'polite');
+		assert.strictEqual(stack.style.left, '400px');
+		assert.strictEqual(stack.style.bottom, '124px');
+		assert.strictEqual(stack.style.maxWidth, '568px');
+		assert.strictEqual(
+			firstNotice.textContent,
+			'Task 에 해당하는 Claude Code #1 이 종료되었습니다.',
+		);
+		assert.deepStrictEqual(
+			scheduler.pendingDelays,
+			[TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS],
+		);
+
+		graphView.showTaskAgentSessionEndedNotice(
+			'session-ended-first',
+			'Duplicate title',
+		);
+		graphView.showTaskAgentSessionEndedNotice(
+			'session-ended-second',
+			'Codex #2',
+		);
+		assert.strictEqual(stack.children.length, 2);
+		assert.deepStrictEqual(scheduler.pendingDelays, [
+			TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS,
+			TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS,
+		]);
+
+		scheduler.runNext(TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS);
+		assert.strictEqual(stack.children.length, 1);
+		assert.strictEqual(
+			stack.children[0]?.textContent,
+			'Task 에 해당하는 Codex #2 이 종료되었습니다.',
+		);
+		scheduler.runNext(TASK_AGENT_SESSION_END_NOTICE_LIFETIME_MS);
+		assert.strictEqual(stack.children.length, 0);
+		assert.strictEqual(scheduler.pendingCount, 0);
+
+		graphView.showTaskAgentSessionEndedNotice(
+			'session-ended-dispose',
+			'Codex #3',
+		);
+		assert.strictEqual(scheduler.pendingCount, 1);
+		graphView.dispose();
+		assert.strictEqual(scheduler.pendingCount, 0);
+		assert.strictEqual(root.children.length, 0);
+	});
+
 	test('Task Port/Action/Grab CSS는 연결 상태와 pointer 충돌 규약을 표현한다', () => {
 		const taskViewCss = readFileSync(resolve(
 			__dirname,
@@ -10015,6 +10109,14 @@ suite('Graph View', () => {
 		assert.match(
 			graphViewCss,
 			/\.graph-agent-activity-floating-notification-stack\s*\{[^}]*flex-direction:\s*row-reverse;/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.task-agent-session-end-notice-stack\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-50%\);/s,
+		);
+		assert.match(
+			graphViewCss,
+			/\.task-agent-session-end-notice\s*\{[^}]*animation:\s*task-agent-session-end-notice-enter\s+160ms/s,
 		);
 		assert.match(
 			graphViewCss,

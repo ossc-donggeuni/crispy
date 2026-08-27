@@ -7,6 +7,7 @@ import { createAgentActivityStore } from '../agent/webview/agentActivityStore';
 import { createAgentSessionColorRegistry } from '../agent/agentSessionColor';
 import { createAgentSessionPresentationCoordinator } from '../agent/webview/agentSessionPresentationCoordinator';
 import {
+	AGENT_SESSION_UNTITLED_TITLE,
 	createAgentSessionPresentationStore,
 	type AgentSessionPresentationStore,
 } from '../agent/webview/agentSessionPresentationStore';
@@ -507,6 +508,10 @@ cleanupTaskAgentSessions = (targets): void => {
 		closedTabIds.add(target.tabId);
 		taskWorkByTabId.delete(target.tabId);
 		taskWorkAgentSessionIds.delete(target.sessionId);
+		graphView.showTaskAgentSessionEndedNotice(
+			target.sessionId,
+			presentation.title || AGENT_SESSION_UNTITLED_TITLE,
+		);
 	}
 };
 
